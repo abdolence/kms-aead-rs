@@ -1,6 +1,6 @@
+use kms_aead::providers::AwsKmsProvider;
 use kms_aead::*;
 use secret_vault_value::SecretValue;
-use kms_aead::providers::AwsKmsProvider;
 
 pub fn config_env_var(name: &str) -> Result<String, String> {
     std::env::var(name).map_err(|e| format!("{}: {}", name, e))
