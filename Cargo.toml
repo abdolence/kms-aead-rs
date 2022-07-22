@@ -1,0 +1,68 @@
+[package]
+name = "kms-aead"
+version = "0.1.0"
+authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
+edition = "2021"
+license = "Apache-2.0"
+description = "Library provides a secure vault to store application secrets in memory coming from Google/AWS/other secret managers"
+homepage = "https://github.com/abdolence/secret-vault-rs"
+repository = "https://github.com/abdolence/secret-vault-rs"
+documentation = "https://docs.rs/secret-vault"
+categories = ["cryptography","api-bindings"]
+keywords = ["kms", "google", "aws", "envelope"]
+readme = "README.md"
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md"]
+
+[badges]
+maintenance = { status = "actively-developed" }
+
+[lib]
+name = "kms_aead"
+path = "src/lib.rs"
+bench = false
+
+[dependencies]
+tracing = "0.1"
+secret-vault-value = { version = "0.2" }
+rvstruct = "0.3"
+rsb_derive = "0.5"
+async-trait = "0.1"
+chrono = { version = "0.4" }
+tokio = { version = "1", features = ["full"] }
+hex = "0.4"
+ring = { version = "0.16", features = ["default", "std"], optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+gcloud-sdk = { version = "0.16", optional = true }
+tonic = { version = "0.7", optional = true }
+aws-config = { version = "0.15", optional = true }
+aws-sdk-kms = { version = "0.15", optional = true }
+
+[dev-dependencies]
+cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
+serde_json = { version = "1" }
+proptest = "1.0"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+criterion = { version = "0.3", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "futures", "tokio", "async_tokio"] }
+
+[features]
+default = []
+serde = ["dep:serde", "chrono/serde", "secret-vault-value/serde"]
+encrypted-ring = ["dep:ring"]
+gcp = ["dep:tonic", "gcloud-sdk"]
+gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "encrypted-ring"]
+aws = ["dep:aws-config"]
+aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "encrypted-ring"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[[example]]
+name = "aws_kms"
+path = "examples/aws_kms.rs"
+required-features = ["aws-kms-encryption"]
+
+[[example]]
+name = "gcp_kms"
+path = "examples/gcp_kms.rs"
+required-features = ["gcp-kms-encryption"]
