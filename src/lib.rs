@@ -15,8 +15,8 @@ use rvstruct::*;
 use secret_vault_value::SecretValue;
 pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
 
-mod kms_aead;
-pub use kms_aead::*;
+mod api;
+pub use api::*;
 
 pub mod errors;
 
