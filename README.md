@@ -13,13 +13,13 @@ Available providers for:
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.1", features=["..."] }
+kms-aead = { version = "0.3", features=["..."] }
 ```
 See security consideration below about versioning.
 
 ### Available optional features for Secret Vault:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
-- `aws-kms-encryption` for Google KMS envelope encryption support
+- `aws-kms-encryption` for Amazon KMS envelope encryption support
 
 All examples available at [examples](examples) directory.
 
