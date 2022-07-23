@@ -4,7 +4,8 @@ use crate::errors::*;
 use crate::*;
 use async_trait::async_trait;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
-use gcloud_sdk::google::cloud::kms::v1::{DecryptRequest, EncryptRequest};
+use gcloud_sdk::google::cloud::kms::v1::*;
+use gcloud_sdk::proto_ext::kms::*;
 use gcloud_sdk::*;
 use tracing::*;
 
@@ -65,7 +66,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<EncryptedSessionKey> {
         let mut encrypt_request = tonic::Request::new(EncryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
-            plaintext: hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes(),
+            plaintext: secret_vault_value::SecretValue::new(hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes()),
             ..Default::default()
         });
 
@@ -120,7 +121,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             .map_err(|e| KmsAeadError::from(e))?;
 
         Ok(secret_vault_value::SecretValue::new(
-            hex::decode(decrypt_response.into_inner().plaintext).unwrap(),
+            hex::decode(decrypt_response.into_inner().plaintext.ref_sensitive_value()).unwrap(),
         ))
     }
 }
