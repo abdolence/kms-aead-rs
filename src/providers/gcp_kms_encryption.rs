@@ -66,7 +66,9 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<EncryptedSessionKey> {
         let mut encrypt_request = tonic::Request::new(EncryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
-            plaintext: secret_vault_value::SecretValue::new(hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes()),
+            plaintext: secret_vault_value::SecretValue::new(
+                hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes(),
+            ),
             ..Default::default()
         });
 
@@ -121,7 +123,13 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             .map_err(|e| KmsAeadError::from(e))?;
 
         Ok(secret_vault_value::SecretValue::new(
-            hex::decode(decrypt_response.into_inner().plaintext.ref_sensitive_value()).unwrap(),
+            hex::decode(
+                decrypt_response
+                    .into_inner()
+                    .plaintext
+                    .ref_sensitive_value(),
+            )
+            .unwrap(),
         ))
     }
 }

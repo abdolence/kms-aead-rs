@@ -45,8 +45,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .decrypt_value(&test_aad, &encrypted_value)
         .await?;
 
-    println!("We have our secret back: {}",
-        secret_value.sensitive_value_to_str().unwrap() == "test-secret");
+    println!(
+        "We have our secret back: {}",
+        secret_value.sensitive_value_to_str().unwrap() == "test-secret"
+    );
 
     Ok(())
 }

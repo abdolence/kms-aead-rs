@@ -34,8 +34,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         session_key.to_hex_string()
     );
 
-    println!("We have our secret back: {}",
-             secret_value.sensitive_value_to_str().unwrap() == "test-secret");
+    println!(
+        "We have our secret back: {}",
+        secret_value.sensitive_value_to_str().unwrap() == "test-secret"
+    );
 
     Ok(())
 }
