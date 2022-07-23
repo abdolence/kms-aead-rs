@@ -125,8 +125,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
                     .as_slice(),
             ))
             .send()
-            .await
-            .map_err(|err| KmsAeadError::from(err))?;
+            .await?;
 
         if let Some(plaintext) = decrypt_response.plaintext {
             Ok(secret_vault_value::SecretValue::new(

@@ -1,6 +1,5 @@
 use rsb_derive::*;
 
-use crate::errors::*;
 use crate::*;
 use async_trait::async_trait;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
@@ -48,8 +47,7 @@ impl GcpKmsProvider {
                 "https://cloudkms.googleapis.com",
                 None,
             )
-            .await
-            .map_err(|e| KmsAeadError::from(e))?;
+            .await?;
 
         Ok(Self {
             gcp_key_ref: kms_key_ref.clone(),
@@ -81,12 +79,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             .unwrap(),
         );
 
-        let encrypt_response = self
-            .client
-            .get()
-            .encrypt(encrypt_request)
-            .await
-            .map_err(|e| KmsAeadError::from(e))?;
+        let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
 
         Ok(EncryptedSessionKey(secret_vault_value::SecretValue::new(
             encrypt_response.into_inner().ciphertext,
@@ -115,12 +108,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             .unwrap(),
         );
 
-        let decrypt_response = self
-            .client
-            .get()
-            .decrypt(decrypt_request)
-            .await
-            .map_err(|e| KmsAeadError::from(e))?;
+        let decrypt_response = self.client.get().decrypt(decrypt_request).await?;
 
         Ok(secret_vault_value::SecretValue::new(
             hex::decode(
