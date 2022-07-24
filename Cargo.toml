@@ -1,13 +1,13 @@
 [package]
 name = "kms-aead"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
 license = "Apache-2.0"
-description = "Library provides a secure vault to store application secrets in memory coming from Google/AWS/other secret managers"
-homepage = "https://github.com/abdolence/secret-vault-rs"
-repository = "https://github.com/abdolence/secret-vault-rs"
-documentation = "https://docs.rs/secret-vault"
+description = "KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD encryption"
+homepage = "https://github.com/abdolence/kms-aead-rs"
+repository = "https://github.com/abdolence/kms-aead-rs"
+documentation = "https://docs.rs/kms-aead"
 categories = ["cryptography","api-bindings"]
 keywords = ["kms", "google", "aws", "envelope"]
 readme = "README.md"
