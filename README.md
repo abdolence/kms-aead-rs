@@ -2,7 +2,7 @@
 ![tests and formatting](https://github.com/abdolence/kms-aead-rs/workflows/tests%20&amp;%20formatting/badge.svg)
 ![security audit](https://github.com/abdolence/kms-aead-rs/workflows/security%20audit/badge.svg)
 
-# KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD encryption for Rust
+# KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD for Rust
 
 Available providers for:
  - Google Cloud Platform KMS
