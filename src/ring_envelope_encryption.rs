@@ -99,6 +99,29 @@ where
         Ok((decrypted, current_session_key))
     }
 
+    async fn encrypt_value_with_new_session_key(
+        &self,
+        aad: &Aad,
+        secret_value: &SecretValue,
+    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)> {
+        let session_key = generate_secret_key(&self.secure_rand, self.algo.key_len())?;
+        let new_encrypted_key = self
+            .provider
+            .encrypt_session_key(session_key.clone())
+            .await?;
+
+        Ok((
+            encrypt_with_sealing_key(
+                self.algo,
+                &session_key,
+                &self.nonce_data,
+                ring::aead::Aad::from(aad),
+                secret_value,
+            )?,
+            new_encrypted_key,
+        ))
+    }
+
     async fn decrypt_value_with_session_key(
         &self,
         aad: &Aad,

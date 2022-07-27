@@ -31,6 +31,12 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
         encrypted_value: &EncryptedSecretValue,
     ) -> KmsAeadResult<(SecretValue, EncryptedSessionKey)>;
 
+    async fn encrypt_value_with_new_session_key(
+        &self,
+        aad: &Aad,
+        secret_value: &SecretValue,
+    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)>;
+
     async fn decrypt_value_with_session_key(
         &self,
         aad: &Aad,
