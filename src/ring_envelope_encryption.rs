@@ -130,7 +130,7 @@ where
     ) -> KmsAeadResult<SecretValue> {
         let session_key = self
             .provider
-            .decrypt_session_key(&encrypted_session_key)
+            .decrypt_session_key(encrypted_session_key)
             .await?;
 
         decrypt_with_opening_key(

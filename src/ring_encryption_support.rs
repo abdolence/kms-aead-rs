@@ -104,15 +104,14 @@ pub fn generate_secret_key(
     secure_rand: &SystemRandom,
     key_len: usize,
 ) -> KmsAeadResult<SecretValue> {
-    let mut rand_key_data: Vec<u8> = Vec::with_capacity(key_len);
-    rand_key_data.resize(key_len, 0);
+    let mut rand_key_data: Vec<u8> = vec![0; key_len];
     secure_rand.fill(&mut rand_key_data).map_err(|e| {
         KmsAeadEncryptionError::create(
             "ENCRYPTION",
             format!("Unable to initialise random session key: {:?}", e).as_str(),
         )
     })?;
-    Ok(SecretValue::new(Vec::from(rand_key_data)))
+    Ok(SecretValue::new(rand_key_data))
 }
 
 pub fn generate_nonce(secure_rand: &SystemRandom) -> KmsAeadResult<SecretValue> {
