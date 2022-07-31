@@ -13,7 +13,7 @@ Available providers for:
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.3", features=["..."] }
+kms-aead = { version = "0.4", features=["..."] }
 ```
 See security consideration below about versioning.
 
