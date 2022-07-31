@@ -7,7 +7,6 @@
 //! ## Examples:
 //! Available at github: https://github.com/abdolence/kms-aead-rs
 //!
-//! ```
 
 #![allow(unused_parens, clippy::new_without_default)]
 
