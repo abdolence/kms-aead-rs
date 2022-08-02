@@ -24,7 +24,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         google_kms_key,
     );
 
-    // Building the vault
     let encryption = kms_aead::KmsAeadRingEncryption::new(
         kms_aead::providers::GcpKmsProvider::new(&kms_ref).await?,
     )
