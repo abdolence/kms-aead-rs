@@ -67,3 +67,8 @@ required-features = ["aws-kms-encryption"]
 name = "gcp_kms"
 path = "examples/gcp_kms.rs"
 required-features = ["gcp-kms-encryption"]
+
+[[example]]
+name = "kms_with_explicit_key"
+path = "examples/kms_with_explicit_key.rs"
+required-features = ["aws-kms-encryption"]
