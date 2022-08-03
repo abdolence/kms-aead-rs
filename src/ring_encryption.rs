@@ -15,6 +15,13 @@ impl KmsAeadRingAeadEncryption {
         Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secret)
     }
 
+    pub fn with_generated_secret(algo: &'static ring::aead::Algorithm) -> KmsAeadResult<Self> {
+        let secure_rand = SystemRandom::new();
+        let secret = generate_secret_key(&secure_rand, algo.key_len())?;
+
+        Self::with_algorithm(algo, secret)
+    }
+
     pub fn with_algorithm(
         algo: &'static ring::aead::Algorithm,
         secret: SecretValue,
