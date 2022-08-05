@@ -2,12 +2,13 @@ use crate::ring_encryption_support::*;
 use crate::{EncryptedSecretValue, KmsAeadEncryption, KmsAeadResult};
 use async_trait::*;
 use ring::rand::SystemRandom;
+use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 pub struct KmsAeadRingAeadEncryption {
     algo: &'static ring::aead::Algorithm,
     secret: SecretValue,
-    nonce_data: SecretValue,
+    rand: SystemRandom,
 }
 
 impl KmsAeadRingAeadEncryption {
@@ -26,12 +27,10 @@ impl KmsAeadRingAeadEncryption {
         algo: &'static ring::aead::Algorithm,
         secret: SecretValue,
     ) -> KmsAeadResult<Self> {
-        let secure_rand = SystemRandom::new();
-
         Ok(Self {
             algo,
             secret,
-            nonce_data: generate_nonce(&secure_rand)?,
+            rand: SystemRandom::new(),
         })
     }
 }
@@ -46,13 +45,28 @@ where
         aad: Aad,
         secret_value: &SecretValue,
     ) -> KmsAeadResult<EncryptedSecretValue> {
-        encrypt_with_sealing_key(
+        let nonce_data = generate_nonce(&self.rand)?;
+
+        let encrypted_value = encrypt_with_sealing_key(
             self.algo,
             &self.secret,
-            &self.nonce_data,
+            nonce_data.as_slice(),
             ring::aead::Aad::from(aad),
-            secret_value,
-        )
+            secret_value.ref_sensitive_value().as_slice(),
+        )?;
+
+        let mut encrypted_value_with_nonce: Vec<u8> = Vec::with_capacity(
+            nonce_data.len() + encrypted_value.value().ref_sensitive_value().len(),
+        );
+
+        encrypted_value_with_nonce.extend_from_slice(nonce_data.as_slice());
+
+        encrypted_value_with_nonce
+            .extend_from_slice(encrypted_value.value().ref_sensitive_value().as_slice());
+
+        Ok(EncryptedSecretValue(SecretValue::new(
+            encrypted_value_with_nonce,
+        )))
     }
 
     async fn decrypt_value(
@@ -60,12 +74,17 @@ where
         aad: Aad,
         encrypted_secret_value: &EncryptedSecretValue,
     ) -> KmsAeadResult<SecretValue> {
+        let (nonce_data, encrypted_part) = encrypted_secret_value
+            .value()
+            .ref_sensitive_value()
+            .split_at(ring::aead::NONCE_LEN);
+
         decrypt_with_opening_key(
             self.algo,
             &self.secret,
-            &self.nonce_data,
+            nonce_data,
             ring::aead::Aad::from(aad),
-            encrypted_secret_value,
+            encrypted_part,
         )
     }
 }
@@ -76,7 +95,6 @@ mod tests {
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
     use proptest::test_runner::TestRunner;
-    use rvstruct::*;
 
     pub fn generate_secret_value() -> BoxedStrategy<SecretValue> {
         ("[a-zA-Z0-9]+")
@@ -148,5 +166,33 @@ mod tests {
             .decrypt_value(mock_aad2.clone(), &encrypted_value)
             .await
             .expect_err("Unable to decrypt data");
+    }
+
+    #[tokio::test]
+    async fn different_encryption_instances_test() {
+        let mock_aad: String = "test1".to_string();
+        let mock_secret_value = SecretValue::new("42".repeat(1024).as_bytes().to_vec());
+
+        let secure_rand: SystemRandom = SystemRandom::new();
+        let secret_key =
+            generate_secret_key(&secure_rand, ring::aead::CHACHA20_POLY1305.key_len()).unwrap();
+
+        let encrypted_value = {
+            let encryption = KmsAeadRingAeadEncryption::new(secret_key.clone()).unwrap();
+            encryption
+                .encrypt_value(mock_aad.clone(), &mock_secret_value)
+                .await
+                .unwrap()
+        };
+
+        let decrypted_value = {
+            let encryption = KmsAeadRingAeadEncryption::new(secret_key.clone()).unwrap();
+            encryption
+                .decrypt_value(mock_aad.clone(), &encrypted_value)
+                .await
+                .unwrap()
+        };
+
+        assert_eq!(decrypted_value, mock_secret_value)
     }
 }

@@ -55,6 +55,8 @@
 
 #![allow(unused_parens, clippy::new_without_default)]
 
+extern crate core;
+
 use rvstruct::*;
 use secret_vault_value::SecretValue;
 pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
