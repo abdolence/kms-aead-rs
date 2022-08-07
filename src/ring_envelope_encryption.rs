@@ -13,6 +13,7 @@ pub trait KmsAeadRingEncryptionProvider {
         &self,
         session_key: SecretValue,
     ) -> KmsAeadResult<EncryptedSessionKey>;
+
     async fn decrypt_session_key(
         &self,
         encrypted_session_secret: &EncryptedSessionKey,

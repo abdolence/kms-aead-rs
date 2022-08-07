@@ -40,9 +40,13 @@ reading sensitive information.
 Please don't use broad version dependency management not to include
 a new version of dependency automatically without auditing the changes.
 
-### Protect your secrets in GCP/AWS using IAM and service accounts
-Don't expose all of your secrets to the apps. 
-Use IAM and different service accounts to give access only on as-needed basis.
+### Security implementation details and recommendations
+The library uses random 96 bit [nonces](https://en.wikipedia.org/wiki/Cryptographic_nonce)
+and [ChaCha20-Poly1305](https://tools.ietf.org/html/rfc7539) algorithm by default.
+Depends on your security requirements to avoid nonce collisions it is recommended
+to either rotate random DEK frequently using `rotate_session_key` or
+even use a new random DEK per encryption using `encrypt_value_with_new_session_key`.
+
 
 ## Licence
 Apache Software License (ASL)
