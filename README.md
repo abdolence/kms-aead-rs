@@ -4,16 +4,15 @@
 
 # KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD for Rust
 
-Available providers for:
- - Google Cloud Platform KMS
- - Amazon Web Services KMS
-
 Features:
 - Able to encode using default/current session key (DEK) or receiving it as a parameter
 - Manual rotation of default/current session key (DEK) or automatic key generation for each of the request
 - Provides a public and simple implementation for Ring based AEAD encryption without using KMS.
 - Opt-in for KMS based secure random generator for GCP and AWS instead of Ring.
 
+Available KMS providers:
+- Google Cloud Platform KMS
+- Amazon Web Services KMS
 
 ## Quick start
 
@@ -27,6 +26,7 @@ See security consideration below about versioning.
 ### Available optional features for Secret Vault:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
+- `encrypted-ring` using API for Ring AEAD only without any KMS envelope encryption
 
 All examples available at [examples](examples) directory.
 
