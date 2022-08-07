@@ -1,11 +1,13 @@
-use crate::ring_encryption_support::*;
-use crate::{EncryptedSecretValue, EncryptedSessionKey, KmsAeadEncryption, KmsAeadEnvelopeEncryption, KmsAeadResult};
+use crate::ring_encryption::KmsAeadRingAeadEncryption;
+use crate::{
+    EncryptedSecretValue, EncryptedSessionKey, KmsAeadEncryption, KmsAeadEnvelopeEncryption,
+    KmsAeadResult,
+};
 use async_trait::*;
 use ring::rand::SystemRandom;
 use secret_vault_value::SecretValue;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::ring_encryption::KmsAeadRingAeadEncryption;
 
 #[async_trait]
 pub trait KmsAeadRingEncryptionProvider {
@@ -17,6 +19,11 @@ pub trait KmsAeadRingEncryptionProvider {
     async fn decrypt_session_key(
         &self,
         encrypted_session_secret: &EncryptedSessionKey,
+    ) -> KmsAeadResult<SecretValue>;
+
+    async fn generate_secure_key(
+        &self,
+        aead_encryption: &KmsAeadRingAeadEncryption,
     ) -> KmsAeadResult<SecretValue>;
 }
 
@@ -42,9 +49,10 @@ where
         algo: &'static ring::aead::Algorithm,
     ) -> KmsAeadResult<Self> {
         let secure_rand = SystemRandom::new();
-        let session_key = generate_secret_key(&secure_rand, algo.key_len())?;
-        let current_session_secret = provider.encrypt_session_key(session_key).await?;
         let aead_encryption = KmsAeadRingAeadEncryption::with_algorithm(algo, secure_rand)?;
+
+        let session_key = provider.generate_secure_key(&aead_encryption).await?;
+        let current_session_secret = provider.encrypt_session_key(session_key).await?;
 
         Ok(Self {
             provider,
@@ -72,12 +80,12 @@ where
             .decrypt_session_key(&current_session_key)
             .await?;
 
-        let cipher_text = self.aead_encryption.encrypt_value(aad, plain_text, &session_key).await?;
+        let cipher_text = self
+            .aead_encryption
+            .encrypt_value(aad, plain_text, &session_key)
+            .await?;
 
-        Ok((
-            cipher_text,
-            current_session_key,
-        ))
+        Ok((cipher_text, current_session_key))
     }
 
     async fn encrypt_value_with_new_session_key(
@@ -85,21 +93,23 @@ where
         aad: &Aad,
         plain_text: &SecretValue,
     ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)> {
-        let session_key = self.aead_encryption.generate_session_key()?;
+        let session_key = self
+            .provider
+            .generate_secure_key(&self.aead_encryption)
+            .await?;
 
         let new_encrypted_key = self
             .provider
             .encrypt_session_key(session_key.clone())
             .await?;
 
-        let cipher_text = self.aead_encryption.encrypt_value(aad, plain_text, &session_key).await?;
+        let cipher_text = self
+            .aead_encryption
+            .encrypt_value(aad, plain_text, &session_key)
+            .await?;
 
-        Ok((
-            cipher_text,
-            new_encrypted_key,
-        ))
+        Ok((cipher_text, new_encrypted_key))
     }
-
 
     async fn decrypt_value(
         &self,
@@ -126,13 +136,18 @@ where
             .decrypt_session_key(encrypted_session_key)
             .await?;
 
-        self.aead_encryption.decrypt_value(aad, encrypted_value, &session_key).await
+        self.aead_encryption
+            .decrypt_value(aad, encrypted_value, &session_key)
+            .await
     }
 
     async fn rotate_session_key(
         &self,
     ) -> KmsAeadResult<(EncryptedSessionKey, EncryptedSessionKey)> {
-        let session_key = self.aead_encryption.generate_session_key()?;
+        let session_key = self
+            .provider
+            .generate_secure_key(&self.aead_encryption)
+            .await?;
 
         let new_encrypted_key = self.provider.encrypt_session_key(session_key).await?;
 

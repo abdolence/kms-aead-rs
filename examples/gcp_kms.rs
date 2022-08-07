@@ -1,3 +1,4 @@
+use kms_aead::providers::GcpKmsProviderOptions;
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 

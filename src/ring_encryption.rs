@@ -1,4 +1,4 @@
-use crate::ring_encryption_support::*;
+use crate::ring_support::*;
 use crate::{EncryptedSecretValue, KmsAeadEncryption, KmsAeadResult};
 use async_trait::*;
 use ring::rand::SystemRandom;
@@ -6,24 +6,20 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 pub struct KmsAeadRingAeadEncryption {
-    algo: &'static ring::aead::Algorithm,
-    secure_rand: SystemRandom
+    pub algo: &'static ring::aead::Algorithm,
+    secure_rand: SystemRandom,
 }
 
 impl KmsAeadRingAeadEncryption {
-
     pub fn new(secure_rand: SystemRandom) -> KmsAeadResult<Self> {
         Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secure_rand)
     }
 
     pub fn with_algorithm(
         algo: &'static ring::aead::Algorithm,
-        secure_rand: SystemRandom
+        secure_rand: SystemRandom,
     ) -> KmsAeadResult<Self> {
-        Ok(Self {
-            algo,
-            secure_rand,
-        })
+        Ok(Self { algo, secure_rand })
     }
 
     pub fn generate_session_key(&self) -> KmsAeadResult<SecretValue> {
@@ -36,7 +32,6 @@ impl<Aad> KmsAeadEncryption<Aad> for KmsAeadRingAeadEncryption
 where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
 {
-
     async fn encrypt_value(
         &self,
         aad: &Aad,
@@ -73,7 +68,6 @@ where
         cipher_text: &EncryptedSecretValue,
         session_key: &SecretValue,
     ) -> KmsAeadResult<SecretValue> {
-
         let (nonce_data, encrypted_part) = cipher_text
             .value()
             .ref_sensitive_value()
@@ -106,10 +100,7 @@ mod tests {
         let mock_aad: String = "test".to_string();
         let secure_rand: SystemRandom = SystemRandom::new();
 
-        let encryption = KmsAeadRingAeadEncryption::new(
-            secure_rand,
-        )
-        .unwrap();
+        let encryption = KmsAeadRingAeadEncryption::new(secure_rand).unwrap();
 
         let secret_key = encryption.generate_session_key().unwrap();
 
@@ -157,10 +148,7 @@ mod tests {
 
         let secure_rand: SystemRandom = SystemRandom::new();
 
-        let encryption = KmsAeadRingAeadEncryption::new(
-            secure_rand,
-        )
-        .unwrap();
+        let encryption = KmsAeadRingAeadEncryption::new(secure_rand).unwrap();
 
         let secret_key = encryption.generate_session_key().unwrap();
 

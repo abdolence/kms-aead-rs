@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use aws_sdk_kms::types::Blob;
 use tracing::*;
 
+use crate::ring_encryption::KmsAeadRingAeadEncryption;
 use crate::ring_envelope_encryption::KmsAeadRingEncryptionProvider;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
@@ -31,13 +32,27 @@ impl AwsKmsKeyRef {
     }
 }
 
+#[derive(Debug, Clone, Builder)]
+pub struct AwsKmsProviderOptions {
+    #[default = "false"]
+    pub use_kms_random_gen: bool,
+}
+
 pub struct AwsKmsProvider {
     aws_key_ref: AwsKmsKeyRef,
     client: aws_sdk_kms::Client,
+    options: AwsKmsProviderOptions,
 }
 
 impl AwsKmsProvider {
     pub async fn new(kms_key_ref: &AwsKmsKeyRef) -> KmsAeadResult<Self> {
+        Self::with_options(kms_key_ref, AwsKmsProviderOptions::new()).await
+    }
+
+    pub async fn with_options(
+        kms_key_ref: &AwsKmsKeyRef,
+        options: AwsKmsProviderOptions,
+    ) -> KmsAeadResult<Self> {
         debug!(
             "Initialising AWS KMS envelope encryption for {}",
             kms_key_ref.to_key_arn()
@@ -58,6 +73,7 @@ impl AwsKmsProvider {
         Ok(Self {
             aws_key_ref: effective_kms_ref,
             client,
+            options,
         })
     }
 }
@@ -139,6 +155,33 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
                     self.aws_key_ref.to_key_arn()
                 ),
             )))
+        }
+    }
+
+    async fn generate_secure_key(
+        &self,
+        aead_encryption: &KmsAeadRingAeadEncryption,
+    ) -> KmsAeadResult<SecretValue> {
+        if self.options.use_kms_random_gen {
+            let resp = self
+                .client
+                .generate_random()
+                .number_of_bytes(aead_encryption.algo.key_len() as i32)
+                .send()
+                .await?;
+            let random_bytes_blob = resp.plaintext.ok_or_else(|| {
+                KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
+                    KmsAeadErrorPublicGenericDetails::new("AWS_ERROR".into()),
+                    format!(
+                        "AWS error {:?}. No secure random bytes received.",
+                        self.aws_key_ref.to_key_arn()
+                    ),
+                ))
+            })?;
+
+            Ok(SecretValue::from(random_bytes_blob.into_inner()))
+        } else {
+            aead_encryption.generate_session_key()
         }
     }
 }

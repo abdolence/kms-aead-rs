@@ -8,6 +8,7 @@
 //! - Able to encode using default/current session key (DEK) or receiving it as a parameter
 //! - Manual rotation of default/current session key (DEK) or automatic key generation for each of the request
 //! - Provides a public and simple implementation for Ring based AEAD encryption without using KMS.
+//! - Opt-in for KMS based secure random generator for GCP and AWS instead of Ring.
 //!
 //! ## Examples:
 //!
@@ -71,7 +72,7 @@ pub mod errors;
 pub mod ring_encryption;
 
 #[cfg(feature = "encrypted-ring")]
-mod ring_encryption_support;
+mod ring_support;
 
 #[cfg(feature = "encrypted-ring")]
 pub mod ring_envelope_encryption;

@@ -8,6 +8,7 @@ use gcloud_sdk::proto_ext::kms::*;
 use gcloud_sdk::*;
 use tracing::*;
 
+use crate::ring_encryption::KmsAeadRingAeadEncryption;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
@@ -29,13 +30,26 @@ impl GcpKmsKeyRef {
     }
 }
 
+#[derive(Debug, Clone, Builder)]
+pub struct GcpKmsProviderOptions {
+    #[default = "false"]
+    pub use_kms_random_gen: bool,
+}
+
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
     gcp_key_ref: GcpKmsKeyRef,
+    options: GcpKmsProviderOptions,
 }
 
 impl GcpKmsProvider {
     pub async fn new(kms_key_ref: &GcpKmsKeyRef) -> KmsAeadResult<Self> {
+        Self::with_options(kms_key_ref, GcpKmsProviderOptions::new()).await
+    }
+    pub async fn with_options(
+        kms_key_ref: &GcpKmsKeyRef,
+        options: GcpKmsProviderOptions,
+    ) -> KmsAeadResult<Self> {
         debug!(
             "Initialising Google KMS envelope encryption for {}",
             kms_key_ref.to_google_ref()
@@ -52,6 +66,7 @@ impl GcpKmsProvider {
         Ok(Self {
             gcp_key_ref: kms_key_ref.clone(),
             client,
+            options,
         })
     }
 }
@@ -119,5 +134,41 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             )
             .unwrap(),
         ))
+    }
+
+    async fn generate_secure_key(
+        &self,
+        aead_encryption: &KmsAeadRingAeadEncryption,
+    ) -> KmsAeadResult<SecretValue> {
+        if self.options.use_kms_random_gen {
+            let gcp_global_location = format!(
+                "projects/{}/locations/{}",
+                self.gcp_key_ref.google_project_id, self.gcp_key_ref.location
+            );
+
+            let mut gen_random_bytes_req = tonic::Request::new(GenerateRandomBytesRequest {
+                location: gcp_global_location.clone(),
+                length_bytes: aead_encryption.algo.key_len() as i32,
+                protection_level: ProtectionLevel::Hsm.into(),
+            });
+
+            gen_random_bytes_req.metadata_mut().insert(
+                "x-goog-request-params",
+                MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
+                    "name={}",
+                    gcp_global_location
+                ))
+                .unwrap(),
+            );
+
+            let gen_random_bytes_resp = self
+                .client
+                .get()
+                .generate_random_bytes(gen_random_bytes_req)
+                .await?;
+            Ok(SecretValue::from(gen_random_bytes_resp.into_inner().data))
+        } else {
+            aead_encryption.generate_session_key()
+        }
     }
 }

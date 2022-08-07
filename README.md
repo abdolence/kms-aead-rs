@@ -8,12 +8,19 @@ Available providers for:
  - Google Cloud Platform KMS
  - Amazon Web Services KMS
 
+Features:
+- Able to encode using default/current session key (DEK) or receiving it as a parameter
+- Manual rotation of default/current session key (DEK) or automatic key generation for each of the request
+- Provides a public and simple implementation for Ring based AEAD encryption without using KMS.
+- Opt-in for KMS based secure random generator for GCP and AWS instead of Ring.
+
+
 ## Quick start
 
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.4", features=["..."] }
+kms-aead = { version = "0.5", features=["..."] }
 ```
 See security consideration below about versioning.
 
@@ -22,6 +29,25 @@ See security consideration below about versioning.
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
 
 All examples available at [examples](examples) directory.
+
+## GCP/AWS secure random generators
+To use GCP/AWS KMS API for secure random generator you should enable it using options.
+
+For AWS:
+```rust
+    providers::AwsKmsProvider::with_options(
+            &kms_ref,
+            AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
+    ).await?
+```
+
+For GCP:
+```rust
+    providers::GcpKmsProvider::with_options(
+            &kms_ref,
+            GcpKmsProviderOptions::new().with_use_kms_random_gen(true),
+    ).await?
+```
 
 ## Security considerations and risks
 
@@ -46,7 +72,6 @@ and [ChaCha20-Poly1305](https://tools.ietf.org/html/rfc7539) algorithm by defaul
 Depends on your security requirements to avoid nonce collisions it is recommended
 to either rotate random DEK frequently using `rotate_session_key` or
 even use a new random DEK per encryption using `encrypt_value_with_new_session_key`.
-
 
 ## Licence
 Apache Software License (ASL)
