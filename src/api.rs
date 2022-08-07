@@ -4,21 +4,26 @@ use secret_vault_value::SecretValue;
 
 #[async_trait]
 pub trait KmsAeadEncryption<Aad> {
+
     async fn encrypt_value(
         &self,
-        aad: Aad,
-        secret_value: &SecretValue,
+        aad: &Aad,
+        plain_text: &SecretValue,
+        session_key: &SecretValue,
     ) -> KmsAeadResult<EncryptedSecretValue>;
 
     async fn decrypt_value(
         &self,
-        aad: Aad,
-        secret_value: &EncryptedSecretValue,
+        aad: &Aad,
+        cipher_text: &EncryptedSecretValue,
+        session_key: &SecretValue,
     ) -> KmsAeadResult<SecretValue>;
+
 }
 
 #[async_trait]
 pub trait KmsAeadEnvelopeEncryption<Aad> {
+
     async fn encrypt_value(
         &self,
         aad: &Aad,
@@ -30,13 +35,6 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
         aad: &Aad,
         plain_text: &SecretValue,
     ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)>;
-
-    async fn encrypt_value_with_session_key(
-        &self,
-        aad: &Aad,
-        plain_text: &SecretValue,
-        session_key: &SecretValue,
-    ) -> KmsAeadResult<EncryptedSecretValue>;
 
     async fn decrypt_value(
         &self,

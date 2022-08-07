@@ -7,31 +7,27 @@ use secret_vault_value::SecretValue;
 
 pub struct KmsAeadRingAeadEncryption {
     algo: &'static ring::aead::Algorithm,
-    secret: SecretValue,
-    rand: SystemRandom,
+    secure_rand: SystemRandom
 }
 
 impl KmsAeadRingAeadEncryption {
-    pub fn new(secret: SecretValue) -> KmsAeadResult<Self> {
-        Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secret)
-    }
 
-    pub fn with_generated_secret(algo: &'static ring::aead::Algorithm) -> KmsAeadResult<Self> {
-        let secure_rand = SystemRandom::new();
-        let secret = generate_secret_key(&secure_rand, algo.key_len())?;
-
-        Self::with_algorithm(algo, secret)
+    pub fn new(secure_rand: SystemRandom) -> KmsAeadResult<Self> {
+        Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secure_rand)
     }
 
     pub fn with_algorithm(
         algo: &'static ring::aead::Algorithm,
-        secret: SecretValue,
+        secure_rand: SystemRandom
     ) -> KmsAeadResult<Self> {
         Ok(Self {
             algo,
-            secret,
-            rand: SystemRandom::new(),
+            secure_rand,
         })
+    }
+
+    pub fn generate_session_key(&self) -> KmsAeadResult<SecretValue> {
+        generate_secret_key(&self.secure_rand, self.algo.key_len())
     }
 }
 
@@ -40,19 +36,21 @@ impl<Aad> KmsAeadEncryption<Aad> for KmsAeadRingAeadEncryption
 where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
 {
+
     async fn encrypt_value(
         &self,
-        aad: Aad,
-        secret_value: &SecretValue,
+        aad: &Aad,
+        plain_text: &SecretValue,
+        session_key: &SecretValue,
     ) -> KmsAeadResult<EncryptedSecretValue> {
-        let nonce_data = generate_nonce(&self.rand)?;
+        let nonce_data = generate_nonce(&self.secure_rand)?;
 
         let encrypted_value = encrypt_with_sealing_key(
             self.algo,
-            &self.secret,
+            session_key,
             nonce_data.as_slice(),
             ring::aead::Aad::from(aad),
-            secret_value.ref_sensitive_value().as_slice(),
+            plain_text.ref_sensitive_value().as_slice(),
         )?;
 
         let mut encrypted_value_with_nonce: Vec<u8> = Vec::with_capacity(
@@ -71,17 +69,19 @@ where
 
     async fn decrypt_value(
         &self,
-        aad: Aad,
-        encrypted_secret_value: &EncryptedSecretValue,
+        aad: &Aad,
+        cipher_text: &EncryptedSecretValue,
+        session_key: &SecretValue,
     ) -> KmsAeadResult<SecretValue> {
-        let (nonce_data, encrypted_part) = encrypted_secret_value
+
+        let (nonce_data, encrypted_part) = cipher_text
             .value()
             .ref_sensitive_value()
             .split_at(ring::aead::NONCE_LEN);
 
         decrypt_with_opening_key(
             self.algo,
-            &self.secret,
+            session_key,
             nonce_data,
             ring::aead::Aad::from(aad),
             encrypted_part,
@@ -105,19 +105,22 @@ mod tests {
     async fn encryption_test_for(mock_secret_value: SecretValue) {
         let mock_aad: String = "test".to_string();
         let secure_rand: SystemRandom = SystemRandom::new();
+
         let encryption = KmsAeadRingAeadEncryption::new(
-            generate_secret_key(&secure_rand, ring::aead::CHACHA20_POLY1305.key_len()).unwrap(),
+            secure_rand,
         )
         .unwrap();
 
+        let secret_key = encryption.generate_session_key().unwrap();
+
         let encrypted_value = encryption
-            .encrypt_value(mock_aad.clone(), &mock_secret_value)
+            .encrypt_value(&mock_aad, &mock_secret_value, &secret_key)
             .await
             .unwrap();
         assert_ne!(*encrypted_value.value(), mock_secret_value);
 
         let decrypted_value = encryption
-            .decrypt_value(mock_aad.clone(), &encrypted_value)
+            .decrypt_value(&mock_aad, &encrypted_value, &secret_key)
             .await
             .unwrap();
         assert_eq!(
@@ -153,17 +156,20 @@ mod tests {
         let mock_secret_value = SecretValue::new("42".repeat(1024).as_bytes().to_vec());
 
         let secure_rand: SystemRandom = SystemRandom::new();
+
         let encryption = KmsAeadRingAeadEncryption::new(
-            generate_secret_key(&secure_rand, ring::aead::CHACHA20_POLY1305.key_len()).unwrap(),
+            secure_rand,
         )
         .unwrap();
 
+        let secret_key = encryption.generate_session_key().unwrap();
+
         let encrypted_value = encryption
-            .encrypt_value(mock_aad1.clone(), &mock_secret_value)
+            .encrypt_value(&mock_aad1, &mock_secret_value, &secret_key)
             .await
             .unwrap();
         encryption
-            .decrypt_value(mock_aad2.clone(), &encrypted_value)
+            .decrypt_value(&mock_aad2, &encrypted_value, &secret_key)
             .await
             .expect_err("Unable to decrypt data");
     }
@@ -174,21 +180,22 @@ mod tests {
         let mock_secret_value = SecretValue::new("42".repeat(1024).as_bytes().to_vec());
 
         let secure_rand: SystemRandom = SystemRandom::new();
+
         let secret_key =
             generate_secret_key(&secure_rand, ring::aead::CHACHA20_POLY1305.key_len()).unwrap();
 
         let encrypted_value = {
-            let encryption = KmsAeadRingAeadEncryption::new(secret_key.clone()).unwrap();
+            let encryption = KmsAeadRingAeadEncryption::new(secure_rand.clone()).unwrap();
             encryption
-                .encrypt_value(mock_aad.clone(), &mock_secret_value)
+                .encrypt_value(&mock_aad, &mock_secret_value, &secret_key)
                 .await
                 .unwrap()
         };
 
         let decrypted_value = {
-            let encryption = KmsAeadRingAeadEncryption::new(secret_key.clone()).unwrap();
+            let encryption = KmsAeadRingAeadEncryption::new(secure_rand.clone()).unwrap();
             encryption
-                .decrypt_value(mock_aad.clone(), &encrypted_value)
+                .decrypt_value(&mock_aad, &encrypted_value, &secret_key)
                 .await
                 .unwrap()
         };
