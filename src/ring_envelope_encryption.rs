@@ -1,8 +1,5 @@
 use crate::ring_encryption::KmsAeadRingAeadEncryption;
-use crate::{
-    EncryptedSecretValue, EncryptedSessionKey, KmsAeadEncryption, KmsAeadEnvelopeEncryption,
-    KmsAeadResult,
-};
+use crate::*;
 use async_trait::*;
 use ring::rand::SystemRandom;
 use secret_vault_value::SecretValue;
@@ -11,32 +8,32 @@ use tokio::sync::RwLock;
 
 #[async_trait]
 pub trait KmsAeadRingEncryptionProvider {
-    async fn encrypt_session_key(
+    async fn encrypt_data_encryption_key(
         &self,
-        session_key: SecretValue,
-    ) -> KmsAeadResult<EncryptedSessionKey>;
+        encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
 
-    async fn decrypt_session_key(
+    async fn decrypt_data_encryption_key(
         &self,
-        encrypted_session_secret: &EncryptedSessionKey,
-    ) -> KmsAeadResult<SecretValue>;
+        encrypted_key: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey>;
 
-    async fn generate_secure_key(
+    async fn generate_encryption_key(
         &self,
         aead_encryption: &KmsAeadRingAeadEncryption,
-    ) -> KmsAeadResult<SecretValue>;
+    ) -> KmsAeadResult<DataEncryptionKey>;
 }
 
-pub struct KmsAeadRingEncryption<P>
+pub struct KmsAeadRingEnvelopeEncryption<P>
 where
     P: KmsAeadRingEncryptionProvider + Send + Sync,
 {
     provider: P,
     aead_encryption: KmsAeadRingAeadEncryption,
-    current_session_secret: Arc<RwLock<EncryptedSessionKey>>,
+    current_dek: Arc<RwLock<EncryptedDataEncryptionKey>>,
 }
 
-impl<P> KmsAeadRingEncryption<P>
+impl<P> KmsAeadRingEnvelopeEncryption<P>
 where
     P: KmsAeadRingEncryptionProvider + Send + Sync,
 {
@@ -51,33 +48,33 @@ where
         let secure_rand = SystemRandom::new();
         let aead_encryption = KmsAeadRingAeadEncryption::with_algorithm(algo, secure_rand)?;
 
-        let session_key = provider.generate_secure_key(&aead_encryption).await?;
-        let current_session_secret = provider.encrypt_session_key(session_key).await?;
+        let dek = provider.generate_encryption_key(&aead_encryption).await?;
+        let current_encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
 
         Ok(Self {
             provider,
             aead_encryption,
-            current_session_secret: Arc::new(RwLock::new(current_session_secret)),
+            current_dek: Arc::new(RwLock::new(current_encrypted_dek)),
         })
     }
 }
 
 #[async_trait]
-impl<Aad, P> KmsAeadEnvelopeEncryption<Aad> for KmsAeadRingEncryption<P>
+impl<Aad, P> KmsAeadEnvelopeEncryption<Aad> for KmsAeadRingEnvelopeEncryption<P>
 where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
     P: KmsAeadRingEncryptionProvider + Send + Sync,
 {
-    async fn encrypt_value(
+    async fn encrypt_value_with_current_key(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)> {
-        let current_session_key = { self.current_session_secret.read().await.clone() };
+    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
+        let current_session_key = { self.current_dek.read().await.clone() };
 
         let session_key = self
             .provider
-            .decrypt_session_key(&current_session_key)
+            .decrypt_data_encryption_key(&current_session_key)
             .await?;
 
         let cipher_text = self
@@ -88,19 +85,19 @@ where
         Ok((cipher_text, current_session_key))
     }
 
-    async fn encrypt_value_with_new_session_key(
+    async fn encrypt_value_with_new_key(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)> {
+    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
         let session_key = self
             .provider
-            .generate_secure_key(&self.aead_encryption)
+            .generate_encryption_key(&self.aead_encryption)
             .await?;
 
         let new_encrypted_key = self
             .provider
-            .encrypt_session_key(session_key.clone())
+            .encrypt_data_encryption_key(&session_key)
             .await?;
 
         let cipher_text = self
@@ -111,53 +108,53 @@ where
         Ok((cipher_text, new_encrypted_key))
     }
 
-    async fn decrypt_value(
+    async fn decrypt_value_with_current_key(
         &self,
         aad: &Aad,
-        encrypted_value: &EncryptedSecretValue,
-    ) -> KmsAeadResult<(SecretValue, EncryptedSessionKey)> {
-        let current_session_key = { self.current_session_secret.read().await.clone() };
+        cipher_text: &CipherText,
+    ) -> KmsAeadResult<(SecretValue, EncryptedDataEncryptionKey)> {
+        let current_kek = { self.current_dek.read().await.clone() };
 
         let cipher_text = self
-            .decrypt_value_with_session_key(aad, encrypted_value, &current_session_key)
+            .decrypt_value_with_key(aad, cipher_text, &current_kek)
             .await?;
 
-        Ok((cipher_text, current_session_key))
+        Ok((cipher_text, current_kek))
     }
 
-    async fn decrypt_value_with_session_key(
+    async fn decrypt_value_with_key(
         &self,
         aad: &Aad,
-        encrypted_value: &EncryptedSecretValue,
-        encrypted_session_key: &EncryptedSessionKey,
+        cipher_text: &CipherText,
+        encrypted_data_encryption_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
-        let session_key = self
+        let dek = self
             .provider
-            .decrypt_session_key(encrypted_session_key)
+            .decrypt_data_encryption_key(encrypted_data_encryption_key)
             .await?;
 
         self.aead_encryption
-            .decrypt_value(aad, encrypted_value, &session_key)
+            .decrypt_value(aad, cipher_text, &dek)
             .await
     }
 
-    async fn rotate_session_key(
+    async fn rotate_current_key(
         &self,
-    ) -> KmsAeadResult<(EncryptedSessionKey, EncryptedSessionKey)> {
-        let session_key = self
+    ) -> KmsAeadResult<(EncryptedDataEncryptionKey, EncryptedDataEncryptionKey)> {
+        let kek = self
             .provider
-            .generate_secure_key(&self.aead_encryption)
+            .generate_encryption_key(&self.aead_encryption)
             .await?;
 
-        let new_encrypted_key = self.provider.encrypt_session_key(session_key).await?;
+        let new_encrypted_key = self.provider.encrypt_data_encryption_key(&kek).await?;
 
-        let previous_session_key = {
-            let mut write_session_secret = self.current_session_secret.write().await;
+        let previous_encrypted_key = {
+            let mut write_session_secret = self.current_dek.write().await;
             let previous_session_key = write_session_secret.clone();
             *write_session_secret = new_encrypted_key.clone();
             previous_session_key
         };
 
-        Ok((previous_session_key, new_encrypted_key))
+        Ok((previous_encrypted_key, new_encrypted_key))
     }
 }

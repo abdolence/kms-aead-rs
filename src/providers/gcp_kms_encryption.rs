@@ -73,14 +73,14 @@ impl GcpKmsProvider {
 
 #[async_trait]
 impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
-    async fn encrypt_session_key(
+    async fn encrypt_data_encryption_key(
         &self,
-        session_key: SecretValue,
-    ) -> KmsAeadResult<EncryptedSessionKey> {
+        encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         let mut encrypt_request = tonic::Request::new(EncryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
             plaintext: secret_vault_value::SecretValue::new(
-                hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes(),
+                hex::encode(encryption_key.value().ref_sensitive_value().as_slice()).into_bytes(),
             ),
             ..Default::default()
         });
@@ -96,21 +96,18 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
 
         let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
 
-        Ok(EncryptedSessionKey(secret_vault_value::SecretValue::new(
+        Ok(EncryptedDataEncryptionKey::from(
             encrypt_response.into_inner().ciphertext,
-        )))
+        ))
     }
 
-    async fn decrypt_session_key(
+    async fn decrypt_data_encryption_key(
         &self,
-        encrypted_session_secret: &EncryptedSessionKey,
-    ) -> KmsAeadResult<SecretValue> {
+        encrypted_key: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
         let mut decrypt_request = tonic::Request::new(DecryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
-            ciphertext: encrypted_session_secret
-                .value()
-                .ref_sensitive_value()
-                .clone(),
+            ciphertext: encrypted_key.value().clone(),
             ..Default::default()
         });
 
@@ -125,21 +122,23 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
 
         let decrypt_response = self.client.get().decrypt(decrypt_request).await?;
 
-        Ok(secret_vault_value::SecretValue::new(
-            hex::decode(
-                decrypt_response
-                    .into_inner()
-                    .plaintext
-                    .ref_sensitive_value(),
-            )
-            .unwrap(),
+        Ok(DataEncryptionKey::from(
+            secret_vault_value::SecretValue::new(
+                hex::decode(
+                    decrypt_response
+                        .into_inner()
+                        .plaintext
+                        .ref_sensitive_value(),
+                )
+                .unwrap(),
+            ),
         ))
     }
 
-    async fn generate_secure_key(
+    async fn generate_encryption_key(
         &self,
         aead_encryption: &KmsAeadRingAeadEncryption,
-    ) -> KmsAeadResult<SecretValue> {
+    ) -> KmsAeadResult<DataEncryptionKey> {
         if self.options.use_kms_random_gen {
             let gcp_global_location = format!(
                 "projects/{}/locations/{}",
@@ -166,9 +165,11 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
                 .get()
                 .generate_random_bytes(gen_random_bytes_req)
                 .await?;
-            Ok(SecretValue::from(gen_random_bytes_resp.into_inner().data))
+            Ok(DataEncryptionKey::from(SecretValue::from(
+                gen_random_bytes_resp.into_inner().data,
+            )))
         } else {
-            aead_encryption.generate_session_key()
+            aead_encryption.generate_data_encryption_key()
         }
     }
 }

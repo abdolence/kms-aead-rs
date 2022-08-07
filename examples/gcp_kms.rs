@@ -1,4 +1,3 @@
-use kms_aead::providers::GcpKmsProviderOptions;
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 
@@ -25,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         google_kms_key,
     );
 
-    let encryption = kms_aead::KmsAeadRingEncryption::new(
+    let encryption = kms_aead::KmsAeadRingEnvelopeEncryption::new(
         kms_aead::providers::GcpKmsProvider::new(&kms_ref).await?,
     )
     .await?;
@@ -33,7 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let secret_value = SecretValue::from("test-secret");
     let test_aad = "test-aad".to_string();
 
-    let (encrypted_value, session_key) = encryption.encrypt_value(&test_aad, &secret_value).await?;
+    let (encrypted_value, session_key) = encryption
+        .encrypt_value_with_current_key(&test_aad, &secret_value)
+        .await?;
 
     println!(
         "Encrypted to {:?} with session key: {:?}",
@@ -42,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let (secret_value, _) = encryption
-        .decrypt_value(&test_aad, &encrypted_value)
+        .decrypt_value_with_current_key(&test_aad, &encrypted_value)
         .await?;
 
     println!(

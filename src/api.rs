@@ -1,4 +1,4 @@
-use crate::{EncryptedSecretValue, EncryptedSessionKey, KmsAeadResult};
+use crate::*;
 use async_trait::*;
 use secret_vault_value::SecretValue;
 
@@ -8,44 +8,45 @@ pub trait KmsAeadEncryption<Aad> {
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-        session_key: &SecretValue,
-    ) -> KmsAeadResult<EncryptedSecretValue>;
+        encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<CipherText>;
 
     async fn decrypt_value(
         &self,
         aad: &Aad,
-        cipher_text: &EncryptedSecretValue,
-        session_key: &SecretValue,
+        cipher_text: &CipherText,
+        encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue>;
 }
 
 #[async_trait]
 pub trait KmsAeadEnvelopeEncryption<Aad> {
-    async fn encrypt_value(
+    async fn encrypt_value_with_current_key(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)>;
+    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)>;
 
-    async fn encrypt_value_with_new_session_key(
+    async fn encrypt_value_with_new_key(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(EncryptedSecretValue, EncryptedSessionKey)>;
+    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)>;
 
-    async fn decrypt_value(
+    async fn decrypt_value_with_current_key(
         &self,
         aad: &Aad,
-        encrypted_value: &EncryptedSecretValue,
-    ) -> KmsAeadResult<(SecretValue, EncryptedSessionKey)>;
+        cipher_text: &CipherText,
+    ) -> KmsAeadResult<(SecretValue, EncryptedDataEncryptionKey)>;
 
-    async fn decrypt_value_with_session_key(
+    async fn decrypt_value_with_key(
         &self,
         aad: &Aad,
-        encrypted_value: &EncryptedSecretValue,
-        encrypted_session_key: &EncryptedSessionKey,
+        cipher_text: &CipherText,
+        encrypted_data_encryption_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<SecretValue>;
 
-    async fn rotate_session_key(&self)
-        -> KmsAeadResult<(EncryptedSessionKey, EncryptedSessionKey)>;
+    async fn rotate_current_key(
+        &self,
+    ) -> KmsAeadResult<(EncryptedDataEncryptionKey, EncryptedDataEncryptionKey)>;
 }

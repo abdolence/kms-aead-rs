@@ -18,19 +18,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
 
-    let encryption: KmsAeadRingEncryption<AwsKmsProvider> = kms_aead::KmsAeadRingEncryption::new(
-        providers::AwsKmsProvider::with_options(
-            &kms_ref,
-            AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
+    let encryption: KmsAeadRingEnvelopeEncryption<AwsKmsProvider> =
+        kms_aead::KmsAeadRingEnvelopeEncryption::new(
+            providers::AwsKmsProvider::with_options(
+                &kms_ref,
+                AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
+            )
+            .await?,
         )
-        .await?,
-    )
-    .await?;
+        .await?;
 
     let secret_value = SecretValue::from("test-secret");
     let test_aad = "test-aad".to_string();
 
-    let (encrypted_value, session_key) = encryption.encrypt_value(&test_aad, &secret_value).await?;
+    let (encrypted_value, session_key) = encryption
+        .encrypt_value_with_current_key(&test_aad, &secret_value)
+        .await?;
 
     println!(
         "Encrypted to {:?} with session key: {:?}",
@@ -39,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let (secret_value, _) = encryption
-        .decrypt_value(&test_aad, &encrypted_value)
+        .decrypt_value_with_current_key(&test_aad, &encrypted_value)
         .await?;
 
     println!(

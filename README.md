@@ -19,14 +19,14 @@ Available KMS providers:
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.5", features=["..."] }
+kms-aead = { version = "0.6", features=["..."] }
 ```
 See security consideration below about versioning.
 
 ### Available optional features for Secret Vault:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
-- `encrypted-ring` using API for Ring AEAD only without any KMS envelope encryption
+- `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
 
 All examples available at [examples](examples) directory.
 
@@ -70,8 +70,8 @@ a new version of dependency automatically without auditing the changes.
 The library uses random 96 bit [nonces](https://en.wikipedia.org/wiki/Cryptographic_nonce)
 and [ChaCha20-Poly1305](https://tools.ietf.org/html/rfc7539) algorithm by default.
 Depends on your security requirements to avoid nonce collisions it is recommended
-to either rotate random DEK frequently using `rotate_session_key` or
-even use a new random DEK per encryption using `encrypt_value_with_new_session_key`.
+to either rotate random DEK frequently using `rotate_current_key` or
+even use a new random DEK per encryption using `encrypt_value_with_new_key`.
 
 ## Licence
 Apache Software License (ASL)

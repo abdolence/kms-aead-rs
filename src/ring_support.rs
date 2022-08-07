@@ -1,7 +1,8 @@
 use crate::errors::*;
-use crate::{EncryptedSecretValue, KmsAeadResult};
+use crate::{CipherText, DataEncryptionKey, KmsAeadResult};
 use ring::aead::{Algorithm, BoundKey, OpeningKey, SealingKey, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
+use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 pub struct OneNonceSequence(Option<ring::aead::Nonce>);
@@ -20,15 +21,15 @@ impl ring::aead::NonceSequence for OneNonceSequence {
 
 pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
     algo: &'static Algorithm,
-    session_secret: &SecretValue,
+    encryption_key: &DataEncryptionKey,
     nonce_data: &[u8],
     aad: ring::aead::Aad<A>,
     plain_text: &[u8],
-) -> KmsAeadResult<EncryptedSecretValue> {
+) -> KmsAeadResult<CipherText> {
     let mut encrypted_secret_value = plain_text.to_vec();
 
     let mut sealing_key = SealingKey::new(
-        UnboundKey::new(algo, session_secret.ref_sensitive_value()).map_err(|e| {
+        UnboundKey::new(algo, encryption_key.value().ref_sensitive_value()).map_err(|e| {
             KmsAeadEncryptionError::create(
                 "ENCRYPT_KEY",
                 format!("Unable to create a sealing key: {:?}", e).as_str(),
@@ -52,12 +53,12 @@ pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
                 format!("Unable to encrypt data: {:?}", e).as_str(),
             )
         })?;
-    Ok(EncryptedSecretValue(encrypted_secret_value.into()))
+    Ok(CipherText(encrypted_secret_value))
 }
 
 pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
     algo: &'static Algorithm,
-    session_secret: &SecretValue,
+    encryption_key: &DataEncryptionKey,
     nonce_data: &[u8],
     aad: ring::aead::Aad<A>,
     ciphertext: &[u8],
@@ -65,7 +66,7 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
     let mut secret_value: SecretValue = SecretValue::new(ciphertext.to_vec());
 
     let mut opening_key = OpeningKey::new(
-        UnboundKey::new(algo, session_secret.ref_sensitive_value()).map_err(|e| {
+        UnboundKey::new(algo, encryption_key.value().ref_sensitive_value()).map_err(|e| {
             KmsAeadEncryptionError::create(
                 "DECRYPT_KEY",
                 format!("Unable to create an opening key: {:?}", e).as_str(),
@@ -100,7 +101,7 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
 pub fn generate_secret_key(
     secure_rand: &SystemRandom,
     key_len: usize,
-) -> KmsAeadResult<SecretValue> {
+) -> KmsAeadResult<DataEncryptionKey> {
     let mut rand_key_data: Vec<u8> = vec![0; key_len];
     secure_rand.fill(&mut rand_key_data).map_err(|e| {
         KmsAeadEncryptionError::create(
@@ -108,7 +109,7 @@ pub fn generate_secret_key(
             format!("Unable to initialise random session key: {:?}", e).as_str(),
         )
     })?;
-    Ok(SecretValue::new(rand_key_data))
+    Ok(DataEncryptionKey::from(SecretValue::from(rand_key_data)))
 }
 
 pub fn generate_nonce(secure_rand: &SystemRandom) -> KmsAeadResult<Vec<u8>> {

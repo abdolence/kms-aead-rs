@@ -1,6 +1,6 @@
 [package]
 name = "kms-aead"
-version = "0.5.0"
+version = "0.6.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -49,11 +49,11 @@ cargo-husky = { version = "1.5", default-features = false, features = ["run-for-
 [features]
 default = []
 serde = ["dep:serde", "chrono/serde", "secret-vault-value/serde"]
-encrypted-ring = ["dep:ring"]
+ring-aead-encryption = ["dep:ring"]
 gcp = ["dep:tonic", "gcloud-sdk"]
-gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "encrypted-ring"]
+gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption"]
 aws = ["dep:aws-config"]
-aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "encrypted-ring"]
+aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 
 [package.metadata.docs.rs]
 all-features = true

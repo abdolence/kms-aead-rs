@@ -7,7 +7,6 @@ use aws_sdk_kms::types::Blob;
 use tracing::*;
 
 use crate::ring_encryption::KmsAeadRingAeadEncryption;
-use crate::ring_envelope_encryption::KmsAeadRingEncryptionProvider;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
@@ -80,25 +79,23 @@ impl AwsKmsProvider {
 
 #[async_trait]
 impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
-    async fn encrypt_session_key(
+    async fn encrypt_data_encryption_key(
         &self,
-        session_key: SecretValue,
-    ) -> KmsAeadResult<EncryptedSessionKey> {
+        encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self
             .client
             .encrypt()
             .set_key_id(Some(self.aws_key_ref.to_key_arn()))
             .set_plaintext(Some(Blob::new(
-                hex::encode(session_key.ref_sensitive_value().as_slice()).into_bytes(),
+                hex::encode(encryption_key.value().ref_sensitive_value().as_slice()).into_bytes(),
             )))
             .send()
             .await
         {
             Ok(encrypt_response) => {
                 if let Some(blob) = encrypt_response.ciphertext_blob {
-                    Ok(EncryptedSessionKey(secret_vault_value::SecretValue::new(
-                        blob.into_inner(),
-                    )))
+                    Ok(EncryptedDataEncryptionKey(blob.into_inner()))
                 } else {
                     error!(
                         "Unable to encrypt DEK with AWS KMS {}: Didn't receive any blob.",
@@ -127,25 +124,20 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
         }
     }
 
-    async fn decrypt_session_key(
+    async fn decrypt_data_encryption_key(
         &self,
-        encrypted_session_secret: &EncryptedSessionKey,
-    ) -> KmsAeadResult<SecretValue> {
+        encrypted_key: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
         let decrypt_response = self
             .client
             .decrypt()
-            .ciphertext_blob(Blob::new(
-                encrypted_session_secret
-                    .value()
-                    .ref_sensitive_value()
-                    .as_slice(),
-            ))
+            .ciphertext_blob(Blob::new(encrypted_key.value().as_slice()))
             .send()
             .await?;
 
         if let Some(plaintext) = decrypt_response.plaintext {
-            Ok(secret_vault_value::SecretValue::new(
-                hex::decode(plaintext.into_inner()).unwrap(),
+            Ok(DataEncryptionKey::from(
+                secret_vault_value::SecretValue::new(hex::decode(plaintext.into_inner()).unwrap()),
             ))
         } else {
             Err(KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
@@ -158,10 +150,10 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
         }
     }
 
-    async fn generate_secure_key(
+    async fn generate_encryption_key(
         &self,
         aead_encryption: &KmsAeadRingAeadEncryption,
-    ) -> KmsAeadResult<SecretValue> {
+    ) -> KmsAeadResult<DataEncryptionKey> {
         if self.options.use_kms_random_gen {
             let resp = self
                 .client
@@ -179,9 +171,11 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
                 ))
             })?;
 
-            Ok(SecretValue::from(random_bytes_blob.into_inner()))
+            Ok(DataEncryptionKey::from(SecretValue::from(
+                random_bytes_blob.into_inner(),
+            )))
         } else {
-            aead_encryption.generate_session_key()
+            aead_encryption.generate_data_encryption_key()
         }
     }
 }

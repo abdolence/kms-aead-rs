@@ -25,17 +25,17 @@
 //!
 //!     let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
 //!
-//!     let encryption: KmsAeadRingEncryption<AwsKmsProvider> =
-//!         kms_aead::KmsAeadRingEncryption::new(providers::AwsKmsProvider::new(&kms_ref).await?)
+//!     let encryption: KmsAeadRingEnvelopeEncryption<AwsKmsProvider> =
+//!         kms_aead::KmsAeadRingEnvelopeEncryption::new(providers::AwsKmsProvider::new(&kms_ref).await?)
 //!             .await?;
 //!
 //!     let secret_value = SecretValue::from("test-secret");
 //!     let test_aad = "test-aad".to_string();
 //!
-//!     let (encrypted_value, session_key) = encryption.encrypt_value(&test_aad, &secret_value).await?;
+//!     let (encrypted_value, session_key) = encryption.encrypt_value_with_current_key(&test_aad, &secret_value).await?;
 //!
 //!     let secret_value = encryption
-//!         .decrypt_value_with_session_key(&test_aad, &encrypted_value, &session_key)
+//!         .decrypt_value_with_key(&test_aad, &encrypted_value, &session_key)
 //!         .await?;
 //!
 //!     println!(
@@ -68,27 +68,36 @@ pub use api::*;
 
 pub mod errors;
 
-#[cfg(feature = "encrypted-ring")]
+#[cfg(feature = "ring-aead-encryption")]
 pub mod ring_encryption;
 
-#[cfg(feature = "encrypted-ring")]
+#[cfg(feature = "ring-aead-encryption")]
 mod ring_support;
 
-#[cfg(feature = "encrypted-ring")]
+#[cfg(feature = "ring-aead-encryption")]
 pub mod ring_envelope_encryption;
 
-#[cfg(feature = "encrypted-ring")]
+#[cfg(feature = "ring-aead-encryption")]
 pub use ring_envelope_encryption::*;
 
 #[derive(Debug, Clone, PartialEq, ValueStruct)]
-pub struct EncryptedSecretValue(pub SecretValue);
+pub struct CipherText(pub Vec<u8>);
+
+impl CipherText {
+    pub fn to_hex_string(&self) -> String {
+        hex::encode(self.value())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, ValueStruct)]
-pub struct EncryptedSessionKey(pub SecretValue);
+pub struct DataEncryptionKey(pub SecretValue);
 
-impl EncryptedSessionKey {
+#[derive(Debug, Clone, PartialEq, ValueStruct)]
+pub struct EncryptedDataEncryptionKey(pub Vec<u8>);
+
+impl EncryptedDataEncryptionKey {
     pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value().ref_sensitive_value())
+        hex::encode(self.value())
     }
 }
 
