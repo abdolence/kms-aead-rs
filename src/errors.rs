@@ -35,7 +35,7 @@ impl std::error::Error for KmsAeadError {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Builder)]
+#[derive(Debug, Eq, PartialEq, Clone, Builder)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct KmsAeadErrorPublicGenericDetails {
     pub code: String,
@@ -60,7 +60,7 @@ impl Display for KmsAeadSystemError {
 
 impl std::error::Error for KmsAeadSystemError {}
 
-#[derive(Debug, PartialEq, Clone, Builder)]
+#[derive(Debug, Eq, PartialEq, Clone, Builder)]
 pub struct KmsAeadNetworkError {
     pub public: KmsAeadErrorPublicGenericDetails,
     pub message: String,

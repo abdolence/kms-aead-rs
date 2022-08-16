@@ -80,7 +80,7 @@ pub mod ring_envelope_encryption;
 #[cfg(feature = "ring-aead-encryption")]
 pub use ring_envelope_encryption::*;
 
-#[derive(Debug, Clone, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
 
 impl CipherText {
@@ -89,10 +89,10 @@ impl CipherText {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
 pub struct DataEncryptionKey(pub SecretValue);
 
-#[derive(Debug, Clone, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
 pub struct EncryptedDataEncryptionKey(pub Vec<u8>);
 
 impl EncryptedDataEncryptionKey {
