@@ -88,19 +88,19 @@ where
         aad: &Aad,
         plain_text: &SecretValue,
     ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let current_session_key = { self.current_dek.read().await.clone() };
+        let encrypted_current_dek = { self.current_dek.read().await.clone() };
 
-        let session_key = self
+        let current_dek = self
             .provider
-            .decrypt_data_encryption_key(&current_session_key)
+            .decrypt_data_encryption_key(&encrypted_current_dek)
             .await?;
 
         let cipher_text = self
             .aead_encryption
-            .encrypt_value(aad, plain_text, &session_key)
+            .encrypt_value(aad, plain_text, &current_dek)
             .await?;
 
-        Ok((cipher_text, current_session_key))
+        Ok((cipher_text, encrypted_current_dek))
     }
 
     async fn encrypt_value_with_new_key(
@@ -108,22 +108,19 @@ where
         aad: &Aad,
         plain_text: &SecretValue,
     ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let session_key = self
+        let dek = self
             .provider
             .generate_encryption_key(&self.aead_encryption)
             .await?;
 
-        let new_encrypted_key = self
-            .provider
-            .encrypt_data_encryption_key(&session_key)
-            .await?;
+        let new_encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
 
         let cipher_text = self
             .aead_encryption
-            .encrypt_value(aad, plain_text, &session_key)
+            .encrypt_value(aad, plain_text, &dek)
             .await?;
 
-        Ok((cipher_text, new_encrypted_key))
+        Ok((cipher_text, new_encrypted_dek))
     }
 
     async fn decrypt_value_with_current_key(
@@ -131,13 +128,13 @@ where
         aad: &Aad,
         cipher_text: &CipherText,
     ) -> KmsAeadResult<(SecretValue, EncryptedDataEncryptionKey)> {
-        let current_kek = { self.current_dek.read().await.clone() };
+        let current_dek = { self.current_dek.read().await.clone() };
 
         let cipher_text = self
-            .decrypt_value_with_key(aad, cipher_text, &current_kek)
+            .decrypt_value_with_key(aad, cipher_text, &current_dek)
             .await?;
 
-        Ok((cipher_text, current_kek))
+        Ok((cipher_text, current_dek))
     }
 
     async fn decrypt_value_with_key(
@@ -159,20 +156,20 @@ where
     async fn rotate_current_key(
         &self,
     ) -> KmsAeadResult<(EncryptedDataEncryptionKey, EncryptedDataEncryptionKey)> {
-        let kek = self
+        let dek = self
             .provider
             .generate_encryption_key(&self.aead_encryption)
             .await?;
 
-        let new_encrypted_key = self.provider.encrypt_data_encryption_key(&kek).await?;
+        let new_encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
 
         let previous_encrypted_key = {
             let mut write_session_secret = self.current_dek.write().await;
-            let previous_session_key = write_session_secret.clone();
-            *write_session_secret = new_encrypted_key.clone();
-            previous_session_key
+            let previous_encrypted_dek = write_session_secret.clone();
+            *write_session_secret = new_encrypted_dek.clone();
+            previous_encrypted_dek
         };
 
-        Ok((previous_encrypted_key, new_encrypted_key))
+        Ok((previous_encrypted_key, new_encrypted_dek))
     }
 }
