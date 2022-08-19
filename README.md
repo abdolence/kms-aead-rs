@@ -91,7 +91,7 @@ The library uses random 96 bit [nonces](https://en.wikipedia.org/wiki/Cryptograp
 and [ChaCha20-Poly1305](https://tools.ietf.org/html/rfc7539) algorithm by default.
 Depends on your security requirements to avoid nonce collisions it is recommended
 to either rotate random DEK frequently using `rotate_current_key` or
-even use a new random DEK per encryption using `encrypt_value_with_new_key`.
+even use a new random DEK per encryption using `encrypt_value_with_new_key`/`encrypt_value`.
 
 ## Licence
 Apache Software License (ASL)
