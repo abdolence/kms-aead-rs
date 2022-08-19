@@ -1,7 +1,8 @@
-use crate::ring_encryption::KmsAeadRingAeadEncryption;
+use crate::ring_encryption::{KmsAeadRingAeadEncryption, KmsAeadRingAeadEncryptionOptions};
 use crate::*;
 use async_trait::*;
 use ring::rand::SystemRandom;
+use rsb_derive::*;
 use secret_vault_value::SecretValue;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -33,6 +34,12 @@ where
     current_dek: Arc<RwLock<EncryptedDataEncryptionKey>>,
 }
 
+#[derive(Debug, Clone, Builder)]
+pub struct KmsAeadRingEnvelopeEncryptionOptions {
+    #[default = "KmsAeadRingAeadEncryptionOptions::new()"]
+    pub encryption_options: KmsAeadRingAeadEncryptionOptions,
+}
+
 impl<P> KmsAeadRingEnvelopeEncryption<P>
 where
     P: KmsAeadRingEncryptionProvider + Send + Sync,
@@ -45,8 +52,21 @@ where
         provider: P,
         algo: &'static ring::aead::Algorithm,
     ) -> KmsAeadResult<Self> {
+        Self::with_algorithm_options(provider, algo, KmsAeadRingEnvelopeEncryptionOptions::new())
+            .await
+    }
+
+    pub async fn with_algorithm_options(
+        provider: P,
+        algo: &'static ring::aead::Algorithm,
+        options: KmsAeadRingEnvelopeEncryptionOptions,
+    ) -> KmsAeadResult<Self> {
         let secure_rand = SystemRandom::new();
-        let aead_encryption = KmsAeadRingAeadEncryption::with_algorithm(algo, secure_rand)?;
+        let aead_encryption = KmsAeadRingAeadEncryption::with_algorithm_options(
+            algo,
+            secure_rand,
+            options.encryption_options,
+        )?;
 
         let dek = provider.generate_encryption_key(&aead_encryption).await?;
         let current_encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;

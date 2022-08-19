@@ -2,12 +2,26 @@ use crate::ring_support::*;
 use crate::{CipherText, DataEncryptionKey, KmsAeadEncryption, KmsAeadResult};
 use async_trait::*;
 use ring::rand::SystemRandom;
+use rsb_derive::*;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, Builder)]
+pub struct KmsAeadRingAeadEncryptionOptions {
+    #[default = "KmsAeadRingAeadEncryptionNonceKind::Unique"]
+    pub nonce_kind: KmsAeadRingAeadEncryptionNonceKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum KmsAeadRingAeadEncryptionNonceKind {
+    Unique,
+    TimeUnique,
+}
 
 pub struct KmsAeadRingAeadEncryption {
     pub algo: &'static ring::aead::Algorithm,
     secure_rand: SystemRandom,
+    pub options: KmsAeadRingAeadEncryptionOptions,
 }
 
 impl KmsAeadRingAeadEncryption {
@@ -23,7 +37,26 @@ impl KmsAeadRingAeadEncryption {
         algo: &'static ring::aead::Algorithm,
         secure_rand: SystemRandom,
     ) -> KmsAeadResult<Self> {
-        Ok(Self { algo, secure_rand })
+        Self::with_algorithm_options(algo, secure_rand, KmsAeadRingAeadEncryptionOptions::new())
+    }
+
+    pub fn with_options(
+        secure_rand: SystemRandom,
+        options: KmsAeadRingAeadEncryptionOptions,
+    ) -> KmsAeadResult<Self> {
+        Self::with_algorithm_options(&ring::aead::CHACHA20_POLY1305, secure_rand, options)
+    }
+
+    pub fn with_algorithm_options(
+        algo: &'static ring::aead::Algorithm,
+        secure_rand: SystemRandom,
+        options: KmsAeadRingAeadEncryptionOptions,
+    ) -> KmsAeadResult<Self> {
+        Ok(Self {
+            algo,
+            secure_rand,
+            options,
+        })
     }
 
     pub fn generate_data_encryption_key(&self) -> KmsAeadResult<DataEncryptionKey> {
@@ -42,7 +75,12 @@ where
         plain_text: &SecretValue,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
-        let nonce_data = generate_nonce(&self.secure_rand)?;
+        let nonce_data = match self.options.nonce_kind {
+            KmsAeadRingAeadEncryptionNonceKind::Unique => generate_random_nonce(&self.secure_rand)?,
+            KmsAeadRingAeadEncryptionNonceKind::TimeUnique => {
+                generate_time_random_nonce(&self.secure_rand)?
+            }
+        };
 
         let encrypted_value = encrypt_with_sealing_key(
             self.algo,
