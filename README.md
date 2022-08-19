@@ -7,10 +7,9 @@
 # KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD for Rust
 
 Features:
-- Able to encode using default/current session key (DEK) or receiving it as a parameter
-- Manual rotation of default/current session key (DEK) or automatic key generation for each of the request
-- Provides a public and simple implementation for Ring based AEAD encryption without using KMS.
-- Opt-in for KMS based secure random generator for GCP and AWS instead of Ring.
+- Envelope encryption using automatically generated or provided data encryption keys;
+- Provides a public and simple implementation for Ring based AEAD encryption without using KMS;
+- Opt-in for KMS based secure random generator for GCP and AWS instead of Ring;
 
 Available KMS providers:
 - Google Cloud Platform KMS

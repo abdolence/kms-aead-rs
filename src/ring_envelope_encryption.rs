@@ -164,9 +164,9 @@ where
         let new_encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
 
         let previous_encrypted_key = {
-            let mut write_session_secret = self.current_dek.write().await;
-            let previous_encrypted_dek = write_session_secret.clone();
-            *write_session_secret = new_encrypted_dek.clone();
+            let mut write_current_dek = self.current_dek.write().await;
+            let previous_encrypted_dek = write_current_dek.clone();
+            *write_current_dek = new_encrypted_dek.clone();
             previous_encrypted_dek
         };
 
