@@ -21,6 +21,18 @@ pub trait KmsAeadEncryption<Aad> {
 
 #[async_trait]
 pub trait KmsAeadEnvelopeEncryption<Aad> {
+    async fn encrypt_value(
+        &self,
+        aad: &Aad,
+        plain_text: &SecretValue,
+    ) -> KmsAeadResult<CipherTextWithEncryptedKey>;
+
+    async fn decrypt_value(
+        &self,
+        aad: &Aad,
+        cipher_text: &CipherTextWithEncryptedKey,
+    ) -> KmsAeadResult<SecretValue>;
+
     async fn encrypt_value_with_current_key(
         &self,
         aad: &Aad,

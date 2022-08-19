@@ -1,6 +1,8 @@
 [![Cargo](https://img.shields.io/crates/v/kms-aead.svg)](https://crates.io/crates/kms-aead)
 ![tests and formatting](https://github.com/abdolence/kms-aead-rs/workflows/tests%20&amp;%20formatting/badge.svg)
 ![security audit](https://github.com/abdolence/kms-aead-rs/workflows/security%20audit/badge.svg)
+![unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
+![license](https://img.shields.io/github/license/abdolence/secret-vault-rs)
 
 # KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD for Rust
 
@@ -19,7 +21,7 @@ Available KMS providers:
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.7", features=["..."] }
+kms-aead = { version = "0.8", features=["..."] }
 ```
 See security consideration below about versioning.
 
@@ -27,6 +29,24 @@ See security consideration below about versioning.
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
 - `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
+
+## Example
+```rust
+ let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
+
+ let encryption: KmsAeadRingEnvelopeEncryption<AwsKmsProvider> =
+     kms_aead::KmsAeadRingEnvelopeEncryption::new(providers::AwsKmsProvider::new(&kms_ref).await?)
+         .await?;
+
+ let secret_value = SecretValue::from("test-secret");
+ let test_aad = "test-aad".to_string();
+
+ let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
+
+ let secret_value: SecretValue = encryption
+     .decrypt_value(&test_aad, &cipher_text)
+     .await?;
+```
 
 All examples available at [examples](examples) directory.
 

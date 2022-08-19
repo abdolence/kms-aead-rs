@@ -32,10 +32,10 @@
 //!     let secret_value = SecretValue::from("test-secret");
 //!     let test_aad = "test-aad".to_string();
 //!
-//!     let (encrypted_value, session_key) = encryption.encrypt_value_with_current_key(&test_aad, &secret_value).await?;
+//!     let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
 //!
 //!     let secret_value = encryption
-//!         .decrypt_value_with_key(&test_aad, &encrypted_value, &session_key)
+//!         .decrypt_value(&test_aad, &cipher_text)
 //!         .await?;
 //!
 //!     println!(
@@ -56,11 +56,10 @@
 //!
 
 #![allow(unused_parens, clippy::new_without_default)]
+#![forbid(unsafe_code)]
 
 extern crate core;
 
-use rvstruct::*;
-use secret_vault_value::SecretValue;
 pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
 
 mod api;
@@ -80,25 +79,7 @@ pub mod ring_envelope_encryption;
 #[cfg(feature = "ring-aead-encryption")]
 pub use ring_envelope_encryption::*;
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
-pub struct CipherText(pub Vec<u8>);
-
-impl CipherText {
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value())
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
-pub struct DataEncryptionKey(pub SecretValue);
-
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
-pub struct EncryptedDataEncryptionKey(pub Vec<u8>);
-
-impl EncryptedDataEncryptionKey {
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value())
-    }
-}
+mod types;
+pub use types::*;
 
 pub mod providers;

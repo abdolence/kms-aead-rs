@@ -1,6 +1,6 @@
 [package]
 name = "kms-aead"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
 license = "Apache-2.0"
@@ -69,6 +69,6 @@ path = "examples/gcp_kms.rs"
 required-features = ["gcp-kms-encryption"]
 
 [[example]]
-name = "kms_with_explicit_key"
-path = "examples/kms_with_explicit_key.rs"
-required-features = ["aws-kms-encryption"]
+name = "only_aead"
+path = "examples/only_aead.rs"
+required-features = ["ring-aead-encryption"]

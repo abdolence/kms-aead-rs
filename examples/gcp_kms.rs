@@ -32,19 +32,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let secret_value = SecretValue::from("test-secret");
     let test_aad = "test-aad".to_string();
 
-    let (encrypted_value, session_key) = encryption
-        .encrypt_value_with_current_key(&test_aad, &secret_value)
-        .await?;
+    let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
 
-    println!(
-        "Encrypted to {:?} with session key: {:?}",
-        encrypted_value,
-        session_key.to_hex_string()
-    );
+    println!("Encrypted to {:?}", cipher_text.to_hex_string());
 
-    let (secret_value, _) = encryption
-        .decrypt_value_with_current_key(&test_aad, &encrypted_value)
-        .await?;
+    let secret_value = encryption.decrypt_value(&test_aad, &cipher_text).await?;
 
     println!(
         "We have our secret back: {}",

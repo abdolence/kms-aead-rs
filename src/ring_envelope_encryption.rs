@@ -65,6 +65,24 @@ where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
     P: KmsAeadRingEncryptionProvider + Send + Sync,
 {
+    async fn encrypt_value(
+        &self,
+        aad: &Aad,
+        plain_text: &SecretValue,
+    ) -> KmsAeadResult<CipherTextWithEncryptedKey> {
+        let (cipher_text, dek) = self.encrypt_value_with_new_key(aad, plain_text).await?;
+        Ok(CipherTextWithEncryptedKey::new(&cipher_text, &dek))
+    }
+
+    async fn decrypt_value(
+        &self,
+        aad: &Aad,
+        cipher_text: &CipherTextWithEncryptedKey,
+    ) -> KmsAeadResult<SecretValue> {
+        let (cipher_text, dek) = cipher_text.separate()?;
+        self.decrypt_value_with_key(aad, &cipher_text, &dek).await
+    }
+
     async fn encrypt_value_with_current_key(
         &self,
         aad: &Aad,

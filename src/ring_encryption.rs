@@ -11,6 +11,10 @@ pub struct KmsAeadRingAeadEncryption {
 }
 
 impl KmsAeadRingAeadEncryption {
+    pub fn with_new_secure_rand() -> KmsAeadResult<Self> {
+        Self::new(SystemRandom::new())
+    }
+
     pub fn new(secure_rand: SystemRandom) -> KmsAeadResult<Self> {
         Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secure_rand)
     }
