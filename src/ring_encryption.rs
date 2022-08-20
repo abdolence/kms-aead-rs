@@ -1,5 +1,5 @@
 use crate::ring_support::*;
-use crate::{CipherText, DataEncryptionKey, KmsAeadEncryption, KmsAeadResult};
+use crate::{AeadEncryption, CipherText, DataEncryptionKey, KmsAeadResult};
 use async_trait::*;
 use ring::rand::SystemRandom;
 use rsb_derive::*;
@@ -7,29 +7,29 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 #[derive(Debug, Clone, Builder)]
-pub struct KmsAeadRingAeadEncryptionOptions {
-    #[default = "KmsAeadRingAeadEncryptionNonceKind::Unique"]
-    pub nonce_kind: KmsAeadRingAeadEncryptionNonceKind,
+pub struct RingAeadEncryptionOptions {
+    #[default = "RingAeadEncryptionNonceKind::TimeRandom"]
+    pub nonce_kind: RingAeadEncryptionNonceKind,
 }
 
 #[derive(Debug, Clone)]
-pub enum KmsAeadRingAeadEncryptionNonceKind {
-    Unique,
-    TimeUnique,
+pub enum RingAeadEncryptionNonceKind {
+    Random,
+    TimeRandom,
 }
 
-pub struct KmsAeadRingAeadEncryption {
+pub struct RingAeadEncryption {
     pub algo: &'static ring::aead::Algorithm,
     secure_rand: SystemRandom,
-    pub options: KmsAeadRingAeadEncryptionOptions,
+    pub options: RingAeadEncryptionOptions,
 }
 
-impl KmsAeadRingAeadEncryption {
-    pub fn with_new_secure_rand() -> KmsAeadResult<Self> {
-        Self::new(SystemRandom::new())
+impl RingAeadEncryption {
+    pub fn new() -> KmsAeadResult<Self> {
+        Self::with_rand(SystemRandom::new())
     }
 
-    pub fn new(secure_rand: SystemRandom) -> KmsAeadResult<Self> {
+    pub fn with_rand(secure_rand: SystemRandom) -> KmsAeadResult<Self> {
         Self::with_algorithm(&ring::aead::CHACHA20_POLY1305, secure_rand)
     }
 
@@ -37,12 +37,12 @@ impl KmsAeadRingAeadEncryption {
         algo: &'static ring::aead::Algorithm,
         secure_rand: SystemRandom,
     ) -> KmsAeadResult<Self> {
-        Self::with_algorithm_options(algo, secure_rand, KmsAeadRingAeadEncryptionOptions::new())
+        Self::with_algorithm_options(algo, secure_rand, RingAeadEncryptionOptions::new())
     }
 
     pub fn with_options(
         secure_rand: SystemRandom,
-        options: KmsAeadRingAeadEncryptionOptions,
+        options: RingAeadEncryptionOptions,
     ) -> KmsAeadResult<Self> {
         Self::with_algorithm_options(&ring::aead::CHACHA20_POLY1305, secure_rand, options)
     }
@@ -50,7 +50,7 @@ impl KmsAeadRingAeadEncryption {
     pub fn with_algorithm_options(
         algo: &'static ring::aead::Algorithm,
         secure_rand: SystemRandom,
-        options: KmsAeadRingAeadEncryptionOptions,
+        options: RingAeadEncryptionOptions,
     ) -> KmsAeadResult<Self> {
         Ok(Self {
             algo,
@@ -65,7 +65,7 @@ impl KmsAeadRingAeadEncryption {
 }
 
 #[async_trait]
-impl<Aad> KmsAeadEncryption<Aad> for KmsAeadRingAeadEncryption
+impl<Aad> AeadEncryption<Aad> for RingAeadEncryption
 where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
 {
@@ -76,8 +76,8 @@ where
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
         let nonce_data = match self.options.nonce_kind {
-            KmsAeadRingAeadEncryptionNonceKind::Unique => generate_random_nonce(&self.secure_rand)?,
-            KmsAeadRingAeadEncryptionNonceKind::TimeUnique => {
+            RingAeadEncryptionNonceKind::Random => generate_random_nonce(&self.secure_rand)?,
+            RingAeadEncryptionNonceKind::TimeRandom => {
                 generate_time_random_nonce(&self.secure_rand)?
             }
         };
@@ -135,7 +135,7 @@ mod tests {
         let mock_aad: String = "test".to_string();
         let secure_rand: SystemRandom = SystemRandom::new();
 
-        let encryption = KmsAeadRingAeadEncryption::new(secure_rand).unwrap();
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
 
         let secret_key = encryption.generate_data_encryption_key().unwrap();
 
@@ -187,7 +187,7 @@ mod tests {
 
         let secure_rand: SystemRandom = SystemRandom::new();
 
-        let encryption = KmsAeadRingAeadEncryption::new(secure_rand).unwrap();
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
 
         let secret_key = encryption.generate_data_encryption_key().unwrap();
 
@@ -212,7 +212,7 @@ mod tests {
             generate_secret_key(&secure_rand, ring::aead::CHACHA20_POLY1305.key_len()).unwrap();
 
         let encrypted_value = {
-            let encryption = KmsAeadRingAeadEncryption::new(secure_rand.clone()).unwrap();
+            let encryption = RingAeadEncryption::with_rand(secure_rand.clone()).unwrap();
             encryption
                 .encrypt_value(&mock_aad, &mock_secret_value, &secret_key)
                 .await
@@ -220,7 +220,7 @@ mod tests {
         };
 
         let decrypted_value = {
-            let encryption = KmsAeadRingAeadEncryption::new(secure_rand.clone()).unwrap();
+            let encryption = RingAeadEncryption::with_rand(secure_rand.clone()).unwrap();
             encryption
                 .decrypt_value(&mock_aad, &encrypted_value, &secret_key)
                 .await

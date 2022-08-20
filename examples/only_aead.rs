@@ -1,4 +1,4 @@
-use kms_aead::ring_encryption::KmsAeadRingAeadEncryption;
+use kms_aead::ring_encryption::RingAeadEncryption;
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 
@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let encryption: KmsAeadRingAeadEncryption = KmsAeadRingAeadEncryption::with_new_secure_rand()?;
+    let encryption: RingAeadEncryption = RingAeadEncryption::new()?;
     let key = encryption.generate_data_encryption_key()?;
 
     let secret_value = SecretValue::from("test-secret");

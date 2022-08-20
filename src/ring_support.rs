@@ -107,7 +107,7 @@ pub fn generate_secret_key(
     secure_rand.fill(&mut rand_key_data).map_err(|e| {
         KmsAeadEncryptionError::create(
             "ENCRYPTION",
-            format!("Unable to initialise random session key: {:?}", e).as_str(),
+            format!("Unable to initialise random key: {:?}", e).as_str(),
         )
     })?;
     Ok(DataEncryptionKey::from(SecretValue::from(rand_key_data)))

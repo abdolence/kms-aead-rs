@@ -73,10 +73,10 @@ pub mod ring_encryption;
 mod ring_support;
 
 #[cfg(feature = "ring-aead-encryption")]
-pub mod ring_envelope_encryption;
+pub mod kms_envelope_encryption;
 
 #[cfg(feature = "ring-aead-encryption")]
-pub use ring_envelope_encryption::*;
+pub use kms_envelope_encryption::*;
 
 mod types;
 pub use types::*;

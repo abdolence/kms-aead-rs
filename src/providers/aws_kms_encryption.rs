@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use aws_sdk_kms::types::Blob;
 use tracing::*;
 
-use crate::ring_encryption::KmsAeadRingAeadEncryption;
+use crate::ring_encryption::RingAeadEncryption;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
@@ -152,7 +152,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
 
     async fn generate_encryption_key(
         &self,
-        aead_encryption: &KmsAeadRingAeadEncryption,
+        aead_encryption: &RingAeadEncryption,
     ) -> KmsAeadResult<DataEncryptionKey> {
         if self.options.use_kms_random_gen {
             let resp = self

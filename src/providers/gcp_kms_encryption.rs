@@ -8,7 +8,7 @@ use gcloud_sdk::proto_ext::kms::*;
 use gcloud_sdk::*;
 use tracing::*;
 
-use crate::ring_encryption::KmsAeadRingAeadEncryption;
+use crate::ring_encryption::RingAeadEncryption;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
@@ -137,7 +137,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
 
     async fn generate_encryption_key(
         &self,
-        aead_encryption: &KmsAeadRingAeadEncryption,
+        aead_encryption: &RingAeadEncryption,
     ) -> KmsAeadResult<DataEncryptionKey> {
         if self.options.use_kms_random_gen {
             let gcp_global_location = format!(

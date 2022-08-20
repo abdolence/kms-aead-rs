@@ -3,7 +3,7 @@ use async_trait::*;
 use secret_vault_value::SecretValue;
 
 #[async_trait]
-pub trait KmsAeadEncryption<Aad> {
+pub trait AeadEncryption<Aad> {
     async fn encrypt_value(
         &self,
         aad: &Aad,

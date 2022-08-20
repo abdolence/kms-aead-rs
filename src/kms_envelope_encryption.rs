@@ -1,4 +1,4 @@
-use crate::ring_encryption::{KmsAeadRingAeadEncryption, KmsAeadRingAeadEncryptionOptions};
+use crate::ring_encryption::{RingAeadEncryption, RingAeadEncryptionOptions};
 use crate::*;
 use async_trait::*;
 use ring::rand::SystemRandom;
@@ -21,7 +21,7 @@ pub trait KmsAeadRingEncryptionProvider {
 
     async fn generate_encryption_key(
         &self,
-        aead_encryption: &KmsAeadRingAeadEncryption,
+        aead_encryption: &RingAeadEncryption,
     ) -> KmsAeadResult<DataEncryptionKey>;
 }
 
@@ -30,14 +30,14 @@ where
     P: KmsAeadRingEncryptionProvider + Send + Sync,
 {
     provider: P,
-    aead_encryption: KmsAeadRingAeadEncryption,
+    aead_encryption: RingAeadEncryption,
     current_dek: Arc<RwLock<EncryptedDataEncryptionKey>>,
 }
 
 #[derive(Debug, Clone, Builder)]
 pub struct KmsAeadRingEnvelopeEncryptionOptions {
-    #[default = "KmsAeadRingAeadEncryptionOptions::new()"]
-    pub encryption_options: KmsAeadRingAeadEncryptionOptions,
+    #[default = "RingAeadEncryptionOptions::new()"]
+    pub encryption_options: RingAeadEncryptionOptions,
 }
 
 impl<P> KmsAeadRingEnvelopeEncryption<P>
@@ -56,13 +56,20 @@ where
             .await
     }
 
+    pub async fn with_options(
+        provider: P,
+        options: KmsAeadRingEnvelopeEncryptionOptions,
+    ) -> KmsAeadResult<Self> {
+        Self::with_algorithm_options(provider, &ring::aead::CHACHA20_POLY1305, options).await
+    }
+
     pub async fn with_algorithm_options(
         provider: P,
         algo: &'static ring::aead::Algorithm,
         options: KmsAeadRingEnvelopeEncryptionOptions,
     ) -> KmsAeadResult<Self> {
         let secure_rand = SystemRandom::new();
-        let aead_encryption = KmsAeadRingAeadEncryption::with_algorithm_options(
+        let aead_encryption = RingAeadEncryption::with_algorithm_options(
             algo,
             secure_rand,
             options.encryption_options,
