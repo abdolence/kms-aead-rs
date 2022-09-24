@@ -24,7 +24,7 @@ kms-aead = { version = "0.9", features=["..."] }
 ```
 See security consideration below about versioning.
 
-### Available optional features for Secret Vault:
+### Available features:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
 - `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
