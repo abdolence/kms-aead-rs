@@ -24,7 +24,7 @@ impl EncryptedDataEncryptionKey {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 impl CipherTextWithEncryptedKey {
@@ -68,6 +68,16 @@ impl CipherTextWithEncryptedKey {
 
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
+    }
+
+    pub fn value(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl From<Vec<u8>> for CipherTextWithEncryptedKey {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
     }
 }
 
