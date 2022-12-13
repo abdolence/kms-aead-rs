@@ -70,6 +70,7 @@ impl CipherTextWithEncryptedKey {
         hex::encode(self.value())
     }
 
+    #[inline]
     pub fn value(&self) -> &[u8] {
         &self.0
     }
