@@ -24,7 +24,7 @@ impl EncryptedDataEncryptionKey {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 impl CipherTextWithEncryptedKey {
@@ -36,13 +36,13 @@ impl CipherTextWithEncryptedKey {
         value.extend_from_slice(encrypted_dek.value());
         value.extend_from_slice(cipher_text.value());
 
-        value.into()
+        Self(value)
     }
 
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
         let us_len = std::mem::size_of::<usize>();
 
-        if self.value().len() < us_len {
+        if self.0.len() < us_len {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 "Unexpected len of cipher text to decode",
@@ -52,7 +52,7 @@ impl CipherTextWithEncryptedKey {
         let len_slice = &self.0.as_slice()[0..us_len];
         let dek_len = usize::from_be_bytes(len_slice.try_into().unwrap());
 
-        if self.value().len() < us_len + dek_len {
+        if self.0.len() < us_len + dek_len {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 "Unexpected len of cipher text to decode: DEK len is more than buffer",
@@ -67,7 +67,7 @@ impl CipherTextWithEncryptedKey {
     }
 
     pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value())
+        hex::encode(self.0.clone())
     }
 }
 
