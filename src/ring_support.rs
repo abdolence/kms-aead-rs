@@ -33,14 +33,14 @@ pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
         UnboundKey::new(algo, encryption_key.value().ref_sensitive_value()).map_err(|e| {
             KmsAeadEncryptionError::create(
                 "ENCRYPT_KEY",
-                format!("Unable to create a sealing key: {:?}", e).as_str(),
+                format!("Unable to create a sealing key: {e:?}").as_str(),
             )
         })?,
         OneNonceSequence::new(
             ring::aead::Nonce::try_assume_unique_for_key(nonce_data).map_err(|e| {
                 KmsAeadEncryptionError::create(
                     "ENCRYPT_KEY",
-                    format!("Unable to create a nonce for a sealing key: {:?}", e).as_str(),
+                    format!("Unable to create a nonce for a sealing key: {e:?}").as_str(),
                 )
             })?,
         ),
@@ -51,7 +51,7 @@ pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
         .map_err(|e| {
             KmsAeadEncryptionError::create(
                 "ENCRYPT",
-                format!("Unable to encrypt data: {:?}", e).as_str(),
+                format!("Unable to encrypt data: {e:?}").as_str(),
             )
         })?;
     Ok(CipherText(encrypted_secret_value))
@@ -70,14 +70,14 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
         UnboundKey::new(algo, encryption_key.value().ref_sensitive_value()).map_err(|e| {
             KmsAeadEncryptionError::create(
                 "DECRYPT_KEY",
-                format!("Unable to create an opening key: {:?}", e).as_str(),
+                format!("Unable to create an opening key: {e:?}").as_str(),
             )
         })?,
         OneNonceSequence::new(
             ring::aead::Nonce::try_assume_unique_for_key(nonce_data).map_err(|e| {
                 KmsAeadEncryptionError::create(
                     "DECRYPT_KEY",
-                    format!("Unable to create an opening key: {:?}", e).as_str(),
+                    format!("Unable to create an opening key: {e:?}").as_str(),
                 )
             })?,
         ),
@@ -88,7 +88,7 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
         .map_err(|e| {
             KmsAeadEncryptionError::create(
                 "DECRYPT",
-                format!("Unable to decrypt data: {:?}", e).as_str(),
+                format!("Unable to decrypt data: {e:?}").as_str(),
             )
         })?;
 
@@ -107,7 +107,7 @@ pub fn generate_secret_key(
     secure_rand.fill(&mut rand_key_data).map_err(|e| {
         KmsAeadEncryptionError::create(
             "ENCRYPTION",
-            format!("Unable to initialise random key: {:?}", e).as_str(),
+            format!("Unable to initialise random key: {e:?}").as_str(),
         )
     })?;
     Ok(DataEncryptionKey::from(SecretValue::from(rand_key_data)))
@@ -118,7 +118,7 @@ pub fn generate_random_nonce(secure_rand: &SystemRandom) -> KmsAeadResult<Vec<u8
     secure_rand.fill(&mut nonce_data).map_err(|e| {
         KmsAeadEncryptionError::create(
             "ENCRYPTION",
-            format!("Unable to initialise random nonce: {:?}", e).as_str(),
+            format!("Unable to initialise random nonce: {e:?}").as_str(),
         )
     })?;
 
@@ -146,7 +146,7 @@ pub fn generate_time_random_nonce(secure_rand: &SystemRandom) -> KmsAeadResult<V
         .map_err(|e| {
             KmsAeadEncryptionError::create(
                 "ENCRYPTION",
-                format!("Unable to initialise random nonce: {:?}", e).as_str(),
+                format!("Unable to initialise random nonce: {e:?}").as_str(),
             )
         })?;
 

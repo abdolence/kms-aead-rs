@@ -108,7 +108,7 @@ impl From<gcloud_sdk::error::Error> for KmsAeadError {
         KmsAeadError::SystemError(
             KmsAeadSystemError::new(
                 KmsAeadErrorPublicGenericDetails::new(format!("{:?}", e.kind())),
-                format!("GCloud system error: {}", e),
+                format!("GCloud system error: {e}"),
             )
             .with_root_cause(Box::new(e)),
         )
@@ -120,7 +120,7 @@ impl From<tonic::Status> for KmsAeadError {
     fn from(status: tonic::Status) -> Self {
         KmsAeadError::NetworkError(KmsAeadNetworkError::new(
             KmsAeadErrorPublicGenericDetails::new(format!("{:?}", status.code())),
-            format!("{}", status),
+            format!("{status}"),
         ))
     }
 }
@@ -132,8 +132,8 @@ impl<E: Display + Error + Sync + Send + 'static> From<aws_sdk_kms::types::SdkErr
     fn from(e: aws_sdk_kms::types::SdkError<E>) -> Self {
         KmsAeadError::EncryptionError(
             KmsAeadEncryptionError::new(
-                KmsAeadErrorPublicGenericDetails::new(format!("{}", e)),
-                format!("AWS KMS error: {}", e),
+                KmsAeadErrorPublicGenericDetails::new(format!("{e}")),
+                format!("AWS KMS error: {e}"),
             )
             .with_root_cause(Box::new(e)),
         )

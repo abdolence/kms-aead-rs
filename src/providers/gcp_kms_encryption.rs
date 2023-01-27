@@ -154,8 +154,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             gen_random_bytes_req.metadata_mut().insert(
                 "x-goog-request-params",
                 MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
-                    "name={}",
-                    gcp_global_location
+                    "name={gcp_global_location}"
                 ))
                 .unwrap(),
             );
