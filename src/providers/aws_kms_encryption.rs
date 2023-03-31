@@ -3,7 +3,7 @@ use rsb_derive::*;
 use crate::errors::*;
 use crate::*;
 use async_trait::async_trait;
-use aws_sdk_kms::types::Blob;
+use aws_sdk_kms::primitives::Blob;
 use tracing::*;
 
 use crate::ring_encryption::RingAeadEncryption;
@@ -14,7 +14,7 @@ use secret_vault_value::SecretValue;
 pub struct AwsKmsKeyRef {
     pub account_id: String,
     pub key_id: String,
-    pub aws_region: Option<aws_sdk_kms::Region>,
+    pub aws_region: Option<aws_sdk_kms::config::Region>,
 }
 
 impl AwsKmsKeyRef {
