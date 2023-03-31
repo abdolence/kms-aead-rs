@@ -126,10 +126,10 @@ impl From<tonic::Status> for KmsAeadError {
 }
 
 #[cfg(feature = "aws")]
-impl<E: Display + Error + Sync + Send + 'static> From<aws_sdk_kms::types::SdkError<E>>
+impl<E: Display + Error + Sync + Send + 'static> From<aws_sdk_kms::error::SdkError<E>>
     for KmsAeadError
 {
-    fn from(e: aws_sdk_kms::types::SdkError<E>) -> Self {
+    fn from(e: aws_sdk_kms::error::SdkError<E>) -> Self {
         KmsAeadError::EncryptionError(
             KmsAeadEncryptionError::new(
                 KmsAeadErrorPublicGenericDetails::new(format!("{e}")),

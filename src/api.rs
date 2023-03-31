@@ -2,6 +2,8 @@ use crate::*;
 use async_trait::*;
 use secret_vault_value::SecretValue;
 
+/// A trait that defines the encryption and decryption of a value using a data encryption key
+/// and additional authenticated data (AEAD).
 #[async_trait]
 pub trait AeadEncryption<Aad> {
     async fn encrypt_value(
@@ -19,46 +21,59 @@ pub trait AeadEncryption<Aad> {
     ) -> KmsAeadResult<SecretValue>;
 }
 
+/// A trait that defines the envelope encryption and decryption of a value using
+/// a data encryption key (DEK), a key encryption key (KEK) from KMS providers,
+/// and additional authenticated data (AEAD).
 #[async_trait]
 pub trait KmsAeadEnvelopeEncryption<Aad> {
+    /// Encrypts the plain text using a new data encryption key.
     async fn encrypt_value(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
     ) -> KmsAeadResult<CipherTextWithEncryptedKey>;
 
+    /// Decrypts the cipher text using the cipher text with corresponding encrypted data encryption key.
     async fn decrypt_value(
         &self,
         aad: &Aad,
         cipher_text: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<SecretValue>;
 
-    async fn encrypt_value_with_current_key(
+    /// Encrypts the plain text using the provided data encryption key.
+    async fn encrypt_value_with_dek(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)>;
+        dek: &DataEncryptionKey,
+    ) -> KmsAeadResult<CipherText>;
 
-    async fn encrypt_value_with_new_key(
+    /// Encrypts the plain text using the provided encrypted data encryption key.
+    async fn encrypt_value_with_encrypted_dek(
         &self,
         aad: &Aad,
         plain_text: &SecretValue,
-    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)>;
+        dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<CipherText>;
 
-    async fn decrypt_value_with_current_key(
+    /// Decrypts the cipher text using the provided encrypted data encryption key.
+    async fn decrypt_value_with_dek(
         &self,
         aad: &Aad,
         cipher_text: &CipherText,
-    ) -> KmsAeadResult<(SecretValue, EncryptedDataEncryptionKey)>;
+        data_encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<SecretValue>;
 
-    async fn decrypt_value_with_key(
+    /// Decrypts the cipher text using the provided encrypted data encryption key.
+    async fn decrypt_value_with_encrypted_dek(
         &self,
         aad: &Aad,
         cipher_text: &CipherText,
         encrypted_data_encryption_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<SecretValue>;
 
-    async fn rotate_current_key(
+    /// Generates a new data encryption key and encrypts it using the KMS provider.
+    async fn generate_new_dek(
         &self,
-    ) -> KmsAeadResult<(EncryptedDataEncryptionKey, EncryptedDataEncryptionKey)>;
+    ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>;
 }
