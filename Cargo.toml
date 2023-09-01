@@ -33,7 +33,7 @@ hex = "0.4"
 ring = { version = "0.16", features = ["default", "std"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 gcloud-sdk = { version = "0.20", optional = true }
-tonic = { version = "0.9", optional = true }
+tonic = { version = "0.10", optional = true }
 aws-config = { version = "0.56", optional = true }
 aws-sdk-kms = { version = "0.30", optional = true }
 
