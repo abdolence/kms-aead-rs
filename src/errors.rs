@@ -116,8 +116,8 @@ impl From<gcloud_sdk::error::Error> for KmsAeadError {
 }
 
 #[cfg(feature = "gcp")]
-impl From<tonic::Status> for KmsAeadError {
-    fn from(status: tonic::Status) -> Self {
+impl From<gcloud_sdk::tonic::Status> for KmsAeadError {
+    fn from(status: gcloud_sdk::tonic::Status) -> Self {
         KmsAeadError::NetworkError(KmsAeadNetworkError::new(
             KmsAeadErrorPublicGenericDetails::new(format!("{:?}", status.code())),
             format!("{status}"),
