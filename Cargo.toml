@@ -37,7 +37,7 @@ aws-config = { version = "1", optional = true, features = ["behavior-version-lat
 aws-sdk-kms = { version = "1", optional = true }
 
 [dev-dependencies]
-serde_json = { version = "1" }
+serde_json = { version = "1.0.116" }
 proptest = "1.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.5", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "futures", "tokio", "async_tokio"] }
