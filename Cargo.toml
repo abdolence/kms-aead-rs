@@ -48,7 +48,7 @@ default = []
 serde = ["dep:serde", "chrono/serde", "secret-vault-value/serde"]
 ring-aead-encryption = ["dep:ring"]
 gcp = ["gcloud-sdk"]
-gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption"]
+gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption", "gcloud-sdk/google-longrunning"]
 aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 
