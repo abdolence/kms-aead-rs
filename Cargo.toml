@@ -54,7 +54,8 @@ aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 
 [package.metadata.docs.rs]
-all-features = true
+all-features = false
+features = ["ring-aead-encryption", "gcp-kms-encryption", "aws-kms-encryption", "serde"]
 
 [[example]]
 name = "aws_kms"
