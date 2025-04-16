@@ -36,6 +36,7 @@ pub struct GcpKmsProviderOptions {
     pub use_kms_random_gen: bool,
 }
 
+#[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
     gcp_key_ref: GcpKmsKeyRef,
@@ -50,11 +51,6 @@ impl GcpKmsProvider {
         kms_key_ref: &GcpKmsKeyRef,
         options: GcpKmsProviderOptions,
     ) -> KmsAeadResult<Self> {
-        debug!(
-            "Initialising Google KMS envelope encryption for {}",
-            kms_key_ref.to_google_ref()
-        );
-
         let client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>> =
             GoogleApi::from_function(
                 KeyManagementServiceClient::new,
@@ -63,11 +59,23 @@ impl GcpKmsProvider {
             )
             .await?;
 
-        Ok(Self {
+        Ok(Self::with_client(kms_key_ref, options, client))
+    }
+    pub fn with_client(
+        kms_key_ref: &GcpKmsKeyRef,
+        options: GcpKmsProviderOptions,
+        client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
+    ) -> Self {
+        debug!(
+            "Initialising Google KMS envelope encryption for {}",
+            kms_key_ref.to_google_ref()
+        );
+
+        Self {
             gcp_key_ref: kms_key_ref.clone(),
             client,
             options,
-        })
+        }
     }
 }
 
