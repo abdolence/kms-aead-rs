@@ -40,7 +40,7 @@ aws-sdk-kms = { version = "1", optional = true }
 serde_json = { version = "1" }
 proptest = "1.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-criterion = { version = "0.5", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "futures", "tokio", "async_tokio"] }
+criterion = { version = "0.7", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "futures", "tokio", "async_tokio"] }
 cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
 rustls = "0.23"
 
