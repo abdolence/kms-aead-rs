@@ -30,9 +30,9 @@ pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 impl CipherTextWithEncryptedKey {
     pub fn new(cipher_text: &CipherText, encrypted_dek: &EncryptedDataEncryptionKey) -> Self {
         let mut value = Vec::with_capacity(
-            std::mem::size_of::<usize>() + encrypted_dek.value().len() + cipher_text.value().len(),
+            std::mem::size_of::<u64>() + encrypted_dek.value().len() + cipher_text.value().len(),
         );
-        value.extend_from_slice(&encrypted_dek.value().len().to_be_bytes());
+        value.extend_from_slice(&(encrypted_dek.value().len() as u64).to_be_bytes());
         value.extend_from_slice(encrypted_dek.value());
         value.extend_from_slice(cipher_text.value());
 
@@ -40,7 +40,7 @@ impl CipherTextWithEncryptedKey {
     }
 
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let us_len = std::mem::size_of::<usize>();
+        let us_len = std::mem::size_of::<u64>();
 
         if self.value().len() < us_len {
             return Err(KmsAeadEncryptionError::create(

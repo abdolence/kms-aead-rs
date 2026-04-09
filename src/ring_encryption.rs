@@ -8,7 +8,7 @@ use secret_vault_value::SecretValue;
 
 #[derive(Debug, Clone, Builder)]
 pub struct RingAeadEncryptionOptions {
-    #[default = "RingAeadEncryptionNonceKind::TimeRandom"]
+    #[default = "RingAeadEncryptionNonceKind::Random"]
     pub nonce_kind: RingAeadEncryptionNonceKind,
 }
 
