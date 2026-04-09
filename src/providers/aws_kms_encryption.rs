@@ -88,7 +88,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
             .encrypt()
             .set_key_id(Some(self.aws_key_ref.to_key_arn()))
             .set_plaintext(Some(Blob::new(
-                hex::encode(encryption_key.value().ref_sensitive_value().as_slice()).into_bytes(),
+                encryption_key.value().ref_sensitive_value().as_slice(),
             )))
             .send()
             .await
@@ -137,7 +137,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
 
         if let Some(plaintext) = decrypt_response.plaintext {
             Ok(DataEncryptionKey::from(
-                secret_vault_value::SecretValue::new(hex::decode(plaintext.into_inner()).unwrap()),
+                secret_vault_value::SecretValue::new(plaintext.into_inner()),
             ))
         } else {
             Err(KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
