@@ -88,7 +88,11 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         let mut encrypt_request = tonic::Request::new(EncryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
             plaintext: secret_vault_value::SecretValue::new(
-                hex::encode(encryption_key.value().ref_sensitive_value().as_slice()).into_bytes(),
+                encryption_key
+                    .value()
+                    .ref_sensitive_value()
+                    .as_slice()
+                    .into(),
             ),
             ..Default::default()
         });
@@ -131,15 +135,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         let decrypt_response = self.client.get().decrypt(decrypt_request).await?;
 
         Ok(DataEncryptionKey::from(
-            secret_vault_value::SecretValue::new(
-                hex::decode(
-                    decrypt_response
-                        .into_inner()
-                        .plaintext
-                        .ref_sensitive_value(),
-                )
-                .unwrap(),
-            ),
+            decrypt_response.into_inner().plaintext,
         ))
     }
 
