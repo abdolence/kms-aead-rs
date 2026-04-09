@@ -83,7 +83,7 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
         ),
     );
 
-    opening_key
+    let decrypted = opening_key
         .open_in_place(aad, secret_value.ref_sensitive_value_mut())
         .map_err(|e| {
             KmsAeadEncryptionError::create(
@@ -92,11 +92,7 @@ pub fn decrypt_with_opening_key<A: std::convert::AsRef<[u8]>>(
             )
         })?;
 
-    let len = secret_value.ref_sensitive_value().len();
-    secret_value
-        .ref_sensitive_value_mut()
-        .truncate(len - ring::aead::MAX_TAG_LEN);
-    Ok(secret_value)
+    Ok(SecretValue::new(decrypted.to_vec()))
 }
 
 pub fn generate_secret_key(
