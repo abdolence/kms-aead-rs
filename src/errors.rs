@@ -2,6 +2,7 @@ use rsb_derive::Builder;
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
+use std::time::SystemTimeError;
 
 pub type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -101,6 +102,18 @@ impl Display for KmsAeadEncryptionError {
 }
 
 impl std::error::Error for KmsAeadEncryptionError {}
+
+impl From<SystemTimeError> for KmsAeadError {
+    fn from(e: SystemTimeError) -> Self {
+        KmsAeadError::SystemError(
+            KmsAeadSystemError::new(
+                KmsAeadErrorPublicGenericDetails::new("SYSTEM_TIME_ERROR".to_string()),
+                format!("System time error: {e}"),
+            )
+            .with_root_cause(Box::new(e)),
+        )
+    }
+}
 
 #[cfg(feature = "gcp")]
 impl From<gcloud_sdk::error::Error> for KmsAeadError {

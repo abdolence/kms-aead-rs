@@ -2,9 +2,16 @@ use crate::errors::*;
 use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
+use subtle::ConstantTimeEq;
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
+#[derive(Debug, Clone, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
+
+impl ConstantTimeEq for CipherText {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.value().ct_eq(other.value())
+    }
+}
 
 impl CipherText {
     pub fn to_hex_string(&self) -> String {
@@ -104,7 +111,7 @@ mod tests {
         fn cipher_text_with_key_encoding_test(mock_cipher_text in generate_cipher_text(), mock_encrypted_dek in generate_encrypted_dek()) {
             let cipher_text_with_key = CipherTextWithEncryptedKey::new(&mock_cipher_text, &mock_encrypted_dek);
             let (decoded_cipher_text,decoded_dek) = cipher_text_with_key.separate().unwrap();
-            assert_eq!(decoded_cipher_text, mock_cipher_text);
+            assert_eq!(decoded_cipher_text.ct_eq(&mock_cipher_text).unwrap_u8(), 1u8);
             assert_eq!(decoded_dek, mock_encrypted_dek);
         }
     }

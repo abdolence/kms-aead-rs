@@ -128,8 +128,7 @@ pub fn generate_time_random_nonce(secure_rand: &SystemRandom) -> KmsAeadResult<V
     let now = std::time::SystemTime::now();
 
     let since_the_epoch = &now
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("Clock may have gone backwards")
+        .duration_since(std::time::UNIX_EPOCH)?
         .as_millis()
         .to_be_bytes()[MILLIS_LEN - TIME_LEN..];
 
