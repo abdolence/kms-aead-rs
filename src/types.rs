@@ -7,27 +7,59 @@ use subtle::ConstantTimeEq;
 #[derive(Debug, Clone, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
 
-impl ConstantTimeEq for CipherText {
-    fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.value().ct_eq(other.value())
-    }
-}
-
 impl CipherText {
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
+impl ConstantTimeEq for CipherText {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.value().ct_eq(other.value())
+    }
+}
+
+impl PartialEq for CipherText {
+    fn eq(&self, other: &Self) -> bool {
+        self.ct_eq(other).into()
+    }
+}
+
+#[derive(Debug, Clone, ValueStruct)]
 pub struct DataEncryptionKey(pub SecretValue);
 
-#[derive(Debug, Clone, Eq, PartialEq, ValueStruct)]
+impl ConstantTimeEq for DataEncryptionKey {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.value()
+            .as_sensitive_bytes()
+            .ct_eq(other.value().as_sensitive_bytes())
+    }
+}
+
+impl PartialEq for DataEncryptionKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ct_eq(other).into()
+    }
+}
+
+#[derive(Debug, Clone, ValueStruct)]
 pub struct EncryptedDataEncryptionKey(pub Vec<u8>);
 
 impl EncryptedDataEncryptionKey {
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
+    }
+}
+
+impl ConstantTimeEq for EncryptedDataEncryptionKey {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.value().ct_eq(other.value())
+    }
+}
+
+impl PartialEq for EncryptedDataEncryptionKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ct_eq(other).into()
     }
 }
 
@@ -111,7 +143,7 @@ mod tests {
         fn cipher_text_with_key_encoding_test(mock_cipher_text in generate_cipher_text(), mock_encrypted_dek in generate_encrypted_dek()) {
             let cipher_text_with_key = CipherTextWithEncryptedKey::new(&mock_cipher_text, &mock_encrypted_dek);
             let (decoded_cipher_text,decoded_dek) = cipher_text_with_key.separate().unwrap();
-            assert_eq!(decoded_cipher_text.ct_eq(&mock_cipher_text).unwrap_u8(), 1u8);
+            assert_eq!(decoded_cipher_text, mock_cipher_text);
             assert_eq!(decoded_dek, mock_encrypted_dek);
         }
     }
