@@ -63,7 +63,7 @@ impl PartialEq for EncryptedDataEncryptionKey {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 impl CipherTextWithEncryptedKey {
@@ -118,6 +118,18 @@ impl CipherTextWithEncryptedKey {
 impl From<Vec<u8>> for CipherTextWithEncryptedKey {
     fn from(value: Vec<u8>) -> Self {
         Self(value)
+    }
+}
+
+impl ConstantTimeEq for CipherTextWithEncryptedKey {
+    fn ct_eq(&self, other: &Self) -> subtle::Choice {
+        self.value().ct_eq(other.value())
+    }
+}
+
+impl PartialEq for CipherTextWithEncryptedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ct_eq(other).into()
     }
 }
 
