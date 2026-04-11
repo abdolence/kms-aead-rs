@@ -15,7 +15,6 @@ pub struct RingAeadEncryptionOptions {
 #[derive(Debug, Clone)]
 pub enum RingAeadEncryptionNonceKind {
     Random,
-    TimeRandom,
 }
 
 pub struct RingAeadEncryption {
@@ -77,9 +76,6 @@ where
     ) -> KmsAeadResult<CipherText> {
         let nonce_data = match self.options.nonce_kind {
             RingAeadEncryptionNonceKind::Random => generate_random_nonce(&self.secure_rand)?,
-            RingAeadEncryptionNonceKind::TimeRandom => {
-                generate_time_random_nonce(&self.secure_rand)?
-            }
         };
 
         let encrypted_value = encrypt_with_sealing_key(
