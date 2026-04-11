@@ -103,7 +103,12 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
                 "name={}",
                 self.gcp_key_ref.to_google_ref()
             ))
-            .unwrap(),
+            .map_err(|e| {
+                crate::errors::KmsAeadEncryptionError::create(
+                    "DECRYPT_KEY",
+                    format!("Unable to create request metadata: {e:?}").as_str(),
+                )
+            })?,
         );
 
         let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
@@ -129,7 +134,12 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
                 "name={}",
                 self.gcp_key_ref.to_google_ref()
             ))
-            .unwrap(),
+            .map_err(|e| {
+                crate::errors::KmsAeadEncryptionError::create(
+                    "DECRYPT_KEY",
+                    format!("Unable to create request metadata: {e:?}").as_str(),
+                )
+            })?,
         );
 
         let decrypt_response = self.client.get().decrypt(decrypt_request).await?;
@@ -160,7 +170,12 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
                 MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
                     "name={gcp_global_location}"
                 ))
-                .unwrap(),
+                .map_err(|e| {
+                    crate::errors::KmsAeadEncryptionError::create(
+                        "DECRYPT_KEY",
+                        format!("Unable to create request metadata: {e:?}").as_str(),
+                    )
+                })?,
             );
 
             let gen_random_bytes_resp = self

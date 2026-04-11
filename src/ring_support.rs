@@ -26,8 +26,6 @@ pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
     aad: ring::aead::Aad<A>,
     plain_text: &[u8],
 ) -> KmsAeadResult<CipherText> {
-    let mut encrypted_secret_value = plain_text.to_vec();
-
     let mut sealing_key = SealingKey::new(
         UnboundKey::new(algo, encryption_key.value().ref_sensitive_value()).map_err(|e| {
             KmsAeadEncryptionError::create(
@@ -44,6 +42,8 @@ pub fn encrypt_with_sealing_key<A: std::convert::AsRef<[u8]>>(
             })?,
         ),
     );
+
+    let mut encrypted_secret_value = plain_text.to_vec();
 
     sealing_key
         .seal_in_place_append_tag(aad, &mut encrypted_secret_value)
