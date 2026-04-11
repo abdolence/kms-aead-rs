@@ -102,6 +102,13 @@ where
         cipher_text: &CipherText,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
+        if cipher_text.value().len() < ring::aead::NONCE_LEN {
+            return Err(crate::errors::KmsAeadEncryptionError::create(
+                "INVALID_CIPHERTEXT",
+                "Ciphertext too short to contain nonce",
+            ));
+        }
+
         let (nonce_data, encrypted_part) = cipher_text.value().split_at(ring::aead::NONCE_LEN);
 
         decrypt_with_opening_key(
@@ -117,6 +124,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{CipherText, DataEncryptionKey};
     use proptest::prelude::*;
     use proptest::strategy::ValueTree;
     use proptest::test_runner::TestRunner;
@@ -224,5 +232,294 @@ mod tests {
         };
 
         assert_eq!(decrypted_value, mock_secret_value)
+    }
+
+    #[tokio::test]
+    async fn empty_plaintext_test() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let empty_secret = SecretValue::new(Vec::new());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &empty_secret, &secret_key)
+            .await
+            .unwrap();
+
+        let decrypted_value = encryption
+            .decrypt_value(&mock_aad, &encrypted_value, &secret_key)
+            .await
+            .unwrap();
+
+        assert_eq!(decrypted_value.ref_sensitive_value().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn empty_aad_test() {
+        let empty_aad = b"";
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&empty_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        let decrypted_value = encryption
+            .decrypt_value(&empty_aad, &encrypted_value, &secret_key)
+            .await
+            .unwrap();
+
+        assert_eq!(decrypted_value, secret);
+    }
+
+    #[tokio::test]
+    async fn binary_aad_test() {
+        // Test with binary AAD containing null bytes and non-ASCII
+        let binary_aad: Vec<u8> = vec![0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF, 0x00];
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&binary_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        let decrypted_value = encryption
+            .decrypt_value(&binary_aad, &encrypted_value, &secret_key)
+            .await
+            .unwrap();
+
+        assert_eq!(decrypted_value, secret);
+    }
+
+    #[tokio::test]
+    async fn wrong_key_decryption_fails() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand.clone()).unwrap();
+        let secret_key1 = encryption.generate_data_encryption_key().unwrap();
+        let secret_key2 = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &secret, &secret_key1)
+            .await
+            .unwrap();
+
+        // Try to decrypt with wrong key
+        let result = encryption
+            .decrypt_value(&mock_aad, &encrypted_value, &secret_key2)
+            .await;
+
+        assert!(result.is_err(), "Decryption with wrong key should fail");
+    }
+
+    #[tokio::test]
+    async fn truncated_ciphertext_fails() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        // Truncate the ciphertext
+        let mut truncated = encrypted_value.value().to_vec();
+        truncated.truncate(truncated.len() - 5);
+        let truncated_cipher = CipherText(truncated);
+
+        let result = encryption
+            .decrypt_value(&mock_aad, &truncated_cipher, &secret_key)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Decryption of truncated ciphertext should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn modified_ciphertext_fails() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        // Flip a bit in the ciphertext (after nonce)
+        let mut modified = encrypted_value.value().to_vec();
+        if modified.len() > ring::aead::NONCE_LEN + 1 {
+            modified[ring::aead::NONCE_LEN + 1] ^= 0x01;
+        }
+        let modified_cipher = CipherText(modified);
+
+        let result = encryption
+            .decrypt_value(&mock_aad, &modified_cipher, &secret_key)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Decryption of modified ciphertext should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn modified_nonce_fails() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        // Modify the nonce (first bytes)
+        let mut modified = encrypted_value.value().to_vec();
+        modified[0] ^= 0x01;
+        let modified_cipher = CipherText(modified);
+
+        let result = encryption
+            .decrypt_value(&mock_aad, &modified_cipher, &secret_key)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Decryption with modified nonce should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn too_short_ciphertext_fails() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        // Ciphertext shorter than nonce length
+        let short_cipher = CipherText(vec![0u8; ring::aead::NONCE_LEN - 1]);
+
+        let result = encryption
+            .decrypt_value(&mock_aad, &short_cipher, &secret_key)
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Decryption of too-short ciphertext should fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_aes_256_gcm_algorithm() {
+        let mock_aad: String = "test-aad".to_string();
+        let secure_rand: SystemRandom = SystemRandom::new();
+
+        let encryption =
+            RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, secure_rand).unwrap();
+
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+        let secret = SecretValue::new("test-secret".as_bytes().to_vec());
+
+        let encrypted_value = encryption
+            .encrypt_value(&mock_aad, &secret, &secret_key)
+            .await
+            .unwrap();
+
+        let decrypted_value = encryption
+            .decrypt_value(&mock_aad, &encrypted_value, &secret_key)
+            .await
+            .unwrap();
+
+        assert_eq!(decrypted_value, secret);
+    }
+
+    #[test]
+    fn test_constant_time_cipher_text_comparison() {
+        let cipher1 = CipherText(vec![1, 2, 3, 4, 5]);
+        let cipher2 = CipherText(vec![1, 2, 3, 4, 5]);
+        let cipher3 = CipherText(vec![1, 2, 3, 4, 6]);
+
+        // PartialEq uses constant-time comparison internally
+        assert_eq!(cipher1, cipher2);
+        assert_ne!(cipher1, cipher3);
+    }
+
+    #[test]
+    fn test_constant_time_dek_comparison() {
+        let dek1 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
+        let dek2 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
+        let dek3 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 6]));
+
+        // PartialEq uses constant-time comparison internally
+        assert_eq!(dek1, dek2);
+        assert_ne!(dek1, dek3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_encryption_test() {
+        use tokio::task;
+
+        let secure_rand: SystemRandom = SystemRandom::new();
+        let encryption = RingAeadEncryption::with_rand(secure_rand).unwrap();
+        let secret_key = encryption.generate_data_encryption_key().unwrap();
+
+        let mut handles = vec![];
+        for i in 0..10 {
+            let encryption_clone = RingAeadEncryption::with_rand(SystemRandom::new()).unwrap();
+            let key_clone = secret_key.clone();
+            let handle = task::spawn(async move {
+                let secret = SecretValue::new(format!("secret-{}", i).as_bytes().to_vec());
+                let aad = format!("aad-{}", i);
+
+                let encrypted = encryption_clone
+                    .encrypt_value(&aad, &secret, &key_clone)
+                    .await
+                    .unwrap();
+
+                let decrypted = encryption_clone
+                    .decrypt_value(&aad, &encrypted, &key_clone)
+                    .await
+                    .unwrap();
+
+                assert_eq!(decrypted, secret);
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.await.unwrap();
+        }
     }
 }
