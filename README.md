@@ -20,7 +20,7 @@ Available KMS providers:
 Cargo.toml:
 ```toml
 [dependencies]
-kms-aead = { version = "0.25", features=["..."] }
+kms-aead = { version = "0.27", features=["..."] }
 ```
 See security consideration below about versioning.
 
