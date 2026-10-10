@@ -54,10 +54,6 @@ gcp-kms-encryption-webpki = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead
 aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 
-# gcloud-sdk 0.33 is not on crates.io yet; remove this once it is published.
-[patch.crates-io]
-gcloud-sdk = { git = "https://github.com/abdolence/gcloud-sdk-rs", branch = "feat/google-cloud-auth" }
-
 [package.metadata.docs.rs]
 all-features = false
 features = ["ring-aead-encryption", "gcp-kms-encryption", "aws-kms-encryption", "serde"]
