@@ -209,7 +209,7 @@ mod tests {
         let ciphertext = encrypt_with_sealing_key(algo, &key, &nonce, aad, plaintext).unwrap();
 
         // Even empty plaintext produces ciphertext (auth tag)
-        assert!(ciphertext.value().len() > 0);
+        assert!(!ciphertext.value().is_empty());
 
         let aad2 = ring::aead::Aad::from(b"test-aad");
         let decrypted =
