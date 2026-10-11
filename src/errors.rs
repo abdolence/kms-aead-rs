@@ -89,6 +89,19 @@ impl KmsAeadNetworkError {
             message.to_string(),
         ))
     }
+
+    /// For an error whose message and source chain carry no secret. The chain goes into the
+    /// message, since the top-level message of an HTTP error rarely says what failed.
+    #[cfg(feature = "vault-transit-kms-encryption-base")]
+    pub(crate) fn with_error_chain(code: &str, context: &str, e: &(dyn Error + 'static)) -> Self {
+        let mut message = format!("{context}: {e}");
+        let mut source = e.source();
+        while let Some(cause) = source {
+            message.push_str(&format!(": {cause}"));
+            source = cause.source();
+        }
+        KmsAeadNetworkError::new(KmsAeadErrorPublicGenericDetails::new(code.into()), message)
+    }
 }
 
 impl std::error::Error for KmsAeadNetworkError {}
@@ -168,5 +181,16 @@ impl<E: Display + Error + Sync + Send + 'static, R: std::fmt::Debug + Sync + Sen
             )
             .with_root_cause(Box::new(e)),
         )
+    }
+}
+
+#[cfg(feature = "vault-transit-kms-encryption-base")]
+impl From<hyper_util::client::legacy::Error> for KmsAeadError {
+    fn from(e: hyper_util::client::legacy::Error) -> Self {
+        KmsAeadError::NetworkError(KmsAeadNetworkError::with_error_chain(
+            "VAULT_HTTP",
+            "Unable to send the Vault request",
+            &e,
+        ))
     }
 }

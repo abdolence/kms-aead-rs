@@ -144,9 +144,9 @@ impl VaultTransitProvider {
         Self::with_options(key_ref, VaultTransitProviderOptions::from_env()?)
     }
 
-    /// Fails on an invalid address, mount, key name, namespace or timeout, or an unreadable CA
-    /// certificate file. It sends no request, so a wrong token or an unreachable server fail the
-    /// first encryption.
+    /// Fails on an invalid address, mount, key name, namespace or timeout, an unreadable CA
+    /// certificate file, or no CA certificate to trust at all. It sends no request, so a wrong
+    /// token or an unreachable server fail the first encryption.
     pub fn with_options(
         key_ref: &VaultTransitKeyRef,
         options: VaultTransitProviderOptions,
@@ -205,7 +205,6 @@ impl VaultTransitProvider {
         })
     }
 
-    /// The body of a successful response to a JSON `POST`, within the timeout.
     async fn post(&self, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
         let mut request = Request::new(Full::new(Bytes::from(body)));
         *request.method_mut() = Method::POST;
@@ -231,12 +230,7 @@ impl VaultTransitProvider {
 
         trace!(%uri, "Sending Vault Transit request");
         let exchange = async {
-            let response = self.http_client.request(request).await.map_err(|e| {
-                KmsAeadNetworkError::create(
-                    "VAULT_HTTP",
-                    &format!("Unable to send the Vault request: {}", error_chain(&e)),
-                )
-            })?;
+            let response = self.http_client.request(request).await?;
             let status = response.status();
             // The body buffer belongs to the HTTP stack and is freed without being zeroized.
             let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
@@ -249,13 +243,11 @@ impl VaultTransitProvider {
                             &format!("The Vault response is larger than {MAX_RESPONSE_SIZE} bytes"),
                         )
                     } else {
-                        KmsAeadNetworkError::create(
+                        KmsAeadError::NetworkError(KmsAeadNetworkError::with_error_chain(
                             "VAULT_HTTP",
-                            &format!(
-                                "Unable to receive the Vault response: {}",
-                                error_chain(e.as_ref())
-                            ),
-                        )
+                            "Unable to receive the Vault response",
+                            e.as_ref(),
+                        ))
                     }
                 })?
                 .to_bytes();
@@ -392,18 +384,6 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     })
 }
 
-/// The messages of an error and of all its sources.
-fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
-    let mut message = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
-}
-
 /// The value of an environment variable, `None` when it is unset or empty.
 fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
     match std::env::var(name) {
@@ -457,6 +437,22 @@ fn encoded_vault_path(field: &str, path: &str) -> KmsAeadResult<String> {
 /// selected crypto provider. The provider is passed to this config only and never installed as
 /// the process default, which stays the application's choice.
 fn tls_config(ca_certificate: Option<&Path>) -> KmsAeadResult<rustls::ClientConfig> {
+    let roots = trusted_roots(selected_root_store(), ca_certificate)?;
+
+    #[cfg(feature = "vault-transit-kms-encryption-tls-aws-lc-rs")]
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    #[cfg(feature = "vault-transit-kms-encryption-tls-ring")]
+    let provider = rustls::crypto::ring::default_provider();
+
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| KmsAeadSystemError::create("VAULT_TLS", &e.to_string()))?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    Ok(config)
+}
+
+fn selected_root_store() -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty();
     #[cfg(feature = "vault-transit-kms-encryption-tls-roots")]
     {
@@ -468,7 +464,14 @@ fn tls_config(ca_certificate: Option<&Path>) -> KmsAeadResult<rustls::ClientConf
     }
     #[cfg(feature = "vault-transit-kms-encryption-tls-webpki")]
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    roots
+}
 
+/// `roots` plus the CA certificates in `ca_certificate`; fails when the result trusts no CA.
+fn trusted_roots(
+    mut roots: rustls::RootCertStore,
+    ca_certificate: Option<&Path>,
+) -> KmsAeadResult<rustls::RootCertStore> {
     if let Some(path) = ca_certificate {
         let certificates = CertificateDer::pem_file_iter(path)
             .and_then(|certificates| certificates.collect::<Result<Vec<_>, _>>())
@@ -492,18 +495,15 @@ fn tls_config(ca_certificate: Option<&Path>) -> KmsAeadResult<rustls::ClientConf
             ));
         }
     }
-
-    #[cfg(feature = "vault-transit-kms-encryption-tls-aws-lc-rs")]
-    let provider = rustls::crypto::aws_lc_rs::default_provider();
-    #[cfg(feature = "vault-transit-kms-encryption-tls-ring")]
-    let provider = rustls::crypto::ring::default_provider();
-
-    let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| KmsAeadSystemError::create("VAULT_TLS", &e.to_string()))?
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    Ok(config)
+    // With system roots on a host that has none installed, such as a distroless image, every
+    // request would fail later with an unknown issuer.
+    if roots.is_empty() {
+        return Err(KmsAeadSystemError::create(
+            "VAULT_INVALID_OPTIONS",
+            "No CA certificates to trust: the system has none and no CA certificate file is set",
+        ));
+    }
+    Ok(roots)
 }
 
 #[cfg(test)]
@@ -553,6 +553,14 @@ mod tests {
         DataEncryptionKey(SecretValue::from(DATA_KEY))
     }
 
+    fn error_code(error: &KmsAeadError) -> &str {
+        match error {
+            KmsAeadError::SystemError(error) => &error.public.code,
+            KmsAeadError::NetworkError(error) => &error.public.code,
+            KmsAeadError::EncryptionError(error) => &error.public.code,
+        }
+    }
+
     fn assert_no_secrets(error: &KmsAeadError) {
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
         for text in [format!("{error}"), format!("{error:?}")] {
@@ -576,7 +584,11 @@ mod tests {
         .await
         .expect("the request must end before the test guard");
 
-        assert!(matches!(result, Err(KmsAeadError::NetworkError(_))));
+        let Err(error) = result else {
+            panic!("an unanswered request is not an encrypted key");
+        };
+        assert!(matches!(error, KmsAeadError::NetworkError(_)));
+        assert_eq!(error_code(&error), "VAULT_TIMEOUT");
     }
 
     #[tokio::test]
@@ -596,9 +608,25 @@ mod tests {
         };
 
         assert!(matches!(error, KmsAeadError::EncryptionError(_)));
+        assert_eq!(error_code(&error), "VAULT_STATUS_403");
         assert_no_secrets(&error);
+    }
+
+    #[test]
+    fn token_is_not_shown_by_debug() {
         let token = VaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
+
         assert!(!format!("{token:?}").contains(TOKEN));
+    }
+
+    #[test]
+    fn root_store_without_certificates_is_rejected() {
+        let Err(error) = trusted_roots(rustls::RootCertStore::empty(), None) else {
+            panic!("a root store without certificates trusts no Vault server");
+        };
+
+        assert!(matches!(error, KmsAeadError::SystemError(_)));
+        assert_eq!(error_code(&error), "VAULT_INVALID_OPTIONS");
     }
 
     #[tokio::test]
