@@ -207,9 +207,10 @@ impl EncryptedDataEncryptionKey {
 
     /// Reads the hex, in either case, of what [`try_from_bytes`](Self::try_from_bytes) reads.
     pub fn try_from_hex_string(hex: &str) -> KmsAeadResult<Self> {
+        // `FromHexError` quotes the rejected character, and stored keys end up in logs.
         let bytes = hex::decode(hex).map_err(|_| {
             KmsAeadEncryptionError::create(
-                "INVALID_ENCRYPTED_KEY_FORMAT",
+                "INVALID_HEX",
                 &format!("Encrypted key of {} characters is not hex", hex.len()),
             )
         })?;
@@ -661,7 +662,7 @@ mod tests {
         for invalid in ["abc", "zz", "ff 6b"] {
             assert_eq!(
                 error_code(EncryptedDataEncryptionKey::try_from_hex_string(invalid)),
-                "INVALID_ENCRYPTED_KEY_FORMAT",
+                "INVALID_HEX",
                 "{invalid:?}"
             );
         }
