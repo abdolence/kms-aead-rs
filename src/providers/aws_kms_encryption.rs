@@ -179,3 +179,50 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
+    // the AWS key that the live test configures. That key stays enabled while these exist.
+    const ENVELOPE_FROM_0_28_1: &str = "00000000000000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f9016d64cc226f7525698a42aa79440d72eb0000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c0197410ab39e7f2e03fcb949020110803b199d4e5e7f622192544e6afd92c61bf191d969c8e2bd79558786d3adf0453ebe0883967e7031d5c67d4dbebddd4f05aeca971b7636dbde5946860e8b8069a47514d7c98af6d41f881e50d921ed7eb7568617f632b87134c3d01dc25b292fb39badbe";
+    const ENVELOPE_V1: &str = "010000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901328f5ffd046ddc430b18ba1d85738d440000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c2fb61160bcd48c2e564c02d5020110803b5d02b9463971cf911780d692666861a56101335c3d3d047dad9187a4dd15295189e5489017cb4c745c93064abfe217335d46e0cd8f6da27c8997e5ec392560da00e258e81877a60cc0e2a1d06cedfaef2b10d45bb80fda1cb2b81a5f038b24e8c607";
+
+    #[test]
+    fn envelopes_from_a_live_key_split_into_key_version_and_wrapped_key() {
+        let (legacy_cipher_text, legacy_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
+                .separate()
+                .unwrap();
+        let (v1_cipher_text, v1_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap())
+                .separate()
+                .unwrap();
+
+        assert_eq!(legacy_dek.key_version(), None);
+        assert_eq!(legacy_dek.wrapped().len(), 184);
+        assert_eq!(v1_dek.key_version(), None);
+        assert_eq!(v1_dek.wrapped().len(), 184);
+        // Nonce, the 11 bytes of `test-secret` and the tag.
+        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
+        assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {
+        let key_ref = AwsKmsKeyRef::new(
+            std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
+            std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
+        );
+        let encryption =
+            KmsAeadRingEnvelopeEncryption::new(AwsKmsProvider::new(&key_ref).await?).await?;
+        for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
+            let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
+            let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
+            assert_eq!(secret, SecretValue::from("test-secret"));
+        }
+        Ok(())
+    }
+}
