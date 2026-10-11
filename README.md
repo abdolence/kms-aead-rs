@@ -14,6 +14,7 @@ Features:
 Available KMS providers:
 - Google Cloud Platform KMS
 - Amazon Web Services KMS
+- HashiCorp Vault Transit secrets engine
 
 ## Quick start
 
@@ -27,6 +28,13 @@ See security consideration below about versioning.
 ### Available features:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
+- `vault-transit-kms-encryption` for HashiCorp Vault Transit envelope encryption support,
+  with system root certificates and the aws-lc-rs crypto provider. To choose them, enable one of
+  `vault-transit-kms-encryption-tls-roots`/`-tls-webpki` and one of
+  `vault-transit-kms-encryption-tls-aws-lc-rs`/`-tls-ring` instead.
+  A CA certificate from `VAULT_CACERT` or `ca_certificate` adds to the root store and does not
+  replace it, unlike in the Vault CLI.
+  See [examples/vault_transit_kms.rs](examples/vault_transit_kms.rs)
 - `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
 
 ## Example
