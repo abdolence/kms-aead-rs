@@ -95,7 +95,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
         {
             Ok(encrypt_response) => {
                 if let Some(blob) = encrypt_response.ciphertext_blob {
-                    Ok(EncryptedDataEncryptionKey(blob.into_inner()))
+                    Ok(EncryptedDataEncryptionKey::new(blob.into_inner(), None))
                 } else {
                     error!(
                         "Unable to encrypt DEK with AWS KMS {}: Didn't receive any blob.",
@@ -131,7 +131,7 @@ impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
         let decrypt_response = self
             .client
             .decrypt()
-            .ciphertext_blob(Blob::new(encrypted_key.value().as_slice()))
+            .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
             .send()
             .await?;
 

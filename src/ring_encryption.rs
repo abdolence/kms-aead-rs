@@ -522,4 +522,24 @@ mod tests {
             handle.await.unwrap();
         }
     }
+
+    /// The AEAD layer of every envelope layout: kms-aead 0.28.1 output with the default algorithm.
+    #[tokio::test]
+    async fn cipher_text_from_0_28_1_decrypts() {
+        let encryption = RingAeadEncryption::new().unwrap();
+        let dek = DataEncryptionKey::from(SecretValue::new(
+            hex::decode("ee1b4efa8e3b1f550edfe8fe963d575b8cbf4e1f686e8c512ac7e4b3b1b7dd0a")
+                .unwrap(),
+        ));
+        let cipher_text = CipherText(
+            hex::decode("f77db8c591c62b724b2554930a6c13f624f90f0c3d20d43ee94104b82c02b1eb4f2ff49dbe7ae9ed0f77")
+                .unwrap(),
+        );
+
+        let secret = encryption
+            .decrypt_value(&"fixture-aad", &cipher_text, &dek)
+            .await
+            .unwrap();
+        assert_eq!(secret, SecretValue::from("fixture-secret"));
+    }
 }

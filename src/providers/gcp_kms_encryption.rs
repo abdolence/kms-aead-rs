@@ -79,6 +79,21 @@ impl GcpKmsProvider {
     }
 }
 
+/// The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is recorded
+/// for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the wrapped key.
+fn crypto_key_version(name: &str) -> Option<KmsKeyVersion> {
+    match name
+        .rsplit_once("/cryptoKeyVersions/")
+        .map(|(_, version)| KmsKeyVersion::try_from(version.to_string()))
+    {
+        Some(Ok(version)) => Some(version),
+        _ => {
+            warn!(name, "No key version in the GCP KMS encrypt response");
+            None
+        }
+    }
+}
+
 #[async_trait]
 impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     async fn encrypt_data_encryption_key(
@@ -112,9 +127,13 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         );
 
         let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
+        let EncryptResponse {
+            name, ciphertext, ..
+        } = encrypt_response.into_inner();
 
-        Ok(EncryptedDataEncryptionKey::from(
-            encrypt_response.into_inner().ciphertext,
+        Ok(EncryptedDataEncryptionKey::new(
+            ciphertext,
+            crypto_key_version(&name),
         ))
     }
 
@@ -124,7 +143,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         let mut decrypt_request = tonic::Request::new(DecryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
-            ciphertext: encrypted_key.value().clone(),
+            ciphertext: encrypted_key.wrapped().to_vec(),
             ..Default::default()
         });
 
@@ -189,5 +208,20 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         } else {
             aead_encryption.generate_data_encryption_key()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_version_is_read_from_the_crypto_key_version_name() {
+        let name = "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18";
+
+        assert_eq!(
+            crypto_key_version(name),
+            Some(KmsKeyVersion::try_from("18".to_string()).unwrap())
+        );
     }
 }
