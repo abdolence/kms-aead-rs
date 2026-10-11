@@ -1,8 +1,8 @@
 name: tests & formatting
-on: 
+on:
   push:
   pull_request:
-    types: [opened]  
+    types: [opened]
 jobs:
   build:
     name: ${{ matrix.variant }}
@@ -10,6 +10,8 @@ jobs:
     strategy:
       matrix:
         include:
+          - variant: no-vault
+            tls: ""
           - variant: vault-roots-aws-lc-rs
             tls: vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-aws-lc-rs
           - variant: vault-webpki-aws-lc-rs
@@ -25,6 +27,38 @@ jobs:
           profile: minimal
           toolchain: stable
           components: rustfmt, clippy
-      - run: |
-          FEATURES="gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,${{ matrix.tls }}"
+      - env:
+          TLS: ${{ matrix.tls }}
+        run: |
+          FEATURES="gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption${TLS:+,$TLS}"
           cargo fmt -- --check && cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings && cargo test --features "$FEATURES"
+  vault-live:
+    name: vault-live
+    runs-on: ubuntu-latest
+    services:
+      vault:
+        image: hashicorp/vault:latest
+        env:
+          VAULT_DEV_ROOT_TOKEN_ID: root
+          VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+        ports:
+          - 8200:8200
+        options: --cap-add=IPC_LOCK
+    env:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: root
+      VAULT_TRANSIT_KEY: orders
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+      - run: |
+          for attempt in $(seq 1 30); do
+            curl -sf "$VAULT_ADDR/v1/sys/health" > /dev/null && break
+            sleep 1
+          done
+          curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
+          curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
+      - run: cargo test --features vault-transit-kms-encryption --lib -- --ignored vault_transit
