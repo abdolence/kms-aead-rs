@@ -45,8 +45,10 @@ pub struct AzureKmsProviderOptions {
 /// Wraps and unwraps data encryption keys with an Azure Key Vault key.
 ///
 /// Unwrapping needs the key version recorded in [`EncryptedDataEncryptionKey::key_version`].
-/// A caller of the `*_with_encrypted_dek` APIs who stores the encrypted key must store that
-/// version too: [`EncryptedDataEncryptionKey::to_hex_string`] encodes only the wrapped bytes.
+/// Store an encrypted key with [`EncryptedDataEncryptionKey::to_bytes`] or
+/// [`EncryptedDataEncryptionKey::to_hex_string`] and read it back with `TryFrom<&[u8]>` or
+/// [`EncryptedDataEncryptionKey::try_from_hex_string`], which keep the version Azure needs to
+/// unwrap after a rotation.
 pub struct AzureKmsProvider {
     client: KeyClient,
     azure_key_ref: AzureKmsKeyRef,

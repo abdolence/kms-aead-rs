@@ -105,7 +105,7 @@ a new version of dependency automatically without auditing the changes.
 ### Envelope layout
 Since 0.29.0 `CipherTextWithEncryptedKey` is written in layout v1:
 - the `0x01` layout tag;
-- the version of the KMS key that wrapped the data encryption key, when the provider reports one (GCP, Vault Transit);
+- the version of the KMS key that wrapped the data encryption key, when the provider reports one (GCP, Vault Transit, Azure);
 - the wrapped data encryption key;
 - the AEAD cipher text.
 

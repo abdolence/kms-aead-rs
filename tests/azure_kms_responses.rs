@@ -88,6 +88,25 @@ async fn wrap_with_the_latest_key_version_records_the_version_from_kid() {
 }
 
 #[tokio::test]
+async fn wrapped_key_read_back_from_hex_keeps_its_key_version() {
+    let body = format!(
+        r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "{}"}}"#,
+        azure_core::base64::encode_url_safe(b"wrapped-data-encryption-key")
+    );
+    let encrypted_key = provider_over(StatusCode::Ok, body)
+        .encrypt_data_encryption_key(&data_encryption_key())
+        .await
+        .unwrap();
+
+    let read_back =
+        EncryptedDataEncryptionKey::try_from_hex_string(&encrypted_key.to_hex_string().unwrap())
+            .unwrap();
+
+    assert_eq!(read_back.key_version(), Some(&key_version()));
+    assert_eq!(read_back, encrypted_key);
+}
+
+#[tokio::test]
 async fn encrypted_key_without_a_key_version_is_rejected_before_any_request() {
     // A request would be answered with 200 and an unwrapped key, so an error here can only
     // come from the encrypted key.
