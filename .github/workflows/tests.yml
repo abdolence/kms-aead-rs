@@ -5,7 +5,19 @@ on:
     types: [opened]  
 jobs:
   build:
+    name: ${{ matrix.variant }}
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - variant: vault-roots-aws-lc-rs
+            tls: vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-aws-lc-rs
+          - variant: vault-webpki-aws-lc-rs
+            tls: vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-aws-lc-rs
+          - variant: vault-roots-ring
+            tls: vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-ring
+          - variant: vault-webpki-ring
+            tls: vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-ring
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rs/toolchain@v1
@@ -13,4 +25,6 @@ jobs:
           profile: minimal
           toolchain: stable
           components: rustfmt, clippy
-      - run: cargo fmt -- --check && cargo clippy -- -Dwarnings && cargo test --features "gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption"
+      - run: |
+          FEATURES="gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,${{ matrix.tls }}"
+          cargo fmt -- --check && cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings && cargo test --features "$FEATURES"

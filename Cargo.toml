@@ -34,6 +34,16 @@ gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = "2.6.1"
+hyper = { version = "1", features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+webpki-roots = { version = "1", optional = true }
+percent-encoding = { version = "2", optional = true }
+serde_json = { version = "1", optional = true }
+tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -55,10 +65,30 @@ aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
 ci-aws = ["aws-kms-encryption"] # Live tests against an AWS KMS key
+vault-transit-kms-encryption-base = [
+    "ring-aead-encryption",
+    "dep:hyper",
+    "dep:hyper-util",
+    "dep:hyper-rustls",
+    "dep:http-body-util",
+    "dep:rustls",
+    "dep:percent-encoding",
+    "dep:serde",
+    "dep:serde_json",
+    "secret-vault-value/base64",
+    "dep:tokio",
+]
+# TLS root store variants - user can choose one
+vault-transit-kms-encryption-tls-roots = ["vault-transit-kms-encryption-base", "dep:rustls-native-certs"]
+vault-transit-kms-encryption-tls-webpki = ["vault-transit-kms-encryption-base", "dep:webpki-roots"]
+# TLS crypto provider variants - user can choose one
+vault-transit-kms-encryption-tls-aws-lc-rs = ["vault-transit-kms-encryption-base", "rustls/aws_lc_rs"]
+vault-transit-kms-encryption-tls-ring = ["vault-transit-kms-encryption-base", "rustls/ring"]
+vault-transit-kms-encryption = ["vault-transit-kms-encryption-tls-roots", "vault-transit-kms-encryption-tls-aws-lc-rs"]
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring-aead-encryption", "gcp-kms-encryption", "aws-kms-encryption", "serde"]
+features = ["ring-aead-encryption", "gcp-kms-encryption", "aws-kms-encryption", "vault-transit-kms-encryption", "serde"]
 
 [[example]]
 name = "aws_kms"
@@ -69,6 +99,11 @@ required-features = ["aws-kms-encryption"]
 name = "gcp_kms"
 path = "examples/gcp_kms.rs"
 required-features = ["gcp-kms-encryption"]
+
+[[example]]
+name = "vault_transit_kms"
+path = "examples/vault_transit_kms.rs"
+required-features = ["vault-transit-kms-encryption-base"]
 
 [[example]]
 name = "only_aead"

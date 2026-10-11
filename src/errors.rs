@@ -59,6 +59,15 @@ impl Display for KmsAeadSystemError {
     }
 }
 
+impl KmsAeadSystemError {
+    pub fn create(code: &str, message: &str) -> KmsAeadError {
+        KmsAeadError::SystemError(KmsAeadSystemError::new(
+            KmsAeadErrorPublicGenericDetails::new(code.to_string()),
+            message.to_string(),
+        ))
+    }
+}
+
 impl std::error::Error for KmsAeadSystemError {}
 
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
@@ -70,6 +79,15 @@ pub struct KmsAeadNetworkError {
 impl Display for KmsAeadNetworkError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(f, "Network error: {:?} / {}", self.public, self.message)
+    }
+}
+
+impl KmsAeadNetworkError {
+    pub fn create(code: &str, message: &str) -> KmsAeadError {
+        KmsAeadError::NetworkError(KmsAeadNetworkError::new(
+            KmsAeadErrorPublicGenericDetails::new(code.to_string()),
+            message.to_string(),
+        ))
     }
 }
 

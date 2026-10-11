@@ -3,6 +3,7 @@
 //! Available providers:
 //! - Google Cloud Platform KMS
 //! - Amazon Web Services KMS
+//! - HashiCorp Vault Transit secrets engine
 //!
 //! Features:
 //! - Envelope encryption using automatically generated or provided data encryption keys;
@@ -56,6 +57,40 @@
 
 #![allow(unused_parens, clippy::new_without_default)]
 #![forbid(unsafe_code)]
+
+#[cfg(all(
+    feature = "vault-transit-kms-encryption-base",
+    not(feature = "vault-transit-kms-encryption-tls-roots"),
+    not(feature = "vault-transit-kms-encryption-tls-webpki")
+))]
+compile_error!(
+    "You must enable either \"vault-transit-kms-encryption-tls-roots\" or \"vault-transit-kms-encryption-tls-webpki\" when using Vault Transit features"
+);
+
+#[cfg(all(
+    feature = "vault-transit-kms-encryption-tls-roots",
+    feature = "vault-transit-kms-encryption-tls-webpki"
+))]
+compile_error!(
+    "You cannot enable both \"vault-transit-kms-encryption-tls-roots\" (enabled by \"vault-transit-kms-encryption\") and \"vault-transit-kms-encryption-tls-webpki\" at the same time"
+);
+
+#[cfg(all(
+    feature = "vault-transit-kms-encryption-base",
+    not(feature = "vault-transit-kms-encryption-tls-aws-lc-rs"),
+    not(feature = "vault-transit-kms-encryption-tls-ring")
+))]
+compile_error!(
+    "You must enable either \"vault-transit-kms-encryption-tls-aws-lc-rs\" or \"vault-transit-kms-encryption-tls-ring\" when using Vault Transit features"
+);
+
+#[cfg(all(
+    feature = "vault-transit-kms-encryption-tls-aws-lc-rs",
+    feature = "vault-transit-kms-encryption-tls-ring"
+))]
+compile_error!(
+    "You cannot enable both \"vault-transit-kms-encryption-tls-aws-lc-rs\" (enabled by \"vault-transit-kms-encryption\") and \"vault-transit-kms-encryption-tls-ring\" at the same time"
+);
 
 extern crate core;
 
