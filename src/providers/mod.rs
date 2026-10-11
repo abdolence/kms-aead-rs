@@ -3,9 +3,9 @@ mod aws_kms_encryption;
 #[cfg(feature = "aws-kms-encryption")]
 pub use aws_kms_encryption::*;
 
-#[cfg(any(feature = "gcp-kms-encryption", feature = "gcp-kms-encryption-webpki"))]
+#[cfg(feature = "gcp-kms-encryption-base")]
 mod gcp_kms_encryption;
-#[cfg(any(feature = "gcp-kms-encryption", feature = "gcp-kms-encryption-webpki"))]
+#[cfg(feature = "gcp-kms-encryption-base")]
 pub use gcp_kms_encryption::*;
 
 #[cfg(feature = "vault-transit-kms-encryption-base")]

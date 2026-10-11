@@ -27,6 +27,8 @@ See security consideration below about versioning.
 
 ### Available features:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
+- `gcp-kms-encryption-webpki` for Google KMS envelope encryption with the bundled WebPKI root certificates
+- `gcp-kms-encryption-base` for Google KMS envelope encryption without a TLS root store or crypto provider. The application enables them with its own `gcloud-sdk` features, such as `tls-roots` or `tls-webpki-roots`
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
 - `vault-transit-kms-encryption` for HashiCorp Vault Transit envelope encryption support,
   with system root certificates and the aws-lc-rs crypto provider. To choose them, enable one of

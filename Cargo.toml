@@ -59,8 +59,11 @@ default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
 ring-aead-encryption = ["dep:ring"]
 gcp = ["gcloud-sdk"]
-gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption", "gcloud-sdk/google-longrunning", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
-gcp-kms-encryption-webpki = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption", "gcloud-sdk/google-longrunning", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
+# The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
+# store feature from the application to build.
+gcp-kms-encryption-base = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "gcloud-sdk/google-longrunning", "ring-aead-encryption"]
+gcp-kms-encryption = ["gcp-kms-encryption-base", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
+gcp-kms-encryption-webpki = ["gcp-kms-encryption-base", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
 ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
