@@ -263,6 +263,24 @@ mod tests {
         assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
     }
 
+    #[test]
+    fn wrapped_key_stored_by_0_28_1_reads_as_a_bare_wrapped_key() {
+        let (_, legacy_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
+                .separate()
+                .unwrap();
+
+        assert_eq!(
+            EncryptedDataEncryptionKey::try_from_bytes(legacy_dek.wrapped()).unwrap(),
+            legacy_dek
+        );
+        assert_eq!(
+            EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(legacy_dek.wrapped()))
+                .unwrap(),
+            legacy_dek
+        );
+    }
+
     #[tokio::test]
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
     async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {

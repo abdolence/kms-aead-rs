@@ -96,13 +96,26 @@ a new version of dependency automatically without auditing the changes.
 ### Envelope layout
 Since 0.29.0 `CipherTextWithEncryptedKey` is written in layout v1:
 - the `0x01` layout tag;
-- the version of the KMS key that wrapped the data encryption key, when the provider reports one (GCP);
+- the version of the KMS key that wrapped the data encryption key, when the provider reports one (GCP, Vault Transit);
 - the wrapped data encryption key;
 - the AEAD cipher text.
 
 The library reads every layout written since 0.8.0, including the 4-byte length prefix
 written on 32-bit targets before 0.24.0.
-Be aware that 0.28.1 and earlier cannot read layout v1, so upgrade every reader before the first write.
+
+Since 0.29.0 `EncryptedDataEncryptionKey::to_bytes` and `to_hex_string` write the key for the
+`*_with_encrypted_dek` APIs with its key version:
+- the 7-byte magic `0xFF "kmsDEK"` and the `0x01` layout tag;
+- the KMS key version, when the provider reports one;
+- the wrapped data encryption key.
+
+`try_from_bytes` and `try_from_hex_string` read this layout and the bare wrapped key that
+`value` and `to_hex_string` returned up to 0.28.1, so a key stored by any version reads with them.
+GCP wrapped keys start with `0x0a` and AWS ones with `0x01`, so a stored key is never read in the
+wrong layout. A bare key from a custom provider that starts with the magic reads with
+`EncryptedDataEncryptionKey::new`.
+
+Be aware that 0.28.1 and earlier cannot read either layout, so upgrade every reader before the first write.
 
 ### Security implementation details and recommendations
 The library uses 96 bit [nonces](https://en.wikipedia.org/wiki/Cryptographic_nonce)
