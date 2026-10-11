@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +32,9 @@ const VAULT_REQUEST_HEADER: &str = "x-vault-request";
 /// A Transit response carries one wrapped or unwrapped data key, so a response this large is not
 /// one and is not buffered.
 const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
+/// The longest Vault error text quoted into an error. A misbehaving proxy may echo the request
+/// or other data into `errors`, so only a short prefix of the first one is kept.
+const MAX_VAULT_ERROR_CHARS: usize = 256;
 
 /// Characters a path segment keeps as they are: the RFC 3986 unreserved set.
 const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
@@ -94,7 +98,9 @@ pub struct VaultTransitProviderOptions {
     pub namespace: Option<String>,
 
     /// PEM file with CA certificates to trust besides the ones of the selected root store, for a
-    /// server whose certificate comes from a private CA.
+    /// server whose certificate comes from a private CA. The file adds to the root store and does
+    /// not replace it, unlike `VAULT_CACERT` in the Vault CLI, so a server with a certificate from
+    /// any public CA in the root store is trusted as well.
     pub ca_certificate: Option<PathBuf>,
 
     /// Time limit for one request, from opening the connection to receiving the last byte of the
@@ -127,7 +133,9 @@ impl VaultTransitProviderOptions {
 /// Wraps and unwraps data encryption keys with a key of the Vault Transit secrets engine.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
-/// the key version, so it still decrypts after the key is rotated.
+/// the key version, so it still decrypts after the key is rotated. That version is also recorded
+/// as the [`KmsKeyVersion`], for audit only: decrypt sends the ciphertext and never the recorded
+/// version.
 #[derive(Clone)]
 pub struct VaultTransitProvider {
     http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
@@ -157,10 +165,17 @@ impl VaultTransitProvider {
                 "The Vault request timeout must be greater than zero",
             ));
         }
+        let address = vault_address(&options.address)?;
+        if is_plain_http_to_another_host(&address) {
+            warn!(
+                %address,
+                "The Vault address uses plain HTTP to another host, so the token and the data keys cross the network unencrypted"
+            );
+        }
         let key_endpoint = |operation: &str| -> KmsAeadResult<Uri> {
             let uri = format!(
                 "{}/v1/{}/{operation}/{}",
-                vault_api_base(&options.address)?,
+                address.to_string().trim_end_matches('/'),
                 encoded_vault_path("mount", key_ref.mount.trim_matches('/'))?,
                 encoded_vault_path("key_name", &key_ref.key_name)?
             );
@@ -267,7 +282,7 @@ impl VaultTransitProvider {
         }
 
         let errors = match serde_json::from_slice::<VaultErrorResponse>(&body) {
-            Ok(response) => format!("{:?}", response.errors),
+            Ok(response) => response.first_error_prefix(),
             // The parse error is dropped because serde_json may quote the body in it.
             Err(_) => "the body is not a Vault error response".to_string(),
         };
@@ -298,8 +313,11 @@ impl KmsAeadRingEncryptionProvider for VaultTransitProvider {
 
         let body = self.post(&self.encrypt_uri, request).await?;
         let response: TransitResponse<EncryptData> = parse_response(&body)?;
-        Ok(EncryptedDataEncryptionKey(
-            response.data.ciphertext.into_bytes(),
+        let ciphertext = response.data.ciphertext;
+        let key_version = transit_key_version(&ciphertext);
+        Ok(EncryptedDataEncryptionKey::new(
+            ciphertext.into_bytes(),
+            key_version,
         ))
     }
 
@@ -307,7 +325,7 @@ impl KmsAeadRingEncryptionProvider for VaultTransitProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let ciphertext = std::str::from_utf8(encrypted_key.value()).map_err(|_| {
+        let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
             KmsAeadEncryptionError::create(
                 "VAULT_CIPHERTEXT",
                 "The encrypted data encryption key is not a Vault Transit ciphertext",
@@ -368,6 +386,20 @@ struct VaultErrorResponse {
     errors: Vec<String>,
 }
 
+impl VaultErrorResponse {
+    /// At most [`MAX_VAULT_ERROR_CHARS`] characters of the first error, quoted.
+    fn first_error_prefix(&self) -> String {
+        let first_error = self.errors.first().map(String::as_str).unwrap_or_default();
+        format!(
+            "{:?}",
+            first_error
+                .chars()
+                .take(MAX_VAULT_ERROR_CHARS)
+                .collect::<String>()
+        )
+    }
+}
+
 /// serde_json quotes the offending value in its messages, and in a decrypt response that value
 /// can be the data key itself, so only the category and position are kept.
 fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
@@ -384,6 +416,35 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     })
 }
 
+/// The `N` of the `vault:vN:` prefix of a Transit ciphertext. It is recorded for audit only:
+/// Vault reads the version from its own ciphertext at decrypt.
+fn transit_key_version(ciphertext: &str) -> Option<KmsKeyVersion> {
+    match ciphertext
+        .strip_prefix("vault:v")
+        .and_then(|rest| rest.split_once(':'))
+        .map(|(version, _)| KmsKeyVersion::try_from(version.to_string()))
+    {
+        Some(Ok(version)) => Some(version),
+        _ => {
+            warn!("No key version in the Vault Transit ciphertext");
+            None
+        }
+    }
+}
+
+/// Whether requests to `address` carry the token and the data keys in plain text off this host:
+/// an `http` address whose host is not `localhost` or a loopback IP address.
+fn is_plain_http_to_another_host(address: &Uri) -> bool {
+    let host = address.host().unwrap_or_default();
+    let is_loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    address.scheme_str() == Some("http") && !is_loopback
+}
+
 /// The value of an environment variable, `None` when it is unset or empty.
 fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
     match std::env::var(name) {
@@ -397,9 +458,9 @@ fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
     }
 }
 
-/// `scheme://authority` of a Vault address, followed by its path when Vault is served under a
-/// path prefix.
-fn vault_api_base(address: &str) -> KmsAeadResult<String> {
+/// A Vault address: an `http` or `https` URI with a host and no query. Its text without the
+/// trailing `/` is the API base, which keeps the path of a Vault served under a path prefix.
+fn vault_address(address: &str) -> KmsAeadResult<Uri> {
     let invalid = |reason: String| {
         KmsAeadSystemError::create(
             "VAULT_INVALID_OPTIONS",
@@ -408,10 +469,7 @@ fn vault_api_base(address: &str) -> KmsAeadResult<String> {
     };
     let uri = address.parse::<Uri>().map_err(|e| invalid(e.to_string()))?;
     match (uri.scheme_str(), uri.authority(), uri.query()) {
-        (Some(scheme @ ("http" | "https")), Some(authority), None) => Ok(format!(
-            "{scheme}://{authority}{}",
-            uri.path().trim_end_matches('/')
-        )),
+        (Some("http" | "https"), Some(_), None) => Ok(uri),
         _ => Err(invalid(
             "expected http:// or https://, a host and no query".into(),
         )),
@@ -467,7 +525,8 @@ fn selected_root_store() -> rustls::RootCertStore {
     roots
 }
 
-/// `roots` plus the CA certificates in `ca_certificate`; fails when the result trusts no CA.
+/// `roots` plus the CA certificates in `ca_certificate`, which add to the roots and never replace
+/// them; fails when the result trusts no CA.
 fn trusted_roots(
     mut roots: rustls::RootCertStore,
     ca_certificate: Option<&Path>,
@@ -640,7 +699,10 @@ mod tests {
         );
 
         let Err(error) = provider
-            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey(b"vault:v1:wrapped".into()))
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                b"vault:v1:wrapped".into(),
+                None,
+            ))
             .await
         else {
             panic!("a string is not a Transit decrypt response");
@@ -648,6 +710,62 @@ mod tests {
 
         assert!(matches!(error, KmsAeadError::EncryptionError(_)));
         assert_no_secrets(&error);
+    }
+
+    #[tokio::test]
+    async fn vault_errors_are_cut_to_first_error_prefix() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        // Multi-byte characters put the cut inside a character unless it is made on a char
+        // boundary.
+        let echoed = format!("{}{DATA_KEY}", "é".repeat(MAX_VAULT_ERROR_CHARS));
+        let body = serde_json::json!({ "errors": [echoed, DATA_KEY] }).to_string();
+        answer_with(listener, StatusCode::BAD_REQUEST, body);
+
+        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+            panic!("a 400 is not an encrypted key");
+        };
+
+        assert_eq!(error_code(&error), "VAULT_STATUS_400");
+        assert_no_secrets(&error);
+        assert!(format!("{error}").chars().count() < 2 * MAX_VAULT_ERROR_CHARS);
+    }
+
+    #[test]
+    fn key_version_is_read_from_the_transit_ciphertext() {
+        assert_eq!(
+            transit_key_version("vault:v3:AbCd+/ef=="),
+            Some(KmsKeyVersion::try_from("3".to_string()).unwrap())
+        );
+        for malformed in [
+            "vault:3:AbCd",
+            "vault:v:AbCd",
+            "vault:v3",
+            "AbCd",
+            "vault:v3-x:AbCd",
+        ] {
+            assert_eq!(transit_key_version(malformed), None, "{malformed}");
+        }
+    }
+
+    #[test]
+    fn only_plain_http_to_another_host_is_flagged() {
+        for (address, flagged) in [
+            ("http://vault.example.com:8200", true),
+            ("http://10.0.0.5:8200", true),
+            ("http://127.0.0.1:8200", false),
+            ("http://127.1.2.3:8200", false),
+            ("http://[::1]:8200", false),
+            ("http://LocalHost:8200", false),
+            ("https://vault.example.com:8200", false),
+        ] {
+            let address = vault_address(address).unwrap();
+            assert_eq!(
+                is_plain_http_to_another_host(&address),
+                flagged,
+                "{address}"
+            );
+        }
     }
 
     /// Runs against the Vault server in `VAULT_ADDR`, with a Transit key named `VAULT_TRANSIT_KEY`
@@ -676,18 +794,23 @@ mod tests {
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
-        let cipher_text = encryption.encrypt_value(&aad, &secret).await.unwrap();
-        assert_eq!(
-            encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
-            secret
-        );
+        let key_version = |cipher_text: &CipherTextWithEncryptedKey| {
+            let (_, encrypted_dek) = cipher_text.separate().unwrap();
+            encrypted_dek.key_version().map(KmsKeyVersion::to_string)
+        };
 
+        let before_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
+        let after_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
 
-        assert_eq!(
-            encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
-            secret
-        );
+        assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
+        assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
+        for cipher_text in [before_rotation, after_rotation] {
+            assert_eq!(
+                encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
+                secret
+            );
+        }
     }
 
     #[tokio::test]
