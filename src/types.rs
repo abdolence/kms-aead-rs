@@ -3,7 +3,6 @@ use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
 use std::fmt::{Display, Formatter};
-use std::num::NonZeroU8;
 use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone, ValueStruct)]
@@ -50,54 +49,54 @@ impl PartialEq for DataEncryptionKey {
 /// The same rule validates every key version read back from envelope layout v1 and from the
 /// encrypted key layout, so it may only ever loosen: a stricter rule makes stored data unreadable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KmsKeyVersion {
-    version: String,
-    len: NonZeroU8,
-}
+pub struct KmsKeyVersion(String);
 
 impl KmsKeyVersion {
     pub fn as_str(&self) -> &str {
-        &self.version
+        &self.0
     }
 
     // The error reports the length and the class of the first rejected byte, never the bytes
     // themselves: they come from storage and end up in logs.
     fn from_ascii(bytes: &[u8]) -> KmsAeadResult<Self> {
-        let invalid = |reason: &str| {
-            KmsAeadEncryptionError::create(
+        let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
+            Some("is not 1 to 255 bytes long")
+        } else {
+            bytes
+                .iter()
+                .find(|byte| !byte.is_ascii_alphanumeric())
+                .map(|byte| {
+                    if !byte.is_ascii() {
+                        "contains a non-ASCII byte"
+                    } else if byte.is_ascii_control() {
+                        "contains an ASCII control byte"
+                    } else {
+                        "contains ASCII punctuation or a space"
+                    }
+                })
+        };
+        match rejected {
+            Some(reason) => Err(KmsAeadEncryptionError::create(
                 "INVALID_KEY_VERSION",
                 &format!("KMS key version of {} bytes {reason}", bytes.len()),
-            )
-        };
-        let len = u8::try_from(bytes.len())
-            .ok()
-            .and_then(NonZeroU8::new)
-            .ok_or_else(|| invalid("is not 1 to 255 bytes long"))?;
-        if let Some(byte) = bytes.iter().find(|byte| !byte.is_ascii_alphanumeric()) {
-            return Err(invalid(if !byte.is_ascii() {
-                "contains a non-ASCII byte"
-            } else if byte.is_ascii_control() {
-                "contains an ASCII control byte"
-            } else {
-                "contains ASCII punctuation or a space"
-            }));
+            )),
+            None => Ok(Self(bytes.iter().copied().map(char::from).collect())),
         }
-        Ok(Self {
-            version: bytes.iter().copied().map(char::from).collect(),
-            len,
-        })
     }
 
     // `[k: u8][key version: k bytes]`, `k = 0` when none is recorded: the key version field of
     // envelope layout v1 and of the encrypted key layout, persisted by both.
-    fn write_field(key_version: Option<&Self>, out: &mut Vec<u8>) {
-        match key_version {
-            Some(key_version) => {
-                out.push(key_version.len.get());
-                out.extend_from_slice(key_version.version.as_bytes());
-            }
-            None => out.push(0),
-        }
+    fn write_field(key_version: Option<&Self>, out: &mut Vec<u8>) -> KmsAeadResult<()> {
+        let version = key_version.map_or("", Self::as_str).as_bytes();
+        let len = u8::try_from(version.len()).map_err(|_| {
+            KmsAeadEncryptionError::create(
+                "INVALID_KEY_VERSION",
+                "KMS key version is longer than 255 bytes",
+            )
+        })?;
+        out.push(len);
+        out.extend_from_slice(version);
+        Ok(())
     }
 
     fn split_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -123,7 +122,7 @@ impl TryFrom<String> for KmsKeyVersion {
 
 impl Display for KmsKeyVersion {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.write_str(&self.version)
+        f.write_str(&self.0)
     }
 }
 
@@ -172,16 +171,16 @@ impl EncryptedDataEncryptionKey {
     }
 
     /// Writes the layout in the type docs, with the key version.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> KmsAeadResult<Vec<u8>> {
         let mut bytes = vec![Self::LAYOUT_MAGIC, Self::LAYOUT_V1];
-        KmsKeyVersion::write_field(self.key_version(), &mut bytes);
+        KmsKeyVersion::write_field(self.key_version(), &mut bytes)?;
         bytes.extend_from_slice(&self.wrapped);
-        bytes
+        Ok(bytes)
     }
 
     /// The lowercase hex of [`to_bytes`](Self::to_bytes).
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.to_bytes())
+    pub fn to_hex_string(&self) -> KmsAeadResult<String> {
+        self.to_bytes().map(hex::encode)
     }
 
     /// Reads the hex, in either case, of what `TryFrom<&[u8]>` reads.
@@ -284,7 +283,7 @@ impl CipherTextWithEncryptedKey {
 
         let mut value = Vec::with_capacity(4 + wrapped.len() + cipher_text.value().len());
         value.push(Self::LAYOUT_V1);
-        KmsKeyVersion::write_field(encrypted_dek.key_version(), &mut value);
+        KmsKeyVersion::write_field(encrypted_dek.key_version(), &mut value)?;
         value.extend_from_slice(&wrapped_len.to_be_bytes());
         value.extend_from_slice(wrapped);
         value.extend_from_slice(cipher_text.value());
@@ -548,8 +547,11 @@ mod tests {
         );
         let serialized = "ff0101317661756c743a76313a41624364";
 
-        assert_eq!(encrypted_dek.to_bytes(), hex::decode(serialized).unwrap());
-        assert_eq!(encrypted_dek.to_hex_string(), serialized);
+        assert_eq!(
+            encrypted_dek.to_bytes().unwrap(),
+            hex::decode(serialized).unwrap()
+        );
+        assert_eq!(encrypted_dek.to_hex_string().unwrap(), serialized);
         assert_eq!(
             EncryptedDataEncryptionKey::try_from_hex_string(serialized).unwrap(),
             encrypted_dek
@@ -561,8 +563,11 @@ mod tests {
         let encrypted_dek = EncryptedDataEncryptionKey::new(GOLDEN_WRAPPED_KEY.to_vec(), None);
         let serialized = "ff010077726170706564";
 
-        assert_eq!(encrypted_dek.to_bytes(), hex::decode(serialized).unwrap());
-        assert_eq!(encrypted_dek.to_hex_string(), serialized);
+        assert_eq!(
+            encrypted_dek.to_bytes().unwrap(),
+            hex::decode(serialized).unwrap()
+        );
+        assert_eq!(encrypted_dek.to_hex_string().unwrap(), serialized);
         assert_eq!(
             EncryptedDataEncryptionKey::try_from_hex_string(serialized).unwrap(),
             encrypted_dek
@@ -578,13 +583,15 @@ mod tests {
             let key_version = key_version.map(|version| KmsKeyVersion::try_from(version).unwrap());
             let encrypted_dek = EncryptedDataEncryptionKey::new(wrapped, key_version);
 
+            let bytes = encrypted_dek.to_bytes().unwrap();
+            let hex_string = encrypted_dek.to_hex_string().unwrap();
+
             prop_assert_eq!(
-                EncryptedDataEncryptionKey::try_from(encrypted_dek.to_bytes().as_slice()).unwrap(),
+                EncryptedDataEncryptionKey::try_from(bytes.as_slice()).unwrap(),
                 encrypted_dek.clone()
             );
             prop_assert_eq!(
-                EncryptedDataEncryptionKey::try_from_hex_string(&encrypted_dek.to_hex_string())
-                    .unwrap(),
+                EncryptedDataEncryptionKey::try_from_hex_string(&hex_string).unwrap(),
                 encrypted_dek
             );
         }
