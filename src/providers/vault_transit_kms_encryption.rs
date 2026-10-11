@@ -66,11 +66,15 @@ impl TryFrom<SecretValue> for VaultTransitToken {
 impl VaultTransitToken {
     /// The HTTP stack copies the value into buffers this crate cannot zeroize. Marking it
     /// sensitive keeps it out of the `Debug` output of the request headers.
-    fn header_value(&self) -> HeaderValue {
-        let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value())
-            .expect("a token holds visible ASCII only, which is always a valid header value");
+    fn header_value(&self) -> KmsAeadResult<HeaderValue> {
+        let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value()).map_err(|_| {
+            KmsAeadSystemError::create(
+                "VAULT_INVALID_OPTIONS",
+                "The Vault token is not a valid header value",
+            )
+        })?;
         value.set_sensitive(true);
-        value
+        Ok(value)
     }
 }
 
@@ -233,7 +237,7 @@ impl VaultTransitProvider {
         if let Some(token) = &self.token {
             headers.insert(
                 HeaderName::from_static(VAULT_TOKEN_HEADER),
-                token.header_value(),
+                token.header_value()?,
             );
         }
         if let Some(namespace) = &self.namespace {
