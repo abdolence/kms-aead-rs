@@ -43,29 +43,38 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// A Vault token: non-empty visible ASCII, kept as a sensitive header value that `Debug` and the
-/// `Debug` output of the request headers show as `Sensitive`.
-///
-/// The HTTP stack copies the token into buffers this crate cannot zeroize, so it is not zeroized
-/// here either.
+/// A Vault token: non-empty visible ASCII, zeroized on drop, shown as `***` by `Debug`.
 #[derive(Debug, Clone)]
-pub struct VaultTransitToken(HeaderValue);
+pub struct VaultTransitToken(SecretValue);
 
 impl TryFrom<SecretValue> for VaultTransitToken {
     type Error = KmsAeadError;
 
     fn try_from(token: SecretValue) -> Result<Self, Self::Error> {
         let bytes = token.ref_sensitive_value();
-        match HeaderValue::from_bytes(bytes) {
-            Ok(mut value) if !bytes.is_empty() && bytes.iter().all(u8::is_ascii_graphic) => {
-                value.set_sensitive(true);
-                Ok(Self(value))
-            }
-            _ => Err(KmsAeadSystemError::create(
+        if !bytes.is_empty() && bytes.iter().all(u8::is_ascii_graphic) {
+            Ok(Self(token))
+        } else {
+            Err(KmsAeadSystemError::create(
                 "VAULT_INVALID_OPTIONS",
                 "A Vault token must be a non-empty string of visible ASCII characters",
-            )),
+            ))
         }
+    }
+}
+
+impl VaultTransitToken {
+    /// The HTTP stack copies the value into buffers this crate cannot zeroize. Marking it
+    /// sensitive keeps it out of the `Debug` output of the request headers.
+    fn header_value(&self) -> KmsAeadResult<HeaderValue> {
+        let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value()).map_err(|_| {
+            KmsAeadSystemError::create(
+                "VAULT_INVALID_OPTIONS",
+                "The Vault token is not a valid header value",
+            )
+        })?;
+        value.set_sensitive(true);
+        Ok(value)
     }
 }
 
@@ -226,7 +235,10 @@ impl VaultTransitProvider {
             HeaderValue::from_static("true"),
         );
         if let Some(token) = &self.token {
-            headers.insert(HeaderName::from_static(VAULT_TOKEN_HEADER), token.0.clone());
+            headers.insert(
+                HeaderName::from_static(VAULT_TOKEN_HEADER),
+                token.header_value()?,
+            );
         }
         if let Some(namespace) = &self.namespace {
             headers.insert(
