@@ -120,7 +120,7 @@ where
         plain_text: &SecretValue,
     ) -> KmsAeadResult<CipherTextWithEncryptedKey> {
         let (cipher_text, dek) = self.encrypt_value_with_new_dek(aad, plain_text).await?;
-        Ok(CipherTextWithEncryptedKey::new(&cipher_text, &dek))
+        CipherTextWithEncryptedKey::new(&cipher_text, &dek)
     }
 
     async fn decrypt_value(
@@ -245,7 +245,7 @@ mod tests {
             // Simple mock: just clone the key and store it
             let encrypted = encryption_key.value().ref_sensitive_value().to_vec();
             self.encrypted_keys.lock().unwrap().push(encrypted.clone());
-            Ok(EncryptedDataEncryptionKey::from(encrypted))
+            Ok(EncryptedDataEncryptionKey::new(encrypted, None))
         }
 
         async fn decrypt_data_encryption_key(
@@ -261,7 +261,7 @@ mod tests {
 
             // Simple mock: just return the key
             Ok(DataEncryptionKey::from(SecretValue::from(
-                encrypted_key.value().clone(),
+                encrypted_key.wrapped().to_vec(),
             )))
         }
 
@@ -624,5 +624,35 @@ mod tests {
 
         let result = encryption.decrypt_value(&aad, &corrupted_ct).await;
         assert!(result.is_err(), "Decryption of corrupted data should fail");
+    }
+
+    const FIXTURE_AAD: &str = "fixture-aad";
+    const FIXTURE_SECRET: &str = "fixture-secret";
+
+    async fn decrypt_released_envelope(envelope_hex: &str) -> KmsAeadResult<SecretValue> {
+        let encryption = KmsAeadRingEnvelopeEncryption::new(MockKmsProvider::new()).await?;
+        let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
+        encryption.decrypt_value(&FIXTURE_AAD, &envelope).await
+    }
+
+    #[tokio::test]
+    async fn envelope_from_0_28_1_decrypts() {
+        let secret = decrypt_released_envelope(
+            "000000000000002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e",
+        )
+        .await
+        .unwrap();
+        assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
+    }
+
+    /// 32-bit targets wrote a 4-byte length prefix before 0.24.0.
+    #[tokio::test]
+    async fn envelope_from_0_23_0_on_32_bit_decrypts() {
+        let secret = decrypt_released_envelope(
+            "00000020e8efcd9417d41f8dee5dc6b8cfde7b209951fb80e60e0b8240a9fa688f815e1501a12b36821b4aa097fbe86573df02d8fe8d34235bdb9b3731107e946d0021d7d2ea089f87d4bea034a2",
+        )
+        .await
+        .unwrap();
+        assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
     }
 }

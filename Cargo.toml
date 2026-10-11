@@ -53,6 +53,8 @@ gcp-kms-encryption = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryp
 gcp-kms-encryption-webpki = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "ring-aead-encryption", "gcloud-sdk/google-longrunning", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
+ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
+ci-aws = ["aws-kms-encryption"] # Live tests against an AWS KMS key
 
 [package.metadata.docs.rs]
 all-features = false

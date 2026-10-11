@@ -85,6 +85,17 @@ reading sensitive information.
 Please don't use broad version dependency management not to include
 a new version of dependency automatically without auditing the changes.
 
+### Envelope layout
+Since 0.29.0 `CipherTextWithEncryptedKey` is written in layout v1:
+- the `0x01` layout tag;
+- the version of the KMS key that wrapped the data encryption key, when the provider reports one (GCP);
+- the wrapped data encryption key;
+- the AEAD cipher text.
+
+The library reads every layout written since 0.8.0, including the 4-byte length prefix
+written on 32-bit targets before 0.24.0.
+Be aware that 0.28.1 and earlier cannot read layout v1, so upgrade every reader before the first write.
+
 ### Security implementation details and recommendations
 The library uses 96 bit [nonces](https://en.wikipedia.org/wiki/Cryptographic_nonce)
 and [ChaCha20-Poly1305](https://tools.ietf.org/html/rfc7539) algorithm by default.

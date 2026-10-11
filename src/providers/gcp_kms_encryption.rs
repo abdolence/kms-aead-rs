@@ -28,6 +28,16 @@ impl GcpKmsKeyRef {
             self.google_project_id, self.location, self.key_ring, self.key
         )
     }
+
+    // The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is
+    // recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
+    // wrapped key.
+    fn crypto_key_version(&self, name: &str) -> Option<KmsKeyVersion> {
+        let version = name
+            .strip_prefix(&self.to_google_ref())?
+            .strip_prefix("/cryptoKeyVersions/")?;
+        KmsKeyVersion::try_from(version.to_string()).ok()
+    }
 }
 
 #[derive(Debug, Clone, Builder)]
@@ -112,10 +122,16 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         );
 
         let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
+        let EncryptResponse {
+            name, ciphertext, ..
+        } = encrypt_response.into_inner();
 
-        Ok(EncryptedDataEncryptionKey::from(
-            encrypt_response.into_inner().ciphertext,
-        ))
+        let key_version = self.gcp_key_ref.crypto_key_version(&name);
+        if key_version.is_none() {
+            warn!(name, "No key version in the GCP KMS encrypt response");
+        }
+
+        Ok(EncryptedDataEncryptionKey::new(ciphertext, key_version))
     }
 
     async fn decrypt_data_encryption_key(
@@ -124,7 +140,7 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         let mut decrypt_request = tonic::Request::new(DecryptRequest {
             name: self.gcp_key_ref.to_google_ref(),
-            ciphertext: encrypted_key.value().clone(),
+            ciphertext: encrypted_key.wrapped().to_vec(),
             ..Default::default()
         });
 
@@ -189,5 +205,80 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
         } else {
             aead_encryption.generate_data_encryption_key()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
+        let key_ref = GcpKmsKeyRef::new(
+            "my-project".into(),
+            "global".into(),
+            "my-ring".into(),
+            "my-key".into(),
+        );
+
+        assert_eq!(
+            key_ref.crypto_key_version(
+                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
+            ),
+            Some(KmsKeyVersion::try_from("18".to_string()).unwrap())
+        );
+        assert_eq!(
+            key_ref.crypto_key_version(
+                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
+            ),
+            None
+        );
+    }
+
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
+    // the GCP key that the live test configures. That key stays enabled while these exist.
+    const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
+    const ENVELOPE_V1: &str = "0102313800720a25006b8d8e5a8e86a5a08f5e037793f8ef10fa761a405a1b7671502bde6bd99bd94c5bfdeea0124900eaf42f63f2b2bfd2be52a7ba228358efc9ce15c6b1add6c4425e405ef132335b8295daf42a74967f32aa8f02a314ce02c443548ea267bfa6edc17d7cfa69d90364fe040b71513c40a0234d736eb30b4b9de8963886967adda827b982dbe37531904f4b534269e8d548446a3ccd021a";
+
+    #[test]
+    fn envelopes_from_a_live_key_split_into_key_version_and_wrapped_key() {
+        let (legacy_cipher_text, legacy_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
+                .separate()
+                .unwrap();
+        let (v1_cipher_text, v1_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap())
+                .separate()
+                .unwrap();
+
+        assert_eq!(legacy_dek.key_version(), None);
+        assert_eq!(legacy_dek.wrapped().len(), 114);
+        assert_eq!(
+            v1_dek.key_version(),
+            Some(&KmsKeyVersion::try_from("18".to_string()).unwrap())
+        );
+        assert_eq!(v1_dek.wrapped().len(), 114);
+        // Nonce, the 11 bytes of `test-secret` and the tag.
+        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
+        assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {
+        let key_ref = GcpKmsKeyRef::new(
+            std::env::var("PROJECT_ID").expect("PROJECT_ID is set"),
+            std::env::var("PROJECT_LOCATION").expect("PROJECT_LOCATION is set"),
+            std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
+            std::env::var("KMS_KEY").expect("KMS_KEY is set"),
+        );
+        let encryption =
+            KmsAeadRingEnvelopeEncryption::new(GcpKmsProvider::new(&key_ref).await?).await?;
+        for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
+            let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
+            let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
+            assert_eq!(secret, SecretValue::from("test-secret"));
+        }
+        Ok(())
     }
 }
