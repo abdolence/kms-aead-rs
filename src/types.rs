@@ -52,22 +52,41 @@ impl KmsKeyVersion {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    // The error reports the length and the class of the first rejected byte, never the bytes
+    // themselves: they come from storage and end up in logs.
+    fn from_ascii(bytes: &[u8]) -> KmsAeadResult<Self> {
+        let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
+            Some("is not 1 to 255 bytes long")
+        } else {
+            bytes
+                .iter()
+                .find(|byte| !byte.is_ascii_alphanumeric())
+                .map(|byte| {
+                    if !byte.is_ascii() {
+                        "contains a non-ASCII byte"
+                    } else if byte.is_ascii_control() {
+                        "contains an ASCII control byte"
+                    } else {
+                        "contains ASCII punctuation or a space"
+                    }
+                })
+        };
+        match rejected {
+            Some(reason) => Err(KmsAeadEncryptionError::create(
+                "INVALID_KEY_VERSION",
+                &format!("KMS key version of {} bytes {reason}", bytes.len()),
+            )),
+            None => Ok(Self(bytes.iter().copied().map(char::from).collect())),
+        }
+    }
 }
 
 impl TryFrom<String> for KmsKeyVersion {
     type Error = KmsAeadError;
 
     fn try_from(value: String) -> KmsAeadResult<Self> {
-        if value.is_empty()
-            || value.len() > usize::from(u8::MAX)
-            || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        {
-            return Err(KmsAeadEncryptionError::create(
-                "INVALID_KEY_VERSION",
-                &format!("KMS key version {value:?} is not 1 to 255 ASCII alphanumeric characters"),
-            ));
-        }
-        Ok(Self(value))
+        Self::from_ascii(value.as_bytes())
     }
 }
 
@@ -132,6 +151,10 @@ impl PartialEq for EncryptedDataEncryptionKey {
 /// `k = 0` records no key version. [`separate`](Self::separate) also reads the legacy layout
 /// written up to 0.28.1, `[length: u64 BE][wrapped key][cipher text]`, including its 4-byte
 /// length form written on 32-bit targets before 0.24.0.
+///
+/// The header is not authenticated, so a header field is only ever an address or an audit
+/// value. A field that selects an algorithm, a mode or a transform needs a new layout tag with
+/// an authenticated header.
 #[derive(Debug, Clone)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
@@ -204,9 +227,7 @@ impl CipherTextWithEncryptedKey {
         })?;
         let key_version = match key_version {
             [] => None,
-            version => Some(KmsKeyVersion::try_from(
-                String::from_utf8_lossy(version).into_owned(),
-            )?),
+            version => Some(KmsKeyVersion::from_ascii(version)?),
         };
 
         Ok((
@@ -215,7 +236,6 @@ impl CipherTextWithEncryptedKey {
         ))
     }
 
-    /// Splits the layout v1 bytes after the tag into key version, wrapped key and cipher text.
     fn split_v1(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         let (&key_version_len, rest) = bytes.split_first()?;
         let (key_version, rest) = rest.split_at_checked(usize::from(key_version_len))?;
@@ -225,7 +245,6 @@ impl CipherTextWithEncryptedKey {
         Some((key_version, wrapped, cipher_text))
     }
 
-    /// Splits the legacy layout into an empty key version, wrapped key and cipher text.
     fn split_legacy(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         // 32-bit targets before 0.24.0 wrote the length as a 4-byte `usize`, all other writers
         // as 8 bytes. For lengths 1 to 2^24 - 1, bytes 1 to 3 are zero only in the 8-byte form.
@@ -399,20 +418,33 @@ mod tests {
     }
 
     #[test]
-    fn key_version_outside_ascii_alphanumeric_is_rejected_on_read() {
-        let envelope = CipherTextWithEncryptedKey::from(
-            [0x01, 0x03, b'1', b'/', b'2', 0x00, 0x01, 0xAA, 0xBB].to_vec(),
+    fn key_version_outside_ascii_alphanumeric_is_rejected_on_read_without_echoing_it() {
+        let stored_version = b"marker/18";
+        let mut envelope = vec![0x01, stored_version.len() as u8];
+        envelope.extend_from_slice(stored_version);
+        envelope.extend_from_slice(&[0x00, 0x01, 0xAA, 0xBB]);
+
+        let error = CipherTextWithEncryptedKey::from(envelope)
+            .separate()
+            .unwrap_err();
+
+        assert!(
+            !format!("{error} {error:?}").contains("marker"),
+            "{error:?}"
         );
-        assert_eq!(error_code(envelope.separate()), "INVALID_KEY_VERSION");
+        assert_eq!(error_code::<()>(Err(error)), "INVALID_KEY_VERSION");
     }
 
     proptest! {
         #[test]
         fn separate_returns_on_arbitrary_bytes(
             tag in prop_oneof![Just(0x00u8), Just(0x01), any::<u8>()],
+            // Bytes 1 to 3 pick the legacy length width and are almost never all zero at random.
+            width in prop_oneof![Just(vec![0u8; 3]), prop::collection::vec(any::<u8>(), 0..=3)],
             rest in prop::collection::vec(any::<u8>(), 0..64),
         ) {
             let mut bytes = vec![tag];
+            bytes.extend(width);
             bytes.extend(rest);
             let _ = CipherTextWithEncryptedKey::from(bytes).separate();
         }

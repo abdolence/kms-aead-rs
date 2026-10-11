@@ -28,6 +28,16 @@ impl GcpKmsKeyRef {
             self.google_project_id, self.location, self.key_ring, self.key
         )
     }
+
+    // The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is
+    // recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
+    // wrapped key.
+    fn crypto_key_version(&self, name: &str) -> Option<KmsKeyVersion> {
+        let version = name
+            .strip_prefix(&self.to_google_ref())?
+            .strip_prefix("/cryptoKeyVersions/")?;
+        KmsKeyVersion::try_from(version.to_string()).ok()
+    }
 }
 
 #[derive(Debug, Clone, Builder)]
@@ -79,21 +89,6 @@ impl GcpKmsProvider {
     }
 }
 
-/// The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is recorded
-/// for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the wrapped key.
-fn crypto_key_version(name: &str) -> Option<KmsKeyVersion> {
-    match name
-        .rsplit_once("/cryptoKeyVersions/")
-        .map(|(_, version)| KmsKeyVersion::try_from(version.to_string()))
-    {
-        Some(Ok(version)) => Some(version),
-        _ => {
-            warn!(name, "No key version in the GCP KMS encrypt response");
-            None
-        }
-    }
-}
-
 #[async_trait]
 impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
     async fn encrypt_data_encryption_key(
@@ -131,10 +126,12 @@ impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
             name, ciphertext, ..
         } = encrypt_response.into_inner();
 
-        Ok(EncryptedDataEncryptionKey::new(
-            ciphertext,
-            crypto_key_version(&name),
-        ))
+        let key_version = self.gcp_key_ref.crypto_key_version(&name);
+        if key_version.is_none() {
+            warn!(name, "No key version in the GCP KMS encrypt response");
+        }
+
+        Ok(EncryptedDataEncryptionKey::new(ciphertext, key_version))
     }
 
     async fn decrypt_data_encryption_key(
@@ -216,12 +213,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_version_is_read_from_the_crypto_key_version_name() {
-        let name = "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18";
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
+        let key_ref = GcpKmsKeyRef::new(
+            "my-project".into(),
+            "global".into(),
+            "my-ring".into(),
+            "my-key".into(),
+        );
 
         assert_eq!(
-            crypto_key_version(name),
+            key_ref.crypto_key_version(
+                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
+            ),
             Some(KmsKeyVersion::try_from("18".to_string()).unwrap())
+        );
+        assert_eq!(
+            key_ref.crypto_key_version(
+                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
+            ),
+            None
         );
     }
 }
