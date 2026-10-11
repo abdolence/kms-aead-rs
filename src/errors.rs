@@ -194,3 +194,62 @@ impl From<hyper_util::client::legacy::Error> for KmsAeadError {
         ))
     }
 }
+
+#[cfg(feature = "azure-kms-encryption-base")]
+impl From<azure_core::Error> for KmsAeadError {
+    /// A 5xx or 429 response is a retryable network error; any other HTTP error keeps Key
+    /// Vault's error code and the message of its error envelope. Nothing else from a response
+    /// body is kept: for a body that is not an Azure error envelope the SDK copies the whole
+    /// body into the error, and an unwrap response body holds the data encryption key. A
+    /// response parse error keeps no message or root cause for the same reason.
+    fn from(e: azure_core::Error) -> Self {
+        use azure_core::error::ErrorKind;
+        match e.kind() {
+            ErrorKind::HttpResponse {
+                status,
+                error_code,
+                raw_response,
+            } => {
+                let code = error_code
+                    .clone()
+                    .unwrap_or_else(|| format!("AZURE_STATUS_{}", u16::from(*status)));
+                let envelope_message = raw_response
+                    .as_ref()
+                    .and_then(|response| {
+                        azure_core::json::from_json::<_, azure_core::error::ErrorResponse>(
+                            response.body(),
+                        )
+                        .ok()
+                    })
+                    .and_then(|response| response.error)
+                    .and_then(|detail| detail.message);
+                let message = match envelope_message {
+                    Some(message) => format!("Azure Key Vault returned {status}: {message}"),
+                    None => format!("Azure Key Vault returned {status}"),
+                };
+                if status.is_server_error()
+                    || *status == azure_core::http::StatusCode::TooManyRequests
+                {
+                    KmsAeadNetworkError::create(&code, &message)
+                } else {
+                    KmsAeadEncryptionError::create(&code, &message)
+                }
+            }
+            ErrorKind::DataConversion => KmsAeadEncryptionError::create(
+                &format!("{}", e.kind()),
+                "Unable to parse the Azure Key Vault response",
+            ),
+            ErrorKind::Connection | ErrorKind::Io => KmsAeadNetworkError::create(
+                &format!("{}", e.kind()),
+                &format!("Azure Key Vault network error: {e}"),
+            ),
+            _ => KmsAeadError::EncryptionError(
+                KmsAeadEncryptionError::new(
+                    KmsAeadErrorPublicGenericDetails::new(format!("{}", e.kind())),
+                    format!("Azure Key Vault error: {e}"),
+                )
+                .with_root_cause(Box::new(e)),
+            ),
+        }
+    }
+}

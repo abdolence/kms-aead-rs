@@ -44,6 +44,11 @@ webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
 serde_json = { version = "1", optional = true }
 tokio = { version = "1", default-features = false, features = ["time"], optional = true }
+azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
+azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
+# Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
+# version azure_core depends on.
+reqwest = { version = "0.13.2", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -53,6 +58,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.8", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "async_tokio"] }
 cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
 rustls = "0.23"
+azure_identity = { version = "1.0", default-features = false }
 
 [features]
 default = []
@@ -66,6 +72,12 @@ gcp-kms-encryption = ["gcp-kms-encryption-base", "gcloud-sdk/tls-roots", "gcloud
 gcp-kms-encryption-webpki = ["gcp-kms-encryption-base", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 aws = ["dep:aws-config"]
 aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
+azure-kms-encryption-base = ["dep:azure_core", "dep:azure_security_keyvault_keys", "dep:reqwest", "ring-aead-encryption"]
+# TLS variants - user can choose one
+azure-kms-encryption-tls-aws-lc-rs = ["azure-kms-encryption-base", "azure_core/reqwest_rustls"]
+azure-kms-encryption-tls-no-provider = ["azure-kms-encryption-base", "reqwest/rustls-no-provider"]
+azure-kms-encryption-native-tls = ["azure-kms-encryption-base", "reqwest/native-tls"]
+azure-kms-encryption = ["azure-kms-encryption-tls-aws-lc-rs"]
 ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
 ci-aws = ["aws-kms-encryption"] # Live tests against an AWS KMS key
 vault-transit-kms-encryption-base = [
@@ -107,6 +119,21 @@ required-features = ["gcp-kms-encryption"]
 name = "vault_transit_kms"
 path = "examples/vault_transit_kms.rs"
 required-features = ["vault-transit-kms-encryption-base"]
+
+[[example]]
+name = "azure_kms"
+path = "examples/azure_kms.rs"
+required-features = ["azure-kms-encryption-base"]
+
+[[test]]
+name = "azure_kms_emulator"
+path = "tests/azure_kms_emulator.rs"
+required-features = ["azure-kms-encryption-base"]
+
+[[test]]
+name = "azure_kms_responses"
+path = "tests/azure_kms_responses.rs"
+required-features = ["azure-kms-encryption-base"]
 
 [[example]]
 name = "only_aead"

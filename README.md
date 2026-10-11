@@ -4,7 +4,7 @@
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
 ![license](https://img.shields.io/github/license/abdolence/secret-vault-rs)
 
-# KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD for Rust
+# KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and Ring AEAD for Rust
 
 Features:
 - Envelope encryption using automatically generated or provided data encryption keys;
@@ -15,6 +15,7 @@ Available KMS providers:
 - Google Cloud Platform KMS
 - Amazon Web Services KMS
 - HashiCorp Vault Transit secrets engine
+- Azure Key Vault keys
 
 ## Quick start
 
@@ -26,9 +27,9 @@ kms-aead = { version = "0.28", features=["..."] }
 See security consideration below about versioning.
 
 ### Available features:
-- `gcp-kms-encryption` for Google KMS envelope encryption support
+- `gcp-kms-encryption` for Google KMS envelope encryption support. Be aware it also turns on native-tls in reqwest, so the Azure provider uses native-tls whatever its TLS feature
 - `gcp-kms-encryption-webpki` for Google KMS envelope encryption with the bundled WebPKI root certificates
-- `gcp-kms-encryption-base` for Google KMS envelope encryption without a TLS root store or crypto provider. The application enables them with its own `gcloud-sdk` features, such as `tls-roots` or `tls-webpki-roots`
+- `gcp-kms-encryption-base` for Google KMS envelope encryption without a TLS root store or crypto provider. The application enables them with its own `gcloud-sdk` features, such as `tls-roots` or `tls-webpki-roots`, and the crate does not build without one
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
 - `vault-transit-kms-encryption` for HashiCorp Vault Transit envelope encryption support,
   with system root certificates and the aws-lc-rs crypto provider. To choose them, enable one of
@@ -37,6 +38,12 @@ See security consideration below about versioning.
   A CA certificate from `VAULT_CACERT` or `ca_certificate` adds to the root store and does not
   replace it, unlike in the Vault CLI.
   See [examples/vault_transit_kms.rs](examples/vault_transit_kms.rs)
+- `azure-kms-encryption` for Azure Key Vault envelope encryption support, with rustls and the aws-lc-rs crypto provider. Other TLS variants, choose one:
+  - `azure-kms-encryption-tls-aws-lc-rs`, the same as `azure-kms-encryption`;
+  - `azure-kms-encryption-tls-no-provider` for rustls with the crypto provider the application installs. The application must install a process-default rustls `CryptoProvider` before creating the provider, otherwise rustls panics;
+  - `azure-kms-encryption-native-tls` for the platform TLS library.
+
+  Full example available [here](examples/azure_kms.rs)
 - `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
 
 ## Example

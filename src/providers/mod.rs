@@ -12,3 +12,7 @@ pub use gcp_kms_encryption::*;
 mod vault_transit_kms_encryption;
 #[cfg(feature = "vault-transit-kms-encryption-base")]
 pub use vault_transit_kms_encryption::*;
+#[cfg(feature = "azure-kms-encryption-base")]
+mod azure_kms_encryption;
+#[cfg(feature = "azure-kms-encryption-base")]
+pub use azure_kms_encryption::*;

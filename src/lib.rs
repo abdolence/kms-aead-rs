@@ -1,9 +1,10 @@
-//! # KMS/AEAD envelope encryption for GCP/AWS KMS and Ring AEAD encryption
+//! # KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and Ring AEAD encryption
 //!
 //! Available providers:
 //! - Google Cloud Platform KMS
 //! - Amazon Web Services KMS
 //! - HashiCorp Vault Transit secrets engine
+//! - Azure Key Vault keys
 //!
 //! Features:
 //! - Envelope encryption using automatically generated or provided data encryption keys;
@@ -93,6 +94,34 @@ compile_error!(
 );
 
 extern crate core;
+
+#[cfg(all(
+    feature = "azure-kms-encryption-base",
+    not(feature = "azure-kms-encryption-tls-aws-lc-rs"),
+    not(feature = "azure-kms-encryption-tls-no-provider"),
+    not(feature = "azure-kms-encryption-native-tls")
+))]
+compile_error!(
+    "You must enable one of \"azure-kms-encryption-tls-aws-lc-rs\" (or \"azure-kms-encryption\"), \"azure-kms-encryption-tls-no-provider\" or \"azure-kms-encryption-native-tls\" when using Azure features"
+);
+
+#[cfg(any(
+    all(
+        feature = "azure-kms-encryption-tls-aws-lc-rs",
+        feature = "azure-kms-encryption-tls-no-provider"
+    ),
+    all(
+        feature = "azure-kms-encryption-tls-aws-lc-rs",
+        feature = "azure-kms-encryption-native-tls"
+    ),
+    all(
+        feature = "azure-kms-encryption-tls-no-provider",
+        feature = "azure-kms-encryption-native-tls"
+    )
+))]
+compile_error!(
+    "You can enable only one of \"azure-kms-encryption-tls-aws-lc-rs\" (enabled by \"azure-kms-encryption\"), \"azure-kms-encryption-tls-no-provider\" and \"azure-kms-encryption-native-tls\""
+);
 
 pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
 

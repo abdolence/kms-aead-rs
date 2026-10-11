@@ -4,22 +4,33 @@ on:
   pull_request:
     types: [opened]
 jobs:
+  # One row per Vault Transit TLS root store and crypto provider pair, and one per TLS stack
+  # the Azure provider builds with. gcloud-sdk's TLS features select reqwest's TLS stack too:
+  # `gcp-kms-encryption` turns on native-tls and `gcloud-sdk/tls-webpki-roots` turns on rustls
+  # with aws-lc-rs, so each Azure row picks the GCP features that leave the Azure choice in
+  # effect.
   build:
-    name: ${{ matrix.variant }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - variant: no-vault
-            tls: ""
-          - variant: vault-roots-aws-lc-rs
-            tls: vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-aws-lc-rs
-          - variant: vault-webpki-aws-lc-rs
-            tls: vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-aws-lc-rs
-          - variant: vault-roots-ring
-            tls: vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-ring
-          - variant: vault-webpki-ring
-            tls: vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-ring
+          - name: no-vault
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption
+          - name: vault-roots-aws-lc-rs
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-aws-lc-rs
+          - name: vault-webpki-aws-lc-rs
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-aws-lc-rs
+          - name: vault-roots-ring
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-ring
+          - name: vault-webpki-ring
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-ring
+          - name: azure-native-tls
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-native-tls
+          - name: azure-rustls-aws-lc-rs
+            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-tls-aws-lc-rs
+          - name: azure-rustls-no-provider
+            features: aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-tls-no-provider
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rs/toolchain@v1
@@ -27,11 +38,17 @@ jobs:
           profile: minimal
           toolchain: stable
           components: rustfmt, clippy
-      - env:
-          TLS: ${{ matrix.tls }}
+      - name: Run checks
+        env:
+          FEATURES: ${{ matrix.features }}
         run: |
-          FEATURES="gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption${TLS:+,$TLS}"
-          cargo fmt -- --check && cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings && cargo test --features "$FEATURES"
+          cargo fmt -- --check
+          if cargo tree -e normal --features "$FEATURES" -d --depth 0 | grep -q '^reqwest '; then
+            echo "Two reqwest versions: the Azure TLS features would configure the one azure_core does not use"
+            exit 1
+          fi
+          cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
+          cargo test --features "$FEATURES"
   vault-live:
     name: vault-live
     runs-on: ubuntu-latest
