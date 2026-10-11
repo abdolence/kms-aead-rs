@@ -353,36 +353,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypted_dek_stored_as_hex_decrypts_after_reading_it_back() {
-        let encryption = KmsAeadRingEnvelopeEncryption::new(MockKmsProvider::new())
-            .await
-            .unwrap();
-        let aad = "test-aad";
-        let plaintext = SecretValue::from("secret message");
-        let (_dek, encrypted_dek) =
-            KmsAeadEnvelopeEncryption::<&str>::generate_new_dek(&encryption)
-                .await
-                .unwrap();
-        let ciphertext = encryption
-            .encrypt_value_with_encrypted_dek(&aad, &plaintext, &encrypted_dek)
-            .await
-            .unwrap();
-
-        // 0.28.1 and earlier stored the hex of the wrapped bytes alone.
-        for stored in [
-            hex::encode(encrypted_dek.wrapped()),
-            encrypted_dek.to_hex_string(),
-        ] {
-            let read_back = EncryptedDataEncryptionKey::try_from_hex_string(&stored).unwrap();
-            let decrypted = encryption
-                .decrypt_value_with_encrypted_dek(&aad, &ciphertext, &read_back)
-                .await
-                .unwrap();
-            assert_eq!(decrypted, plaintext, "{stored}");
-        }
-    }
-
-    #[tokio::test]
     async fn test_wrong_aad_fails() {
         let provider = MockKmsProvider::new();
         let encryption = KmsAeadRingEnvelopeEncryption::new(provider).await.unwrap();

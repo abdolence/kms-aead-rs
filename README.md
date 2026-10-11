@@ -105,15 +105,20 @@ written on 32-bit targets before 0.24.0.
 
 Since 0.29.0 `EncryptedDataEncryptionKey::to_bytes` and `to_hex_string` write the key for the
 `*_with_encrypted_dek` APIs with its key version:
-- the 7-byte magic `0xFF "kmsDEK"` and the `0x01` layout tag;
+- the `0xFF` magic and the `0x01` layout tag;
 - the KMS key version, when the provider reports one;
 - the wrapped data encryption key.
 
-`try_from_bytes` and `try_from_hex_string` read this layout and the bare wrapped key that
+`TryFrom<&[u8]>` and `try_from_hex_string` read this layout and the bare wrapped key that
 `value` and `to_hex_string` returned up to 0.28.1, so a key stored by any version reads with them.
-GCP wrapped keys start with `0x0a` and AWS ones with `0x01`, so a stored key is never read in the
-wrong layout. A bare key from a custom provider that starts with the magic reads with
-`EncryptedDataEncryptionKey::new`.
+Keys stored up to 0.28.1 come only from GCP and AWS: GCP wrapped keys start with `0x0a` and AWS
+ones with `0x01`, so a stored key is never read in the wrong layout.
+
+Up to 0.28.1 a stored key was written with `value()` or `to_hex_string()` and read with
+`From<Vec<u8>>`. Since 0.29.0 write it with `to_bytes()` or `to_hex_string()` and read it with
+`TryFrom<&[u8]>` or `try_from_hex_string()`. Be aware not to read stored keys with
+`EncryptedDataEncryptionKey::new`: it takes the bytes a KMS returned, so it reads keys stored
+before the upgrade and fails at the KMS on keys written after it.
 
 Be aware that 0.28.1 and earlier cannot read either layout, so upgrade every reader before the first write.
 

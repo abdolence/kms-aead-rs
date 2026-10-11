@@ -217,7 +217,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(
-            EncryptedDataEncryptionKey::try_from_bytes(legacy_dek.wrapped()).unwrap(),
+            EncryptedDataEncryptionKey::try_from(legacy_dek.wrapped()).unwrap(),
             legacy_dek
         );
         assert_eq!(

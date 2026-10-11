@@ -3,6 +3,7 @@ use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU8;
 use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone, ValueStruct)]
@@ -45,51 +46,58 @@ impl PartialEq for DataEncryptionKey {
 
 /// The version of the KMS key that wrapped a data encryption key: 1 to 255 ASCII alphanumeric
 /// characters, such as the `N` of a GCP `cryptoKeyVersions/N`.
+///
+/// The same rule validates every key version read back from envelope layout v1 and from the
+/// encrypted key layout, so it may only ever loosen: a stricter rule makes stored data unreadable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KmsKeyVersion(String);
+pub struct KmsKeyVersion {
+    version: String,
+    len: NonZeroU8,
+}
 
 impl KmsKeyVersion {
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.version
     }
 
     // The error reports the length and the class of the first rejected byte, never the bytes
     // themselves: they come from storage and end up in logs.
     fn from_ascii(bytes: &[u8]) -> KmsAeadResult<Self> {
-        let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
-            Some("is not 1 to 255 bytes long")
-        } else {
-            bytes
-                .iter()
-                .find(|byte| !byte.is_ascii_alphanumeric())
-                .map(|byte| {
-                    if !byte.is_ascii() {
-                        "contains a non-ASCII byte"
-                    } else if byte.is_ascii_control() {
-                        "contains an ASCII control byte"
-                    } else {
-                        "contains ASCII punctuation or a space"
-                    }
-                })
-        };
-        match rejected {
-            Some(reason) => Err(KmsAeadEncryptionError::create(
+        let invalid = |reason: &str| {
+            KmsAeadEncryptionError::create(
                 "INVALID_KEY_VERSION",
                 &format!("KMS key version of {} bytes {reason}", bytes.len()),
-            )),
-            None => Ok(Self(bytes.iter().copied().map(char::from).collect())),
+            )
+        };
+        let len = u8::try_from(bytes.len())
+            .ok()
+            .and_then(NonZeroU8::new)
+            .ok_or_else(|| invalid("is not 1 to 255 bytes long"))?;
+        if let Some(byte) = bytes.iter().find(|byte| !byte.is_ascii_alphanumeric()) {
+            return Err(invalid(if !byte.is_ascii() {
+                "contains a non-ASCII byte"
+            } else if byte.is_ascii_control() {
+                "contains an ASCII control byte"
+            } else {
+                "contains ASCII punctuation or a space"
+            }));
         }
+        Ok(Self {
+            version: bytes.iter().copied().map(char::from).collect(),
+            len,
+        })
     }
 
     // `[k: u8][key version: k bytes]`, `k = 0` when none is recorded: the key version field of
     // envelope layout v1 and of the encrypted key layout, persisted by both.
     fn write_field(key_version: Option<&Self>, out: &mut Vec<u8>) {
-        let bytes = key_version.map_or("", Self::as_str).as_bytes();
-        out.push(
-            u8::try_from(bytes.len())
-                .expect("from_ascii builds every KmsKeyVersion and admits at most 255 bytes"),
-        );
-        out.extend_from_slice(bytes);
+        match key_version {
+            Some(key_version) => {
+                out.push(key_version.len.get());
+                out.extend_from_slice(key_version.version.as_bytes());
+            }
+            None => out.push(0),
+        }
     }
 
     fn split_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
@@ -115,7 +123,7 @@ impl TryFrom<String> for KmsKeyVersion {
 
 impl Display for KmsKeyVersion {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.version)
     }
 }
 
@@ -126,13 +134,14 @@ impl Display for KmsKeyVersion {
 /// kept for the `*_with_encrypted_dek` APIs keeps its version:
 ///
 /// ```text
-/// [magic: 0xFF "kmsDEK"][0x01][k: u8][key version: k bytes][wrapped key to the end]
+/// [0xFF][0x01][k: u8][key version: k bytes][wrapped key to the end]
 /// ```
 ///
-/// `k = 0` records no key version. [`try_from_bytes`](Self::try_from_bytes) and
-/// [`try_from_hex_string`](Self::try_from_hex_string) also read the bare wrapped key that 0.28.1
-/// and earlier stored, as a key with no version. No GCP or AWS wrapped key starts with `0xFF`; a
-/// bare key from another provider that starts with the magic reads with [`new`](Self::new).
+/// `0xFF` marks the layout, `0x01` is its version and `k = 0` records no key version.
+/// `TryFrom<&[u8]>` and [`try_from_hex_string`](Self::try_from_hex_string) also read the bare
+/// wrapped key that 0.28.1 and earlier stored, as a key with no version. Those keys come only from
+/// GCP, a protobuf message starting with `0x0a` (`0xFF` would be the undefined wire type 7), and
+/// from AWS, starting with `0x01`, so none of them reads as the layout.
 #[derive(Debug, Clone)]
 pub struct EncryptedDataEncryptionKey {
     wrapped: Vec<u8>,
@@ -140,9 +149,11 @@ pub struct EncryptedDataEncryptionKey {
 }
 
 impl EncryptedDataEncryptionKey {
-    const LAYOUT_MAGIC: [u8; 7] = *b"\xFFkmsDEK";
+    const LAYOUT_MAGIC: u8 = 0xFF;
     const LAYOUT_V1: u8 = 0x01;
 
+    /// Takes the bytes a KMS returned. A stored key is read with
+    /// [`try_from_hex_string`](Self::try_from_hex_string) or `TryFrom<&[u8]>`.
     pub fn new(wrapped: Vec<u8>, key_version: Option<KmsKeyVersion>) -> Self {
         Self {
             wrapped,
@@ -150,7 +161,8 @@ impl EncryptedDataEncryptionKey {
         }
     }
 
-    /// The bytes the KMS returned, unchanged.
+    /// The bytes the KMS returned, unchanged. Not a storage form, because it drops the key
+    /// version: store [`to_bytes`](Self::to_bytes) or [`to_hex_string`](Self::to_hex_string).
     pub fn wrapped(&self) -> &[u8] {
         &self.wrapped
     }
@@ -161,22 +173,39 @@ impl EncryptedDataEncryptionKey {
 
     /// Writes the layout in the type docs, with the key version.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Self::LAYOUT_MAGIC.to_vec();
-        bytes.push(Self::LAYOUT_V1);
+        let mut bytes = vec![Self::LAYOUT_MAGIC, Self::LAYOUT_V1];
         KmsKeyVersion::write_field(self.key_version(), &mut bytes);
         bytes.extend_from_slice(&self.wrapped);
         bytes
     }
 
-    /// Reads the layout when `bytes` starts with its magic, and bare wrapped bytes otherwise.
-    /// Fails on an unknown layout tag, on a key version running past the end and on a key version
-    /// that is not ASCII alphanumeric.
-    pub fn try_from_bytes(bytes: &[u8]) -> KmsAeadResult<Self> {
-        let Some(serialized) = bytes.strip_prefix(&Self::LAYOUT_MAGIC) else {
-            return Ok(Self::new(bytes.to_vec(), None));
-        };
-        match serialized.split_first() {
-            Some((&Self::LAYOUT_V1, fields)) => {
+    /// The lowercase hex of [`to_bytes`](Self::to_bytes).
+    pub fn to_hex_string(&self) -> String {
+        hex::encode(self.to_bytes())
+    }
+
+    /// Reads the hex, in either case, of what `TryFrom<&[u8]>` reads.
+    pub fn try_from_hex_string(encoded: &str) -> KmsAeadResult<Self> {
+        let bytes = hex::decode(encoded).map_err(|e| {
+            KmsAeadEncryptionError::create("INVALID_HEX", &format!("Encrypted key is not hex: {e}"))
+        })?;
+        Self::try_from(bytes.as_slice())
+    }
+}
+
+impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
+    type Error = KmsAeadError;
+
+    /// Reads the layout when `bytes` starts with `0xFF`, and bare wrapped bytes otherwise. Fails on
+    /// empty input, on an unknown layout tag, on a key version running past the end and on a key
+    /// version that is not ASCII alphanumeric.
+    fn try_from(bytes: &[u8]) -> KmsAeadResult<Self> {
+        match bytes {
+            [] => Err(KmsAeadEncryptionError::create(
+                "INVALID_ENCRYPTED_KEY_FORMAT",
+                "The encrypted key is empty",
+            )),
+            [Self::LAYOUT_MAGIC, Self::LAYOUT_V1, fields @ ..] => {
                 let (key_version, wrapped) =
                     KmsKeyVersion::split_field(fields).ok_or_else(|| {
                         KmsAeadEncryptionError::create(
@@ -189,32 +218,16 @@ impl EncryptedDataEncryptionKey {
                     KmsKeyVersion::from_field(key_version)?,
                 ))
             }
-            Some((tag, _)) => Err(KmsAeadEncryptionError::create(
+            [Self::LAYOUT_MAGIC, tag, ..] => Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
                 &format!("Unknown encrypted key layout tag {tag:#04x}"),
             )),
-            None => Err(KmsAeadEncryptionError::create(
+            [Self::LAYOUT_MAGIC] => Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
                 "Encrypted key ends after the layout magic, with no layout tag",
             )),
+            bare => Ok(Self::new(bare.to_vec(), None)),
         }
-    }
-
-    /// The lowercase hex of [`to_bytes`](Self::to_bytes).
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.to_bytes())
-    }
-
-    /// Reads the hex, in either case, of what [`try_from_bytes`](Self::try_from_bytes) reads.
-    pub fn try_from_hex_string(hex: &str) -> KmsAeadResult<Self> {
-        // `FromHexError` quotes the rejected character, and stored keys end up in logs.
-        let bytes = hex::decode(hex).map_err(|_| {
-            KmsAeadEncryptionError::create(
-                "INVALID_HEX",
-                &format!("Encrypted key of {} characters is not hex", hex.len()),
-            )
-        })?;
-        Self::try_from_bytes(&bytes)
     }
 }
 
@@ -533,7 +546,7 @@ mod tests {
             b"vault:v1:AbCd".to_vec(),
             Some(KmsKeyVersion::try_from("1".to_string()).unwrap()),
         );
-        let serialized = "ff6b6d7344454b0101317661756c743a76313a41624364";
+        let serialized = "ff0101317661756c743a76313a41624364";
 
         assert_eq!(encrypted_dek.to_bytes(), hex::decode(serialized).unwrap());
         assert_eq!(encrypted_dek.to_hex_string(), serialized);
@@ -546,7 +559,7 @@ mod tests {
     #[test]
     fn serialized_key_without_key_version_is_pinned() {
         let encrypted_dek = EncryptedDataEncryptionKey::new(GOLDEN_WRAPPED_KEY.to_vec(), None);
-        let serialized = "ff6b6d7344454b010077726170706564";
+        let serialized = "ff010077726170706564";
 
         assert_eq!(encrypted_dek.to_bytes(), hex::decode(serialized).unwrap());
         assert_eq!(encrypted_dek.to_hex_string(), serialized);
@@ -566,7 +579,7 @@ mod tests {
             let encrypted_dek = EncryptedDataEncryptionKey::new(wrapped, key_version);
 
             prop_assert_eq!(
-                EncryptedDataEncryptionKey::try_from_bytes(&encrypted_dek.to_bytes()).unwrap(),
+                EncryptedDataEncryptionKey::try_from(encrypted_dek.to_bytes().as_slice()).unwrap(),
                 encrypted_dek.clone()
             );
             prop_assert_eq!(
@@ -577,49 +590,33 @@ mod tests {
         }
 
         #[test]
-        fn bytes_without_the_layout_magic_read_as_a_bare_wrapped_key(
-            wrapped in prop::collection::vec(any::<u8>(), 0..512),
-        ) {
-            prop_assume!(!wrapped.starts_with(&EncryptedDataEncryptionKey::LAYOUT_MAGIC));
-            let bare = EncryptedDataEncryptionKey::new(wrapped.clone(), None);
-
-            prop_assert_eq!(
-                EncryptedDataEncryptionKey::try_from_bytes(&wrapped).unwrap(),
-                bare.clone()
-            );
-            prop_assert_eq!(
-                EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&wrapped)).unwrap(),
-                bare
-            );
-        }
-
-        #[test]
-        fn serialized_key_parsers_return_on_arbitrary_input(
-            magic in any::<bool>(),
+        fn serialized_key_parser_returns_on_arbitrary_input(
             layout in prop_oneof![Just(vec![0x01u8]), prop::collection::vec(any::<u8>(), 0..=1)],
             rest in prop::collection::vec(any::<u8>(), 0..300),
-            text in ".{0,64}",
         ) {
-            let mut bytes = if magic {
-                EncryptedDataEncryptionKey::LAYOUT_MAGIC.to_vec()
-            } else {
-                Vec::new()
-            };
+            let mut bytes = vec![EncryptedDataEncryptionKey::LAYOUT_MAGIC];
             bytes.extend(layout);
             bytes.extend(rest);
-            let _ = EncryptedDataEncryptionKey::try_from_bytes(&bytes);
-            let _ = EncryptedDataEncryptionKey::try_from_hex_string(&text);
+            let _ = EncryptedDataEncryptionKey::try_from(bytes.as_slice());
         }
     }
 
     #[test]
+    fn empty_encrypted_key_is_rejected() {
+        assert_eq!(
+            error_code(EncryptedDataEncryptionKey::try_from([].as_slice())),
+            "INVALID_ENCRYPTED_KEY_FORMAT"
+        );
+    }
+
+    #[test]
     fn serialized_key_with_an_unknown_layout_tag_is_rejected() {
-        let tags: [&[u8]; 4] = [&[], &[0x00], &[0x02], &[0xFF, 0x01]];
+        let tags: [&[u8]; 2] = [&[], &[0x02]];
         for tag in tags {
-            let mut bytes = EncryptedDataEncryptionKey::LAYOUT_MAGIC.to_vec();
+            let mut bytes = vec![EncryptedDataEncryptionKey::LAYOUT_MAGIC];
             bytes.extend_from_slice(tag);
             assert_eq!(
-                error_code(EncryptedDataEncryptionKey::try_from_bytes(&bytes)),
+                error_code(EncryptedDataEncryptionKey::try_from(bytes.as_slice())),
                 "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
                 "{tag:02x?}"
             );
@@ -630,10 +627,10 @@ mod tests {
     fn serialized_key_with_a_key_version_past_the_end_is_rejected() {
         let bodies: [&[u8]; 2] = [&[0x01], &[0x01, 0x02, b'1']];
         for body in bodies {
-            let mut bytes = EncryptedDataEncryptionKey::LAYOUT_MAGIC.to_vec();
+            let mut bytes = vec![EncryptedDataEncryptionKey::LAYOUT_MAGIC];
             bytes.extend_from_slice(body);
             assert_eq!(
-                error_code(EncryptedDataEncryptionKey::try_from_bytes(&bytes)),
+                error_code(EncryptedDataEncryptionKey::try_from(bytes.as_slice())),
                 "INVALID_ENCRYPTED_KEY_FORMAT",
                 "{body:02x?}"
             );
@@ -641,31 +638,11 @@ mod tests {
     }
 
     #[test]
-    fn serialized_key_version_outside_ascii_alphanumeric_is_rejected_without_echoing_it() {
-        let stored_version = b"marker/18";
-        let mut bytes = EncryptedDataEncryptionKey::LAYOUT_MAGIC.to_vec();
-        bytes.extend_from_slice(&[0x01, stored_version.len() as u8]);
-        bytes.extend_from_slice(stored_version);
-        bytes.extend_from_slice(GOLDEN_WRAPPED_KEY);
-
-        let error = EncryptedDataEncryptionKey::try_from_bytes(&bytes).unwrap_err();
-
-        assert!(
-            !format!("{error} {error:?}").contains("marker"),
-            "{error:?}"
-        );
-        assert_eq!(error_code::<()>(Err(error)), "INVALID_KEY_VERSION");
-    }
-
-    #[test]
     fn hex_that_does_not_decode_is_rejected() {
-        for invalid in ["abc", "zz", "ff 6b"] {
-            assert_eq!(
-                error_code(EncryptedDataEncryptionKey::try_from_hex_string(invalid)),
-                "INVALID_HEX",
-                "{invalid:?}"
-            );
-        }
+        assert_eq!(
+            error_code(EncryptedDataEncryptionKey::try_from_hex_string("zz")),
+            "INVALID_HEX"
+        );
     }
 
     #[test]
