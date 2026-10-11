@@ -28,7 +28,11 @@ See security consideration below about versioning.
 ### Available features:
 - `gcp-kms-encryption` for Google KMS envelope encryption support
 - `aws-kms-encryption` for Amazon KMS envelope encryption support
-- `vault-transit-kms-encryption` for HashiCorp Vault Transit envelope encryption support
+- `vault-transit-kms-encryption` for HashiCorp Vault Transit envelope encryption support,
+  with system root certificates and the aws-lc-rs crypto provider. To choose them, enable one of
+  `vault-transit-kms-encryption-tls-roots`/`-tls-webpki` and one of
+  `vault-transit-kms-encryption-tls-aws-lc-rs`/`-tls-ring` instead.
+  See [examples/vault_transit_kms.rs](examples/vault_transit_kms.rs)
 - `ring-aead-encryption` using API for Ring AEAD only without any KMS envelope encryption
 
 ## Example
@@ -50,36 +54,6 @@ See security consideration below about versioning.
 ```
 
 All examples available at [examples](examples) directory.
-
-## HashiCorp Vault Transit
-The Vault Transit provider wraps data encryption keys with a Transit key using
-the `encrypt` and `decrypt` endpoints. The encrypted key is the Transit ciphertext
-(`vault:v1:...`), so values encrypted before a key rotation still decrypt after it.
-
-```rust
- let key_ref = kms_aead::providers::VaultTransitKeyRef::new("my-key".into());
-
- let encryption: KmsAeadRingEnvelopeEncryption<VaultTransitProvider> =
-     kms_aead::KmsAeadRingEnvelopeEncryption::new(providers::VaultTransitProvider::new(&key_ref)?)
-         .await?;
-```
-
-`VaultTransitProvider::new` reads the same environment variables as the Vault CLI:
-`VAULT_ADDR`, `VAULT_TOKEN`, `VAULT_NAMESPACE` and `VAULT_CACERT`.
-Use `VaultTransitProvider::with_options` to set them, the request timeout (60 seconds by default)
-and the mount (`transit` by default, set with `VaultTransitKeyRef::with_mount`) in code.
-
-TLS features:
-- `vault-transit-kms-encryption-tls-roots`: system root certificates (default);
-- `vault-transit-kms-encryption-tls-webpki`: bundled WebPKI root certificates;
-- `vault-transit-kms-encryption-tls-aws-lc-rs`: aws-lc-rs crypto provider for rustls (default);
-- `vault-transit-kms-encryption-tls-ring`: ring crypto provider for rustls.
-
-`vault-transit-kms-encryption` enables both defaults. To change one of them, enable one root store
-and one crypto provider explicitly instead, for example
-`features = ["vault-transit-kms-encryption-tls-webpki", "vault-transit-kms-encryption-tls-ring"]`.
-
-Full example available [here](examples/vault_transit_kms.rs).
 
 ## GCP/AWS secure random generators
 To use GCP/AWS KMS API for secure random generator you should enable it using options.
