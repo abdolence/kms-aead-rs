@@ -163,6 +163,19 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str
     )
 }
 
+/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a key the caller stored. `purpose` is
+/// `randomized` or `deterministic`.
+#[cfg(feature = "deterministic")]
+pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display) -> Span {
+    debug_span!(
+        "KMS AEAD decrypt DEK",
+        { PURPOSE } = purpose,
+        { ALGORITHM } = %algorithm,
+        { DEK_CACHE } = DEK_CACHE_DISABLED,
+        { ERROR_CODE } = field::Empty,
+    )
+}
+
 /// Runs `operation` inside `span`, without holding the span entered across an `.await`, and
 /// records the code of the error it returns.
 pub(crate) async fn in_span<T>(
