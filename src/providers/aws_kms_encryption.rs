@@ -1,13 +1,12 @@
 use rsb_derive::*;
 
 use crate::errors::*;
+use crate::spans::{self, kms};
 use crate::*;
 use async_trait::async_trait;
+use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
 use aws_sdk_kms::primitives::Blob;
-use tracing::*;
 
-use crate::ring_encryption::RingAeadEncryption;
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
@@ -41,6 +40,7 @@ pub struct AwsKmsProvider {
     aws_key_ref: AwsKmsKeyRef,
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
+    kek: KekRef,
 }
 
 impl AwsKmsProvider {
@@ -52,11 +52,6 @@ impl AwsKmsProvider {
         kms_key_ref: &AwsKmsKeyRef,
         options: AwsKmsProviderOptions,
     ) -> KmsAeadResult<Self> {
-        debug!(
-            "Initialising AWS KMS envelope encryption for {}",
-            kms_key_ref.to_key_arn()
-        );
-
         let shared_config = aws_config::load_from_env().await;
 
         let effective_kms_ref = if kms_key_ref.aws_region.is_none() {
@@ -67,122 +62,248 @@ impl AwsKmsProvider {
             kms_key_ref.clone()
         };
 
-        let client = aws_sdk_kms::Client::new(&shared_config);
+        Ok(Self::with_client(
+            effective_kms_ref,
+            aws_sdk_kms::Client::new(&shared_config),
+            options,
+        ))
+    }
 
-        Ok(Self {
-            aws_key_ref: effective_kms_ref,
+    fn with_client(
+        aws_key_ref: AwsKmsKeyRef,
+        client: aws_sdk_kms::Client,
+        options: AwsKmsProviderOptions,
+    ) -> Self {
+        Self {
+            kek: KekRef::new(KekProvider::Aws, aws_key_ref.to_key_arn()),
+            aws_key_ref,
             client,
             options,
-        })
+        }
+    }
+
+    /// Names the configured key: without it AWS KMS unwraps under whichever key the blob names,
+    /// for any key the principal may decrypt with.
+    fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
+        self.client
+            .decrypt()
+            .key_id(self.aws_key_ref.to_key_arn())
+            .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
     }
 }
 
 #[async_trait]
-impl KmsAeadRingEncryptionProvider for AwsKmsProvider {
+impl KmsAeadEncryptionProvider for AwsKmsProvider {
+    fn kek(&self) -> KekRef {
+        self.kek.clone()
+    }
+
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        match self
-            .client
-            .encrypt()
-            .set_key_id(Some(self.aws_key_ref.to_key_arn()))
-            .set_plaintext(Some(Blob::new(
-                encryption_key.value().ref_sensitive_value().as_slice(),
-            )))
-            .send()
-            .await
-        {
-            Ok(encrypt_response) => {
-                if let Some(blob) = encrypt_response.ciphertext_blob {
-                    Ok(EncryptedDataEncryptionKey::new(blob.into_inner(), None))
-                } else {
-                    error!(
-                        "Unable to encrypt DEK with AWS KMS {}: Didn't receive any blob.",
-                        self.aws_key_ref.to_key_arn()
-                    );
-                    return Err(KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
-                        KmsAeadErrorPublicGenericDetails::new("AWS_ERROR".into()),
-                        format!(
+        spans::in_span(kms::wrap(&self.kek), async {
+            let request = self
+                .client
+                .encrypt()
+                .set_key_id(Some(self.aws_key_ref.to_key_arn()))
+                .set_plaintext(Some(Blob::new(
+                    encryption_key.value().ref_sensitive_value().as_slice(),
+                )));
+            match kms::timed(request.send()).await {
+                Ok(encrypt_response) => match encrypt_response.ciphertext_blob {
+                    Some(blob) => {
+                        let encrypted_key =
+                            EncryptedDataEncryptionKey::new(blob.into_inner(), None);
+                        kms::record_wrap(&encrypted_key);
+                        Ok(encrypted_key)
+                    }
+                    None => Err(KmsAeadEncryptionError::create(
+                        "AWS_ERROR",
+                        &format!(
                             "AWS error {:?}. No encrypted blob received.",
                             self.aws_key_ref.to_key_arn()
                         ),
-                    )));
-                }
+                    )),
+                },
+                Err(err) => Err(KmsAeadEncryptionError::create(
+                    "AWS_ERROR",
+                    &format!("AWS error {:?}: {}", self.aws_key_ref.to_key_arn(), err),
+                )),
             }
-            Err(err) => {
-                error!(
-                    "Unable to encrypt DEK with AWS KMS {}: {}.",
-                    self.aws_key_ref.to_key_arn(),
-                    err
-                );
-                return Err(KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
-                    KmsAeadErrorPublicGenericDetails::new("AWS_ERROR".into()),
-                    format!("AWS error {:?}: {}", self.aws_key_ref.to_key_arn(), err),
-                )));
-            }
-        }
+        })
+        .await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let decrypt_response = self
-            .client
-            .decrypt()
-            .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
-            .send()
-            .await?;
+        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        spans::in_span(span, async {
+            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
+                .await
+                .map_err(KmsAeadError::from_aws_sdk_error)?;
 
-        if let Some(plaintext) = decrypt_response.plaintext {
-            Ok(DataEncryptionKey::from(
-                secret_vault_value::SecretValue::new(plaintext.into_inner()),
-            ))
-        } else {
-            Err(KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
-                KmsAeadErrorPublicGenericDetails::new("AWS_ERROR".into()),
-                format!(
-                    "AWS error {:?}: No plaintext received",
-                    self.aws_key_ref.to_key_arn()
-                ),
-            )))
-        }
+            match decrypt_response.plaintext {
+                Some(plaintext) => Ok(DataEncryptionKey::from(SecretValue::new(
+                    plaintext.into_inner(),
+                ))),
+                None => Err(KmsAeadEncryptionError::create(
+                    "AWS_ERROR",
+                    &format!(
+                        "AWS error {:?}: No plaintext received",
+                        self.aws_key_ref.to_key_arn()
+                    ),
+                )),
+            }
+        })
+        .await
     }
 
-    async fn generate_encryption_key(
-        &self,
-        aead_encryption: &RingAeadEncryption,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        if self.options.use_kms_random_gen {
-            let resp = self
-                .client
-                .generate_random()
-                .number_of_bytes(aead_encryption.algo.key_len() as i32)
-                .send()
-                .await?;
-            let random_bytes_blob = resp.plaintext.ok_or_else(|| {
-                KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
-                    KmsAeadErrorPublicGenericDetails::new("AWS_ERROR".into()),
-                    format!(
+    async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
+        if !self.options.use_kms_random_gen {
+            return Ok(None);
+        }
+        spans::in_span(kms::random(self.kek.provider(), None, len), async {
+            let number_of_bytes = i32::try_from(len).map_err(|_| {
+                KmsAeadEncryptionError::create(
+                    "INVALID_KEY_LENGTH",
+                    &format!("AWS KMS cannot generate {len} random bytes in one request"),
+                )
+            })?;
+            let response = kms::timed(
+                self.client
+                    .generate_random()
+                    .number_of_bytes(number_of_bytes)
+                    .send(),
+            )
+            .await
+            .map_err(KmsAeadError::from_aws_sdk_error)?;
+            let random_bytes = response.plaintext.ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "AWS_ERROR",
+                    &format!(
                         "AWS error {:?}. No secure random bytes received.",
                         self.aws_key_ref.to_key_arn()
                     ),
-                ))
+                )
             })?;
-
-            Ok(DataEncryptionKey::from(SecretValue::from(
-                random_bytes_blob.into_inner(),
-            )))
-        } else {
-            aead_encryption.generate_data_encryption_key()
-        }
+            Ok(Some(SecretValue::new(random_bytes.into_inner())))
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_kms::config::http::HttpResponse;
+    use aws_sdk_kms::error::{ErrorMetadata, SdkError};
+    use aws_sdk_kms::operation::decrypt::DecryptError;
+    use aws_sdk_kms::types::error::IncorrectKeyException;
+    use rvstruct::ValueStruct;
+
+    const ACCOUNT_ID: &str = "123456789012";
+    const KEY_ID: &str = "1234abcd-12ab-34cd-56ef-1234567890ab";
+    const KEY_ARN: &str =
+        "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+    /// The base64 of a data encryption key in a Decrypt response body.
+    const PLAINTEXT_MARKER: &str = "cGxhaW50ZXh0LWRhdGEta2V5LW1hcmtlcg==";
+
+    fn offline_provider() -> AwsKmsProvider {
+        let key_ref = AwsKmsKeyRef::new(ACCOUNT_ID.into(), KEY_ID.into())
+            .with_aws_region(aws_sdk_kms::config::Region::new("eu-west-1"));
+        let config = aws_sdk_kms::Config::builder()
+            .behavior_version(aws_sdk_kms::config::BehaviorVersion::latest())
+            .build();
+        AwsKmsProvider::with_client(
+            key_ref,
+            aws_sdk_kms::Client::from_conf(config),
+            AwsKmsProviderOptions::new(),
+        )
+    }
+
+    fn response_with_body(status: u16, body: &str) -> HttpResponse {
+        HttpResponse::new(status.try_into().unwrap(), body.to_string().into())
+    }
+
+    fn incorrect_key_exception() -> DecryptError {
+        DecryptError::IncorrectKeyException(
+            IncorrectKeyException::builder()
+                .message("The key ID in the request does not identify a CMK that can perform this operation.")
+                .meta(ErrorMetadata::builder().code("IncorrectKeyException").build())
+                .build(),
+        )
+    }
+
+    #[test]
+    fn unwrap_names_the_configured_kek() {
+        let provider = offline_provider();
+
+        let request =
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None));
+
+        assert_eq!(request.get_key_id().as_deref(), Some(KEY_ARN));
+        assert_eq!(
+            request.get_ciphertext_blob().as_ref().map(Blob::as_ref),
+            Some(b"wrapped".as_slice())
+        );
+        assert_eq!(provider.kek(), KekRef::new(KekProvider::Aws, KEY_ARN));
+    }
+
+    #[test]
+    fn a_service_error_keeps_the_service_code_and_error() {
+        let error = KmsAeadError::from_aws_sdk_error(SdkError::service_error(
+            incorrect_key_exception(),
+            response_with_body(400, r#"{"__type":"IncorrectKeyException"}"#),
+        ));
+
+        let KmsAeadError::EncryptionError(error) = error else {
+            panic!("expected an encryption error, got {error:?}");
+        };
+        assert_eq!(error.public.code, "IncorrectKeyException");
+        let root_cause = error.root_cause.expect("the service error is kept");
+        assert!(root_cause
+            .downcast_ref::<DecryptError>()
+            .is_some_and(DecryptError::is_incorrect_key_exception));
+    }
+
+    #[test]
+    fn a_dispatch_failure_keeps_the_sdk_error() {
+        let error = KmsAeadError::from_aws_sdk_error(
+            SdkError::<DecryptError, HttpResponse>::timeout_error("connect timed out"),
+        );
+
+        assert!(
+            matches!(&error, KmsAeadError::EncryptionError(error) if error.root_cause.is_some()),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn provider_errors_carry_no_key_material() {
+        let body = format!(r#"{{"KeyId":"{KEY_ARN}","Plaintext":"{PLAINTEXT_MARKER}"}}"#);
+        let errors = [
+            // A successful unwrap whose body failed to parse.
+            KmsAeadError::from_aws_sdk_error(
+                SdkError::<DecryptError, HttpResponse>::response_error(
+                    "failed to parse the response",
+                    response_with_body(200, &body),
+                ),
+            ),
+            KmsAeadError::from_aws_sdk_error(SdkError::service_error(
+                incorrect_key_exception(),
+                response_with_body(400, &body),
+            )),
+        ];
+
+        for error in errors {
+            for text in [format!("{error}"), format!("{error:?}")] {
+                assert!(!text.contains(PLAINTEXT_MARKER), "{text}");
+            }
+        }
+    }
 
     // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
     // the AWS key that the live test configures. That key stays enabled while these exist.
@@ -228,6 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ring")]
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
     async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {
         let key_ref = AwsKmsKeyRef::new(
@@ -235,12 +357,46 @@ mod tests {
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         );
         let encryption =
-            KmsAeadRingEnvelopeEncryption::new(AwsKmsProvider::new(&key_ref).await?).await?;
+            KmsAeadEnvelope::<_, crate::backend::Ring>::new(AwsKmsProvider::new(&key_ref).await?)
+                .await?;
         for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
             let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
             assert_eq!(secret, SecretValue::from("test-secret"));
         }
+        Ok(())
+    }
+
+    /// Needs a second key in the account that the test principal may encrypt and decrypt with.
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    async fn live_unwrap_of_a_key_wrapped_under_another_kek_fails() -> KmsAeadResult<()> {
+        let account_id = std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set");
+        let configured = AwsKmsKeyRef::new(
+            account_id.clone(),
+            std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
+        );
+        let other = AwsKmsKeyRef::new(
+            account_id,
+            std::env::var("KMS_SECOND_KEY_ID").expect("KMS_SECOND_KEY_ID is set"),
+        );
+        let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
+        let wrapped_under_other = AwsKmsProvider::new(&other)
+            .await?
+            .encrypt_data_encryption_key(&dek)
+            .await?;
+
+        let result = AwsKmsProvider::new(&configured)
+            .await?
+            .decrypt_data_encryption_key(&wrapped_under_other)
+            .await;
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "IncorrectKeyException"),
+            "{:?}",
+            result.err()
+        );
         Ok(())
     }
 }

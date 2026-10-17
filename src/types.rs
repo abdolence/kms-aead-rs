@@ -26,8 +26,21 @@ impl PartialEq for CipherText {
     }
 }
 
-#[derive(Debug, Clone, ValueStruct)]
-pub struct DataEncryptionKey(pub SecretValue);
+/// A plaintext data encryption key, zeroized on drop and shown as `***` by `Debug`.
+#[derive(Debug, Clone)]
+pub struct DataEncryptionKey(SecretValue);
+
+impl DataEncryptionKey {
+    pub fn value(&self) -> &SecretValue {
+        &self.0
+    }
+}
+
+impl From<SecretValue> for DataEncryptionKey {
+    fn from(value: SecretValue) -> Self {
+        Self(value)
+    }
+}
 
 impl ConstantTimeEq for DataEncryptionKey {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
@@ -324,6 +337,16 @@ impl CipherTextWithEncryptedKey {
                 KmsKeyVersion::from_field(key_version)?,
             ),
         ))
+    }
+
+    /// The layout the first byte names, as the `format` span field records it.
+    /// [`separate`](Self::separate) reads and checks the rest.
+    pub(crate) fn layout_name(&self) -> Option<&'static str> {
+        match self.value().first() {
+            Some(&Self::LAYOUT_V1) => Some("envelope_v1"),
+            Some(0x00) => Some("envelope_legacy"),
+            _ => None,
+        }
     }
 
     fn split_v1(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
@@ -675,6 +698,26 @@ mod tests {
         // PartialEq uses constant-time comparison internally
         assert_eq!(ct1, ct2);
         assert_ne!(ct1, ct3);
+    }
+
+    #[test]
+    fn test_constant_time_cipher_text_comparison() {
+        let cipher1 = CipherText(vec![1, 2, 3, 4, 5]);
+        let cipher2 = CipherText(vec![1, 2, 3, 4, 5]);
+        let cipher3 = CipherText(vec![1, 2, 3, 4, 6]);
+
+        assert_eq!(cipher1, cipher2);
+        assert_ne!(cipher1, cipher3);
+    }
+
+    #[test]
+    fn test_constant_time_dek_comparison() {
+        let dek1 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
+        let dek2 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
+        let dek3 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 6]));
+
+        assert_eq!(dek1, dek2);
+        assert_ne!(dek1, dek3);
     }
 
     #[test]

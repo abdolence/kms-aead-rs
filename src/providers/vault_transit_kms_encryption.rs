@@ -16,13 +16,12 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rsb_derive::Builder;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::CertificateDer;
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
 use crate::errors::*;
-use crate::ring_encryption::RingAeadEncryption;
+use crate::spans::{self, kms};
 use crate::*;
 
 const VAULT_TOKEN_HEADER: &str = "x-vault-token";
@@ -148,6 +147,7 @@ pub struct VaultTransitProvider {
     token: Option<VaultTransitToken>,
     namespace: Option<HeaderValue>,
     timeout: Duration,
+    kek: KekRef,
 }
 
 impl VaultTransitProvider {
@@ -208,12 +208,6 @@ impl VaultTransitProvider {
             .enable_http1()
             .build();
 
-        debug!(
-            mount = %key_ref.mount,
-            key_name = %key_ref.key_name,
-            "Initialising Vault Transit envelope encryption"
-        );
-
         Ok(Self {
             http_client: Client::builder(TokioExecutor::new()).build(connector),
             encrypt_uri: key_endpoint("encrypt")?,
@@ -221,6 +215,14 @@ impl VaultTransitProvider {
             token: options.token,
             namespace,
             timeout: options.timeout,
+            kek: KekRef::new(
+                KekProvider::VaultTransit,
+                format!(
+                    "{}/keys/{}",
+                    key_ref.mount.trim_matches('/'),
+                    key_ref.key_name
+                ),
+            ),
         })
     }
 
@@ -249,7 +251,11 @@ impl VaultTransitProvider {
 
         trace!(%uri, "Sending Vault Transit request");
         let exchange = async {
-            let response = self.http_client.request(request).await?;
+            let response = self
+                .http_client
+                .request(request)
+                .await
+                .map_err(KmsAeadError::from_vault_http_error)?;
             let status = response.status();
             // The body buffer belongs to the HTTP stack and is freed without being zeroized.
             let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
@@ -303,58 +309,65 @@ impl VaultTransitProvider {
 }
 
 #[async_trait]
-impl KmsAeadRingEncryptionProvider for VaultTransitProvider {
+impl KmsAeadEncryptionProvider for VaultTransitProvider {
+    fn kek(&self) -> KekRef {
+        self.kek.clone()
+    }
+
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        let plaintext = encryption_key.value().as_sensitive_base64_str();
-        // The request buffer belongs to the HTTP stack and is freed without being zeroized.
-        let request = serde_json::to_vec(&EncryptRequest {
-            plaintext: &plaintext,
-        })
-        .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
+        spans::in_span(kms::wrap(&self.kek), async {
+            let plaintext = encryption_key.value().as_sensitive_base64_str();
+            // The request buffer belongs to the HTTP stack and is freed without being zeroized.
+            let request = serde_json::to_vec(&EncryptRequest {
+                plaintext: &plaintext,
+            })
+            .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
-        let body = self.post(&self.encrypt_uri, request).await?;
-        let response: TransitResponse<EncryptData> = parse_response(&body)?;
-        let ciphertext = response.data.ciphertext;
-        let key_version = transit_key_version(&ciphertext);
-        Ok(EncryptedDataEncryptionKey::new(
-            ciphertext.into_bytes(),
-            key_version,
-        ))
+            let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
+            let response: TransitResponse<EncryptData> = parse_response(&body)?;
+            let ciphertext = response.data.ciphertext;
+            let key_version = transit_key_version(&ciphertext);
+            let encrypted_key =
+                EncryptedDataEncryptionKey::new(ciphertext.into_bytes(), key_version);
+            kms::record_wrap(&encrypted_key);
+            Ok(encrypted_key)
+        })
+        .await
     }
 
+    /// The request URL names the configured key, so that Vault refuses a ciphertext of another
+    /// key.
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
-            KmsAeadEncryptionError::create(
-                "VAULT_CIPHERTEXT",
-                "The encrypted data encryption key is not a Vault Transit ciphertext",
-            )
-        })?;
-        let request = serde_json::to_vec(&DecryptRequest { ciphertext })
-            .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
+        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        spans::in_span(span, async {
+            let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
+                KmsAeadEncryptionError::create(
+                    "VAULT_CIPHERTEXT",
+                    "The encrypted data encryption key is not a Vault Transit ciphertext",
+                )
+            })?;
+            let request = serde_json::to_vec(&DecryptRequest { ciphertext })
+                .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
-        let body = self.post(&self.decrypt_uri, request).await?;
-        let response: TransitResponse<DecryptData> = parse_response(&body)?;
-        // The decode error is dropped because it names a byte of the key and its offset.
-        let plaintext = SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
-            KmsAeadEncryptionError::create(
-                "VAULT_RESPONSE",
-                "The Vault Transit plaintext is not valid base64",
-            )
-        })?;
-        Ok(DataEncryptionKey(plaintext))
-    }
-
-    async fn generate_encryption_key(
-        &self,
-        aead_encryption: &RingAeadEncryption,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        aead_encryption.generate_data_encryption_key()
+            let body = kms::timed(self.post(&self.decrypt_uri, request)).await?;
+            let response: TransitResponse<DecryptData> = parse_response(&body)?;
+            // The decode error is dropped because it names a byte of the key and its offset.
+            let plaintext =
+                SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
+                    KmsAeadEncryptionError::create(
+                        "VAULT_RESPONSE",
+                        "The Vault Transit plaintext is not valid base64",
+                    )
+                })?;
+            Ok(DataEncryptionKey::from(plaintext))
+        })
+        .await
     }
 }
 
@@ -572,6 +585,7 @@ fn trusted_roots(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -592,8 +606,15 @@ mod tests {
             .unwrap()
     }
 
-    /// Answers every request on `listener` with `status` and `body`.
-    fn answer_with(listener: TcpListener, status: StatusCode, body: String) {
+    /// Answers every request on `listener` with `status` and `body`, and returns the request
+    /// heads it receives.
+    fn answer_with(
+        listener: TcpListener,
+        status: StatusCode,
+        body: String,
+    ) -> Arc<Mutex<Vec<String>>> {
+        let heads = Arc::new(Mutex::new(Vec::new()));
+        let received = heads.clone();
         tokio::spawn(async move {
             loop {
                 let (mut connection, _) = listener.accept().await.unwrap();
@@ -603,6 +624,10 @@ mod tests {
                     let read = connection.read(&mut buffer).await.unwrap();
                     request.extend_from_slice(&buffer[..read]);
                 }
+                received
+                    .lock()
+                    .unwrap()
+                    .push(String::from_utf8_lossy(&request).into_owned());
                 let response = format!(
                     "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -610,18 +635,11 @@ mod tests {
                 connection.write_all(response.as_bytes()).await.unwrap();
             }
         });
+        heads
     }
 
     fn data_key() -> DataEncryptionKey {
-        DataEncryptionKey(SecretValue::from(DATA_KEY))
-    }
-
-    fn error_code(error: &KmsAeadError) -> &str {
-        match error {
-            KmsAeadError::SystemError(error) => &error.public.code,
-            KmsAeadError::NetworkError(error) => &error.public.code,
-            KmsAeadError::EncryptionError(error) => &error.public.code,
-        }
+        DataEncryptionKey::from(SecretValue::from(DATA_KEY))
     }
 
     fn assert_no_secrets(error: &KmsAeadError) {
@@ -631,6 +649,66 @@ mod tests {
             assert!(!text.contains(DATA_KEY), "{text}");
             assert!(!text.contains(data_key_base64.as_str()), "{text}");
         }
+    }
+
+    #[tokio::test]
+    async fn unwrap_names_the_configured_kek() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        let data_key_base64 = data_key().value().as_sensitive_base64_str();
+        let heads = answer_with(
+            listener,
+            StatusCode::OK,
+            format!(
+                r#"{{"data":{{"plaintext":"{}"}}}}"#,
+                data_key_base64.as_str()
+            ),
+        );
+
+        provider
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                b"vault:v1:wrapped".into(),
+                None,
+            ))
+            .await
+            .unwrap();
+
+        let heads = heads.lock().unwrap();
+        assert_eq!(heads.len(), 1);
+        assert!(
+            heads[0].starts_with(&format!("POST /v1/transit/decrypt/{TEST_KEY} ")),
+            "{}",
+            heads[0]
+        );
+        assert_eq!(
+            provider.kek(),
+            KekRef::new(
+                KekProvider::VaultTransit,
+                format!("transit/keys/{TEST_KEY}")
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_server_is_a_network_error() {
+        // A port that was just freed refuses the connection.
+        let address = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let options = VaultTransitProviderOptions::new(format!("http://{address}"))
+            .with_timeout(Duration::from_secs(2));
+        let provider =
+            VaultTransitProvider::with_options(&VaultTransitKeyRef::new(TEST_KEY.into()), options)
+                .unwrap();
+
+        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+            panic!("a refused connection is not an encrypted key");
+        };
+
+        assert!(matches!(error, KmsAeadError::NetworkError(_)), "{error:?}");
+        assert_eq!(error.code(), "VAULT_HTTP");
     }
 
     #[tokio::test]
@@ -651,7 +729,7 @@ mod tests {
             panic!("an unanswered request is not an encrypted key");
         };
         assert!(matches!(error, KmsAeadError::NetworkError(_)));
-        assert_eq!(error_code(&error), "VAULT_TIMEOUT");
+        assert_eq!(error.code(), "VAULT_TIMEOUT");
     }
 
     #[tokio::test]
@@ -671,7 +749,7 @@ mod tests {
         };
 
         assert!(matches!(error, KmsAeadError::EncryptionError(_)));
-        assert_eq!(error_code(&error), "VAULT_STATUS_403");
+        assert_eq!(error.code(), "VAULT_STATUS_403");
         assert_no_secrets(&error);
     }
 
@@ -689,7 +767,7 @@ mod tests {
         };
 
         assert!(matches!(error, KmsAeadError::SystemError(_)));
-        assert_eq!(error_code(&error), "VAULT_INVALID_OPTIONS");
+        assert_eq!(error.code(), "VAULT_INVALID_OPTIONS");
     }
 
     #[tokio::test]
@@ -730,7 +808,7 @@ mod tests {
             panic!("a 400 is not an encrypted key");
         };
 
-        assert_eq!(error_code(&error), "VAULT_STATUS_400");
+        assert_eq!(error.code(), "VAULT_STATUS_400");
         assert_no_secrets(&error);
         assert!(format!("{error}").chars().count() < 2 * MAX_VAULT_ERROR_CHARS);
     }
@@ -781,6 +859,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ring")]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn envelope_round_trip_survives_key_rotation() {
         let provider = live_provider();
@@ -792,7 +871,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadRingEnvelopeEncryption::new(provider.clone())
+        let encryption = KmsAeadEnvelope::<_, crate::backend::Ring>::new(provider.clone())
             .await
             .unwrap();
         let aad = "orders-aad".to_string();

@@ -18,6 +18,13 @@ use std::sync::Arc;
 mod common;
 use common::FixedTokenCredential;
 
+#[cfg(feature = "ring")]
+type Backend = kms_aead::backend::Ring;
+#[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
+type Backend = kms_aead::backend::AwsLc;
+#[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
+type Backend = kms_aead::backend::RustCrypto;
+
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";
 
 struct Emulator {
@@ -90,7 +97,7 @@ impl Emulator {
         &self,
         key_name: &str,
         key_version: KmsKeyVersion,
-    ) -> KmsAeadRingEnvelopeEncryption<AzureKmsProvider> {
+    ) -> KmsAeadEnvelope<AzureKmsProvider, Backend> {
         let key_ref = AzureKmsKeyRef::new(self.vault_url.clone(), key_name.to_string())
             .with_key_version(key_version);
         let provider = AzureKmsProvider::with_options(
@@ -99,7 +106,7 @@ impl Emulator {
             Arc::new(FixedTokenCredential),
         )
         .unwrap();
-        KmsAeadRingEnvelopeEncryption::new(provider).await.unwrap()
+        KmsAeadEnvelope::new(provider).await.unwrap()
     }
 }
 

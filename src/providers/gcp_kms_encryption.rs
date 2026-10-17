@@ -1,5 +1,7 @@
 use rsb_derive::*;
 
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
+use crate::spans::{self, kms};
 use crate::*;
 use async_trait::async_trait;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
@@ -8,8 +10,6 @@ use gcloud_sdk::proto_ext::kms::*;
 use gcloud_sdk::*;
 use tracing::*;
 
-use crate::ring_encryption::RingAeadEncryption;
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
 
@@ -29,6 +29,13 @@ impl GcpKmsKeyRef {
         )
     }
 
+    fn to_location_ref(&self) -> String {
+        format!(
+            "projects/{}/locations/{}",
+            self.google_project_id, self.location
+        )
+    }
+
     // The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is
     // recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
     // wrapped key.
@@ -38,6 +45,37 @@ impl GcpKmsKeyRef {
             .strip_prefix("/cryptoKeyVersions/")?;
         KmsKeyVersion::try_from(version.to_string()).ok()
     }
+
+    /// Names the configured CryptoKey, so that Cloud KMS refuses a key wrapped under another one.
+    fn decrypt_request(
+        &self,
+        encrypted_key: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
+        routed(
+            DecryptRequest {
+                name: self.to_google_ref(),
+                ciphertext: encrypted_key.wrapped().to_vec(),
+                ..Default::default()
+            },
+            &self.to_google_ref(),
+        )
+    }
+}
+
+/// The request with the routing header Cloud KMS expects for `resource`.
+fn routed<T>(message: T, resource: &str) -> KmsAeadResult<tonic::Request<T>> {
+    let mut request = tonic::Request::new(message);
+    let routing = MetadataValue::<tonic::metadata::Ascii>::try_from(format!("name={resource}"))
+        .map_err(|e| {
+            KmsAeadEncryptionError::create(
+                "DECRYPT_KEY",
+                format!("Unable to create request metadata: {e:?}").as_str(),
+            )
+        })?;
+    request
+        .metadata_mut()
+        .insert("x-goog-request-params", routing);
+    Ok(request)
 }
 
 #[derive(Debug, Clone, Builder)]
@@ -51,6 +89,7 @@ pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
     gcp_key_ref: GcpKmsKeyRef,
     options: GcpKmsProviderOptions,
+    kek: KekRef,
 }
 
 impl GcpKmsProvider {
@@ -67,7 +106,8 @@ impl GcpKmsProvider {
                 "https://cloudkms.googleapis.com",
                 None,
             )
-            .await?;
+            .await
+            .map_err(KmsAeadError::from_gcp_error)?;
 
         Ok(Self::with_client(kms_key_ref, options, client))
     }
@@ -76,150 +116,186 @@ impl GcpKmsProvider {
         options: GcpKmsProviderOptions,
         client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
     ) -> Self {
-        debug!(
-            "Initialising Google KMS envelope encryption for {}",
-            kms_key_ref.to_google_ref()
-        );
-
         Self {
             gcp_key_ref: kms_key_ref.clone(),
             client,
             options,
+            kek: KekRef::new(KekProvider::Gcp, kms_key_ref.to_google_ref()),
         }
     }
 }
 
 #[async_trait]
-impl KmsAeadRingEncryptionProvider for GcpKmsProvider {
+impl KmsAeadEncryptionProvider for GcpKmsProvider {
+    fn kek(&self) -> KekRef {
+        self.kek.clone()
+    }
+
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        let mut encrypt_request = tonic::Request::new(EncryptRequest {
-            name: self.gcp_key_ref.to_google_ref(),
-            plaintext: secret_vault_value::SecretValue::new(
-                encryption_key
-                    .value()
-                    .ref_sensitive_value()
-                    .as_slice()
-                    .into(),
-            ),
-            ..Default::default()
-        });
+        spans::in_span(kms::wrap(&self.kek), async {
+            let encrypt_request = routed(
+                EncryptRequest {
+                    name: self.gcp_key_ref.to_google_ref(),
+                    plaintext: SecretValue::new(
+                        encryption_key.value().ref_sensitive_value().clone(),
+                    ),
+                    ..Default::default()
+                },
+                &self.gcp_key_ref.to_google_ref(),
+            )?;
 
-        encrypt_request.metadata_mut().insert(
-            "x-goog-request-params",
-            MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
-                "name={}",
-                self.gcp_key_ref.to_google_ref()
-            ))
-            .map_err(|e| {
-                crate::errors::KmsAeadEncryptionError::create(
-                    "DECRYPT_KEY",
-                    format!("Unable to create request metadata: {e:?}").as_str(),
-                )
-            })?,
-        );
+            let encrypt_response = kms::timed(self.client.get().encrypt(encrypt_request))
+                .await
+                .map_err(KmsAeadError::from_gcp_status)?;
+            let EncryptResponse {
+                name, ciphertext, ..
+            } = encrypt_response.into_inner();
 
-        let encrypt_response = self.client.get().encrypt(encrypt_request).await?;
-        let EncryptResponse {
-            name, ciphertext, ..
-        } = encrypt_response.into_inner();
+            let key_version = self.gcp_key_ref.crypto_key_version(&name);
+            if key_version.is_none() {
+                warn!(name, "No key version in the GCP KMS encrypt response");
+            }
 
-        let key_version = self.gcp_key_ref.crypto_key_version(&name);
-        if key_version.is_none() {
-            warn!(name, "No key version in the GCP KMS encrypt response");
-        }
-
-        Ok(EncryptedDataEncryptionKey::new(ciphertext, key_version))
+            let encrypted_key = EncryptedDataEncryptionKey::new(ciphertext, key_version);
+            kms::record_wrap(&encrypted_key);
+            Ok(encrypted_key)
+        })
+        .await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let mut decrypt_request = tonic::Request::new(DecryptRequest {
-            name: self.gcp_key_ref.to_google_ref(),
-            ciphertext: encrypted_key.wrapped().to_vec(),
-            ..Default::default()
-        });
+        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        spans::in_span(span, async {
+            let decrypt_request = self.gcp_key_ref.decrypt_request(encrypted_key)?;
+            let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
+                .await
+                .map_err(KmsAeadError::from_gcp_status)?;
 
-        decrypt_request.metadata_mut().insert(
-            "x-goog-request-params",
-            MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
-                "name={}",
-                self.gcp_key_ref.to_google_ref()
+            Ok(DataEncryptionKey::from(
+                decrypt_response.into_inner().plaintext,
             ))
-            .map_err(|e| {
-                crate::errors::KmsAeadEncryptionError::create(
-                    "DECRYPT_KEY",
-                    format!("Unable to create request metadata: {e:?}").as_str(),
-                )
-            })?,
-        );
-
-        let decrypt_response = self.client.get().decrypt(decrypt_request).await?;
-
-        Ok(DataEncryptionKey::from(
-            decrypt_response.into_inner().plaintext,
-        ))
+        })
+        .await
     }
 
-    async fn generate_encryption_key(
-        &self,
-        aead_encryption: &RingAeadEncryption,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        if self.options.use_kms_random_gen {
-            let gcp_global_location = format!(
-                "projects/{}/locations/{}",
-                self.gcp_key_ref.google_project_id, self.gcp_key_ref.location
-            );
-
-            let mut gen_random_bytes_req = tonic::Request::new(GenerateRandomBytesRequest {
-                location: gcp_global_location.clone(),
-                length_bytes: aead_encryption.algo.key_len() as i32,
-                protection_level: ProtectionLevel::Hsm.into(),
-            });
-
-            gen_random_bytes_req.metadata_mut().insert(
-                "x-goog-request-params",
-                MetadataValue::<tonic::metadata::Ascii>::try_from(format!(
-                    "name={gcp_global_location}"
-                ))
-                .map_err(|e| {
-                    crate::errors::KmsAeadEncryptionError::create(
-                        "DECRYPT_KEY",
-                        format!("Unable to create request metadata: {e:?}").as_str(),
-                    )
-                })?,
-            );
-
-            let gen_random_bytes_resp = self
-                .client
-                .get()
-                .generate_random_bytes(gen_random_bytes_req)
-                .await?;
-            Ok(DataEncryptionKey::from(SecretValue::from(
-                gen_random_bytes_resp.into_inner().data,
-            )))
-        } else {
-            aead_encryption.generate_data_encryption_key()
+    async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
+        if !self.options.use_kms_random_gen {
+            return Ok(None);
         }
+        let location = self.gcp_key_ref.to_location_ref();
+        let span = kms::random(self.kek.provider(), Some(&location), len);
+        spans::in_span(span, async {
+            let length_bytes = i32::try_from(len).map_err(|_| {
+                KmsAeadEncryptionError::create(
+                    "INVALID_KEY_LENGTH",
+                    &format!("GCP KMS cannot generate {len} random bytes in one request"),
+                )
+            })?;
+            let request = routed(
+                GenerateRandomBytesRequest {
+                    location: location.clone(),
+                    length_bytes,
+                    protection_level: ProtectionLevel::Hsm.into(),
+                },
+                &location,
+            )?;
+
+            let response = kms::timed(self.client.get().generate_random_bytes(request))
+                .await
+                .map_err(KmsAeadError::from_gcp_status)?;
+            Ok(Some(SecretValue::new(response.into_inner().data)))
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gcloud_sdk::tonic::codegen::Bytes;
+    use gcloud_sdk::tonic::metadata::MetadataMap;
+    use gcloud_sdk::tonic::{Code, Status};
+    use rvstruct::ValueStruct;
 
-    #[test]
-    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
-        let key_ref = GcpKmsKeyRef::new(
+    const KEY_NAME: &str =
+        "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key";
+    const KEY_MARKER: &str = "data-key-marker-value-of-32bytes";
+
+    fn key_ref() -> GcpKmsKeyRef {
+        GcpKmsKeyRef::new(
             "my-project".into(),
             "global".into(),
             "my-ring".into(),
             "my-key".into(),
+        )
+    }
+
+    #[test]
+    fn unwrap_names_the_configured_kek() {
+        let request = key_ref()
+            .decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None))
+            .unwrap();
+
+        assert_eq!(request.get_ref().name, KEY_NAME);
+        assert_eq!(request.get_ref().ciphertext, b"wrapped");
+        assert_eq!(
+            request.metadata().get("x-goog-request-params").unwrap(),
+            format!("name={KEY_NAME}").as_str()
         );
+    }
+
+    #[test]
+    fn a_status_is_a_network_error_with_its_code() {
+        let error = KmsAeadError::from_gcp_status(Status::permission_denied(
+            "Permission 'cloudkms.cryptoKeyVersions.useToDecrypt' denied",
+        ));
+
+        assert!(
+            matches!(&error, KmsAeadError::NetworkError(error) if error.public.code == "PermissionDenied"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_client_error_is_a_system_error_with_its_kind() {
+        let error = KmsAeadError::from_gcp_error(gcloud_sdk::error::Error::from(
+            gcloud_sdk::error::ErrorKind::CryptoProviderMissing,
+        ));
+
+        assert!(
+            matches!(&error, KmsAeadError::SystemError(error)
+                if error.public.code == "CryptoProviderMissing" && error.root_cause.is_some()),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn provider_errors_carry_no_key_material() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("x-echo", KEY_MARKER.parse().unwrap());
+        let status = Status::with_details_and_metadata(
+            Code::Internal,
+            "internal error",
+            Bytes::from_static(KEY_MARKER.as_bytes()),
+            metadata,
+        );
+
+        let error = KmsAeadError::from_gcp_status(status);
+
+        for text in [format!("{error}"), format!("{error:?}")] {
+            assert!(!text.contains(KEY_MARKER), "{text}");
+        }
+    }
+
+    #[test]
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
+        let key_ref = key_ref();
 
         assert_eq!(
             key_ref.crypto_key_version(
@@ -282,6 +358,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ring")]
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
     async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {
         let key_ref = GcpKmsKeyRef::new(
@@ -291,7 +368,8 @@ mod tests {
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         );
         let encryption =
-            KmsAeadRingEnvelopeEncryption::new(GcpKmsProvider::new(&key_ref).await?).await?;
+            KmsAeadEnvelope::<_, crate::backend::Ring>::new(GcpKmsProvider::new(&key_ref).await?)
+                .await?;
         for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
             let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;

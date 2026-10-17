@@ -1,4 +1,4 @@
-//! # KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and Ring AEAD encryption
+//! # KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit
 //!
 //! Available providers:
 //! - Google Cloud Platform KMS
@@ -8,49 +8,35 @@
 //!
 //! Features:
 //! - Envelope encryption using automatically generated or provided data encryption keys;
-//! - Provides a public and simple implementation for Ring based AEAD encryption without using KMS;
-//! - Opt-in for KMS based secure random generator for GCP and AWS instead of Ring;
+//! - AEAD encryption without a KMS, with [`AeadCipher`];
+//! - ring, aws-lc-rs or RustCrypto as the AEAD backend, chosen with the `ring`, `aws-lc` and
+//!   `rustcrypto` features and named as a type from [`backend`];
+//! - Opt-in for KMS based secure random generator for GCP and AWS instead of the backend's;
 //!
 //! ## Examples:
 //!
-//! For AWS:
+//! For AWS, with the ring backend:
 //! ```rust,no_run
-//! use kms_aead::providers::AwsKmsProvider;
+//! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
+//! # async fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::backend::Ring;
+//! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
 //! use kms_aead::*;
 //! use secret_vault_value::SecretValue;
 //!
-//!#[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-//!     let aws_account_id = config_env_var("ACCOUNT_ID")?;
-//!     let aws_key_id: String = config_env_var("KMS_KEY_ID")?;
+//! let kms_ref = AwsKmsKeyRef::new("123456789012".into(), "my-key-id".into());
+//! let encryption: KmsAeadEnvelope<AwsKmsProvider, Ring> =
+//!     KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?).await?;
 //!
-//!     let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
+//! let secret_value = SecretValue::from("test-secret");
+//! let test_aad = "test-aad".to_string();
 //!
-//!     let encryption: KmsAeadRingEnvelopeEncryption<AwsKmsProvider> =
-//!         kms_aead::KmsAeadRingEnvelopeEncryption::new(providers::AwsKmsProvider::new(&kms_ref).await?)
-//!             .await?;
+//! let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
+//! let decrypted = encryption.decrypt_value(&test_aad, &cipher_text).await?;
 //!
-//!     let secret_value = SecretValue::from("test-secret");
-//!     let test_aad = "test-aad".to_string();
-//!
-//!     let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
-//!
-//!     let secret_value = encryption
-//!         .decrypt_value(&test_aad, &cipher_text)
-//!         .await?;
-//!
-//!     println!(
-//!         "We have our secret back: {}",
-//!         secret_value.sensitive_value_to_str().unwrap() == "test-secret"
-//!     );
-//!
-//!     Ok(())
-//! }
-//!
-//! pub fn config_env_var(name: &str) -> Result<String, String> {
-//!     std::env::var(name).map_err(|e| format!("{}: {}", name, e))
-//! }
-//!
+//! assert_eq!(decrypted, secret_value);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! More examples are available at [github](https://github.com/abdolence/kms-aead-rs)
@@ -96,6 +82,19 @@ compile_error!(
 extern crate core;
 
 #[cfg(all(
+    any(
+        feature = "gcp-kms-encryption-base",
+        feature = "aws-kms-encryption",
+        feature = "azure-kms-encryption-base",
+        feature = "vault-transit-kms-encryption-base"
+    ),
+    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))
+))]
+compile_error!(
+    "kms-aead needs a crypto backend for its KMS providers: enable \"ring\", \"aws-lc\" or \"rustcrypto\""
+);
+
+#[cfg(all(
     feature = "azure-kms-encryption-base",
     not(feature = "azure-kms-encryption-tls-aws-lc-rs"),
     not(feature = "azure-kms-encryption-tls-no-provider"),
@@ -128,21 +127,31 @@ pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
 mod api;
 pub use api::*;
 
+mod algorithm;
+pub use algorithm::*;
+
+pub mod backend;
+
+mod aead_cipher;
+pub use aead_cipher::*;
+
+mod deterministic;
+pub use deterministic::*;
+
 pub mod errors;
 
-#[cfg(feature = "ring-aead-encryption")]
-pub mod ring_encryption;
-
-#[cfg(feature = "ring-aead-encryption")]
-mod ring_support;
-
-#[cfg(feature = "ring-aead-encryption")]
-pub mod kms_envelope_encryption;
-
-#[cfg(feature = "ring-aead-encryption")]
+mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;
+
+mod spans;
 
 mod types;
 pub use types::*;
 
 pub mod providers;
+
+#[cfg(all(
+    test,
+    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+))]
+mod test_provider;
