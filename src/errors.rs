@@ -1,3 +1,9 @@
+//! The error type of every fallible operation, [`KmsAeadError`].
+//!
+//! Each error carries a code in [`KmsAeadErrorPublicGenericDetails::code`]: one of the crate's
+//! own codes, such as `INVALID_KEY_LENGTH` or `DECRYPT`, or the error code a KMS returned, such as
+//! AWS's `IncorrectKeyException` or `VAULT_STATUS_403` for an HTTP status from Vault.
+
 use rsb_derive::Builder;
 use std::error::Error;
 use std::fmt::Display;
@@ -15,8 +21,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KmsAeadError {
+    /// The configuration or the environment: invalid provider options, a KMS client that cannot
+    /// be built, or a system clock error.
     SystemError(KmsAeadSystemError),
+    /// A KMS that could not be reached or did not answer in time, a server error or a rate limit
+    /// from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS.
     NetworkError(KmsAeadNetworkError),
+    /// Encrypting, decrypting, wrapping or unwrapping failed, or a stored value could not be
+    /// read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault refused.
     EncryptionError(KmsAeadEncryptionError),
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
@@ -181,16 +193,22 @@ impl std::error::Error for KmsAeadError {
     }
 }
 
+/// The part of an error that is safe to return to an application's own callers.
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct KmsAeadErrorPublicGenericDetails {
+    /// A code a caller can match on: one of the crate's codes or the code a KMS returned.
     pub code: String,
 }
 
+/// See [`KmsAeadError::SystemError`].
 #[derive(Debug, Clone, Builder)]
 pub struct KmsAeadSystemError {
+    /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
+    /// What failed, for a person reading logs.
     pub message: String,
+    /// The error of the library that failed, when there is one.
     pub root_cause: Option<Arc<dyn Error + Send + Sync>>,
 }
 
@@ -205,6 +223,7 @@ impl Display for KmsAeadSystemError {
 }
 
 impl KmsAeadSystemError {
+    /// A [`KmsAeadError::SystemError`] with `code` and `message` and no root cause.
     pub fn create(code: &str, message: &str) -> KmsAeadError {
         KmsAeadError::SystemError(KmsAeadSystemError::new(
             KmsAeadErrorPublicGenericDetails::new(code.to_string()),
@@ -215,9 +234,12 @@ impl KmsAeadSystemError {
 
 impl std::error::Error for KmsAeadSystemError {}
 
+/// See [`KmsAeadError::NetworkError`].
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
 pub struct KmsAeadNetworkError {
+    /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
+    /// What failed, for a person reading logs.
     pub message: String,
 }
 
@@ -228,6 +250,7 @@ impl Display for KmsAeadNetworkError {
 }
 
 impl KmsAeadNetworkError {
+    /// A [`KmsAeadError::NetworkError`] with `code` and `message`.
     pub fn create(code: &str, message: &str) -> KmsAeadError {
         KmsAeadError::NetworkError(KmsAeadNetworkError::new(
             KmsAeadErrorPublicGenericDetails::new(code.to_string()),
@@ -251,14 +274,19 @@ impl KmsAeadNetworkError {
 
 impl std::error::Error for KmsAeadNetworkError {}
 
+/// See [`KmsAeadError::EncryptionError`].
 #[derive(Debug, Clone, Builder)]
 pub struct KmsAeadEncryptionError {
+    /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
+    /// What failed, for a person reading logs.
     pub message: String,
+    /// The error of the library or the KMS that failed, when there is one.
     pub root_cause: Option<Arc<dyn Error + Send + Sync>>,
 }
 
 impl KmsAeadEncryptionError {
+    /// A [`KmsAeadError::EncryptionError`] with `code` and `message` and no root cause.
     pub fn create(code: &str, message: &str) -> KmsAeadError {
         KmsAeadError::EncryptionError(KmsAeadEncryptionError::new(
             KmsAeadErrorPublicGenericDetails::new(code.to_string()),
@@ -279,11 +307,13 @@ impl Display for KmsAeadEncryptionError {
 
 impl std::error::Error for KmsAeadEncryptionError {}
 
-/// Code `UNSUPPORTED_ALGORITHM`.
+/// See [`KmsAeadError::UnsupportedAlgorithm`]. Its code is `UNSUPPORTED_ALGORITHM`.
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadUnsupportedAlgorithmError {
+    /// The error code, `UNSUPPORTED_ALGORITHM`.
     pub public: KmsAeadErrorPublicGenericDetails,
+    /// The algorithm the backend does not implement.
     pub algorithm: AeadAlgorithm,
     /// Names the backend.
     pub message: String,
@@ -311,11 +341,13 @@ impl Display for KmsAeadUnsupportedAlgorithmError {
 
 impl std::error::Error for KmsAeadUnsupportedAlgorithmError {}
 
-/// Code `LEGACY_FORMAT`.
+/// See [`KmsAeadError::LegacyFormat`]. Its code is `LEGACY_FORMAT`.
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadLegacyFormatError {
+    /// The error code, `LEGACY_FORMAT`.
     pub public: KmsAeadErrorPublicGenericDetails,
+    /// The layout of the stored value.
     pub format: KmsAeadLegacyFormat,
     /// Names the feature that reads the layout.
     pub message: String,
@@ -333,6 +365,7 @@ impl Display for KmsAeadLegacyFormatError {
 
 impl std::error::Error for KmsAeadLegacyFormatError {}
 
+/// A layout written by kms-aead 0.28.1 and earlier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KmsAeadLegacyFormat {

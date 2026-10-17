@@ -1,49 +1,100 @@
-//! # KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit
+//! Envelope encryption with a key encryption key (KEK) held by a KMS, and AEAD without one.
 //!
-//! Available providers:
-//! - Google Cloud Platform KMS
-//! - Amazon Web Services KMS
-//! - HashiCorp Vault Transit secrets engine
-//! - Azure Key Vault keys
+//! A value is sealed under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
+//! wrapped by the KEK. [`KmsAeadEnvelope`] does both and stores the wrapped DEK with the cipher
+//! text. [`AeadCipher`] seals with a DEK the caller holds, without a KMS.
 //!
-//! Features:
-//! - Envelope encryption using automatically generated or provided data encryption keys;
-//! - AEAD encryption without a KMS, with [`AeadCipher`];
-//! - ring, aws-lc-rs or RustCrypto as the AEAD backend, chosen with the `ring`, `aws-lc` and
-//!   `rustcrypto` features and named as a type from [`backend`];
-//! - Opt-in for KMS based secure random generator for GCP and AWS instead of the backend's;
+//! # Providers
 //!
-//! ## Examples:
+//! A provider wraps and unwraps DEKs with one KEK. Each one is a type in [`providers`], enabled by
+//! its feature, and implements [`KmsAeadEncryptionProvider`], which an application can also
+//! implement for a KMS of its own.
 //!
-//! For AWS, with the ring backend:
+//! | KMS | Type | Feature |
+//! |---|---|---|
+//! | Google Cloud KMS | `GcpKmsProvider` | `gcp-kms-encryption` |
+//! | AWS KMS | `AwsKmsProvider` | `aws-kms-encryption` |
+//! | Azure Key Vault and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
+//! | HashiCorp Vault Transit | `VaultTransitProvider` | `vault-transit-kms-encryption` |
+//!
+//! The GCP, Azure and Vault Transit features have variants that choose the TLS stack, the root
+//! store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build with a
+//! provider needs a backend.
+//!
+//! # Backends
+//!
+//! The AEAD runs on a crypto library chosen by a feature and named as a type from [`backend`],
+//! the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`]. A build may enable any number
+//! of them, and there is no default one.
+//!
+//! | Feature | Type | Algorithms |
+//! |---|---|---|
+//! | `ring` | `Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
+//! | `aws-lc` | `AwsLc` | every [`AeadAlgorithm`] |
+//! | `aws-lc-fips` | `AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
+//! | `rustcrypto` | `RustCrypto` | every [`AeadAlgorithm`] |
+//!
+//! A value sealed by one backend opens with any other that implements its algorithm.
+//!
+//! # Other features
+//!
+//! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].
+//! - `legacy-formats`: reads the layouts written up to 0.28.1. Deprecated.
+//! - `serde`: `Serialize` and `Deserialize` for [`errors::KmsAeadErrorPublicGenericDetails`] and
+//!   for `SecretValue`.
+//!
+//! # Examples
+//!
+//! Envelope encryption with AWS KMS, on the ring backend:
+//!
 //! ```rust,no_run
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
 //! use kms_aead::backend::Ring;
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::*;
+//! use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeEncryption};
 //! use secret_vault_value::SecretValue;
 //!
-//! let kms_ref = AwsKmsKeyRef::new("123456789012".into(), "my-key-id".into());
+//! let kms_ref = AwsKmsKeyRef::new("123456789012".into(), "alias/orders".into());
 //! let encryption: KmsAeadEnvelope<AwsKmsProvider, Ring> =
 //!     KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?).await?;
 //!
-//! let secret_value = SecretValue::from("test-secret");
-//! let test_aad = "test-aad".to_string();
+//! let secret_value = SecretValue::from("4111 1111 1111 1111");
+//! let aad = "orders/1042".to_string();
 //!
-//! let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
-//! let decrypted = encryption.decrypt_value(&test_aad, &cipher_text).await?;
+//! let cipher_text = encryption.encrypt_value(&aad, &secret_value).await?;
+//! let decrypted = encryption.decrypt_value(&aad, &cipher_text).await?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! More examples are available at [github](https://github.com/abdolence/kms-aead-rs)
+//! AEAD with a key the caller holds, on the ring backend:
 //!
+//! ```rust
+//! # #[cfg(feature = "ring")]
+//! # async fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::backend::Ring;
+//! use kms_aead::{AeadAlgorithm, AeadCipher, AeadEncryption};
+//! use secret_vault_value::SecretValue;
+//!
+//! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
+//! let key = cipher.generate_data_encryption_key()?;
+//! let secret_value = SecretValue::from("4111 1111 1111 1111");
+//! let aad = "orders/1042";
+//!
+//! let cipher_text = cipher.encrypt_value(&aad, &secret_value, &key).await?;
+//! let decrypted = cipher.decrypt_value(&aad, &cipher_text, &key).await?;
+//!
+//! assert_eq!(decrypted, secret_value);
+//! # Ok(())
+//! # }
+//! ```
 
 #![allow(unused_parens, clippy::new_without_default)]
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 #[cfg(all(
     feature = "vault-transit-kms-encryption-base",
@@ -122,6 +173,7 @@ compile_error!(
     "You can enable only one of \"azure-kms-encryption-tls-aws-lc-rs\" (enabled by \"azure-kms-encryption\"), \"azure-kms-encryption-tls-no-provider\" and \"azure-kms-encryption-native-tls\""
 );
 
+/// The result of every fallible operation of the crate.
 pub type KmsAeadResult<T> = std::result::Result<T, errors::KmsAeadError>;
 
 mod api;
@@ -155,3 +207,12 @@ pub mod providers;
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod test_provider;
+
+#[cfg(all(
+    test,
+    any(
+        feature = "aws-kms-encryption",
+        feature = "vault-transit-kms-encryption-base"
+    )
+))]
+mod test_http;

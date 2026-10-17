@@ -14,6 +14,7 @@ pub enum DeterministicAlgorithm {
 }
 
 impl DeterministicAlgorithm {
+    /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
             DeterministicAlgorithm::Aes256Siv => 64,

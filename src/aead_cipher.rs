@@ -12,7 +12,8 @@ use crate::{
     KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
-/// Randomized AEAD with the algorithm it was made with, on the backend `B`, without a KMS.
+/// Randomized AEAD with the algorithm it was made with, on the backend `B`, without a KMS. The
+/// [`AeadEncryption`] implementation seals and opens values.
 ///
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
 #[derive(Debug, Clone)]
@@ -22,7 +23,12 @@ pub struct AeadCipher<B> {
 }
 
 impl<B: AeadBackend> AeadCipher<B> {
-    /// Fails with `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`.
+    /// A cipher for `algorithm` on the backend `B`.
+    ///
+    /// # Errors
+    ///
+    /// [`KmsAeadError::UnsupportedAlgorithm`](crate::errors::KmsAeadError::UnsupportedAlgorithm),
+    /// code `UNSUPPORTED_ALGORITHM`, when `B` does not implement `algorithm`.
     pub fn new(algorithm: AeadAlgorithm) -> KmsAeadResult<Self> {
         if B::supports(Token::new(), algorithm) {
             Ok(Self {
@@ -37,11 +43,16 @@ impl<B: AeadBackend> AeadCipher<B> {
         }
     }
 
+    /// The algorithm this cipher seals and opens with.
     pub fn algorithm(&self) -> AeadAlgorithm {
         self.algorithm
     }
 
-    /// `algorithm().key_len()` bytes from `B`'s CSPRNG.
+    /// A new key of `algorithm().key_len()` bytes from `B`'s CSPRNG.
+    ///
+    /// # Errors
+    ///
+    /// `ENCRYPTION` when the CSPRNG fails.
     pub fn generate_data_encryption_key(&self) -> KmsAeadResult<DataEncryptionKey> {
         let mut key = SecretValue::new(vec![0; self.algorithm.key_len()]);
         B::fill_random(Token::new(), key.ref_sensitive_value_mut()).map_err(|_| {
@@ -50,9 +61,13 @@ impl<B: AeadBackend> AeadCipher<B> {
         Ok(DataEncryptionKey::from(key))
     }
 
-    /// A key from the KMS generator of `provider` when it is configured to use one, and from
-    /// `B`'s CSPRNG otherwise. Fails with `INVALID_KEY_LENGTH` when the KMS returns a key of
-    /// another length.
+    /// A new key from the KMS generator of `provider` when it is configured to use one, and from
+    /// `B`'s CSPRNG otherwise. Calls the KMS only in the first case.
+    ///
+    /// # Errors
+    ///
+    /// The provider's error when the KMS call fails, `INVALID_KEY_LENGTH` when the KMS returns a
+    /// key of another length, and `ENCRYPTION` when the CSPRNG fails.
     pub async fn generate_data_encryption_key_with<P>(
         &self,
         provider: &P,

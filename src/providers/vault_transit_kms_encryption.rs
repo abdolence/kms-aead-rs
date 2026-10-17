@@ -80,6 +80,7 @@ impl VaultTransitToken {
 /// A key of the Vault Transit secrets engine.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct VaultTransitKeyRef {
+    /// The name of the Transit key.
     pub key_name: String,
 
     /// Mount path of the Transit secrets engine.
@@ -115,6 +116,11 @@ pub struct VaultTransitProviderOptions {
 impl VaultTransitProviderOptions {
     /// Options from the variables the Vault CLI reads: `VAULT_ADDR` (required), `VAULT_TOKEN`,
     /// `VAULT_NAMESPACE` and `VAULT_CACERT`. An empty variable counts as unset.
+    ///
+    /// # Errors
+    ///
+    /// `VAULT_INVALID_OPTIONS` when `VAULT_ADDR` is unset, a variable is not valid Unicode, or
+    /// the token is not visible ASCII.
     pub fn from_env() -> KmsAeadResult<Self> {
         let address = env_var("VAULT_ADDR")?.ok_or_else(|| {
             KmsAeadSystemError::create(
@@ -134,6 +140,15 @@ impl VaultTransitProviderOptions {
 }
 
 /// Wraps and unwraps data encryption keys with a key of the Vault Transit secrets engine.
+/// Available with the `vault-transit-kms-encryption-base` feature and one TLS root store and one
+/// crypto provider feature.
+///
+/// A response with an error status is `VAULT_STATUS_<status>`: a
+/// [`NetworkError`](crate::errors::KmsAeadError::NetworkError) for a server error or a rate
+/// limit, an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) otherwise.
+/// `VAULT_HTTP` and `VAULT_TIMEOUT` are network errors for a request that got no complete
+/// response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` encryption
+/// errors for a response or an encrypted key that cannot be read.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
 /// the key version, so it still decrypts after the key is rotated. That version is also recorded
@@ -152,13 +167,22 @@ pub struct VaultTransitProvider {
 
 impl VaultTransitProvider {
     /// A provider with the options from [`VaultTransitProviderOptions::from_env`].
+    ///
+    /// # Errors
+    ///
+    /// As [`VaultTransitProviderOptions::from_env`] and [`with_options`](Self::with_options).
     pub fn new(key_ref: &VaultTransitKeyRef) -> KmsAeadResult<Self> {
         Self::with_options(key_ref, VaultTransitProviderOptions::from_env()?)
     }
 
-    /// Fails on an invalid address, mount, key name, namespace or timeout, an unreadable CA
-    /// certificate file, or no CA certificate to trust at all. It sends no request, so a wrong
-    /// token or an unreachable server fail the first encryption.
+    /// A provider for the key at `key_ref` with `options`. It sends no request, so a wrong token
+    /// or an unreachable server fail the first encryption.
+    ///
+    /// # Errors
+    ///
+    /// `VAULT_INVALID_OPTIONS` on an invalid address, mount, key name, namespace or timeout, an
+    /// unreadable CA certificate file, or no CA certificate to trust at all, and `VAULT_TLS` when
+    /// the TLS configuration cannot be built.
     pub fn with_options(
         key_ref: &VaultTransitKeyRef,
         options: VaultTransitProviderOptions,
@@ -603,8 +627,7 @@ fn trusted_roots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::test_http::answer_with;
     use tokio::net::TcpListener;
 
     const TOKEN: &str = "hvs.token-marker-value";
@@ -622,38 +645,6 @@ mod tests {
             .with_timeout(Duration::from_millis(200));
         VaultTransitProvider::with_options(&VaultTransitKeyRef::new(TEST_KEY.into()), options)
             .unwrap()
-    }
-
-    /// Answers every request on `listener` with `status` and `body`, and returns the request
-    /// heads it receives.
-    fn answer_with(
-        listener: TcpListener,
-        status: StatusCode,
-        body: String,
-    ) -> Arc<Mutex<Vec<String>>> {
-        let heads = Arc::new(Mutex::new(Vec::new()));
-        let received = heads.clone();
-        tokio::spawn(async move {
-            loop {
-                let (mut connection, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = connection.read(&mut buffer).await.unwrap();
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                received
-                    .lock()
-                    .unwrap()
-                    .push(String::from_utf8_lossy(&request).into_owned());
-                let response = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                connection.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-        heads
     }
 
     fn data_key() -> DataEncryptionKey {
@@ -677,7 +668,7 @@ mod tests {
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
         let heads = answer_with(
             listener,
-            StatusCode::OK,
+            200,
             format!(
                 r#"{{"data":{{"plaintext":"{}"}}}}"#,
                 data_key_base64.as_str()
@@ -793,7 +784,7 @@ mod tests {
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
         answer_with(
             listener,
-            StatusCode::FORBIDDEN,
+            403,
             format!("denied {TOKEN} {DATA_KEY} {}", data_key_base64.as_str()),
         );
 
@@ -827,11 +818,7 @@ mod tests {
     async fn unparseable_decrypt_response_is_not_quoted_in_error() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = local_provider(&listener);
-        answer_with(
-            listener,
-            StatusCode::OK,
-            format!(r#"{{"data":"{DATA_KEY}"}}"#),
-        );
+        answer_with(listener, 200, format!(r#"{{"data":"{DATA_KEY}"}}"#));
 
         let Err(error) = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
@@ -855,7 +842,7 @@ mod tests {
         // boundary.
         let echoed = format!("{}{DATA_KEY}", "é".repeat(MAX_VAULT_ERROR_CHARS));
         let body = serde_json::json!({ "errors": [echoed, DATA_KEY] }).to_string();
-        answer_with(listener, StatusCode::BAD_REQUEST, body);
+        answer_with(listener, 400, body);
 
         let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
             panic!("a 400 is not an encrypted key");

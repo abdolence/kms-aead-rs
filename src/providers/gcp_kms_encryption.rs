@@ -13,11 +13,17 @@ use tracing::*;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
 
+/// A Google Cloud KMS CryptoKey that wraps data encryption keys. Available with the
+/// `gcp-kms-encryption-base` feature.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct GcpKmsKeyRef {
+    /// The project that holds the key ring.
     pub google_project_id: String,
+    /// The location of the key ring, such as `global` or `europe-west1`.
     pub location: String,
+    /// The key ring that holds the key.
     pub key_ring: String,
+    /// The CryptoKey name.
     pub key: String,
 }
 
@@ -78,12 +84,21 @@ fn routed<T>(message: T, resource: &str) -> KmsAeadResult<tonic::Request<T>> {
     Ok(request)
 }
 
+/// Options for [`GcpKmsProvider`].
 #[derive(Debug, Clone, Builder)]
 pub struct GcpKmsProviderOptions {
+    /// Generates data encryption keys with Cloud KMS `GenerateRandomBytes` at the HSM protection
+    /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key. Off by
+    /// default.
     #[default = "false"]
     pub use_kms_random_gen: bool,
 }
 
+/// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey. Available with the
+/// `gcp-kms-encryption-base` feature.
+///
+/// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
+/// is the gRPC status code, such as `PermissionDenied` or `NotFound`.
 #[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
@@ -93,9 +108,21 @@ pub struct GcpKmsProvider {
 }
 
 impl GcpKmsProvider {
+    /// A provider for the key at `kms_key_ref`, with the default options and a Cloud KMS client
+    /// authenticated with the application default credentials.
+    ///
+    /// # Errors
+    ///
+    /// A [`SystemError`](crate::errors::KmsAeadError::SystemError) when the client cannot be
+    /// built, such as when no credentials are found.
     pub async fn new(kms_key_ref: &GcpKmsKeyRef) -> KmsAeadResult<Self> {
         Self::with_options(kms_key_ref, GcpKmsProviderOptions::new()).await
     }
+    /// As [`new`](Self::new), with `options`.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
     pub async fn with_options(
         kms_key_ref: &GcpKmsKeyRef,
         options: GcpKmsProviderOptions,
@@ -111,6 +138,7 @@ impl GcpKmsProvider {
 
         Ok(Self::with_client(kms_key_ref, options, client))
     }
+    /// A provider for the key at `kms_key_ref` that sends its requests with `client`.
     pub fn with_client(
         kms_key_ref: &GcpKmsKeyRef,
         options: GcpKmsProviderOptions,

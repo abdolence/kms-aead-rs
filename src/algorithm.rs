@@ -1,15 +1,19 @@
 use std::fmt::{Display, Formatter};
 
-/// A randomized AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a random nonce from
-/// the backend's CSPRNG, and do not depend on which backend sealed them.
+/// A randomized AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a 12-byte random
+/// nonce from the backend's CSPRNG and a 16-byte tag, and do not depend on which backend sealed
+/// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AeadAlgorithm {
-    /// RFC 8439. The default of `KmsAeadEnvelope::new`, as in every earlier release.
+    /// ChaCha20-Poly1305 (RFC 8439). The default of
+    /// [`KmsAeadEnvelope::new`](crate::KmsAeadEnvelope::new).
     ChaCha20Poly1305,
+    /// AES-GCM with a 16-byte key.
     Aes128Gcm,
+    /// AES-GCM with a 32-byte key.
     Aes256Gcm,
-    /// RFC 8452.
+    /// AES-GCM-SIV (RFC 8452) with a 32-byte key.
     Aes256GcmSiv,
 }
 
@@ -20,6 +24,7 @@ impl AeadAlgorithm {
     /// Every algorithm takes a nonce of this length.
     pub(crate) const NONCE_LEN: usize = 12;
 
+    /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
             AeadAlgorithm::Aes128Gcm => 16,
@@ -29,6 +34,7 @@ impl AeadAlgorithm {
         }
     }
 
+    /// The length of the nonce at the start of every value, in bytes.
     pub fn nonce_len(self) -> usize {
         Self::NONCE_LEN
     }

@@ -7,19 +7,23 @@ use secret_vault_value::SecretValue;
 use tracing::Span;
 
 /// Envelope encryption: a data encryption key per value or per caller, wrapped by the provider
-/// `P`, and AEAD on the backend `B`.
+/// `P`, and AEAD on the backend `B`. The [`KmsAeadEnvelopeEncryption`] implementation encrypts
+/// and decrypts values.
 ///
 /// Name the backend once: `KmsAeadEnvelope::<GcpKmsProvider, Ring>::new(provider).await?`.
+/// Every call opens one `DEBUG` span, with the KMS call as a child span when it makes one.
 pub struct KmsAeadEnvelope<P, B> {
     pub(crate) provider: P,
     pub(crate) cipher: AeadCipher<B>,
 }
 
+/// The settings of a [`KmsAeadEnvelope`].
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadEnvelopeOptions {
-    /// The envelope layout does not record the algorithm, so the writer and the reader of a value
-    /// must be configured with the same one.
+    /// The AEAD algorithm, ChaCha20-Poly1305 by default. The envelope layout does not record
+    /// the algorithm, so the writer and the reader of a value must be configured with the same
+    /// one.
     #[default = "AeadAlgorithm::ChaCha20Poly1305"]
     pub algorithm: AeadAlgorithm,
 }
@@ -29,12 +33,20 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
     B: AeadBackend,
 {
-    /// ChaCha20-Poly1305, as in every earlier release.
+    /// An envelope with the default options: ChaCha20-Poly1305.
+    ///
+    /// # Errors
+    ///
+    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement ChaCha20-Poly1305.
     pub async fn new(provider: P) -> KmsAeadResult<Self> {
         Self::with_options(provider, KmsAeadEnvelopeOptions::new()).await
     }
 
-    /// Fails with `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`.
+    /// An envelope with `algorithm`.
+    ///
+    /// # Errors
+    ///
+    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`.
     pub async fn with_algorithm(provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<Self> {
         Self::with_options(
             provider,
@@ -43,7 +55,11 @@ where
         .await
     }
 
-    /// Fails with `UNSUPPORTED_ALGORITHM` when `B` does not implement the algorithm.
+    /// An envelope with `options`.
+    ///
+    /// # Errors
+    ///
+    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement the algorithm of `options`.
     pub async fn with_options(provider: P, options: KmsAeadEnvelopeOptions) -> KmsAeadResult<Self> {
         Ok(Self {
             provider,
@@ -51,6 +67,7 @@ where
         })
     }
 
+    /// The algorithm this envelope seals and opens with.
     pub fn algorithm(&self) -> AeadAlgorithm {
         self.cipher.algorithm()
     }

@@ -1,3 +1,8 @@
+//! The KMS providers, one per feature: `GcpKmsProvider` (`gcp-kms-encryption`),
+//! `AwsKmsProvider` (`aws-kms-encryption`), `AzureKmsProvider` (`azure-kms-encryption`) and
+//! `VaultTransitProvider` (`vault-transit-kms-encryption`), each with the key reference and
+//! options types it is built from.
+
 #[cfg(feature = "aws-kms-encryption")]
 mod aws_kms_encryption;
 #[cfg(feature = "aws-kms-encryption")]

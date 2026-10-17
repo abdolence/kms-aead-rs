@@ -9,14 +9,23 @@ use aws_sdk_kms::primitives::Blob;
 
 use secret_vault_value::SecretValue;
 
+/// An AWS KMS key that wraps data encryption keys. Available with the `aws-kms-encryption`
+/// feature.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct AwsKmsKeyRef {
+    /// The AWS account that owns the key, used to build its ARN.
     pub account_id: String,
+    /// The key as AWS KMS accepts it: a key id, a key ARN, an alias name such as
+    /// `alias/orders`, or an alias ARN.
     pub key_id: String,
+    /// The region of the key. Without one, [`AwsKmsProvider::new`] takes the region of the AWS
+    /// configuration it loads.
     pub aws_region: Option<aws_sdk_kms::config::Region>,
 }
 
 impl AwsKmsKeyRef {
+    /// The ARN of the key: `key_id` itself when it is an ARN already, an alias ARN for an alias
+    /// name, and a key ARN for a key id. Without a region it is `key_id` unchanged.
     pub fn to_key_arn(&self) -> String {
         match &self.aws_region {
             _ if self.key_id.starts_with("arn:") => self.key_id.clone(),
@@ -32,12 +41,21 @@ impl AwsKmsKeyRef {
     }
 }
 
+/// Options for [`AwsKmsProvider`].
 #[derive(Debug, Clone, Builder)]
 pub struct AwsKmsProviderOptions {
+    /// Generates data encryption keys with AWS KMS `GenerateRandom` instead of the backend's
+    /// CSPRNG, at the cost of one more KMS request per key. Off by default.
     #[default = "false"]
     pub use_kms_random_gen: bool,
 }
 
+/// Wraps and unwraps data encryption keys with an AWS KMS key. Available with the
+/// `aws-kms-encryption` feature.
+///
+/// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
+/// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
+/// message is the one AWS KMS returned. Its root cause is the SDK error.
 pub struct AwsKmsProvider {
     aws_key_ref: AwsKmsKeyRef,
     client: aws_sdk_kms::Client,
@@ -46,10 +64,16 @@ pub struct AwsKmsProvider {
 }
 
 impl AwsKmsProvider {
+    /// A provider for the key at `kms_key_ref`, with the default options and the AWS
+    /// configuration from the environment.
+    ///
+    /// It sends no request, so missing credentials or an unreachable endpoint fail the first
+    /// wrap or unwrap; it returns `Ok` for every key reference.
     pub async fn new(kms_key_ref: &AwsKmsKeyRef) -> KmsAeadResult<Self> {
         Self::with_options(kms_key_ref, AwsKmsProviderOptions::new()).await
     }
 
+    /// As [`new`](Self::new), with `options`.
     pub async fn with_options(
         kms_key_ref: &AwsKmsKeyRef,
         options: AwsKmsProviderOptions,
@@ -196,6 +220,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_http::answer_with;
     use aws_sdk_kms::config::http::HttpResponse;
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};
@@ -203,7 +228,6 @@ mod tests {
     use aws_sdk_kms::operation::decrypt::DecryptError;
     use aws_sdk_kms::types::error::IncorrectKeyException;
     use rvstruct::ValueStruct;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     const REGION: &str = "eu-west-1";
@@ -240,25 +264,10 @@ mod tests {
 
     /// A provider whose requests go to a local server that answers each of them with `status`
     /// and the JSON `body`.
-    async fn provider_answered_with(status: u16, body: &'static str) -> AwsKmsProvider {
+    async fn provider_answered_with(status: u16, body: &str) -> AwsKmsProvider {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            loop {
-                let (mut connection, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 4096];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = connection.read(&mut buffer).await.unwrap();
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                let response = format!(
-                    "HTTP/1.1 {status} Status\r\ncontent-type: application/x-amz-json-1.1\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                connection.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
+        answer_with(listener, status, body.to_string());
         provider_for(
             KEY_ID,
             aws_sdk_kms::Config::builder()

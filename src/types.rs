@@ -5,12 +5,45 @@ use secret_vault_value::SecretValue;
 use std::fmt::{Debug, Display, Formatter};
 use subtle::ConstantTimeEq;
 
-#[derive(Debug, Clone, ValueStruct)]
+/// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
+/// It holds no key, so it is not a storage form for envelope encryption without the wrapped key
+/// that opens it.
+#[derive(Debug, Clone)]
 pub struct CipherText(pub Vec<u8>);
 
 impl CipherText {
+    /// Wraps sealed bytes, such as ones read back from storage.
+    pub const fn new(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+
+    /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
+    }
+}
+
+impl ValueStruct for CipherText {
+    type ValueType = Vec<u8>;
+
+    fn value(&self) -> &Vec<u8> {
+        &self.0
+    }
+
+    fn into_value(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl From<Vec<u8>> for CipherText {
+    fn from(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+}
+
+impl From<&Vec<u8>> for CipherText {
+    fn from(value: &Vec<u8>) -> Self {
+        Self(value.clone())
     }
 }
 
@@ -20,11 +53,13 @@ impl PartialEq for CipherText {
     }
 }
 
-/// A plaintext data encryption key, zeroized on drop and shown as `***` by `Debug`.
+/// A plaintext data encryption key, zeroized on drop and shown as `***` by `Debug`. Equality
+/// compares in constant time.
 #[derive(Debug, Clone)]
 pub struct DataEncryptionKey(SecretValue);
 
 impl DataEncryptionKey {
+    /// The key bytes.
     pub fn value(&self) -> &SecretValue {
         &self.0
     }
@@ -54,6 +89,7 @@ impl PartialEq for DataEncryptionKey {
 pub struct KmsKeyVersion(String);
 
 impl KmsKeyVersion {
+    /// The version as the KMS names it.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -168,11 +204,17 @@ impl EncryptedDataEncryptionKey {
         &self.wrapped
     }
 
+    /// The version of the KMS key that wrapped this key, when the KMS reported one.
     pub fn key_version(&self) -> Option<&KmsKeyVersion> {
         self.key_version.as_ref()
     }
 
     /// Writes the layout in the type docs, with the key version.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_KEY_VERSION` when the key version is longer than 255 bytes, which a
+    /// [`KmsKeyVersion`] never is.
     pub fn to_bytes(&self) -> KmsAeadResult<Vec<u8>> {
         let mut bytes = vec![Self::LAYOUT_MAGIC, Self::LAYOUT_V1];
         KmsKeyVersion::write_field(self.key_version(), &mut bytes)?;
@@ -181,11 +223,19 @@ impl EncryptedDataEncryptionKey {
     }
 
     /// The lowercase hex of [`to_bytes`](Self::to_bytes).
+    ///
+    /// # Errors
+    ///
+    /// As [`to_bytes`](Self::to_bytes).
     pub fn to_hex_string(&self) -> KmsAeadResult<String> {
         self.to_bytes().map(hex::encode)
     }
 
     /// Reads the hex, in either case, of what `TryFrom<&[u8]>` reads.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_HEX` when `encoded` is not hex, and the errors of `TryFrom<&[u8]>`.
     pub fn try_from_hex_string(encoded: &str) -> KmsAeadResult<Self> {
         let bytes = hex::decode(encoded).map_err(|e| {
             KmsAeadEncryptionError::create("INVALID_HEX", &format!("Encrypted key is not hex: {e}"))
@@ -197,9 +247,13 @@ impl EncryptedDataEncryptionKey {
 impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
     type Error = KmsAeadError;
 
-    /// Reads the layout when `bytes` starts with `0xFF`, and bare wrapped bytes otherwise. Fails on
-    /// empty input, on an unknown layout tag, on a key version running past the end and on a key
-    /// version that is not ASCII alphanumeric.
+    /// Reads the layout when `bytes` starts with `0xFF`, and bare wrapped bytes otherwise.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_ENCRYPTED_KEY_FORMAT` on empty input or a key version running past the end,
+    /// `UNKNOWN_ENCRYPTED_KEY_LAYOUT` on an unknown layout tag, and `INVALID_KEY_VERSION` on a
+    /// key version that is not ASCII alphanumeric.
     fn try_from(bytes: &[u8]) -> KmsAeadResult<Self> {
         match bytes {
             [] => Err(KmsAeadEncryptionError::create(
@@ -270,7 +324,11 @@ pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 impl CipherTextWithEncryptedKey {
     const LAYOUT_V1: u8 = 0x01;
 
-    /// Fails when the wrapped key is longer than 65,535 bytes.
+    /// Writes layout v1 of `cipher_text` and the wrapped key that opens it.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is longer than 65,535 bytes.
     pub fn new(
         cipher_text: &CipherText,
         encrypted_dek: &EncryptedDataEncryptionKey,
@@ -295,8 +353,13 @@ impl CipherTextWithEncryptedKey {
         Ok(Self(value))
     }
 
-    /// Reads layout v1 and the legacy layout. Fails on an unknown layout tag, on a length that
-    /// runs past the end of the buffer and on a key version that is not ASCII alphanumeric.
+    /// Reads layout v1 and the legacy layout into the cipher text and the wrapped key.
+    ///
+    /// # Errors
+    ///
+    /// `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or an unknown layout tag,
+    /// `INVALID_CIPHER_TEXT_FORMAT` on a length that runs past the end of the value, and
+    /// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
         let fields = match self.value().split_first() {
             Some((&Self::LAYOUT_V1, header)) => Self::split_v1(header),
@@ -364,10 +427,12 @@ impl CipherTextWithEncryptedKey {
         Some((&[], wrapped, cipher_text))
     }
 
+    /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
     }
 
+    /// The stored bytes.
     #[inline]
     pub fn value(&self) -> &[u8] {
         &self.0
