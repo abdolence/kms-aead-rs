@@ -63,18 +63,26 @@ impl KmsAeadError {
         R: std::fmt::Debug + Send + Sync + 'static,
     {
         use aws_sdk_kms::error::SdkError;
-        let message = format!("AWS KMS error: {e}");
-        let (code, root_cause): (String, Option<Arc<dyn Error + Send + Sync>>) = match e {
-            SdkError::ServiceError(context) => {
-                let service_error = context.into_err();
-                let code = service_error
-                    .code()
-                    .map_or_else(|| "service error".to_string(), str::to_string);
-                (code, Some(Arc::new(service_error)))
-            }
-            SdkError::ResponseError(_) => (e.to_string(), None),
-            other => (other.to_string(), Some(Arc::new(other))),
-        };
+        let (code, message, root_cause): (String, String, Option<Arc<dyn Error + Send + Sync>>) =
+            match e {
+                SdkError::ServiceError(context) => {
+                    let service_error = context.into_err();
+                    let code = service_error
+                        .code()
+                        .map_or_else(|| "service error".to_string(), str::to_string);
+                    let message = match service_error.message() {
+                        Some(message) => format!("AWS KMS returned {code}: {message}"),
+                        None => format!("AWS KMS returned {code}"),
+                    };
+                    (code, message, Some(Arc::new(service_error)))
+                }
+                SdkError::ResponseError(_) => (e.to_string(), format!("AWS KMS error: {e}"), None),
+                other => (
+                    other.to_string(),
+                    format!("AWS KMS error: {other}"),
+                    Some(Arc::new(other)),
+                ),
+            };
         KmsAeadError::EncryptionError(KmsAeadEncryptionError {
             public: KmsAeadErrorPublicGenericDetails::new(code),
             message,
