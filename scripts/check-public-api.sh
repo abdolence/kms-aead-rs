@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Fails when a type, trait or error of a crypto library appears in the public API of a crate, so
-# that a major release of ring, aws-lc-rs or a RustCrypto crate is never a breaking change here.
+# that a major release of ring, aws-lc-rs, a RustCrypto crate or subtle is never a breaking change
+# here.
 #
 # Needs cargo-public-api and a nightly toolchain for its rustdoc JSON:
 #   rustup toolchain install nightly
-#   cargo install cargo-public-api --locked
+#   cargo install cargo-public-api@0.52.0 --locked
+#
+# CI pins the nightly in .github/workflows/tests.yml; RUSTUP_TOOLCHAIN selects it here.
 #
 # Usage: scripts/check-public-api.sh [package], kms-aead by default.
 set -euo pipefail
@@ -23,7 +26,7 @@ esac
 
 # Blanket impls stay in the output, so that trait bounds and `From` impls are matched too.
 # `kms_aead::` does not match `\baead::`, since `_` and `a` are both word characters.
-crypto_paths='\b(ring|aws_lc_rs|aws_lc_sys|aws_lc_fips_sys|aes_gcm|aes_gcm_siv|chacha20poly1305|aes_siv|aead|getrandom|rand_core)::'
+crypto_paths='\b(ring|aws_lc_rs|aws_lc_sys|aws_lc_fips_sys|aes_gcm|aes_gcm_siv|chacha20poly1305|aes_siv|aead|getrandom|rand_core|subtle)::'
 
 api="$(cargo public-api --package "$package" --features "$features")"
 

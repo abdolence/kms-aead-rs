@@ -2,7 +2,7 @@ use crate::errors::*;
 use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Display, Formatter};
 use subtle::ConstantTimeEq;
 
 #[derive(Debug, Clone, ValueStruct)]
@@ -14,15 +14,9 @@ impl CipherText {
     }
 }
 
-impl ConstantTimeEq for CipherText {
-    fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.value().ct_eq(other.value())
-    }
-}
-
 impl PartialEq for CipherText {
     fn eq(&self, other: &Self) -> bool {
-        self.ct_eq(other).into()
+        constant_time_eq(self.value(), other.value())
     }
 }
 
@@ -42,17 +36,12 @@ impl From<SecretValue> for DataEncryptionKey {
     }
 }
 
-impl ConstantTimeEq for DataEncryptionKey {
-    fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.value()
-            .as_sensitive_bytes()
-            .ct_eq(other.value().as_sensitive_bytes())
-    }
-}
-
 impl PartialEq for DataEncryptionKey {
     fn eq(&self, other: &Self) -> bool {
-        self.ct_eq(other).into()
+        constant_time_eq(
+            self.value().as_sensitive_bytes(),
+            other.value().as_sensitive_bytes(),
+        )
     }
 }
 
@@ -154,7 +143,7 @@ impl Display for KmsKeyVersion {
 /// wrapped key that 0.28.1 and earlier stored, as a key with no version. Those keys come only from
 /// GCP, a protobuf message starting with `0x0a` (`0xFF` would be the undefined wire type 7), and
 /// from AWS, starting with `0x01`, so none of them reads as the layout.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EncryptedDataEncryptionKey {
     wrapped: Vec<u8>,
     key_version: Option<KmsKeyVersion>,
@@ -243,17 +232,20 @@ impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
     }
 }
 
-impl ConstantTimeEq for EncryptedDataEncryptionKey {
-    fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        // The key version is not secret, so it compares in variable time.
-        self.wrapped.ct_eq(&other.wrapped)
-            & subtle::Choice::from(u8::from(self.key_version == other.key_version))
+/// The length of the wrapped key and the key version, never the wrapped key itself.
+impl Debug for EncryptedDataEncryptionKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptedDataEncryptionKey")
+            .field("wrapped_len", &self.wrapped.len())
+            .field("key_version", &self.key_version)
+            .finish()
     }
 }
 
 impl PartialEq for EncryptedDataEncryptionKey {
     fn eq(&self, other: &Self) -> bool {
-        self.ct_eq(other).into()
+        // The key version is not secret, so it compares in variable time.
+        constant_time_eq(&self.wrapped, &other.wrapped) && self.key_version == other.key_version
     }
 }
 
@@ -272,7 +264,7 @@ impl PartialEq for EncryptedDataEncryptionKey {
 /// The header is not authenticated, so a header field is only ever an address or an audit
 /// value. A field that selects an algorithm, a mode or a transform needs a new layout tag with
 /// an authenticated header.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 impl CipherTextWithEncryptedKey {
@@ -388,16 +380,24 @@ impl From<Vec<u8>> for CipherTextWithEncryptedKey {
     }
 }
 
-impl ConstantTimeEq for CipherTextWithEncryptedKey {
-    fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.value().ct_eq(other.value())
+/// The length only: the value holds the wrapped data encryption key.
+impl Debug for CipherTextWithEncryptedKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CipherTextWithEncryptedKey")
+            .field("len", &self.0.len())
+            .finish()
     }
 }
 
 impl PartialEq for CipherTextWithEncryptedKey {
     fn eq(&self, other: &Self) -> bool {
-        self.ct_eq(other).into()
+        constant_time_eq(self.value(), other.value())
     }
+}
+
+/// Compares in time that depends on the lengths only, never on where the bytes differ.
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    left.ct_eq(right).into()
 }
 
 #[cfg(test)]
@@ -675,33 +675,71 @@ mod tests {
         );
     }
 
+    /// The wrapped key as `Debug` prints a byte slice, without the brackets.
+    fn debug_listed(bytes: &[u8]) -> String {
+        let listed = format!("{bytes:?}");
+        listed[1..listed.len() - 1].to_string()
+    }
+
     #[test]
-    fn test_constant_time_encrypted_dek_comparison() {
+    fn encrypted_key_debug_shows_no_wrapped_key_bytes() {
+        let encrypted_dek = EncryptedDataEncryptionKey::new(
+            GOLDEN_WRAPPED_KEY.to_vec(),
+            Some(KmsKeyVersion::try_from("18".to_string()).unwrap()),
+        );
+
+        let debug = format!("{encrypted_dek:?}");
+
+        assert!(
+            !debug.contains(&debug_listed(GOLDEN_WRAPPED_KEY)),
+            "{debug}"
+        );
+        assert!(!debug.contains(&hex::encode(GOLDEN_WRAPPED_KEY)), "{debug}");
+        assert!(debug.contains("18"), "{debug}");
+    }
+
+    #[test]
+    fn envelope_debug_shows_no_wrapped_key_bytes() {
+        let envelope = CipherTextWithEncryptedKey::new(
+            &CipherText(GOLDEN_CIPHER_TEXT.to_vec()),
+            &EncryptedDataEncryptionKey::new(GOLDEN_WRAPPED_KEY.to_vec(), None),
+        )
+        .unwrap();
+
+        let debug = format!("{envelope:?}");
+
+        assert!(
+            !debug.contains(&debug_listed(GOLDEN_WRAPPED_KEY)),
+            "{debug}"
+        );
+        assert!(!debug.contains(&hex::encode(GOLDEN_WRAPPED_KEY)), "{debug}");
+    }
+
+    #[test]
+    fn encrypted_keys_are_equal_with_equal_wrapped_keys_and_key_versions() {
         let version = KmsKeyVersion::try_from("1".to_string()).unwrap();
         let dek1 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], Some(version.clone()));
         let dek2 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], Some(version.clone()));
         let dek3 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 6], Some(version));
         let dek4 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], None);
 
-        // PartialEq uses constant-time comparison internally
         assert_eq!(dek1, dek2);
         assert_ne!(dek1, dek3);
         assert_ne!(dek1, dek4);
     }
 
     #[test]
-    fn test_constant_time_cipher_text_with_key_comparison() {
+    fn envelopes_are_equal_with_equal_bytes() {
         let ct1 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 5]);
         let ct2 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 5]);
         let ct3 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 6]);
 
-        // PartialEq uses constant-time comparison internally
         assert_eq!(ct1, ct2);
         assert_ne!(ct1, ct3);
     }
 
     #[test]
-    fn test_constant_time_cipher_text_comparison() {
+    fn cipher_texts_are_equal_with_equal_bytes() {
         let cipher1 = CipherText(vec![1, 2, 3, 4, 5]);
         let cipher2 = CipherText(vec![1, 2, 3, 4, 5]);
         let cipher3 = CipherText(vec![1, 2, 3, 4, 6]);
@@ -711,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn test_constant_time_dek_comparison() {
+    fn data_encryption_keys_are_equal_with_equal_bytes() {
         let dek1 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
         let dek2 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
         let dek3 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 6]));
