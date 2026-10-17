@@ -88,8 +88,6 @@ impl sealed::Sealed for RustCrypto {
         }
     }
 
-    /// Opens into `in_out`, a buffer the caller's `SecretValue` owns; the plaintext is never
-    /// copied out of it.
     fn open_in_place(
         _: Token,
         algorithm: AeadAlgorithm,
@@ -115,8 +113,10 @@ mod tests {
     use crate::backend::contract;
     use crate::{AeadAlgorithm, AeadCipher};
 
+    /// The contract suite runs only the algorithms a backend supports, so it would still pass
+    /// with one of them dropped.
     #[test]
-    fn every_algorithm_is_supported() {
+    fn every_aead_algorithm_is_supported() {
         for algorithm in [
             AeadAlgorithm::ChaCha20Poly1305,
             AeadAlgorithm::Aes128Gcm,

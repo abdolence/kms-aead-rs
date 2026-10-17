@@ -49,8 +49,13 @@ impl sealed::Sealed for AwsLc {
         "aws-lc"
     }
 
-    fn supports(_: Token, _: AeadAlgorithm) -> bool {
-        true
+    fn supports(_: Token, algorithm: AeadAlgorithm) -> bool {
+        match algorithm {
+            AeadAlgorithm::ChaCha20Poly1305
+            | AeadAlgorithm::Aes128Gcm
+            | AeadAlgorithm::Aes256Gcm
+            | AeadAlgorithm::Aes256GcmSiv => true,
+        }
     }
 
     fn fill_random(_: Token, out: &mut [u8]) -> Result<(), Failure> {
