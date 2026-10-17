@@ -34,6 +34,11 @@ impl DataEncryptionKey {
     pub fn value(&self) -> &SecretValue {
         &self.0
     }
+
+    /// The key bytes, moved out so that a key changing purpose leaves no copy behind.
+    pub(crate) fn into_value(self) -> SecretValue {
+        self.0
+    }
 }
 
 impl From<SecretValue> for DataEncryptionKey {

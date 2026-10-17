@@ -259,7 +259,7 @@ mod aes_siv_cipher {
                 };
                 let encrypted_key = self.provider.encrypt_data_encryption_key(&key).await?;
                 Ok((
-                    DeterministicDataEncryptionKey(key.value().clone()),
+                    DeterministicDataEncryptionKey(key.into_value()),
                     encrypted_key,
                 ))
             })
@@ -285,7 +285,7 @@ mod aes_siv_cipher {
                     .await?;
                 let len = key.value().ref_sensitive_value().len();
                 if len == algorithm.key_len() {
-                    Ok(DeterministicDataEncryptionKey(key.value().clone()))
+                    Ok(DeterministicDataEncryptionKey(key.into_value()))
                 } else {
                     Err(KmsAeadEncryptionError::invalid_key_length(
                         len,

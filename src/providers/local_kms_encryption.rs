@@ -380,8 +380,7 @@ impl LocalKmsProvider {
     pub fn ephemeral(id: LocalKekId, backend: AeadBackend) -> KmsAeadResult<Self> {
         let material = AeadCipher::new(backend, AeadAlgorithm::Aes256Gcm)?
             .generate_data_encryption_key()?
-            .value()
-            .clone();
+            .into_value();
         let kek = LocalKek {
             version: LocalKekVersion(NonZeroU32::MIN),
             material,
