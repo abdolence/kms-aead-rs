@@ -8,42 +8,13 @@ use subtle::ConstantTimeEq;
 /// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
 /// It holds no key, so it is not a storage form for envelope encryption without the wrapped key
 /// that opens it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
 
 impl CipherText {
-    /// Wraps sealed bytes, such as ones read back from storage.
-    pub const fn new(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-
     /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
-    }
-}
-
-impl ValueStruct for CipherText {
-    type ValueType = Vec<u8>;
-
-    fn value(&self) -> &Vec<u8> {
-        &self.0
-    }
-
-    fn into_value(self) -> Vec<u8> {
-        self.0
-    }
-}
-
-impl From<Vec<u8>> for CipherText {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-}
-
-impl From<&Vec<u8>> for CipherText {
-    fn from(value: &Vec<u8>) -> Self {
-        Self(value.clone())
     }
 }
 
