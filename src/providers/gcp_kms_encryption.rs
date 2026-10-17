@@ -246,8 +246,6 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(feature = "legacy-formats"))]
-    use crate::errors::KmsAeadLegacyFormat;
     use gcloud_sdk::tonic::codegen::Bytes;
     use gcloud_sdk::tonic::metadata::MetadataMap;
     use gcloud_sdk::tonic::{Code, Status};
@@ -343,6 +341,7 @@ mod tests {
 
     // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
     // the GCP key that the live test configures. That key stays enabled while these exist.
+    #[cfg(feature = "legacy-formats")]
     const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
     const ENVELOPE_V1: &str = "0102313800720a25006b8d8e5a8e86a5a08f5e037793f8ef10fa761a405a1b7671502bde6bd99bd94c5bfdeea0124900eaf42f63f2b2bfd2be52a7ba228358efc9ce15c6b1add6c4425e405ef132335b8295daf42a74967f32aa8f02a314ce02c443548ea267bfa6edc17d7cfa69d90364fe040b71513c40a0234d736eb30b4b9de8963886967adda827b982dbe37531904f4b534269e8d548446a3ccd021a";
 
@@ -394,31 +393,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "legacy-formats"))]
-    #[test]
-    fn values_stored_by_0_28_1_need_legacy_formats() {
-        let separated =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap()).separate();
-        assert!(
-            matches!(&separated, Err(KmsAeadError::LegacyFormat(error))
-                if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope),
-            "{separated:?}"
-        );
-
-        // The hex of the wrapped key, after the 8-byte length.
-        let wrapped_key = &ENVELOPE_FROM_0_28_1[16..16 + 2 * 114];
-        for read in [
-            EncryptedDataEncryptionKey::try_from(hex::decode(wrapped_key).unwrap().as_slice()),
-            EncryptedDataEncryptionKey::try_from_hex_string(wrapped_key),
-        ] {
-            assert!(
-                matches!(&read, Err(KmsAeadError::LegacyFormat(error))
-                    if error.format == KmsAeadLegacyFormat::BareEncryptedKey),
-                "{read:?}"
-            );
-        }
-    }
-
     #[tokio::test]
     #[cfg(feature = "ring")]
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
@@ -431,11 +405,11 @@ mod tests {
         );
         let encryption =
             KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring).await?;
-        let envelopes = if cfg!(feature = "legacy-formats") {
-            vec![ENVELOPE_FROM_0_28_1, ENVELOPE_V1]
-        } else {
-            vec![ENVELOPE_V1]
-        };
+        let envelopes = [
+            #[cfg(feature = "legacy-formats")]
+            ENVELOPE_FROM_0_28_1,
+            ENVELOPE_V1,
+        ];
         for envelope in envelopes {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
             let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;

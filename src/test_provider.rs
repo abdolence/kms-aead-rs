@@ -70,3 +70,18 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
         }
     }
 }
+
+/// The forms in which stored or secret bytes could reach a message or a log line: as text,
+/// as lowercase and uppercase hex, as standard base64, and as the `Debug` list of a byte slice
+/// without its brackets, which also finds the list with them.
+pub(crate) fn renderings(bytes: &[u8]) -> Vec<String> {
+    vec![
+        String::from_utf8_lossy(bytes).into_owned(),
+        hex::encode(bytes),
+        hex::encode_upper(bytes),
+        SecretValue::new(bytes.to_vec())
+            .as_sensitive_base64_str()
+            .to_string(),
+        format!("{bytes:?}").trim_matches(['[', ']']).to_string(),
+    ]
+}

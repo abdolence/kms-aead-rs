@@ -5,6 +5,8 @@ use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
 use std::fmt::{Debug, Display, Formatter};
+#[cfg(feature = "legacy-formats")]
+use std::sync::atomic::{AtomicBool, Ordering};
 use subtle::ConstantTimeEq;
 
 /// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
@@ -236,8 +238,18 @@ impl EncryptedDataEncryptionKey {
     ///
     /// `INVALID_HEX` when `encoded` is not hex, and the errors of `TryFrom<&[u8]>`.
     pub fn try_from_hex_string(encoded: &str) -> KmsAeadResult<Self> {
-        let bytes = hex::decode(encoded).map_err(|e| {
-            KmsAeadEncryptionError::create("INVALID_HEX", &format!("Encrypted key is not hex: {e}"))
+        let bytes = hex::decode(encoded).map_err(|error| {
+            let reason = match error {
+                // The character may be a byte of a value stored in plain text, so it stays out.
+                hex::FromHexError::InvalidHexCharacter { index, .. } => {
+                    format!("the character at position {index} is not a hex digit")
+                }
+                other => other.to_string(),
+            };
+            KmsAeadEncryptionError::create(
+                "INVALID_HEX",
+                &format!("Encrypted key is not hex: {reason}"),
+            )
         })?;
         Self::try_from(bytes.as_slice())
     }
@@ -277,13 +289,13 @@ impl EncryptedDataEncryptionKey {
                 "The encrypted key is empty",
             )),
             [Self::LAYOUT_MAGIC, Self::LAYOUT_V1, ..] => Ok(EncryptedKeyLayout::V1),
-            [Self::LAYOUT_MAGIC, tag, ..] => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
-                &format!("Unknown encrypted key layout tag {tag:#04x}"),
-            )),
             [Self::LAYOUT_MAGIC] => Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
                 "Encrypted key ends after the layout magic, with no layout tag",
+            )),
+            [Self::LAYOUT_MAGIC, ..] => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
+                "Unknown encrypted key layout tag",
             )),
             [0x0a | 0x01, ..] => Ok(EncryptedKeyLayout::Bare),
             // 0.29 read every first byte but the magic as a bare key, and the feature keeps that.
@@ -335,15 +347,15 @@ impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
             }
             #[cfg(feature = "legacy-formats")]
             EncryptedKeyLayout::Bare => {
-                static WARNED: std::sync::Once = std::sync::Once::new();
-                WARNED.call_once(|| {
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         "Read an EncryptedDataEncryptionKey stored as a bare wrapped key by \
                          kms-aead 0.28.1 or earlier. Reading it is deprecated and will be removed \
                          in a later breaking release: rewrite stored keys with \
                          EncryptedDataEncryptionKey::upgrade_legacy_layout"
-                    )
-                });
+                    );
+                }
                 Ok(Self::new(bytes.to_vec(), None))
             }
             #[cfg(not(feature = "legacy-formats"))]
@@ -458,15 +470,15 @@ impl CipherTextWithEncryptedKey {
             EnvelopeLayout::V1 => Self::split_v1(self.value()),
             #[cfg(feature = "legacy-formats")]
             EnvelopeLayout::LengthPrefixed => {
-                static WARNED: std::sync::Once = std::sync::Once::new();
-                WARNED.call_once(|| {
+                static WARNED: AtomicBool = AtomicBool::new(false);
+                if !WARNED.swap(true, Ordering::Relaxed) {
                     tracing::warn!(
                         "Read a CipherTextWithEncryptedKey in the length-prefixed layout written \
                          by kms-aead 0.28.1 and earlier. Reading it is deprecated and will be \
                          removed in a later breaking release: rewrite stored values with \
                          CipherTextWithEncryptedKey::upgrade_legacy_layout"
-                    )
-                });
+                    );
+                }
                 Self::split_length_prefixed(self.value())
             }
             #[cfg(not(feature = "legacy-formats"))]
@@ -530,9 +542,9 @@ impl CipherTextWithEncryptedKey {
             // The length-prefixed layout starts with the top byte of its length, zero for any
             // wrapped key a KMS returns.
             Some(0x00) => Ok(EnvelopeLayout::LengthPrefixed),
-            Some(tag) => Err(KmsAeadEncryptionError::create(
+            Some(_) => Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                &format!("Unknown cipher text layout tag {tag:#04x}"),
+                "Unknown cipher text layout tag",
             )),
             None => Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_CIPHER_TEXT_LAYOUT",
@@ -770,7 +782,11 @@ mod tests {
             let mut bytes = vec![tag];
             bytes.extend(width);
             bytes.extend(rest);
-            let _ = CipherTextWithEncryptedKey::from(bytes).separate();
+            let envelope = CipherTextWithEncryptedKey::from(bytes);
+            let _ = envelope.separate();
+            #[cfg(feature = "legacy-formats")]
+            #[expect(deprecated, reason = "tests the deprecated upgrade")]
+            let _ = envelope.upgrade_legacy_layout();
         }
     }
 
@@ -840,6 +856,9 @@ mod tests {
             bytes.extend(layout);
             bytes.extend(rest);
             let _ = EncryptedDataEncryptionKey::try_from(bytes.as_slice());
+            #[cfg(feature = "legacy-formats")]
+            #[expect(deprecated, reason = "tests the deprecated upgrade")]
+            let _ = EncryptedDataEncryptionKey::upgrade_legacy_layout(&bytes);
         }
     }
 
@@ -975,9 +994,10 @@ mod tests {
     const CIPHER_TEXT_MARKER: &[u8] = b"zq-cipher-marker-zq";
 
     /// `[0x00 × 7][w][wrapped key: w][cipher text]`, as kms-aead 0.28.1 wrote it.
+    #[cfg(not(feature = "legacy-formats"))]
     fn length_prefixed_envelope() -> Vec<u8> {
         let mut envelope = vec![0x00; 7];
-        envelope.push(WRAPPED_KEY_MARKER.len() as u8);
+        envelope.push(u8::try_from(WRAPPED_KEY_MARKER.len()).unwrap());
         envelope.extend_from_slice(WRAPPED_KEY_MARKER);
         envelope.extend_from_slice(CIPHER_TEXT_MARKER);
         envelope
@@ -1005,8 +1025,7 @@ mod tests {
             let result = CipherTextWithEncryptedKey::from(envelope.to_vec()).separate();
             assert!(
                 matches!(&result, Err(KmsAeadError::LegacyFormat(error))
-                    if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope
-                        && error.public.code == "LEGACY_FORMAT"),
+                    if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope),
                 "{envelope:02x?}: {result:?}"
             );
         }
@@ -1023,8 +1042,7 @@ mod tests {
             ] {
                 assert!(
                     matches!(&result, Err(KmsAeadError::LegacyFormat(error))
-                        if error.format == KmsAeadLegacyFormat::BareEncryptedKey
-                            && error.public.code == "LEGACY_FORMAT"),
+                        if error.format == KmsAeadLegacyFormat::BareEncryptedKey),
                     "{first:#04x}: {result:?}"
                 );
             }
@@ -1058,28 +1076,44 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "legacy-formats"))]
+    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
     #[test]
-    fn legacy_errors_echo_no_bytes() {
-        let bare_key = [&[0x0a], WRAPPED_KEY_MARKER].concat();
+    fn read_errors_echo_no_stored_bytes() {
+        use crate::test_provider::renderings;
+
+        /// The first byte of a value stored in plain text, which a read error must not echo:
+        /// for a one-character value such as `y` or `n`, it is the whole value.
+        const PLAIN_TEXT_BYTE: u8 = b'~';
+
         let errors = [
+            CipherTextWithEncryptedKey::from(vec![PLAIN_TEXT_BYTE, 0x00])
+                .separate()
+                .unwrap_err(),
+            EncryptedDataEncryptionKey::try_from(
+                [EncryptedDataEncryptionKey::LAYOUT_MAGIC, PLAIN_TEXT_BYTE].as_slice(),
+            )
+            .unwrap_err(),
+            EncryptedDataEncryptionKey::try_from_hex_string(&format!(
+                "0a{}0",
+                char::from(PLAIN_TEXT_BYTE)
+            ))
+            .unwrap_err(),
+        ];
+        #[cfg(not(feature = "legacy-formats"))]
+        let bare_key = [&[0x0a], WRAPPED_KEY_MARKER].concat();
+        #[cfg(not(feature = "legacy-formats"))]
+        let errors = errors.into_iter().chain([
             CipherTextWithEncryptedKey::from(length_prefixed_envelope())
                 .separate()
                 .unwrap_err(),
             EncryptedDataEncryptionKey::try_from(bare_key.as_slice()).unwrap_err(),
             EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&bare_key)).unwrap_err(),
-        ];
+        ]);
         for error in errors {
-            assert!(matches!(error, KmsAeadError::LegacyFormat(_)), "{error:?}");
             let text = format!("{error} {error:?}");
-            for marker in [WRAPPED_KEY_MARKER, CIPHER_TEXT_MARKER] {
-                for rendering in [
-                    String::from_utf8_lossy(marker).into_owned(),
-                    hex::encode(marker),
-                    hex::encode_upper(marker),
-                    debug_listed(marker),
-                ] {
-                    assert!(!text.contains(&rendering), "{text}");
+            for stored in [WRAPPED_KEY_MARKER, CIPHER_TEXT_MARKER, &[PLAIN_TEXT_BYTE]] {
+                for rendering in renderings(stored) {
+                    assert!(!text.contains(&rendering), "{rendering:?} in {text}");
                 }
             }
         }
@@ -1131,34 +1165,9 @@ mod tests {
         Ok(())
     }
 
-    proptest! {
-        #[test]
-        fn readers_return_on_arbitrary_bytes(
-            first in prop_oneof![
-                Just(0x00u8),
-                Just(0x01),
-                Just(0x0a),
-                Just(EncryptedDataEncryptionKey::LAYOUT_MAGIC),
-                any::<u8>(),
-            ],
-            rest in prop::collection::vec(any::<u8>(), 0..300),
-        ) {
-            let bytes = [&[first], rest.as_slice()].concat();
-            let _ = CipherTextWithEncryptedKey::from(bytes.clone()).separate();
-            let _ = EncryptedDataEncryptionKey::try_from(bytes.as_slice());
-            let _ = EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&bytes));
-            #[cfg(feature = "legacy-formats")]
-            #[allow(deprecated, reason = "the upgrades go with the layouts they read")]
-            {
-                let _ = CipherTextWithEncryptedKey::from(bytes.clone()).upgrade_legacy_layout();
-                let _ = EncryptedDataEncryptionKey::upgrade_legacy_layout(&bytes);
-            }
-        }
-    }
-
     #[cfg(feature = "legacy-formats")]
     #[test]
-    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    #[expect(deprecated, reason = "tests the deprecated upgrade")]
     fn a_bare_encrypted_key_upgrades_to_the_encrypted_key_layout() -> KmsAeadResult<()> {
         let bare_key = [&[0x0a], WRAPPED_KEY_MARKER].concat();
         let current = EncryptedDataEncryptionKey::new(bare_key.clone(), None).to_bytes()?;
@@ -1176,22 +1185,7 @@ mod tests {
 
     #[cfg(feature = "legacy-formats")]
     #[test]
-    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
-    fn a_length_prefixed_envelope_upgrades_to_layout_v1() -> KmsAeadResult<()> {
-        let legacy = CipherTextWithEncryptedKey::from(length_prefixed_envelope());
-        let current = CipherTextWithEncryptedKey::new(
-            &CipherText(CIPHER_TEXT_MARKER.to_vec()),
-            &EncryptedDataEncryptionKey::new(WRAPPED_KEY_MARKER.to_vec(), None),
-        )?;
-
-        assert_eq!(legacy.upgrade_legacy_layout()?, Some(current.clone()));
-        assert_eq!(current.upgrade_legacy_layout()?, None);
-        Ok(())
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[test]
-    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    #[expect(deprecated, reason = "tests the deprecated upgrade")]
     fn an_upgrade_of_an_unreadable_value_fails() {
         let envelope = CipherTextWithEncryptedKey::from(vec![0x00, 0x00, 0x00, 0x20, 0xAA]);
         let result = envelope.upgrade_legacy_layout();

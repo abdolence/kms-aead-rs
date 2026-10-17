@@ -482,7 +482,7 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
 ))]
 mod tests {
     use super::*;
-    use crate::test_provider::TEST_BACKEND;
+    use crate::test_provider::{renderings, TEST_BACKEND};
 
     const KEK_MATERIAL: [u8; 32] = [0x42; 32];
     const DEK_MATERIAL: [u8; 32] = [0x11; 32];
@@ -726,19 +726,6 @@ mod tests {
                 .unwrap(),
             dek()
         );
-    }
-
-    /// The forms in which a key could reach a log line.
-    fn renderings(material: &[u8]) -> Vec<String> {
-        let base64 = SecretValue::new(material.to_vec())
-            .as_sensitive_base64_str()
-            .to_string();
-        vec![
-            hex::encode(material),
-            hex::encode_upper(material),
-            base64,
-            format!("{material:?}"),
-        ]
     }
 
     #[test]
