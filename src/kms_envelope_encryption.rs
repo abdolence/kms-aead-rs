@@ -15,6 +15,11 @@ use tracing::Span;
 
 const DEFAULT_MAX_USES: NonZeroU64 = NonZeroU64::new(1 << 24).expect("2^24 is not zero");
 
+/// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
+/// allows 2^32 invocations of authenticated encryption under one key with random 96-bit IVs, the
+/// nonces every [`AeadAlgorithm`] draws.
+const MAX_USES: u64 = 1 << 32;
+
 /// Envelope encryption: data encryption keys (DEKs) wrapped by the provider `P`, and AEAD on the
 /// backend the envelope is built with. The [`KmsAeadEnvelopeEncryption`] implementation encrypts
 /// and decrypts values.
@@ -70,12 +75,12 @@ pub struct KmsAeadEnvelopeOptions {
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
-    /// The age at which the DEK is renewed: 24 hours by default.
+    /// The age at which the DEK is renewed: 24 hours by default, and longer than zero.
     #[default = "Duration::from_secs(24 * 60 * 60)"]
     pub max_age: Duration,
-    /// The encryptions under one DEK: 2^24 by default. Every [`AeadAlgorithm`] seals each value
-    /// with a random 96-bit nonce, which NIST SP 800-38D allows for 2^32 values under one AES-GCM
-    /// key.
+    /// The encryptions under one DEK: 2^24 by default, and 2^32 at most. Every
+    /// [`AeadAlgorithm`] seals each value with a random 96-bit nonce, which NIST SP 800-38D
+    /// allows for 2^32 values under one AES-GCM key.
     #[default = "DEFAULT_MAX_USES"]
     pub max_uses: NonZeroU64,
 }
@@ -101,8 +106,18 @@ struct CurrentDek {
 }
 
 impl DekReuse {
-    /// The reuse of `policy`, whose DEK lives in `dek_cache`, which must be enabled.
+    /// The reuse of `policy`, which must be in range, with its DEK in `dek_cache`, which must be
+    /// enabled.
     fn new(policy: DekReusePolicy, dek_cache: &DekCache) -> KmsAeadResult<Self> {
+        if policy.max_age.is_zero() || policy.max_uses.get() > MAX_USES {
+            return Err(KmsAeadSystemError::create(
+                "INVALID_DEK_REUSE_POLICY",
+                &format!(
+                    "A DEK reuse policy needs a max_age longer than zero and a max_uses of 2^32 at \
+                     most: {policy:?}"
+                ),
+            ));
+        }
         if !dek_cache.is_enabled() {
             return Err(KmsAeadSystemError::create(
                 "INVALID_DEK_REUSE_POLICY",
@@ -206,8 +221,9 @@ where
     /// # Errors
     ///
     /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement the algorithm of `options`,
-    /// `INVALID_DEK_REUSE_POLICY` for a reuse policy beside [`DekCache::disabled`], and the
-    /// errors of [`DekCache::new`] for the default cache of store-less mode.
+    /// `INVALID_DEK_REUSE_POLICY` for a reuse policy with a zero `max_age` or a `max_uses` over
+    /// 2^32, or beside [`DekCache::disabled`], and the errors of [`DekCache::new`] for the
+    /// default cache of store-less mode.
     pub async fn with_options(
         provider: P,
         backend: AeadBackend,
@@ -761,6 +777,38 @@ mod tests {
             "{:?}",
             result.as_ref().err()
         );
+    }
+
+    #[tokio::test]
+    async fn reuse_policy_out_of_range_is_refused() -> KmsAeadResult<()> {
+        let refused = [
+            DekReusePolicy::new().with_max_age(Duration::ZERO),
+            DekReusePolicy::new().with_max_uses(NonZeroU64::new((1 << 32) + 1).unwrap()),
+        ];
+        for policy in refused {
+            let result = CountingEnvelope::with_options(
+                CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+                TEST_BACKEND,
+                KmsAeadEnvelopeOptions::new().with_dek_reuse(policy.clone()),
+            )
+            .await;
+            assert!(
+                matches!(&result, Err(KmsAeadError::SystemError(error))
+                    if error.public.code == "INVALID_DEK_REUSE_POLICY"),
+                "{policy:?}: {:?}",
+                result.as_ref().err()
+            );
+        }
+
+        CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            TEST_BACKEND,
+            KmsAeadEnvelopeOptions::new().with_dek_reuse(
+                DekReusePolicy::new().with_max_uses(NonZeroU64::new(1 << 32).unwrap()),
+            ),
+        )
+        .await?;
+        Ok(())
     }
 
     #[tokio::test]
