@@ -1,13 +1,3 @@
-//! The aws-lc-rs backend.
-//!
-//! aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own allocator,
-//! which overwrites every allocation with zeros before freeing it. The expanded key schedule
-//! therefore does not stay in freed memory after a call, as long as the application leaves
-//! AWS-LC's allocator in place: a replacement installed through `CRYPTO_set_mem_functions` or
-//! the `OPENSSL_memory_*` hooks decides on its own whether freed memory is cleared. The record
-//! keys AES-256-GCM-SIV derives from the key and the nonce for each call live on the stack, and
-//! AWS-LC does not clear them.
-
 use aws_lc_rs::aead::{
     Aad, Algorithm, LessSafeKey, Nonce, UnboundKey, AES_128_GCM, AES_256_GCM, AES_256_GCM_SIV,
     CHACHA20_POLY1305,
@@ -22,6 +12,14 @@ use crate::AeadAlgorithm;
 ///
 /// With the `aws-lc-fips` feature it runs on the AWS-LC FIPS module, and so does every other
 /// user of aws-lc-rs in the build. AES-256-GCM is the algorithm for FIPS deployments.
+///
+/// aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own allocator,
+/// which overwrites every allocation with zeros before freeing it (`OPENSSL_free`). The
+/// expanded key schedule therefore does not stay in freed memory after a call, as long as the
+/// application leaves AWS-LC's allocator in place: a replacement installed through
+/// `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on its own whether freed
+/// memory is cleared. The record keys AES-256-GCM-SIV derives from the key and the nonce for
+/// each call live on the stack, and AWS-LC does not clear them.
 #[derive(Debug, Clone, Copy)]
 pub struct AwsLc;
 
