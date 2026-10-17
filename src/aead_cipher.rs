@@ -15,7 +15,7 @@ use crate::{
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
 #[derive(Debug, Clone)]
 pub struct AeadCipher {
-    backend: AeadBackend,
+    pub(crate) backend: AeadBackend,
     algorithm: AeadAlgorithm,
 }
 

@@ -86,25 +86,13 @@ where
         let encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
         Ok((dek, encrypted_dek))
     }
-}
 
-// Without a backend feature `AeadBackend` has no variant, so no envelope can exist and the
-// compiler sees every read of its backend as unreachable.
-#[cfg_attr(
-    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
-    allow(unreachable_code, unused_variables)
-)]
-impl<P> KmsAeadEnvelope<P> {
     fn encrypt_span(&self, mode: &str) -> Span {
-        spans::aead_encrypt(mode, self.cipher.algorithm(), self.cipher.backend())
+        spans::aead_encrypt(mode, self.cipher.algorithm(), self.cipher.backend)
     }
 
     fn decrypt_span(&self, mode: &str, format: Option<&str>) -> Span {
-        spans::aead_decrypt(mode, self.cipher.algorithm(), self.cipher.backend(), format)
-    }
-
-    fn generate_dek_span(&self) -> Span {
-        spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend())
+        spans::aead_decrypt(mode, self.cipher.algorithm(), self.cipher.backend, format)
     }
 }
 
@@ -201,7 +189,8 @@ where
     async fn generate_new_dek(
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-        spans::in_span(self.generate_dek_span(), self.new_dek()).await
+        let span = spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend);
+        spans::in_span(span, self.new_dek()).await
     }
 }
 
