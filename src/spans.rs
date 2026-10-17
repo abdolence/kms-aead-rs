@@ -19,6 +19,10 @@ const DEK_CACHE: &str = "/kms_aead/dek_cache";
 const FORMAT: &str = "/kms_aead/format";
 const PURPOSE: &str = "/kms_aead/purpose";
 const ERROR_CODE: &str = "/kms_aead/error_code";
+#[cfg(feature = "legacy-formats")]
+const FROM_FORMAT: &str = "/kms_aead/from_format";
+#[cfg(feature = "legacy-formats")]
+const TO_FORMAT: &str = "/kms_aead/to_format";
 
 /// The `dek_cache` value of every envelope call: the per-call envelope has no unwrap cache.
 const DEK_CACHE_DISABLED: &str = "disabled";
@@ -179,6 +183,38 @@ pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display) -> Span {
         { DEK_CACHE } = DEK_CACHE_DISABLED,
         { ERROR_CODE } = field::Empty,
     )
+}
+
+/// Runs `operation`, the re-framing of a stored value, inside a `KMS AEAD upgrade` span.
+/// `from_format` is the layout of the stored value, when its first bytes name one, and
+/// `to_format` is recorded only when `operation` returns a value in it, not `None` for a value
+/// that already was current. The code of the error it returns is recorded too.
+#[cfg(feature = "legacy-formats")]
+pub(crate) fn upgrade<T>(
+    from_format: Option<&str>,
+    to_format: &str,
+    operation: impl FnOnce() -> KmsAeadResult<Option<T>>,
+) -> KmsAeadResult<Option<T>> {
+    let span = debug_span!(
+        "KMS AEAD upgrade",
+        { FROM_FORMAT } = field::Empty,
+        { TO_FORMAT } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    );
+    if let Some(from_format) = from_format {
+        span.record(FROM_FORMAT, from_format);
+    }
+    let result = span.in_scope(operation);
+    match &result {
+        Ok(Some(_)) => {
+            span.record(TO_FORMAT, to_format);
+        }
+        Ok(None) => {}
+        Err(error) => {
+            span.record(ERROR_CODE, error.code());
+        }
+    }
+    result
 }
 
 /// Runs `operation` inside `span`, without holding the span entered across an `.await`, and

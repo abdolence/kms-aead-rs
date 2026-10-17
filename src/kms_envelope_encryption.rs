@@ -200,6 +200,8 @@ where
 ))]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "legacy-formats"))]
+    use crate::errors::{KmsAeadError, KmsAeadLegacyFormat};
     use crate::test_provider::{TestKmsProvider, TEST_BACKEND};
     use std::sync::Arc;
 
@@ -421,7 +423,11 @@ mod tests {
     }
 
     const FIXTURE_AAD: &str = "fixture-aad";
+    #[cfg(feature = "legacy-formats")]
     const FIXTURE_SECRET: &str = "fixture-secret";
+    const ENVELOPE_FROM_0_28_1: &str = "000000000000002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e";
+    /// 32-bit targets wrote a 4-byte length prefix before 0.24.0.
+    const ENVELOPE_FROM_0_23_0_ON_32_BIT: &str = "00000020e8efcd9417d41f8dee5dc6b8cfde7b209951fb80e60e0b8240a9fa688f815e1501a12b36821b4aa097fbe86573df02d8fe8d34235bdb9b3731107e946d0021d7d2ea089f87d4bea034a2";
 
     async fn decrypt_released_envelope(envelope_hex: &str) -> KmsAeadResult<SecretValue> {
         let encryption = Envelope::new(TestKmsProvider::Working, TEST_BACKEND).await?;
@@ -429,24 +435,47 @@ mod tests {
         encryption.decrypt_value(&FIXTURE_AAD, &envelope).await
     }
 
+    #[cfg(feature = "legacy-formats")]
     #[tokio::test]
-    async fn envelope_from_0_28_1_decrypts() {
-        let secret = decrypt_released_envelope(
-            "000000000000002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e",
-        )
-        .await
-        .unwrap();
-        assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
+    async fn envelopes_from_0_28_1_and_earlier_decrypt() -> KmsAeadResult<()> {
+        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+            let secret = decrypt_released_envelope(envelope_hex).await?;
+            assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
+        }
+        Ok(())
     }
 
-    /// 32-bit targets wrote a 4-byte length prefix before 0.24.0.
+    #[cfg(not(feature = "legacy-formats"))]
     #[tokio::test]
-    async fn envelope_from_0_23_0_on_32_bit_decrypts() {
-        let secret = decrypt_released_envelope(
-            "00000020e8efcd9417d41f8dee5dc6b8cfde7b209951fb80e60e0b8240a9fa688f815e1501a12b36821b4aa097fbe86573df02d8fe8d34235bdb9b3731107e946d0021d7d2ea089f87d4bea034a2",
-        )
-        .await
-        .unwrap();
-        assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
+    async fn envelopes_from_0_28_1_and_earlier_need_legacy_formats() {
+        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+            let result = decrypt_released_envelope(envelope_hex).await;
+            assert!(
+                matches!(&result, Err(KmsAeadError::LegacyFormat(error))
+                    if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope),
+                "{result:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[tokio::test]
+    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    async fn envelopes_from_0_28_1_and_earlier_upgrade_to_layout_v1() -> KmsAeadResult<()> {
+        let encryption = Envelope::new(TestKmsProvider::Working, TEST_BACKEND).await?;
+        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+            let legacy = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
+            let (cipher_text, encrypted_dek) = legacy.separate()?;
+            let current = CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek)?;
+
+            assert_eq!(encrypted_dek.key_version(), None);
+            assert_eq!(legacy.upgrade_legacy_layout()?, Some(current.clone()));
+            assert_eq!(current.upgrade_legacy_layout()?, None);
+            assert_eq!(
+                encryption.decrypt_value(&FIXTURE_AAD, &current).await?,
+                SecretValue::from(FIXTURE_SECRET)
+            );
+        }
+        Ok(())
     }
 }

@@ -365,6 +365,30 @@ pub struct KmsAeadLegacyFormatError {
     pub message: String,
 }
 
+impl KmsAeadLegacyFormatError {
+    /// The message names the layout and the feature, never the bytes read.
+    #[cfg(not(feature = "legacy-formats"))]
+    pub(crate) fn create(format: KmsAeadLegacyFormat) -> KmsAeadError {
+        let message = match format {
+            KmsAeadLegacyFormat::LengthPrefixedEnvelope => {
+                "The cipher text is in the length-prefixed layout written by kms-aead 0.28.1 and \
+                 earlier, which only the deprecated legacy-formats feature reads"
+            }
+            KmsAeadLegacyFormat::BareEncryptedKey => {
+                "The encrypted key is a bare wrapped key as kms-aead 0.28.1 and earlier stored it, \
+                 which only the deprecated legacy-formats feature reads. It may also be a value of \
+                 another layout handed to the wrong reader, such as a CipherTextWithEncryptedKey \
+                 or a keyring value"
+            }
+        };
+        KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError::new(
+            KmsAeadErrorPublicGenericDetails::new("LEGACY_FORMAT".to_string()),
+            format,
+            message.to_string(),
+        ))
+    }
+}
+
 impl Display for KmsAeadLegacyFormatError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         write!(

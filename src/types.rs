@@ -1,4 +1,6 @@
 use crate::errors::*;
+#[cfg(feature = "legacy-formats")]
+use crate::spans;
 use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
@@ -151,14 +153,35 @@ impl Display for KmsKeyVersion {
 /// ```
 ///
 /// `0xFF` marks the layout, `0x01` is its version and `k = 0` records no key version.
-/// `TryFrom<&[u8]>` and [`try_from_hex_string`](Self::try_from_hex_string) also read the bare
-/// wrapped key that 0.28.1 and earlier stored, as a key with no version. Those keys come only from
-/// GCP, a protobuf message starting with `0x0a` (`0xFF` would be the undefined wire type 7), and
-/// from AWS, starting with `0x01`, so none of them reads as the layout.
+///
+/// kms-aead 0.28.1 and earlier stored the bare wrapped key. Those keys come only from GCP, a
+/// protobuf message starting with `0x0a` (`0xFF` would be the undefined wire type 7), and from
+/// AWS, starting with `0x01`, so none of them reads as the layout. `TryFrom<&[u8]>` and
+/// [`try_from_hex_string`](Self::try_from_hex_string) read them, as keys with no version, only
+/// with the deprecated `legacy-formats` feature, which also adds `upgrade_legacy_layout` to
+/// rewrite them. Without it they fail with [`KmsAeadLegacyFormat::BareEncryptedKey`].
 #[derive(Clone)]
 pub struct EncryptedDataEncryptionKey {
     wrapped: Vec<u8>,
     key_version: Option<KmsKeyVersion>,
+}
+
+/// The layout of stored encrypted key bytes.
+#[derive(Clone, Copy)]
+enum EncryptedKeyLayout {
+    V1,
+    Bare,
+}
+
+#[cfg(feature = "legacy-formats")]
+impl EncryptedKeyLayout {
+    /// The value of the `from_format` and `to_format` span fields.
+    fn name(self) -> &'static str {
+        match self {
+            EncryptedKeyLayout::V1 => "encrypted_key_v1",
+            EncryptedKeyLayout::Bare => "encrypted_key_bare",
+        }
+    }
 }
 
 impl EncryptedDataEncryptionKey {
@@ -218,27 +241,88 @@ impl EncryptedDataEncryptionKey {
         })?;
         Self::try_from(bytes.as_slice())
     }
-}
 
-impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
-    type Error = KmsAeadError;
-
-    /// Reads the layout when `bytes` starts with `0xFF`, and bare wrapped bytes otherwise.
+    /// Rewrites stored key bytes that `TryFrom<&[u8]>` reads into the layout in the type docs,
+    /// with no key version, or returns `None` when they already are in it. The wrapped key
+    /// stays as it is, and no KMS is called: the GCP and AWS providers unwrap without a key
+    /// version. It takes the stored bytes because a parsed key does not record the layout it
+    /// was read from; a caller that stores hex decodes before and encodes after.
+    ///
+    /// Opens a `KMS AEAD upgrade` span.
     ///
     /// # Errors
     ///
-    /// `INVALID_ENCRYPTED_KEY_FORMAT` on empty input or a key version running past the end,
-    /// `UNKNOWN_ENCRYPTED_KEY_LAYOUT` on an unknown layout tag, and `INVALID_KEY_VERSION` on a
-    /// key version that is not ASCII alphanumeric.
-    fn try_from(bytes: &[u8]) -> KmsAeadResult<Self> {
+    /// The errors of `TryFrom<&[u8]>`.
+    #[cfg(feature = "legacy-formats")]
+    #[deprecated(
+        since = "0.30.0",
+        note = "reading the layouts written up to 0.28.1 will be removed in a later breaking release"
+    )]
+    pub fn upgrade_legacy_layout(stored: &[u8]) -> KmsAeadResult<Option<Vec<u8>>> {
+        let layout = Self::layout(stored);
+        let from_format = layout.as_ref().ok().copied().map(EncryptedKeyLayout::name);
+        spans::upgrade(from_format, EncryptedKeyLayout::V1.name(), || {
+            let encrypted_dek = Self::try_from(stored)?;
+            match layout? {
+                EncryptedKeyLayout::V1 => Ok(None),
+                EncryptedKeyLayout::Bare => encrypted_dek.to_bytes().map(Some),
+            }
+        })
+    }
+
+    fn layout(bytes: &[u8]) -> KmsAeadResult<EncryptedKeyLayout> {
         match bytes {
             [] => Err(KmsAeadEncryptionError::create(
                 "INVALID_ENCRYPTED_KEY_FORMAT",
                 "The encrypted key is empty",
             )),
-            [Self::LAYOUT_MAGIC, Self::LAYOUT_V1, fields @ ..] => {
-                let (key_version, wrapped) =
-                    KmsKeyVersion::split_field(fields).ok_or_else(|| {
+            [Self::LAYOUT_MAGIC, Self::LAYOUT_V1, ..] => Ok(EncryptedKeyLayout::V1),
+            [Self::LAYOUT_MAGIC, tag, ..] => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
+                &format!("Unknown encrypted key layout tag {tag:#04x}"),
+            )),
+            [Self::LAYOUT_MAGIC] => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
+                "Encrypted key ends after the layout magic, with no layout tag",
+            )),
+            [0x0a | 0x01, ..] => Ok(EncryptedKeyLayout::Bare),
+            // 0.29 read every first byte but the magic as a bare key, and the feature keeps that.
+            #[cfg(feature = "legacy-formats")]
+            _ => Ok(EncryptedKeyLayout::Bare),
+            #[cfg(not(feature = "legacy-formats"))]
+            _ => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
+                "The encrypted key starts with neither the layout magic nor the first byte of a \
+                 GCP or AWS wrapped key",
+            )),
+        }
+    }
+}
+
+impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
+    type Error = KmsAeadError;
+
+    /// Reads the layout in the type docs when `bytes` starts with `0xFF`. With the deprecated
+    /// `legacy-formats` feature, reads any other bytes as a bare wrapped key with no version, and
+    /// logs a `WARN` event the first time in the process.
+    ///
+    /// # Errors
+    ///
+    /// - `INVALID_ENCRYPTED_KEY_FORMAT` on empty input or a key version running past the end;
+    /// - `UNKNOWN_ENCRYPTED_KEY_LAYOUT` on an unknown layout tag, and without `legacy-formats` on
+    ///   a first byte that starts no known layout;
+    /// - `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric;
+    /// - without `legacy-formats`, [`KmsAeadError::LegacyFormat`] with
+    ///   [`KmsAeadLegacyFormat::BareEncryptedKey`] on bytes starting with `0x0a` or `0x01`, the
+    ///   first byte of a GCP or AWS wrapped key, and of an envelope or keyring value handed to the
+    ///   wrong reader.
+    fn try_from(bytes: &[u8]) -> KmsAeadResult<Self> {
+        match Self::layout(bytes)? {
+            EncryptedKeyLayout::V1 => {
+                let (key_version, wrapped) = bytes
+                    .get(2..)
+                    .and_then(KmsKeyVersion::split_field)
+                    .ok_or_else(|| {
                         KmsAeadEncryptionError::create(
                             "INVALID_ENCRYPTED_KEY_FORMAT",
                             "The key version length runs past the end of the encrypted key",
@@ -249,15 +333,23 @@ impl TryFrom<&[u8]> for EncryptedDataEncryptionKey {
                     KmsKeyVersion::from_field(key_version)?,
                 ))
             }
-            [Self::LAYOUT_MAGIC, tag, ..] => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
-                &format!("Unknown encrypted key layout tag {tag:#04x}"),
+            #[cfg(feature = "legacy-formats")]
+            EncryptedKeyLayout::Bare => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    tracing::warn!(
+                        "Read an EncryptedDataEncryptionKey stored as a bare wrapped key by \
+                         kms-aead 0.28.1 or earlier. Reading it is deprecated and will be removed \
+                         in a later breaking release: rewrite stored keys with \
+                         EncryptedDataEncryptionKey::upgrade_legacy_layout"
+                    )
+                });
+                Ok(Self::new(bytes.to_vec(), None))
+            }
+            #[cfg(not(feature = "legacy-formats"))]
+            EncryptedKeyLayout::Bare => Err(KmsAeadLegacyFormatError::create(
+                KmsAeadLegacyFormat::BareEncryptedKey,
             )),
-            [Self::LAYOUT_MAGIC] => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_ENCRYPTED_KEY_LAYOUT",
-                "Encrypted key ends after the layout magic, with no layout tag",
-            )),
-            bare => Ok(Self::new(bare.to_vec(), None)),
         }
     }
 }
@@ -287,15 +379,36 @@ impl PartialEq for EncryptedDataEncryptionKey {
 /// [0x01][k: u8][key version: k bytes][w: u16 BE][wrapped key: w bytes][cipher text to the end]
 /// ```
 ///
-/// `k = 0` records no key version. [`separate`](Self::separate) also reads the legacy layout
-/// written up to 0.28.1, `[length: u64 BE][wrapped key][cipher text]`, including its 4-byte
-/// length form written on 32-bit targets before 0.24.0.
+/// `k = 0` records no key version.
+///
+/// kms-aead 0.28.1 and earlier wrote `[length: u64 BE][wrapped key][cipher text]`, and 32-bit
+/// targets before 0.24.0 a 4-byte length. Its first byte is `0x00`. [`separate`](Self::separate)
+/// reads it only with the deprecated `legacy-formats` feature, which also adds
+/// `upgrade_legacy_layout` to rewrite it. Without it, it fails with
+/// [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`].
 ///
 /// The header is not authenticated, so a header field is only ever an address or an audit
 /// value. A field that selects an algorithm, a mode or a transform needs a new layout tag with
 /// an authenticated header.
 #[derive(Clone)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
+
+/// The layout of a stored [`CipherTextWithEncryptedKey`].
+#[derive(Clone, Copy)]
+enum EnvelopeLayout {
+    V1,
+    LengthPrefixed,
+}
+
+impl EnvelopeLayout {
+    /// The value of the `format`, `from_format` and `to_format` span fields.
+    fn name(self) -> &'static str {
+        match self {
+            EnvelopeLayout::V1 => "envelope_v1",
+            EnvelopeLayout::LengthPrefixed => "envelope_legacy",
+        }
+    }
+}
 
 impl CipherTextWithEncryptedKey {
     const LAYOUT_V1: u8 = 0x01;
@@ -329,29 +442,37 @@ impl CipherTextWithEncryptedKey {
         Ok(Self(value))
     }
 
-    /// Reads layout v1 and the legacy layout into the cipher text and the wrapped key.
+    /// Reads layout v1, and with the deprecated `legacy-formats` feature the length-prefixed
+    /// layout, into the cipher text and the wrapped key. The first length-prefixed read in the
+    /// process logs a `WARN` event.
     ///
     /// # Errors
     ///
-    /// `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or an unknown layout tag,
-    /// `INVALID_CIPHER_TEXT_FORMAT` on a length that runs past the end of the value, and
-    /// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
+    /// - `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or an unknown layout tag;
+    /// - `INVALID_CIPHER_TEXT_FORMAT` on a length that runs past the end of the value;
+    /// - `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric;
+    /// - without `legacy-formats`, [`KmsAeadError::LegacyFormat`] with
+    ///   [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on a value starting with `0x00`.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let fields = match self.value().split_first() {
-            Some((&Self::LAYOUT_V1, header)) => Self::split_v1(header),
-            // The legacy layout starts with the top byte of its length, zero for any wrapped
-            // key a KMS returns.
-            Some((0x00, _)) => Self::split_legacy(self.value()),
-            Some((tag, _)) => {
-                return Err(KmsAeadEncryptionError::create(
-                    "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                    &format!("Unknown cipher text layout tag {tag:#04x}"),
-                ))
+        let fields = match self.layout()? {
+            EnvelopeLayout::V1 => Self::split_v1(self.value()),
+            #[cfg(feature = "legacy-formats")]
+            EnvelopeLayout::LengthPrefixed => {
+                static WARNED: std::sync::Once = std::sync::Once::new();
+                WARNED.call_once(|| {
+                    tracing::warn!(
+                        "Read a CipherTextWithEncryptedKey in the length-prefixed layout written \
+                         by kms-aead 0.28.1 and earlier. Reading it is deprecated and will be \
+                         removed in a later breaking release: rewrite stored values with \
+                         CipherTextWithEncryptedKey::upgrade_legacy_layout"
+                    )
+                });
+                Self::split_length_prefixed(self.value())
             }
-            None => {
-                return Err(KmsAeadEncryptionError::create(
-                    "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                    "Empty cipher text has no layout tag",
+            #[cfg(not(feature = "legacy-formats"))]
+            EnvelopeLayout::LengthPrefixed => {
+                return Err(KmsAeadLegacyFormatError::create(
+                    KmsAeadLegacyFormat::LengthPrefixedEnvelope,
                 ))
             }
         };
@@ -370,25 +491,67 @@ impl CipherTextWithEncryptedKey {
         ))
     }
 
-    /// The layout the first byte names, as the `format` span field records it.
-    /// [`separate`](Self::separate) reads and checks the rest.
+    /// Rewrites a value that [`separate`](Self::separate) reads in layout v1, with no key
+    /// version, or returns `None` when it already is in layout v1. The wrapped key and the AEAD
+    /// bytes stay as they are, and no KMS is called: the GCP and AWS providers unwrap without a
+    /// key version.
+    ///
+    /// Opens a `KMS AEAD upgrade` span.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`separate`](Self::separate).
+    #[cfg(feature = "legacy-formats")]
+    #[deprecated(
+        since = "0.30.0",
+        note = "reading the layouts written up to 0.28.1 will be removed in a later breaking release"
+    )]
+    pub fn upgrade_legacy_layout(&self) -> KmsAeadResult<Option<Self>> {
+        let layout = self.layout();
+        let from_format = layout.as_ref().ok().copied().map(EnvelopeLayout::name);
+        spans::upgrade(from_format, EnvelopeLayout::V1.name(), || {
+            let (cipher_text, encrypted_dek) = self.separate()?;
+            match layout? {
+                EnvelopeLayout::V1 => Ok(None),
+                EnvelopeLayout::LengthPrefixed => Self::new(&cipher_text, &encrypted_dek).map(Some),
+            }
+        })
+    }
+
+    /// The layout the first byte names, as the `format` span field records it, whether or not
+    /// this build reads it. [`separate`](Self::separate) reads and checks the rest.
     pub(crate) fn layout_name(&self) -> Option<&'static str> {
+        self.layout().ok().map(EnvelopeLayout::name)
+    }
+
+    fn layout(&self) -> KmsAeadResult<EnvelopeLayout> {
         match self.value().first() {
-            Some(&Self::LAYOUT_V1) => Some("envelope_v1"),
-            Some(0x00) => Some("envelope_legacy"),
-            _ => None,
+            Some(&Self::LAYOUT_V1) => Ok(EnvelopeLayout::V1),
+            // The length-prefixed layout starts with the top byte of its length, zero for any
+            // wrapped key a KMS returns.
+            Some(0x00) => Ok(EnvelopeLayout::LengthPrefixed),
+            Some(tag) => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                &format!("Unknown cipher text layout tag {tag:#04x}"),
+            )),
+            None => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "Empty cipher text has no layout tag",
+            )),
         }
     }
 
-    fn split_v1(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
-        let (key_version, rest) = KmsKeyVersion::split_field(bytes)?;
+    fn split_v1(value: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+        let (_, header) = value.split_first()?;
+        let (key_version, rest) = KmsKeyVersion::split_field(header)?;
         let (wrapped_len, rest) = rest.split_first_chunk::<2>()?;
         let (wrapped, cipher_text) =
             rest.split_at_checked(usize::from(u16::from_be_bytes(*wrapped_len)))?;
         Some((key_version, wrapped, cipher_text))
     }
 
-    fn split_legacy(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    #[cfg(feature = "legacy-formats")]
+    fn split_length_prefixed(bytes: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
         // 32-bit targets before 0.24.0 wrote the length as a 4-byte `usize`, all other writers
         // as 8 bytes. For lengths 1 to 2^24 - 1, bytes 1 to 3 are zero only in the 8-byte form.
         let (wrapped_len, rest) = match bytes.get(1..4) {
@@ -541,13 +704,26 @@ mod tests {
 
     #[test]
     fn length_fields_past_the_buffer_are_rejected() {
-        let truncated: [&[u8]; 9] = [
-            // Layout v1
+        let truncated: [&[u8]; 4] = [
             &[0x01],
             &[0x01, 0x02, b'1'],
             &[0x01, 0x00, 0x00],
             &[0x01, 0x00, 0x00, 0x05, 0xAA],
-            // Legacy layout, 4-byte and 8-byte lengths
+        ];
+        for envelope in truncated {
+            assert_eq!(
+                error_code(CipherTextWithEncryptedKey::from(envelope.to_vec()).separate()),
+                "INVALID_CIPHER_TEXT_FORMAT",
+                "{envelope:02x?}"
+            );
+        }
+    }
+
+    /// A crafted length allocates nothing: the parser cuts the buffer it was given.
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    fn length_prefixed_lengths_past_the_buffer_are_rejected() {
+        let truncated: [&[u8]; 5] = [
             &[0x00, 0x00, 0x00],
             &[0x00, 0x00, 0x00, 0x20, 0xAA],
             &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -792,6 +968,244 @@ mod tests {
 
         assert_eq!(dek1, dek2);
         assert_ne!(dek1, dek3);
+    }
+
+    /// A wrapped key and a cipher text that no message should ever contain.
+    const WRAPPED_KEY_MARKER: &[u8] = b"zq-key-marker-zq";
+    const CIPHER_TEXT_MARKER: &[u8] = b"zq-cipher-marker-zq";
+
+    /// `[0x00 × 7][w][wrapped key: w][cipher text]`, as kms-aead 0.28.1 wrote it.
+    fn length_prefixed_envelope() -> Vec<u8> {
+        let mut envelope = vec![0x00; 7];
+        envelope.push(WRAPPED_KEY_MARKER.len() as u8);
+        envelope.extend_from_slice(WRAPPED_KEY_MARKER);
+        envelope.extend_from_slice(CIPHER_TEXT_MARKER);
+        envelope
+    }
+
+    /// A kms-aead-keyring value, `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]`.
+    fn keyring_value() -> Vec<u8> {
+        let mut value = vec![0x01, 0x00, 0x00, 0x00, 0x07];
+        value.extend_from_slice(&[0x5A; 12]);
+        value.extend_from_slice(CIPHER_TEXT_MARKER);
+        value.extend_from_slice(&[0xA5; 16]);
+        value
+    }
+
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn a_length_prefixed_envelope_needs_legacy_formats() {
+        let envelopes: [&[u8]; 4] = [
+            &[0x00],
+            &[0x00, 0x00, 0x00, 0x02, 0xAA, 0xBB, 0xCC],
+            &[0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA],
+            &length_prefixed_envelope(),
+        ];
+        for envelope in envelopes {
+            let result = CipherTextWithEncryptedKey::from(envelope.to_vec()).separate();
+            assert!(
+                matches!(&result, Err(KmsAeadError::LegacyFormat(error))
+                    if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope
+                        && error.public.code == "LEGACY_FORMAT"),
+                "{envelope:02x?}: {result:?}"
+            );
+        }
+    }
+
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn a_bare_encrypted_key_needs_legacy_formats() {
+        for first in [0x0a, 0x01] {
+            let stored = [&[first], WRAPPED_KEY_MARKER].concat();
+            for result in [
+                EncryptedDataEncryptionKey::try_from(stored.as_slice()),
+                EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&stored)),
+            ] {
+                assert!(
+                    matches!(&result, Err(KmsAeadError::LegacyFormat(error))
+                        if error.format == KmsAeadLegacyFormat::BareEncryptedKey
+                            && error.public.code == "LEGACY_FORMAT"),
+                    "{first:#04x}: {result:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn an_encrypted_key_in_no_known_layout_is_rejected() {
+        for first in (0x00..=0xFE).filter(|first| ![0x0a, 0x01].contains(first)) {
+            let result = EncryptedDataEncryptionKey::try_from([first, 0x24].as_slice());
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "UNKNOWN_ENCRYPTED_KEY_LAYOUT"),
+                "{first:#04x}: {result:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    fn any_encrypted_key_without_the_layout_magic_reads_as_a_bare_wrapped_key() -> KmsAeadResult<()>
+    {
+        for first in 0x00..=0xFE {
+            let stored = [first, 0x24];
+            assert_eq!(
+                EncryptedDataEncryptionKey::try_from(stored.as_slice())?,
+                EncryptedDataEncryptionKey::new(stored.to_vec(), None)
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn legacy_errors_echo_no_bytes() {
+        let bare_key = [&[0x0a], WRAPPED_KEY_MARKER].concat();
+        let errors = [
+            CipherTextWithEncryptedKey::from(length_prefixed_envelope())
+                .separate()
+                .unwrap_err(),
+            EncryptedDataEncryptionKey::try_from(bare_key.as_slice()).unwrap_err(),
+            EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&bare_key)).unwrap_err(),
+        ];
+        for error in errors {
+            assert!(matches!(error, KmsAeadError::LegacyFormat(_)), "{error:?}");
+            let text = format!("{error} {error:?}");
+            for marker in [WRAPPED_KEY_MARKER, CIPHER_TEXT_MARKER] {
+                for rendering in [
+                    String::from_utf8_lossy(marker).into_owned(),
+                    hex::encode(marker),
+                    hex::encode_upper(marker),
+                    debug_listed(marker),
+                ] {
+                    assert!(!text.contains(&rendering), "{text}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_value_in_the_wrong_reader_fails_without_a_panic() -> KmsAeadResult<()> {
+        let keyring_value = keyring_value();
+        let envelope_v1 = CipherTextWithEncryptedKey::new(
+            &CipherText(CIPHER_TEXT_MARKER.to_vec()),
+            &EncryptedDataEncryptionKey::new(WRAPPED_KEY_MARKER.to_vec(), None),
+        )?;
+        let encrypted_key =
+            EncryptedDataEncryptionKey::new(WRAPPED_KEY_MARKER.to_vec(), None).to_bytes()?;
+
+        // A key id under 2^24 reads as layout v1 with no key version; the KMS refuses the
+        // wrapped key cut from the key id.
+        let read = CipherTextWithEncryptedKey::from(keyring_value.clone()).separate();
+        assert!(
+            matches!(&read, Ok((_, key)) if key.key_version().is_none()),
+            "{read:?}"
+        );
+        let read = CipherTextWithEncryptedKey::from(encrypted_key).separate();
+        assert!(
+            matches!(&read, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "UNKNOWN_CIPHER_TEXT_LAYOUT"),
+            "{read:?}"
+        );
+
+        for value in [keyring_value, envelope_v1.0] {
+            for read in [
+                EncryptedDataEncryptionKey::try_from(value.as_slice()),
+                EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&value)),
+            ] {
+                #[cfg(not(feature = "legacy-formats"))]
+                assert!(
+                    matches!(&read, Err(KmsAeadError::LegacyFormat(error))
+                        if error.format == KmsAeadLegacyFormat::BareEncryptedKey),
+                    "{read:?}"
+                );
+                #[cfg(feature = "legacy-formats")]
+                assert!(
+                    matches!(&read, Ok(key)
+                        if key.wrapped() == value.as_slice() && key.key_version().is_none()),
+                    "{read:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn readers_return_on_arbitrary_bytes(
+            first in prop_oneof![
+                Just(0x00u8),
+                Just(0x01),
+                Just(0x0a),
+                Just(EncryptedDataEncryptionKey::LAYOUT_MAGIC),
+                any::<u8>(),
+            ],
+            rest in prop::collection::vec(any::<u8>(), 0..300),
+        ) {
+            let bytes = [&[first], rest.as_slice()].concat();
+            let _ = CipherTextWithEncryptedKey::from(bytes.clone()).separate();
+            let _ = EncryptedDataEncryptionKey::try_from(bytes.as_slice());
+            let _ = EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(&bytes));
+            #[cfg(feature = "legacy-formats")]
+            #[allow(deprecated, reason = "the upgrades go with the layouts they read")]
+            {
+                let _ = CipherTextWithEncryptedKey::from(bytes.clone()).upgrade_legacy_layout();
+                let _ = EncryptedDataEncryptionKey::upgrade_legacy_layout(&bytes);
+            }
+        }
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    fn a_bare_encrypted_key_upgrades_to_the_encrypted_key_layout() -> KmsAeadResult<()> {
+        let bare_key = [&[0x0a], WRAPPED_KEY_MARKER].concat();
+        let current = EncryptedDataEncryptionKey::new(bare_key.clone(), None).to_bytes()?;
+
+        assert_eq!(
+            EncryptedDataEncryptionKey::upgrade_legacy_layout(&bare_key)?,
+            Some(current.clone())
+        );
+        assert_eq!(
+            EncryptedDataEncryptionKey::upgrade_legacy_layout(&current)?,
+            None
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    fn a_length_prefixed_envelope_upgrades_to_layout_v1() -> KmsAeadResult<()> {
+        let legacy = CipherTextWithEncryptedKey::from(length_prefixed_envelope());
+        let current = CipherTextWithEncryptedKey::new(
+            &CipherText(CIPHER_TEXT_MARKER.to_vec()),
+            &EncryptedDataEncryptionKey::new(WRAPPED_KEY_MARKER.to_vec(), None),
+        )?;
+
+        assert_eq!(legacy.upgrade_legacy_layout()?, Some(current.clone()));
+        assert_eq!(current.upgrade_legacy_layout()?, None);
+        Ok(())
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    #[allow(deprecated, reason = "the upgrade goes with the layouts it reads")]
+    fn an_upgrade_of_an_unreadable_value_fails() {
+        let envelope = CipherTextWithEncryptedKey::from(vec![0x00, 0x00, 0x00, 0x20, 0xAA]);
+        let result = envelope.upgrade_legacy_layout();
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
+            "{result:?}"
+        );
+        let result = EncryptedDataEncryptionKey::upgrade_legacy_layout(&[0xFF, 0x02]);
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "UNKNOWN_ENCRYPTED_KEY_LAYOUT"),
+            "{result:?}"
+        );
     }
 
     #[test]
