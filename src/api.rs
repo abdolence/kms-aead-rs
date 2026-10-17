@@ -72,8 +72,7 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
     ///
     /// Besides the AEAD and KMS errors, `UNKNOWN_CIPHER_TEXT_LAYOUT`,
     /// `INVALID_CIPHER_TEXT_FORMAT` or `INVALID_KEY_VERSION` when `cipher_text` cannot be read
-    /// (see [`CipherTextWithEncryptedKey::separate`]), and `DEK_REVOKED` when the cache revoked
-    /// the key between its lookup and the open, after which a retry unwraps it again.
+    /// (see [`CipherTextWithEncryptedKey::separate`]).
     async fn decrypt_value(
         &self,
         aad: &Aad,

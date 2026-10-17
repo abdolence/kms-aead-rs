@@ -2,15 +2,14 @@ use std::future::Future;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::cache::{DekCache, DekCacheOptions, DekSlot, SlotLifecycle};
+use crate::cache::{DekCache, DekCacheOptions};
 use crate::spans;
 use crate::*;
 use async_trait::*;
 use rsb_derive::*;
 use secret_vault_value::SecretValue;
-use tokio::time::Instant;
 use tracing::Span;
 
 const DEFAULT_MAX_USES: NonZeroU64 = NonZeroU64::new(1 << 24).expect("2^24 is not zero");
@@ -35,7 +34,7 @@ pub struct KmsAeadEnvelope<P> {
     pub(crate) provider: P,
     pub(crate) cipher: AeadCipher,
     dek_cache: DekCache,
-    dek_reuse: Option<ReusedDeks>,
+    dek_reuse: Option<DekReuse>,
 }
 
 /// The settings of a [`KmsAeadEnvelope`].
@@ -76,22 +75,22 @@ pub struct DekReusePolicy {
 }
 
 /// The DEK a store-less envelope encrypts under, renewed by its policy.
-struct ReusedDeks {
+struct DekReuse {
     policy: DekReusePolicy,
-    current: RwLock<Option<Arc<ReusedDek>>>,
+    current: RwLock<Option<Arc<CurrentDek>>>,
     /// Held across a renewal's KMS call, so that one caller renews and the others take its DEK.
     renewal: tokio::sync::Mutex<()>,
 }
 
-/// One reused DEK, with the wrapped form every value under it carries.
-struct ReusedDek {
-    slot: DekSlot<DataEncryptionKey>,
+/// The DEK in use, with the wrapped form every value under it carries.
+struct CurrentDek {
+    key: DataEncryptionKey,
     encrypted: EncryptedDataEncryptionKey,
     created_at: Instant,
     uses: AtomicU64,
 }
 
-impl ReusedDeks {
+impl DekReuse {
     fn new(policy: DekReusePolicy) -> Self {
         Self {
             policy,
@@ -101,7 +100,7 @@ impl ReusedDeks {
     }
 
     /// The DEK to encrypt one value under, from `renew` when the policy renews the current one.
-    async fn claim_or_renew<F, Fut>(&self, renew: F) -> KmsAeadResult<Arc<ReusedDek>>
+    async fn claim_or_renew<F, Fut>(&self, renew: F) -> KmsAeadResult<Arc<CurrentDek>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>>,
@@ -114,8 +113,8 @@ impl ReusedDeks {
             return Ok(dek);
         }
         let (key, encrypted) = renew().await?;
-        let dek = Arc::new(ReusedDek {
-            slot: DekSlot::live(key),
+        let dek = Arc::new(CurrentDek {
+            key,
             encrypted,
             created_at: Instant::now(),
             uses: AtomicU64::new(1),
@@ -125,7 +124,7 @@ impl ReusedDeks {
     }
 
     /// The current DEK with one of its uses taken, or `None` when the policy renews it.
-    fn claim(&self) -> Option<Arc<ReusedDek>> {
+    fn claim(&self) -> Option<Arc<CurrentDek>> {
         let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
         let dek = current.as_ref()?;
         let usable = dek.created_at.elapsed() < self.policy.max_age
@@ -185,7 +184,7 @@ where
             provider,
             cipher: AeadCipher::new(backend, options.algorithm)?,
             dek_cache,
-            dek_reuse: options.dek_reuse.map(ReusedDeks::new),
+            dek_reuse: options.dek_reuse.map(DekReuse::new),
         })
     }
 
@@ -209,15 +208,19 @@ where
         Ok((dek, encrypted_dek))
     }
 
-    /// The slot of the DEK `encrypted` wraps, through the cache, recording on the current span
-    /// where it came from.
-    async fn unwrap_dek(
+    /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
+    /// current span where the key came from, whether `use_key` succeeds or not.
+    async fn with_dek<T>(
         &self,
         encrypted: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<Arc<DekSlot<DataEncryptionKey>>> {
-        let (slot, outcome) = self.dek_cache.unwrap(&self.provider, encrypted).await?;
+        use_key: impl FnOnce(&DataEncryptionKey) -> KmsAeadResult<T>,
+    ) -> KmsAeadResult<T> {
+        let (used, outcome) = self
+            .dek_cache
+            .with_key(&self.provider, encrypted, use_key)
+            .await?;
         spans::record_dek_cache(outcome);
-        Ok(slot)
+        used
     }
 
     /// The `mode` span field of `encrypt_value` and `decrypt_value`.
@@ -262,11 +265,9 @@ where
     ) -> KmsAeadResult<CipherTextWithEncryptedKey> {
         spans::in_span(self.encrypt_span(self.mode()), async {
             match &self.dek_reuse {
-                Some(reused_deks) => {
-                    let dek = reused_deks.claim_or_renew(|| self.new_dek()).await?;
-                    let cipher_text =
-                        dek.slot
-                            .encrypt_value(&self.cipher, aad.as_ref(), plain_text)?;
+                Some(dek_reuse) => {
+                    let dek = dek_reuse.claim_or_renew(|| self.new_dek()).await?;
+                    let cipher_text = self.cipher.seal(aad.as_ref(), plain_text, &dek.key)?;
                     CipherTextWithEncryptedKey::new(&cipher_text, &dek.encrypted)
                 }
                 None => {
@@ -287,11 +288,10 @@ where
         let span = self.decrypt_span(self.mode(), cipher_text.layout_name());
         spans::in_span(span, async {
             let (cipher_text, encrypted_dek) = cipher_text.separate()?;
-            self.unwrap_dek(&encrypted_dek).await?.decrypt_value(
-                &self.cipher,
-                aad.as_ref(),
-                &cipher_text,
-            )
+            self.with_dek(&encrypted_dek, |key| {
+                self.cipher.open(aad.as_ref(), &cipher_text, key)
+            })
+            .await
         })
         .await
     }
@@ -315,9 +315,8 @@ where
         dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
         spans::in_span(self.encrypt_span("caller_dek"), async {
-            self.unwrap_dek(dek)
-                .await?
-                .encrypt_value(&self.cipher, aad.as_ref(), plain_text)
+            self.with_dek(dek, |key| self.cipher.seal(aad.as_ref(), plain_text, key))
+                .await
         })
         .await
     }
@@ -342,9 +341,10 @@ where
         encrypted_data_encryption_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
         spans::in_span(self.decrypt_span("caller_dek", None), async {
-            self.unwrap_dek(encrypted_data_encryption_key)
-                .await?
-                .decrypt_value(&self.cipher, aad.as_ref(), cipher_text)
+            self.with_dek(encrypted_data_encryption_key, |key| {
+                self.cipher.open(aad.as_ref(), cipher_text, key)
+            })
+            .await
         })
         .await
     }
@@ -365,10 +365,17 @@ mod tests {
     use super::*;
     #[cfg(not(feature = "legacy-formats"))]
     use crate::errors::{KmsAeadError, KmsAeadLegacyFormat};
-    use crate::test_provider::{TestKmsProvider, TEST_BACKEND};
-    use std::sync::Arc;
+    use crate::test_provider::{
+        let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
+        TEST_BACKEND,
+    };
 
     type Envelope = KmsAeadEnvelope<TestKmsProvider>;
+    type CountingEnvelope = KmsAeadEnvelope<CountingKmsProvider>;
+
+    const AAD: &str = "orders/1042";
+    const PLAIN_TEXT: &str = "4111 1111 1111 1111";
+    const ORDERS_KEK: &str = "orders";
 
     #[tokio::test]
     async fn test_envelope_encryption_roundtrip() {
@@ -643,29 +650,11 @@ mod tests {
         }
         Ok(())
     }
-}
-
-#[cfg(all(
-    test,
-    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
-))]
-mod store_less_tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::test_provider::{CountingKmsProvider, TestKmsProvider, TEST_BACKEND};
-
-    type Envelope = KmsAeadEnvelope<CountingKmsProvider>;
-
-    const AAD: &str = "orders/1042";
-    const PLAIN_TEXT: &str = "4111 1111 1111 1111";
-    const ORDERS_KEK: &str = "orders";
-    const CONCURRENT_CALLS: usize = 16;
 
     #[tokio::test]
     async fn per_call_envelope_has_no_cache_by_default() -> KmsAeadResult<()> {
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
-        let envelope = Envelope::new(provider, TEST_BACKEND).await?;
+        let envelope = CountingEnvelope::new(provider, TEST_BACKEND).await?;
 
         let value = envelope
             .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
@@ -682,13 +671,13 @@ mod store_less_tests {
 
     #[tokio::test]
     async fn an_explicit_cache_overrides_the_default_of_the_mode() -> KmsAeadResult<()> {
-        let per_call = Envelope::with_options(
+        let per_call = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )
         .await?;
-        let store_less = Envelope::with_options(
+        let store_less = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new()
@@ -713,7 +702,7 @@ mod store_less_tests {
 
     #[tokio::test]
     async fn encrypted_dek_calls_unwrap_through_the_cache() -> KmsAeadResult<()> {
-        let envelope = Envelope::with_options(
+        let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
@@ -737,7 +726,7 @@ mod store_less_tests {
     #[tokio::test]
     async fn reuse_renews_by_count() -> KmsAeadResult<()> {
         let policy = DekReusePolicy::new().with_max_uses(NonZeroU64::new(3).unwrap());
-        let envelope = Envelope::with_options(
+        let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new().with_dek_reuse(policy),
@@ -761,10 +750,10 @@ mod store_less_tests {
         Ok(())
     }
 
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn reuse_renews_by_age() -> KmsAeadResult<()> {
-        let max_age = Duration::from_secs(60 * 60);
-        let envelope = Envelope::with_options(
+        let max_age = Duration::from_millis(200);
+        let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new()
@@ -773,12 +762,12 @@ mod store_less_tests {
         .await?;
 
         let mut wrapped_deks = Vec::new();
-        for _ in 0..3 {
+        for pause in [Duration::ZERO, max_age, Duration::ZERO] {
             let value = envelope
                 .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
                 .await?;
             wrapped_deks.push(value.separate()?.1);
-            tokio::time::advance(max_age / 2).await;
+            tokio::time::sleep(pause).await;
         }
 
         let renewals: Vec<_> = wrapped_deks
@@ -793,7 +782,7 @@ mod store_less_tests {
     #[tokio::test]
     async fn renewal_is_single_flight() -> KmsAeadResult<()> {
         let envelope = Arc::new(
-            Envelope::with_options(
+            CountingEnvelope::with_options(
                 CountingKmsProvider::gated(TestKmsProvider::Working, ORDERS_KEK),
                 TEST_BACKEND,
                 KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
@@ -811,9 +800,7 @@ mod store_less_tests {
                 })
             })
             .collect();
-        for _ in 0..CONCURRENT_CALLS * 4 {
-            tokio::task::yield_now().await;
-        }
+        let_spawned_tasks_wait().await;
         assert_eq!(envelope.provider.wraps(), 1);
         envelope.provider.open_gate();
 
@@ -829,7 +816,7 @@ mod store_less_tests {
     #[tokio::test]
     async fn reused_dek_values_decrypt_after_renewal() -> KmsAeadResult<()> {
         let policy = DekReusePolicy::new().with_max_uses(NonZeroU64::new(2).unwrap());
-        let envelope = Envelope::with_options(
+        let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new().with_dek_reuse(policy),

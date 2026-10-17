@@ -1,13 +1,8 @@
 //! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext key itself,
-//! and the backend those tests run on.
-// Without a backend, only the cache tests and the read-error tests compile; the envelope tests
-// that use the rest of this module need a backend.
-#![cfg_attr(
-    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
-    allow(dead_code)
-)]
+//! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
@@ -28,12 +23,20 @@ pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
+/// How many calls the concurrency tests start at once.
+pub(crate) const CONCURRENT_CALLS: usize = 16;
+
+/// How long a test waits for another thread, far past any period that thread waits on.
+const WAIT_DEADLINE: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {
     Working,
+    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
     FailingToWrap,
     FailingToUnwrap,
     /// Returns its key material from `generate_key_material`, as a KMS generator would.
+    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
     Generating(SecretValue),
 }
 
@@ -48,6 +51,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
+            #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
             TestKmsProvider::FailingToWrap => Err(KmsAeadEncryptionError::create(
                 "TEST_WRAP",
                 "The test provider fails to wrap",
@@ -76,6 +80,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
 
     async fn generate_key_material(&self, _len: usize) -> KmsAeadResult<Option<SecretValue>> {
         match self {
+            #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
             TestKmsProvider::Generating(key_material) => Ok(Some(key_material.clone())),
             _ => Ok(None),
         }
@@ -115,6 +120,7 @@ impl CountingKmsProvider {
         self.gate.send_replace(true);
     }
 
+    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
     pub(crate) fn wraps(&self) -> usize {
         self.wraps.load(Ordering::SeqCst)
     }
@@ -150,6 +156,21 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
         self.unwraps.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
         self.inner.decrypt_data_encryption_key(encrypted_key).await
+    }
+}
+
+/// Lets every spawned task of a current-thread runtime run until it waits on something.
+pub(crate) async fn let_spawned_tasks_wait() {
+    for _ in 0..CONCURRENT_CALLS * 4 {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Waits until `done` holds, which another thread brings about, or for 5 seconds at most.
+pub(crate) fn wait_until(done: impl Fn() -> bool) {
+    let deadline = Instant::now() + WAIT_DEADLINE;
+    while !done() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
     }
 }
 

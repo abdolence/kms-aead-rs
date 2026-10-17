@@ -208,9 +208,10 @@ pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display, dek_cache: &De
         { DEK_CACHE } = field::Empty,
         { ERROR_CODE } = field::Empty,
     );
-    record_disabled_cache(&span, dek_cache);
     if dek_cache.is_enabled() {
         span.record(DEK_CACHE, DEK_CACHE_BYPASSED);
+    } else {
+        span.record(DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
     span
 }

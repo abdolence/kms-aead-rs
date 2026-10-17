@@ -305,15 +305,6 @@ impl KmsAeadEncryptionError {
             &format!("A key of {len} bytes does not fit {algorithm}, which takes {key_len} bytes"),
         )
     }
-
-    /// `DEK_REVOKED`: the DEK cache revoked the slot of a data encryption key, which has to be
-    /// unwrapped again.
-    pub(crate) fn dek_revoked() -> KmsAeadError {
-        Self::create(
-            "DEK_REVOKED",
-            "The data encryption key was revoked from the DEK cache",
-        )
-    }
 }
 
 impl Display for KmsAeadEncryptionError {
