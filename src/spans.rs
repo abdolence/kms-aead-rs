@@ -24,12 +24,6 @@ const ERROR_CODE: &str = "/kms_aead/error_code";
 const DEK_CACHE_DISABLED: &str = "disabled";
 
 /// The spans of the calls to a KMS, which the providers open.
-#[cfg(any(
-    feature = "gcp-kms-encryption-base",
-    feature = "aws-kms-encryption",
-    feature = "azure-kms-encryption-base",
-    feature = "vault-transit-kms-encryption-base"
-))]
 pub(crate) mod kms {
     use std::future::Future;
     use std::time::Instant;
