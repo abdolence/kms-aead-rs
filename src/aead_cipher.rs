@@ -99,9 +99,6 @@ impl AeadCipher {
 
 /// Values are `[nonce][ciphertext][tag]`, with a random nonce.
 impl Cipher for AeadCipher {
-    type Key = DataEncryptionKey;
-    type Sealed = CipherText;
-
     fn seal(
         &self,
         aad: &[u8],

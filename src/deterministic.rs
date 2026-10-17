@@ -44,7 +44,7 @@ mod aes_siv_cipher {
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
     use crate::{
-        checked_key_material, spans, Cipher, DataEncryptionKey, EncryptedDataEncryptionKey,
+        checked_key_material, spans, DataEncryptionKey, EncryptedDataEncryptionKey,
         KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
     };
 
@@ -174,7 +174,11 @@ mod aes_siv_cipher {
             plain_text: &SecretValue,
             key: &DeterministicDataEncryptionKey,
         ) -> KmsAeadResult<DeterministicCipherText> {
-            self.seal(aad, plain_text, key)
+            let cipher_text = self
+                .siv(key)?
+                .encrypt([aad], plain_text.ref_sensitive_value())
+                .map_err(|_| KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data"))?;
+            Ok(DeterministicCipherText(cipher_text))
         }
 
         /// Opens a value [`encrypt_value`](Self::encrypt_value) sealed, into a buffer the
@@ -186,48 +190,6 @@ mod aes_siv_cipher {
         /// `INVALID_CIPHERTEXT` when the value is shorter than the 16-byte synthetic IV, and
         /// `DECRYPT` when the value, the AAD or the key is not the one it was sealed with.
         pub fn decrypt_value(
-            &self,
-            aad: &[u8],
-            cipher_text: &DeterministicCipherText,
-            key: &DeterministicDataEncryptionKey,
-        ) -> KmsAeadResult<SecretValue> {
-            self.open(aad, cipher_text, key)
-        }
-
-        /// The cipher keyed with `key`: the first half keys S2V's CMAC and the second half CTR,
-        /// the order of RFC 5297 and of Tink's `AesSivKey`.
-        fn siv(&self, key: &DeterministicDataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
-            let key = key.value().ref_sensitive_value();
-            match self.algorithm {
-                DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
-                    KmsAeadEncryptionError::invalid_key_length(
-                        key.len(),
-                        self.algorithm,
-                        self.algorithm.key_len(),
-                    )
-                }),
-            }
-        }
-    }
-
-    impl Cipher for DeterministicCipher {
-        type Key = DeterministicDataEncryptionKey;
-        type Sealed = DeterministicCipherText;
-
-        fn seal(
-            &self,
-            aad: &[u8],
-            plain_text: &SecretValue,
-            key: &DeterministicDataEncryptionKey,
-        ) -> KmsAeadResult<DeterministicCipherText> {
-            let cipher_text = self
-                .siv(key)?
-                .encrypt([aad], plain_text.ref_sensitive_value())
-                .map_err(|_| KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data"))?;
-            Ok(DeterministicCipherText(cipher_text))
-        }
-
-        fn open(
             &self,
             aad: &[u8],
             cipher_text: &DeterministicCipherText,
@@ -246,6 +208,21 @@ mod aes_siv_cipher {
             siv.decrypt([aad], cipher_text.value())
                 .map(SecretValue::new)
                 .map_err(|_| KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data"))
+        }
+
+        /// The cipher keyed with `key`: the first half keys S2V's CMAC and the second half CTR,
+        /// the order of RFC 5297 and of Tink's `AesSivKey`.
+        fn siv(&self, key: &DeterministicDataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
+            let key = key.value().ref_sensitive_value();
+            match self.algorithm {
+                DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
+                    KmsAeadEncryptionError::invalid_key_length(
+                        key.len(),
+                        self.algorithm,
+                        self.algorithm.key_len(),
+                    )
+                }),
+            }
         }
     }
 

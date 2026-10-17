@@ -172,30 +172,24 @@ pub trait KmsAeadEncryptionProvider {
     }
 }
 
-/// Sealing and opening under a key of the cipher's own kind, for the crate's own callers. It is
-/// crate-private so that these operations stay off the public types and can change in any
-/// release.
+/// Sealing and opening for the crate's own callers. It is crate-private so that these operations
+/// stay off the public API of [`AeadCipher`] and can change in any release.
 pub(crate) trait Cipher {
-    /// The key it seals and opens with.
-    type Key;
-    /// A sealed value.
-    type Sealed;
-
     /// Seals `plain_text` under `key`, authenticating `aad`.
     fn seal(
         &self,
         aad: &[u8],
         plain_text: &SecretValue,
-        key: &Self::Key,
-    ) -> KmsAeadResult<Self::Sealed>;
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<CipherText>;
 
     /// Opens a value [`seal`](Self::seal) sealed under `key` and `aad`, into a buffer the
     /// returned `SecretValue` owns, so that no other copy of the plaintext exists.
     fn open(
         &self,
         aad: &[u8],
-        sealed: &Self::Sealed,
-        key: &Self::Key,
+        cipher_text: &CipherText,
+        key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue>;
 }
 
