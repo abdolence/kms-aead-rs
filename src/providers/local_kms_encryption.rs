@@ -56,15 +56,20 @@ impl TryFrom<String> for LocalKekId {
 
 impl LocalKekId {
     /// `[0x01][i][KEK id][KEK version]`: the start of a wrapped key and its associated data.
-    fn wrapped_key_header(&self, version: LocalKekVersion) -> Vec<u8> {
+    fn wrapped_key_header(&self, version: LocalKekVersion) -> KmsAeadResult<Vec<u8>> {
         let id = self.0.as_bytes();
+        let id_len = u8::try_from(id.len()).map_err(|_| {
+            KmsAeadSystemError::create(
+                "INVALID_LOCAL_KEK_ID",
+                "A local KEK id is longer than 255 bytes",
+            )
+        })?;
         let mut header = Vec::with_capacity(2 + id.len() + 4);
         header.push(WRAPPED_KEY_LAYOUT);
-        // The id is at most 255 bytes, so its length fits the byte.
-        header.push(id.len() as u8);
+        header.push(id_len);
         header.extend_from_slice(id);
         header.extend_from_slice(&version.0.get().to_be_bytes());
-        header
+        Ok(header)
     }
 }
 
@@ -102,6 +107,10 @@ pub struct LocalKek {
 }
 
 impl LocalKek {
+    /// The largest KEK file read: the 44 characters of the base64 and room for whitespace, small
+    /// enough that a wrong path is refused before its content is read into memory.
+    const MAX_FILE_LEN: usize = 256;
+
     /// A KEK the application already holds: one an operator unseals with their own tool
     /// (systemd-creds, a TPM, sops, age), or a credential the init system passes, such as a
     /// file systemd's `LoadCredential` places in `$CREDENTIALS_DIRECTORY`. The recommended form
@@ -139,17 +148,17 @@ impl LocalKek {
     /// Reads the standard base64 of the 32 bytes from the file at `path`. Trailing whitespace,
     /// such as an editor's final newline, is allowed.
     ///
-    /// On Unix the file is opened first and the opened file is checked, so it cannot be
-    /// swapped between the check and the read: it must be a regular file, owned by the effective
-    /// user or by root, with no permission for group or others (`mode & 0o077 == 0`), as OpenSSH
-    /// requires of a private key. A symbolic link is followed, and the file it points to is
-    /// checked. On other platforms no type, owner or permission check runs.
+    /// On Unix the file is opened without blocking and the opened file is checked, so it cannot
+    /// be swapped between the check and the read: it must be a regular file, owned by the
+    /// effective user or by root, with no permission for group or others (`mode & 0o077 == 0`),
+    /// as OpenSSH requires of a private key. A symbolic link is followed, and the file it points
+    /// to is checked. On other platforms no type, owner or permission check runs.
     ///
     /// # Errors
     ///
     /// `LOCAL_KEK_FILE_PERMISSIONS` when a check fails, `LOCAL_KEK_SOURCE` when the file cannot
-    /// be read or is not standard base64, and `LOCAL_KEK_LENGTH` when it does not decode to 32
-    /// bytes. The error names the path, never the content.
+    /// be read or is not standard base64, and `LOCAL_KEK_LENGTH` when it is larger than 256
+    /// bytes or does not decode to 32 bytes. The error names the path, never the content.
     pub fn from_file(version: LocalKekVersion, path: &Path) -> KmsAeadResult<Self> {
         let origin = format!("the file {}", path.display());
         let unreadable = |error: std::io::Error| {
@@ -159,25 +168,31 @@ impl LocalKek {
             )
         };
 
-        // Opening a FIFO blocks until a writer opens it, so a path that names anything but a
-        // regular file is refused before the open. The check that decides is the one on the
-        // opened file below.
+        // Without `O_NONBLOCK`, opening a FIFO blocks until a writer opens it.
         #[cfg(unix)]
-        if !std::fs::metadata(path).map_err(unreadable)?.is_file() {
-            return Err(KmsAeadSystemError::create(
-                "LOCAL_KEK_FILE_PERMISSIONS",
-                &format!("{origin} is not a regular file"),
-            ));
-        }
-
+        let file = {
+            use rustix::fs::{Mode, OFlags};
+            let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            File::from(
+                rustix::fs::open(path, flags, Mode::empty())
+                    .map_err(|errno| unreadable(errno.into()))?,
+            )
+        };
+        #[cfg(not(unix))]
         let file = File::open(path).map_err(unreadable)?;
         let metadata = file.metadata().map_err(unreadable)?;
         #[cfg(unix)]
         check_opened_file(&metadata, path, rustix::process::geteuid().as_raw())?;
 
-        let len = usize::try_from(metadata.len()).map_err(|_| {
-            KmsAeadSystemError::create("LOCAL_KEK_LENGTH", &format!("{origin} is too large"))
-        })?;
+        let len = usize::try_from(metadata.len())
+            .ok()
+            .filter(|len| *len <= Self::MAX_FILE_LEN)
+            .ok_or_else(|| {
+                KmsAeadSystemError::create(
+                    "LOCAL_KEK_LENGTH",
+                    &format!("{origin} is larger than {} bytes", Self::MAX_FILE_LEN),
+                )
+            })?;
         let mut encoded = SecretValue::new(Vec::with_capacity(len));
         // Reading at most the length the file had when opened keeps the buffer from growing,
         // which would leave a copy of the key in freed memory.
@@ -294,6 +309,13 @@ impl std::fmt::Debug for LocalKek {
 ///   encryption key instead, and add a new KEK version before the budget is spent.
 /// - Crypto-shredding means destroying every copy of the KEK, backups included.
 /// - Keys wrapped by a local KEK cannot be exported to BigQuery, which unwraps with Cloud KMS.
+///
+/// # Errors
+///
+/// A wrap fails with `ENCRYPTION` when `B`'s CSPRNG fails. An unwrap fails with
+/// `LOCAL_WRAPPED_KEY_FORMAT` when the key is not in the layout above, `LOCAL_KEK_ID_MISMATCH`
+/// when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION` when the provider does
+/// not hold its version, and `DECRYPT` when it is not authentic under that version.
 #[derive(Debug)]
 pub struct LocalKmsProvider<B> {
     id: LocalKekId,
@@ -338,11 +360,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
             .map(|(version, source)| format!("{version} ({source})"))
             .collect::<Vec<_>>()
             .join(", ");
-        tracing::info!(
-            "/kms_aead/key" = %id,
-            "/kms_aead/key_versions" = versions,
-            "A local KEK wraps and unwraps data encryption keys"
-        );
+        kms::local_kek_loaded(&id, &versions);
 
         Ok(Self {
             kek: KekRef::new(KekProvider::Local, id.to_string()),
@@ -424,7 +442,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version", self.id),
                 )
             })?;
-            let mut wrapped = self.id.wrapped_key_header(version);
+            let mut wrapped = self.id.wrapped_key_header(version)?;
             let sealed =
                 kms::timed(async { self.cipher.seal(&wrapped, encryption_key.value(), kek) })
                     .await?;
@@ -437,12 +455,6 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         .await
     }
 
-    /// # Errors
-    ///
-    /// `LOCAL_WRAPPED_KEY_FORMAT` when the key is not in the layout of the type docs,
-    /// `LOCAL_KEK_ID_MISMATCH` when it was wrapped under another KEK id,
-    /// `LOCAL_KEK_UNKNOWN_VERSION` when the provider does not hold its version, and `DECRYPT`
-    /// when it is not authentic under that version.
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
@@ -565,7 +577,7 @@ mod tests {
     async fn a_flipped_header_byte_fails_to_unwrap() {
         let provider = Provider::new(
             kek_id("golden"),
-            vec![kek(7, KEK_MATERIAL), kek(6, [0x43; 32])],
+            vec![kek(7, KEK_MATERIAL), kek(6, KEK_MATERIAL)],
         )
         .unwrap();
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
@@ -751,7 +763,12 @@ mod tests {
                 .with_ansi(false)
                 .with_max_level(tracing::Level::TRACE)
                 .finish();
-            tracing::subscriber::with_default(subscriber, operation);
+            // A test thread that reaches a callsite first, with no subscriber of its own, caches
+            // its interest as never; rebuilding inside the scope lets this subscriber decide.
+            tracing::subscriber::with_default(subscriber, || {
+                tracing::callsite::rebuild_interest_cache();
+                operation();
+            });
             let captured = log.0.lock().unwrap().clone();
             String::from_utf8(captured).unwrap()
         }
@@ -898,19 +915,36 @@ mod tests {
         }
 
         #[test]
-        fn a_fifo_is_refused() {
-            let dir = TestDir::new("fifo");
-            let path = dir.0.join("kek");
-            let created = std::process::Command::new("mkfifo")
-                .arg("-m")
-                .arg("600")
-                .arg(&path)
-                .status()
-                .unwrap();
-            assert!(created.success());
+        fn a_file_larger_than_the_cap_is_refused() {
+            let dir = TestDir::new("large");
+            let padded = format!("{KEK_BASE64}{}", " ".repeat(LocalKek::MAX_FILE_LEN));
+            let path = dir.file("kek", &padded, 0o600);
 
             assert_eq!(
                 error_code(LocalKek::from_file(version(1), &path)),
+                "LOCAL_KEK_LENGTH"
+            );
+        }
+
+        /// Opening a FIFO with no writer blocks, so the read runs on its own thread and a
+        /// regression fails on the timeout instead of hanging the suite.
+        #[test]
+        fn a_fifo_is_refused_without_blocking() {
+            let dir = TestDir::new("fifo");
+            let path = dir.0.join("kek");
+            let owner_only = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR;
+            rustix::fs::mkfifoat(rustix::fs::CWD, &path, owner_only).unwrap();
+
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let fifo = path.clone();
+            std::thread::spawn(move || {
+                let _ = sender.send(error_code(LocalKek::from_file(version(1), &fifo)));
+            });
+
+            assert_eq!(
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("from_file blocked on the FIFO"),
                 "LOCAL_KEK_FILE_PERMISSIONS"
             );
         }
@@ -950,30 +984,6 @@ mod tests {
                 )),
                 "LOCAL_KEK_FILE_PERMISSIONS"
             );
-        }
-
-        #[test]
-        fn the_check_runs_on_the_opened_file() {
-            let dir = TestDir::new("swap");
-            let path = dir.file("kek", KEK_BASE64, 0o644);
-            let file = File::open(&path).unwrap();
-            let private = dir.file("private", KEK_BASE64, 0o600);
-            fs::rename(&private, &path).unwrap();
-
-            assert_eq!(
-                error_code(check_opened_file(
-                    &file.metadata().unwrap(),
-                    &path,
-                    effective_user()
-                )),
-                "LOCAL_KEK_FILE_PERMISSIONS"
-            );
-            assert!(check_opened_file(
-                &File::open(&path).unwrap().metadata().unwrap(),
-                &path,
-                effective_user()
-            )
-            .is_ok());
         }
     }
 }

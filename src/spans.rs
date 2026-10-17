@@ -36,6 +36,7 @@ pub(crate) mod kms {
     const PROVIDER: &str = "/kms_aead/provider";
     const KEY: &str = "/kms_aead/key";
     const KEY_VERSION: &str = "/kms_aead/key_version";
+    const KEY_VERSIONS: &str = "/kms_aead/key_versions";
     const RESPONSE_TIME: &str = "/kms_aead/response_time";
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
     const LEN: &str = "/kms_aead/len";
@@ -89,6 +90,16 @@ pub(crate) mod kms {
             span.record(KEY, key);
         }
         span
+    }
+
+    /// The `INFO` event of a new local KMS provider: its KEK id and its versions, each with
+    /// where it came from, such as `1 (file), 2 (secret)`.
+    pub(crate) fn local_kek_loaded(key: &impl std::fmt::Display, versions: &str) {
+        tracing::info!(
+            { KEY } = %key,
+            { KEY_VERSIONS } = versions,
+            "A local KEK wraps and unwraps data encryption keys"
+        );
     }
 
     /// Records on the current KMS span the key version that wrapped `encrypted_key`, when the
