@@ -7,8 +7,8 @@
 //! # Providers
 //!
 //! A provider wraps and unwraps DEKs with one KEK. Each one is a type in [`providers`], enabled by
-//! its feature, and implements [`KmsAeadEncryptionProvider`], which an application can also
-//! implement for a KMS of its own.
+//! its feature where the table names one, and implements [`KmsAeadEncryptionProvider`], which an
+//! application can also implement for a KMS of its own.
 //!
 //! | KMS | Type | Feature |
 //! |---|---|---|
@@ -16,6 +16,7 @@
 //! | AWS KMS | `AwsKmsProvider` | `aws-kms-encryption` |
 //! | Azure Key Vault and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
 //! | HashiCorp Vault Transit | `VaultTransitProvider` | `vault-transit-kms-encryption` |
+//! | A KEK the process holds | `LocalKmsProvider` | none, in every build |
 //!
 //! The GCP, Azure and Vault Transit features have variants that choose the TLS stack, the root
 //! store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build with a
