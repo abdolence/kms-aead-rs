@@ -57,7 +57,6 @@ pub struct AwsKmsProviderOptions {
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
 /// message is the one AWS KMS returned. Its root cause is the SDK error.
 pub struct AwsKmsProvider {
-    aws_key_ref: AwsKmsKeyRef,
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
     kek: KekRef,
@@ -89,22 +88,21 @@ impl AwsKmsProvider {
         };
 
         Ok(Self::with_client(
-            effective_kms_ref,
+            &effective_kms_ref,
             aws_sdk_kms::Client::new(&shared_config),
             options,
         ))
     }
 
     fn with_client(
-        aws_key_ref: AwsKmsKeyRef,
+        kms_key_ref: &AwsKmsKeyRef,
         client: aws_sdk_kms::Client,
         options: AwsKmsProviderOptions,
     ) -> Self {
         Self {
-            kek: KekRef::new(KekProvider::Aws, aws_key_ref.to_key_arn()),
-            aws_key_ref,
             client,
             options,
+            kek: KekRef::new(KekProvider::Aws, kms_key_ref.to_key_arn()),
         }
     }
 
@@ -113,7 +111,7 @@ impl AwsKmsProvider {
     fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
         self.client
             .decrypt()
-            .key_id(self.aws_key_ref.to_key_arn())
+            .key_id(self.kek.key())
             .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
     }
 }
@@ -132,7 +130,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
             let request = self
                 .client
                 .encrypt()
-                .set_key_id(Some(self.aws_key_ref.to_key_arn()))
+                .key_id(self.kek.key())
                 .set_plaintext(Some(Blob::new(
                     encryption_key.value().ref_sensitive_value().as_slice(),
                 )));
@@ -149,7 +147,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                     "AWS_ERROR",
                     &format!(
                         "AWS error {:?}. No encrypted blob received.",
-                        self.aws_key_ref.to_key_arn()
+                        self.kek.key()
                     ),
                 )),
             }
@@ -173,10 +171,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                 ))),
                 None => Err(KmsAeadEncryptionError::create(
                     "AWS_ERROR",
-                    &format!(
-                        "AWS error {:?}: No plaintext received",
-                        self.aws_key_ref.to_key_arn()
-                    ),
+                    &format!("AWS error {:?}: No plaintext received", self.kek.key()),
                 )),
             }
         })
@@ -207,7 +202,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                     "AWS_ERROR",
                     &format!(
                         "AWS error {:?}. No secure random bytes received.",
-                        self.aws_key_ref.to_key_arn()
+                        self.kek.key()
                     ),
                 )
             })?;
@@ -245,7 +240,7 @@ mod tests {
             .behavior_version(aws_sdk_kms::config::BehaviorVersion::latest())
             .build();
         AwsKmsProvider::with_client(
-            key_ref,
+            &key_ref,
             aws_sdk_kms::Client::from_conf(config),
             AwsKmsProviderOptions::new(),
         )
