@@ -1,14 +1,17 @@
 //! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext key itself,
 //! and the backend those tests run on.
-// Without a backend, only the read-error tests compile; the envelope tests that use the rest of
-// this module need a backend.
+// Without a backend, only the cache tests and the read-error tests compile; the envelope tests
+// that use the rest of this module need a backend.
 #![cfg_attr(
     not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
     allow(dead_code)
 )]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
+use tokio::sync::watch;
 
 use crate::errors::KmsAeadEncryptionError;
 #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
@@ -76,6 +79,69 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
             TestKmsProvider::Generating(key_material) => Ok(Some(key_material.clone())),
             _ => Ok(None),
         }
+    }
+}
+
+/// A [`TestKmsProvider`] under a KEK of its own, which counts its unwraps and can hold them, once
+/// counted, until the test opens its gate.
+pub(crate) struct CountingKmsProvider {
+    inner: TestKmsProvider,
+    kek: KekRef,
+    unwraps: AtomicUsize,
+    gate: watch::Sender<bool>,
+}
+
+impl CountingKmsProvider {
+    /// A provider whose calls go through at once.
+    pub(crate) fn new(inner: TestKmsProvider, kek: &str) -> Self {
+        Self {
+            inner,
+            kek: KekRef::new(KekProvider::Other("test".to_string()), kek),
+            unwraps: AtomicUsize::new(0),
+            gate: watch::Sender::new(true),
+        }
+    }
+
+    /// A provider whose unwraps wait until [`open_gate`](Self::open_gate).
+    pub(crate) fn gated(inner: TestKmsProvider, kek: &str) -> Self {
+        let provider = Self::new(inner, kek);
+        provider.gate.send_replace(false);
+        provider
+    }
+
+    pub(crate) fn open_gate(&self) {
+        self.gate.send_replace(true);
+    }
+
+    pub(crate) fn unwraps(&self) -> usize {
+        self.unwraps.load(Ordering::SeqCst)
+    }
+
+    async fn pass_gate(&self) {
+        self.gate.subscribe().wait_for(|open| *open).await.unwrap();
+    }
+}
+
+#[async_trait]
+impl KmsAeadEncryptionProvider for CountingKmsProvider {
+    fn kek(&self) -> KekRef {
+        self.kek.clone()
+    }
+
+    async fn encrypt_data_encryption_key(
+        &self,
+        encryption_key: &DataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        self.inner.encrypt_data_encryption_key(encryption_key).await
+    }
+
+    async fn decrypt_data_encryption_key(
+        &self,
+        encrypted_key: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
+        self.unwraps.fetch_add(1, Ordering::SeqCst);
+        self.pass_gate().await;
+        self.inner.decrypt_data_encryption_key(encrypted_key).await
     }
 }
 

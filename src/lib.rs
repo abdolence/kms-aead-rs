@@ -187,6 +187,8 @@ pub use backend::AeadBackend;
 mod aead_cipher;
 pub use aead_cipher::*;
 
+pub mod cache;
+
 mod deterministic;
 pub use deterministic::*;
 

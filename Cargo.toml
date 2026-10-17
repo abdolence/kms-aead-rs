@@ -51,6 +51,10 @@ gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = "2.6.1"
+moka = { version = "0.12.16", features = ["future"] }
+# `rt` spawns the DEK cache's reaper on the caller's runtime, `time` paces it, and `sync` holds the
+# store-less DEK renewal to one caller at a time.
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync"] }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1"], optional = true }
@@ -60,7 +64,6 @@ rustls-native-certs = { version = "0.8", optional = true }
 webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
 serde_json = { version = "1", optional = true }
-tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
 azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
 # Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
@@ -71,7 +74,8 @@ reqwest = { version = "0.13.2", optional = true, default-features = false }
 rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+futures = "0.3"
 serde_json = { version = "1" }
 proptest = "1.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -143,7 +147,6 @@ hashicorp-vault-transit-kms-encryption-base = [
     "dep:percent-encoding",
     "dep:serde",
     "dep:serde_json",
-    "dep:tokio",
 ]
 # TLS root store variants - user can choose one
 hashicorp-vault-transit-kms-encryption-tls-roots = ["hashicorp-vault-transit-kms-encryption-base", "dep:rustls-native-certs"]

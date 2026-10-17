@@ -67,6 +67,24 @@ mod aes_siv_cipher {
         }
     }
 
+    /// `key`, as a provider unwrapped it, as a deterministic key for `algorithm`. The one place
+    /// that checks an unwrapped key against a deterministic algorithm.
+    pub(crate) fn checked_deterministic_key(
+        key: DataEncryptionKey,
+        algorithm: DeterministicAlgorithm,
+    ) -> KmsAeadResult<DeterministicDataEncryptionKey> {
+        let len = key.value().ref_sensitive_value().len();
+        if len == algorithm.key_len() {
+            Ok(DeterministicDataEncryptionKey(key.into_value()))
+        } else {
+            Err(KmsAeadEncryptionError::invalid_key_length(
+                len,
+                algorithm,
+                algorithm.key_len(),
+            ))
+        }
+    }
+
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
     /// output order of RFC 5297. Equal plaintexts and AADs under one key give equal values.
     /// Equality compares in constant time.
@@ -278,16 +296,7 @@ mod aes_siv_cipher {
                     .provider
                     .decrypt_data_encryption_key(encrypted_key)
                     .await?;
-                let len = key.value().ref_sensitive_value().len();
-                if len == algorithm.key_len() {
-                    Ok(DeterministicDataEncryptionKey(key.into_value()))
-                } else {
-                    Err(KmsAeadEncryptionError::invalid_key_length(
-                        len,
-                        algorithm,
-                        algorithm.key_len(),
-                    ))
-                }
+                checked_deterministic_key(key, algorithm)
             })
             .await
         }
