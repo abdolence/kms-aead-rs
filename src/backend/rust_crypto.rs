@@ -10,7 +10,7 @@ use crate::AeadAlgorithm;
 /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates: ChaCha20-Poly1305,
 /// AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV, with `getrandom` as the CSPRNG. Needs no C
 /// compiler. The `rustcrypto` feature turns on the crates' `zeroize` features, so their key
-/// objects are zeroized when dropped.
+/// objects, and the Poly1305 and POLYVAL keys each call derives, are zeroized when dropped.
 #[derive(Debug, Clone, Copy)]
 pub struct RustCrypto;
 

@@ -40,6 +40,10 @@ aes-siv = { version = "0.8.0", default-features = false, optional = true }
 # aes-gcm-siv and aes-siv are not zeroized otherwise: aes-siv's own `zeroize` does not reach them.
 aes = { version = "0.9", default-features = false, optional = true }
 cmac = { version = "0.8", default-features = false, optional = true }
+# Depended on only to turn on their `zeroize` features. ChaCha20-Poly1305's one-time Poly1305 key
+# and the POLYVAL key of AES-256-GCM-SIV are not zeroized otherwise.
+poly1305 = { version = "0.9", default-features = false, optional = true }
+polyval = { version = "0.7", default-features = false, optional = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -95,6 +99,10 @@ rustcrypto = [
     "chacha20poly1305/zeroize",
     "dep:aes",
     "aes/zeroize",
+    "dep:poly1305",
+    "poly1305/zeroize",
+    "dep:polyval",
+    "polyval/zeroize",
 ]
 # `aes-siv/alloc` carries the `siv::Aes256Siv` calls that take the associated data as a list.
 deterministic = [
