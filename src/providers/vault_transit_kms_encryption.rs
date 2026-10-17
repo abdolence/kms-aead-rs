@@ -318,7 +318,7 @@ impl KmsAeadEncryptionProvider for VaultTransitProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap(&self.kek), async {
+        spans::in_span(kms::wrap_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroized.
             let request = serde_json::to_vec(&EncryptRequest {
@@ -344,7 +344,7 @@ impl KmsAeadEncryptionProvider for VaultTransitProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
                 KmsAeadEncryptionError::create(

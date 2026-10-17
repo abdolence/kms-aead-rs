@@ -12,45 +12,42 @@ use tracing::{debug_span, field, Instrument, Span};
 
 use crate::KmsAeadResult;
 
-const PROVIDER: &str = "/kms_aead/provider";
-const KEY: &str = "/kms_aead/key";
-const KEY_VERSION: &str = "/kms_aead/key_version";
-const RESPONSE_TIME: &str = "/kms_aead/response_time";
-const LEN: &str = "/kms_aead/len";
 const MODE: &str = "/kms_aead/mode";
 const ALGORITHM: &str = "/kms_aead/algorithm";
 const BACKEND: &str = "/kms_aead/backend";
 const DEK_CACHE: &str = "/kms_aead/dek_cache";
 const FORMAT: &str = "/kms_aead/format";
 const PURPOSE: &str = "/kms_aead/purpose";
-const FROM_FORMAT: &str = "/kms_aead/from_format";
-const TO_FORMAT: &str = "/kms_aead/to_format";
 const ERROR_CODE: &str = "/kms_aead/error_code";
 
 /// The `dek_cache` value of every envelope call: the per-call envelope has no unwrap cache.
 const DEK_CACHE_DISABLED: &str = "disabled";
 
 /// The spans of the calls to a KMS, which the providers open.
-#[cfg_attr(
-    not(any(
-        feature = "gcp-kms-encryption-base",
-        feature = "aws-kms-encryption",
-        feature = "azure-kms-encryption-base",
-        feature = "vault-transit-kms-encryption-base"
-    )),
-    allow(dead_code, reason = "no KMS provider is compiled into this build")
-)]
+#[cfg(any(
+    feature = "gcp-kms-encryption-base",
+    feature = "aws-kms-encryption",
+    feature = "azure-kms-encryption-base",
+    feature = "vault-transit-kms-encryption-base"
+))]
 pub(crate) mod kms {
     use std::future::Future;
     use std::time::Instant;
 
     use tracing::{debug_span, field, Span};
 
-    use super::{ERROR_CODE, KEY, KEY_VERSION, LEN, PROVIDER, RESPONSE_TIME};
-    use crate::{EncryptedDataEncryptionKey, KekProvider, KekRef, KmsKeyVersion};
+    use super::ERROR_CODE;
+    use crate::{EncryptedDataEncryptionKey, KekRef, KmsKeyVersion};
+
+    const PROVIDER: &str = "/kms_aead/provider";
+    const KEY: &str = "/kms_aead/key";
+    const KEY_VERSION: &str = "/kms_aead/key_version";
+    const RESPONSE_TIME: &str = "/kms_aead/response_time";
+    #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
+    const LEN: &str = "/kms_aead/len";
 
     /// `KMS wrap`, around a provider's `encrypt_data_encryption_key`.
-    pub(crate) fn wrap(kek: &KekRef) -> Span {
+    pub(crate) fn wrap_span(kek: &KekRef) -> Span {
         debug_span!(
             "KMS wrap",
             { PROVIDER } = kek.provider().name(),
@@ -63,7 +60,7 @@ pub(crate) mod kms {
 
     /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`, with the key version the
     /// encrypted key records.
-    pub(crate) fn unwrap(kek: &KekRef, key_version: Option<&KmsKeyVersion>) -> Span {
+    pub(crate) fn unwrap_span(kek: &KekRef, key_version: Option<&KmsKeyVersion>) -> Span {
         let span = debug_span!(
             "KMS unwrap",
             { PROVIDER } = kek.provider().name(),
@@ -80,14 +77,12 @@ pub(crate) mod kms {
 
     /// `KMS random`, around a call to a KMS generator. `key` is what the request names, if
     /// anything.
-    #[cfg_attr(
-        not(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption")),
-        allow(
-            dead_code,
-            reason = "only the GCP and AWS providers call a KMS generator"
-        )
-    )]
-    pub(crate) fn random(provider: &KekProvider, key: Option<&str>, len: usize) -> Span {
+    #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
+    pub(crate) fn random_span(
+        provider: &crate::KekProvider,
+        key: Option<&str>,
+        len: usize,
+    ) -> Span {
         let span = debug_span!(
             "KMS random",
             { PROVIDER } = provider.name(),
@@ -166,37 +161,6 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str
         { BACKEND } = backend,
         { ERROR_CODE } = field::Empty,
     )
-}
-
-/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a deterministic key.
-#[allow(dead_code, reason = "opened only with the deterministic feature")]
-pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display) -> Span {
-    debug_span!(
-        "KMS AEAD decrypt DEK",
-        { PURPOSE } = purpose,
-        { ALGORITHM } = %algorithm,
-        { DEK_CACHE } = DEK_CACHE_DISABLED,
-        { ERROR_CODE } = field::Empty,
-    )
-}
-
-/// `KMS AEAD upgrade`, around the upgrade of a stored value from a legacy layout. The formats
-/// are `envelope_legacy`, `envelope_v1`, `encrypted_key_bare` and `encrypted_key_v1`; the one it
-/// is upgraded to is recorded with [`record_upgraded_format`] only when the input was not current
-/// already.
-#[allow(dead_code, reason = "opened only with the legacy-formats feature")]
-pub(crate) fn upgrade(from_format: &str) -> Span {
-    debug_span!(
-        "KMS AEAD upgrade",
-        { FROM_FORMAT } = from_format,
-        { TO_FORMAT } = field::Empty,
-        { ERROR_CODE } = field::Empty,
-    )
-}
-
-#[allow(dead_code, reason = "recorded only with the legacy-formats feature")]
-pub(crate) fn record_upgraded_format(to_format: &str) {
-    Span::current().record(TO_FORMAT, to_format);
 }
 
 /// Runs `operation` inside `span`, without holding the span entered across an `.await`, and

@@ -154,7 +154,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap(&self.kek), async {
+        spans::in_span(kms::wrap_span(&self.kek), async {
             let parameters =
                 self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
             let wrapped = kms::timed(
@@ -208,7 +208,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let key_version = encrypted_key.key_version().ok_or_else(|| {
                 KmsAeadEncryptionError::create(

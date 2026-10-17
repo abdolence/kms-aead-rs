@@ -135,7 +135,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap(&self.kek), async {
+        spans::in_span(kms::wrap_span(&self.kek), async {
             let encrypt_request = routed(
                 EncryptRequest {
                     name: self.gcp_key_ref.to_google_ref(),
@@ -170,7 +170,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap(&self.kek, encrypted_key.key_version());
+        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let decrypt_request = self.gcp_key_ref.decrypt_request(encrypted_key)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
@@ -189,7 +189,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
             return Ok(None);
         }
         let location = self.gcp_key_ref.to_location_ref();
-        let span = kms::random(self.kek.provider(), Some(&location), len);
+        let span = kms::random_span(self.kek.provider(), Some(&location), len);
         spans::in_span(span, async {
             let length_bytes = i32::try_from(len).map_err(|_| {
                 KmsAeadEncryptionError::create(
