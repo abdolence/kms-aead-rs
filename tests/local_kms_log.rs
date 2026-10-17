@@ -8,15 +8,16 @@ use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
 
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use kms_aead::AeadBackend;
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::MakeWriter;
 
 #[cfg(feature = "ring")]
-type Backend = kms_aead::backend::Ring;
+const BACKEND: AeadBackend = AeadBackend::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-type Backend = kms_aead::backend::AwsLc;
+const BACKEND: AeadBackend = AeadBackend::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-type Backend = kms_aead::backend::RustCrypto;
+const BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 #[derive(Clone, Default)]
 struct CapturedLog(Arc<Mutex<Vec<u8>>>);
@@ -67,12 +68,13 @@ fn the_info_event_names_the_source_kind() {
         .with_max_level(tracing::Level::TRACE)
         .finish();
     tracing::subscriber::with_default(subscriber, || {
-        LocalKmsProvider::<Backend>::new(
+        LocalKmsProvider::new(
             LocalKekId::try_from("orders".to_string()).unwrap(),
             vec![kek(2, [0x5A; 32]), kek(1, [0x5B; 32])],
+            BACKEND,
         )
         .unwrap();
-        LocalKmsProvider::<Backend>::ephemeral(LocalKekId::try_from("tests".to_string()).unwrap())
+        LocalKmsProvider::ephemeral(LocalKekId::try_from("tests".to_string()).unwrap(), BACKEND)
             .unwrap();
     });
     let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();

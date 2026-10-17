@@ -1,4 +1,3 @@
-use kms_aead::backend::Ring;
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 
@@ -9,7 +8,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    let encryption = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
+    let encryption = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)?;
     let key = encryption.generate_data_encryption_key()?;
 
     let secret_value = SecretValue::from("test-secret");

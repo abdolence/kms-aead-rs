@@ -1,27 +1,19 @@
-//! The crypto libraries that implement the [`AeadAlgorithm`](crate::AeadAlgorithm)s.
-//!
-//! The features `ring`, `aws-lc` and `rustcrypto` each add one backend type, and a build may
-//! enable any number of them. A caller names the backend once, as the `B` of
-//! [`AeadCipher<B>`](crate::AeadCipher) or [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope).
-//! There is no default backend: with Cargo's feature unification, a default chosen by features
-//! would change for every crate in a build when one crate enables another backend.
+//! The AEAD backends: the public [`AeadBackend`] a caller chooses at runtime and, behind it, one
+//! crate-private [`AeadBackendOps`] implementation per crypto library, so that no type of a
+//! crypto library reaches the public API.
 
-use std::fmt::Debug;
+use std::fmt::{Display, Formatter};
+
+use crate::AeadAlgorithm;
 
 #[cfg(feature = "ring")]
 mod ring;
-#[cfg(feature = "ring")]
-pub use ring::Ring;
 
 #[cfg(feature = "aws-lc")]
 mod aws_lc;
-#[cfg(feature = "aws-lc")]
-pub use aws_lc::AwsLc;
 
 #[cfg(feature = "rustcrypto")]
 mod rust_crypto;
-#[cfg(feature = "rustcrypto")]
-pub use rust_crypto::RustCrypto;
 
 #[cfg(all(
     test,
@@ -29,67 +21,112 @@ pub use rust_crypto::RustCrypto;
 ))]
 mod contract;
 
-/// A crypto library that implements the AEAD algorithms. Sealed: only the types in this module
-/// implement it, and only this crate can call its methods.
-pub trait AeadBackend: sealed::Sealed + Copy + Debug + Send + Sync + 'static {}
+/// The crypto library that runs the [`AeadAlgorithm`]s. The features `ring`, `aws-lc` and
+/// `rustcrypto` each add one variant, and a build may enable any number of them.
+///
+/// There is no default backend: with Cargo's feature unification, a default chosen by features
+/// would change for every crate in a build when one crate enables another backend. A value
+/// sealed by one backend opens with any other that implements its algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AeadBackend {
+    /// The [ring](https://crates.io/crates/ring) library, with the `ring` feature:
+    /// ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. It does not
+    /// zeroize its expanded key schedules, so they stay in freed memory after each call.
+    #[cfg(feature = "ring")]
+    Ring,
+    /// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` feature:
+    /// every [`AeadAlgorithm`].
+    ///
+    /// With the `aws-lc-fips` feature it runs on the AWS-LC FIPS module, and so does every other
+    /// user of aws-lc-rs in the build. AES-256-GCM is the algorithm for FIPS deployments.
+    ///
+    /// aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own
+    /// allocator, which overwrites every allocation with zeros before freeing it
+    /// (`OPENSSL_free`). The expanded key schedule therefore does not stay in freed memory after
+    /// a call, as long as the application leaves AWS-LC's allocator in place: a replacement
+    /// installed through `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on
+    /// its own whether freed memory is cleared. The record keys AES-256-GCM-SIV derives from the
+    /// key and the nonce for each call live on the stack, and AWS-LC does not clear them.
+    #[cfg(feature = "aws-lc")]
+    AwsLc,
+    /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the
+    /// `rustcrypto` feature: every [`AeadAlgorithm`], with `getrandom` as the CSPRNG. Needs no C
+    /// compiler. The feature turns on the crates' `zeroize` features, so their key objects, and
+    /// the Poly1305 and POLYVAL keys each call derives, are zeroized when dropped.
+    #[cfg(feature = "rustcrypto")]
+    RustCrypto,
+}
 
-pub(crate) mod sealed {
-    use crate::AeadAlgorithm;
+/// `ring`, `aws-lc`, `rustcrypto`: the values of the `/kms_aead/backend` span field.
+impl Display for AeadBackend {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let ops: &dyn AeadBackendOps = (*self).into();
+        f.write_str(ops.name())
+    }
+}
 
-    pub type Nonce = [u8; AeadAlgorithm::NONCE_LEN];
-    pub type Tag = [u8; AeadAlgorithm::TAG_LEN];
-
-    /// Every method of [`Sealed`] takes one, and only this crate can make one, so no code
-    /// outside it can call a backend, even through a `B: AeadBackend` bound.
-    #[derive(Clone, Copy)]
-    pub struct Token(());
-
-    impl Token {
-        pub(crate) const fn new() -> Self {
-            Self(())
+/// The one place that maps a backend to its implementation.
+impl From<AeadBackend> for &'static dyn AeadBackendOps {
+    fn from(backend: AeadBackend) -> Self {
+        match backend {
+            #[cfg(feature = "ring")]
+            AeadBackend::Ring => &ring::RingOps,
+            #[cfg(feature = "aws-lc")]
+            AeadBackend::AwsLc => &aws_lc::AwsLcOps,
+            #[cfg(feature = "rustcrypto")]
+            AeadBackend::RustCrypto => &rust_crypto::RustCryptoOps,
         }
     }
+}
 
-    /// Crypto libraries report no detail on failure, and none is lost here.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum Failure {
-        /// The library refused the key.
-        Key,
-        /// Generating random bytes, sealing or opening failed. An open fails when the value is
-        /// not authentic under the key, the nonce and the AAD.
-        Operation,
-    }
+pub(crate) type Nonce = [u8; AeadAlgorithm::NONCE_LEN];
+pub(crate) type Tag = [u8; AeadAlgorithm::TAG_LEN];
 
-    /// The operations of a backend. `AeadCipher` checks the key length and the support of the
-    /// algorithm before it calls a backend, so an implementation may rely on both.
-    pub trait Sealed {
-        /// `ring`, `aws-lc` or `rustcrypto`: the value of the `backend` span field.
-        fn name(token: Token) -> &'static str;
+/// Crypto libraries report no detail on failure, and none is lost here.
+// Only the backends construct it, and a build without a backend feature has none.
+#[cfg_attr(
+    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
+    allow(dead_code)
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Failure {
+    /// The library refused the key.
+    Key,
+    /// Generating random bytes, sealing or opening failed. An open fails when the value is not
+    /// authentic under the key, the nonce and the AAD.
+    Operation,
+}
 
-        fn supports(token: Token, algorithm: AeadAlgorithm) -> bool;
+/// The operations of one backend. `AeadCipher` checks the key length and the support of the
+/// algorithm before it calls a backend, so an implementation may rely on both.
+pub(crate) trait AeadBackendOps {
+    /// `ring`, `aws-lc` or `rustcrypto`: the value of the `backend` span field.
+    fn name(&self) -> &'static str;
 
-        /// Fills `out` from the backend's system CSPRNG.
-        fn fill_random(token: Token, out: &mut [u8]) -> Result<(), Failure>;
+    fn supports(&self, algorithm: AeadAlgorithm) -> bool;
 
-        /// Seals `in_out` in place and returns the tag.
-        fn seal_in_place(
-            token: Token,
-            algorithm: AeadAlgorithm,
-            key: &[u8],
-            nonce: &Nonce,
-            aad: &[u8],
-            in_out: &mut [u8],
-        ) -> Result<Tag, Failure>;
+    /// Fills `out` from the backend's system CSPRNG.
+    fn fill_random(&self, out: &mut [u8]) -> Result<(), Failure>;
 
-        /// Opens `[ciphertext][tag]` in place and returns the length of the plaintext, which
-        /// starts at the beginning of `in_out`. `in_out` holds at least a tag.
-        fn open_in_place(
-            token: Token,
-            algorithm: AeadAlgorithm,
-            key: &[u8],
-            nonce: &Nonce,
-            aad: &[u8],
-            in_out: &mut [u8],
-        ) -> Result<usize, Failure>;
-    }
+    /// Seals `in_out` in place and returns the tag.
+    fn seal_in_place(
+        &self,
+        algorithm: AeadAlgorithm,
+        key: &[u8],
+        nonce: &Nonce,
+        aad: &[u8],
+        in_out: &mut [u8],
+    ) -> Result<Tag, Failure>;
+
+    /// Opens `[ciphertext][tag]` in place and returns the length of the plaintext, which starts
+    /// at the beginning of `in_out`. `in_out` holds at least a tag.
+    fn open_in_place(
+        &self,
+        algorithm: AeadAlgorithm,
+        key: &[u8],
+        nonce: &Nonce,
+        aad: &[u8],
+        in_out: &mut [u8],
+    ) -> Result<usize, Failure>;
 }

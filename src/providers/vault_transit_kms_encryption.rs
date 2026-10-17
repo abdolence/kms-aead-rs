@@ -911,7 +911,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::<_, crate::backend::Ring>::new(provider.clone())
+        let encryption = KmsAeadEnvelope::new(provider.clone(), AeadBackend::Ring)
             .await
             .unwrap();
         let aad = "orders-aad".to_string();

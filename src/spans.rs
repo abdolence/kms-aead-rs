@@ -122,12 +122,12 @@ pub(crate) mod kms {
 
 /// `KMS AEAD encrypt`, around the envelope's encrypt calls. `mode` is `per_call` for
 /// `encrypt_value` and `caller_dek` for the calls that take a key.
-pub(crate) fn aead_encrypt(mode: &str, algorithm: impl Display, backend: &str) -> Span {
+pub(crate) fn aead_encrypt(mode: &str, algorithm: impl Display, backend: impl Display) -> Span {
     debug_span!(
         "KMS AEAD encrypt",
         { MODE } = mode,
         { ALGORITHM } = %algorithm,
-        { BACKEND } = backend,
+        { BACKEND } = %backend,
         { DEK_CACHE } = DEK_CACHE_DISABLED,
         { ERROR_CODE } = field::Empty,
     )
@@ -138,14 +138,14 @@ pub(crate) fn aead_encrypt(mode: &str, algorithm: impl Display, backend: &str) -
 pub(crate) fn aead_decrypt(
     mode: &str,
     algorithm: impl Display,
-    backend: &str,
+    backend: impl Display,
     format: Option<&str>,
 ) -> Span {
     let span = debug_span!(
         "KMS AEAD decrypt",
         { MODE } = mode,
         { ALGORITHM } = %algorithm,
-        { BACKEND } = backend,
+        { BACKEND } = %backend,
         { DEK_CACHE } = DEK_CACHE_DISABLED,
         { FORMAT } = field::Empty,
         { ERROR_CODE } = field::Empty,
@@ -158,12 +158,12 @@ pub(crate) fn aead_decrypt(
 
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
 /// `deterministic`.
-pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
+pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: impl Display) -> Span {
     debug_span!(
         "KMS AEAD generate DEK",
         { PURPOSE } = purpose,
         { ALGORITHM } = %algorithm,
-        { BACKEND } = backend,
+        { BACKEND } = %backend,
         { ERROR_CODE } = field::Empty,
     )
 }

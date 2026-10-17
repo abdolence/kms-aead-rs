@@ -1,4 +1,3 @@
-use kms_aead::backend::Ring;
 use kms_aead::providers::{AwsKmsProvider, AwsKmsProviderOptions};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
@@ -19,12 +18,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
 
-    let encryption: KmsAeadEnvelope<AwsKmsProvider, Ring> = KmsAeadEnvelope::new(
-        providers::AwsKmsProvider::with_options(
+    let encryption = KmsAeadEnvelope::new(
+        AwsKmsProvider::with_options(
             &kms_ref,
             AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
         )
         .await?,
+        AeadBackend::Ring,
     )
     .await?;
 

@@ -6,16 +6,16 @@ use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadEncryptionError;
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 #[cfg(feature = "ring")]
-pub(crate) type TestBackend = crate::backend::Ring;
+pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-pub(crate) type TestBackend = crate::backend::AwsLc;
+pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-pub(crate) type TestBackend = crate::backend::RustCrypto;
+pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {

@@ -420,8 +420,7 @@ mod tests {
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         );
         let encryption =
-            KmsAeadEnvelope::<_, crate::backend::Ring>::new(GcpKmsProvider::new(&key_ref).await?)
-                .await?;
+            KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring).await?;
         for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
             let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;

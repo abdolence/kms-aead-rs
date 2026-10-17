@@ -1,4 +1,3 @@
-use crate::backend::AeadBackend;
 use crate::spans;
 use crate::*;
 use async_trait::*;
@@ -7,14 +6,13 @@ use secret_vault_value::SecretValue;
 use tracing::Span;
 
 /// Envelope encryption: a data encryption key per value or per caller, wrapped by the provider
-/// `P`, and AEAD on the backend `B`. The [`KmsAeadEnvelopeEncryption`] implementation encrypts
-/// and decrypts values.
+/// `P`, and AEAD on the backend the envelope is built with. The [`KmsAeadEnvelopeEncryption`]
+/// implementation encrypts and decrypts values.
 ///
-/// Name the backend once: `KmsAeadEnvelope::<GcpKmsProvider, Ring>::new(provider).await?`.
 /// Every call opens one `DEBUG` span, with the KMS call as a child span when it makes one.
-pub struct KmsAeadEnvelope<P, B> {
+pub struct KmsAeadEnvelope<P> {
     pub(crate) provider: P,
-    pub(crate) cipher: AeadCipher<B>,
+    pub(crate) cipher: AeadCipher,
 }
 
 /// The settings of a [`KmsAeadEnvelope`].
@@ -28,42 +26,50 @@ pub struct KmsAeadEnvelopeOptions {
     pub algorithm: AeadAlgorithm,
 }
 
-impl<P, B> KmsAeadEnvelope<P, B>
+impl<P> KmsAeadEnvelope<P>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
-    B: AeadBackend,
 {
-    /// An envelope with the default options: ChaCha20-Poly1305.
+    /// An envelope on `backend` with the default options: ChaCha20-Poly1305.
     ///
     /// # Errors
     ///
-    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement ChaCha20-Poly1305.
-    pub async fn new(provider: P) -> KmsAeadResult<Self> {
-        Self::with_options(provider, KmsAeadEnvelopeOptions::new()).await
+    /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement ChaCha20-Poly1305.
+    pub async fn new(provider: P, backend: AeadBackend) -> KmsAeadResult<Self> {
+        Self::with_options(provider, backend, KmsAeadEnvelopeOptions::new()).await
     }
 
-    /// An envelope with `algorithm`.
+    /// An envelope on `backend` with `algorithm`.
     ///
     /// # Errors
     ///
-    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`.
-    pub async fn with_algorithm(provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<Self> {
+    /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement `algorithm`.
+    pub async fn with_algorithm(
+        provider: P,
+        backend: AeadBackend,
+        algorithm: AeadAlgorithm,
+    ) -> KmsAeadResult<Self> {
         Self::with_options(
             provider,
+            backend,
             KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
         )
         .await
     }
 
-    /// An envelope with `options`.
+    /// An envelope on `backend` with `options`.
     ///
     /// # Errors
     ///
-    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement the algorithm of `options`.
-    pub async fn with_options(provider: P, options: KmsAeadEnvelopeOptions) -> KmsAeadResult<Self> {
+    /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement the algorithm of `options`.
+    pub async fn with_options(
+        provider: P,
+        backend: AeadBackend,
+        options: KmsAeadEnvelopeOptions,
+    ) -> KmsAeadResult<Self> {
         Ok(Self {
             provider,
-            cipher: AeadCipher::new(options.algorithm)?,
+            cipher: AeadCipher::new(backend, options.algorithm)?,
         })
     }
 
@@ -80,27 +86,33 @@ where
         let encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
         Ok((dek, encrypted_dek))
     }
+}
 
+// Without a backend feature `AeadBackend` has no variant, so no envelope can exist and the
+// compiler sees every read of its backend as unreachable.
+#[cfg_attr(
+    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
+    allow(unreachable_code, unused_variables)
+)]
+impl<P> KmsAeadEnvelope<P> {
     fn encrypt_span(&self, mode: &str) -> Span {
-        spans::aead_encrypt(mode, self.algorithm(), AeadCipher::<B>::backend_name())
+        spans::aead_encrypt(mode, self.cipher.algorithm(), self.cipher.backend())
     }
 
     fn decrypt_span(&self, mode: &str, format: Option<&str>) -> Span {
-        spans::aead_decrypt(
-            mode,
-            self.algorithm(),
-            AeadCipher::<B>::backend_name(),
-            format,
-        )
+        spans::aead_decrypt(mode, self.cipher.algorithm(), self.cipher.backend(), format)
+    }
+
+    fn generate_dek_span(&self) -> Span {
+        spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend())
     }
 }
 
 #[async_trait]
-impl<Aad, P, B> KmsAeadEnvelopeEncryption<Aad> for KmsAeadEnvelope<P, B>
+impl<Aad, P> KmsAeadEnvelopeEncryption<Aad> for KmsAeadEnvelope<P>
 where
     Aad: AsRef<[u8]> + Send + Sync + 'static,
     P: KmsAeadEncryptionProvider + Send + Sync,
-    B: AeadBackend,
 {
     async fn encrypt_value(
         &self,
@@ -189,12 +201,7 @@ where
     async fn generate_new_dek(
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-        let span = spans::generate_dek(
-            "randomized",
-            self.algorithm(),
-            AeadCipher::<B>::backend_name(),
-        );
-        spans::in_span(span, self.new_dek()).await
+        spans::in_span(self.generate_dek_span(), self.new_dek()).await
     }
 }
 
@@ -204,15 +211,15 @@ where
 ))]
 mod tests {
     use super::*;
-    use crate::test_provider::{TestBackend, TestKmsProvider};
+    use crate::test_provider::{TestKmsProvider, TEST_BACKEND};
     use std::sync::Arc;
 
-    type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
+    type Envelope = KmsAeadEnvelope<TestKmsProvider>;
 
     #[tokio::test]
     async fn test_envelope_encryption_roundtrip() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::new(provider).await.unwrap();
+        let encryption = Envelope::new(provider, TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret message");
@@ -226,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn test_envelope_encryption_with_provided_dek() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::new(provider).await.unwrap();
+        let encryption = Envelope::new(provider, TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret message");
@@ -258,7 +265,7 @@ mod tests {
     #[tokio::test]
     async fn test_envelope_encryption_with_encrypted_dek() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::new(provider).await.unwrap();
+        let encryption = Envelope::new(provider, TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret message");
@@ -284,7 +291,7 @@ mod tests {
     #[tokio::test]
     async fn test_provider_encrypt_failure() {
         let provider = TestKmsProvider::FailingToWrap;
-        let encryption = Envelope::new(provider).await.unwrap();
+        let encryption = Envelope::new(provider, TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret");
@@ -297,7 +304,7 @@ mod tests {
     #[tokio::test]
     async fn test_provider_decrypt_failure() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::new(provider.clone()).await.unwrap();
+        let encryption = Envelope::new(provider.clone(), TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret");
@@ -305,7 +312,7 @@ mod tests {
         let ciphertext = encryption.encrypt_value(&aad, &plaintext).await.unwrap();
 
         let failing_provider = TestKmsProvider::FailingToUnwrap;
-        let failing_encryption = Envelope::new(failing_provider).await.unwrap();
+        let failing_encryption = Envelope::new(failing_provider, TEST_BACKEND).await.unwrap();
 
         let result = failing_encryption.decrypt_value(&aad, &ciphertext).await;
 
@@ -315,7 +322,7 @@ mod tests {
     #[tokio::test]
     async fn test_aes_256_gcm_algorithm() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::with_algorithm(provider, AeadAlgorithm::Aes256Gcm)
+        let encryption = Envelope::with_algorithm(provider, TEST_BACKEND, AeadAlgorithm::Aes256Gcm)
             .await
             .unwrap();
 
@@ -333,7 +340,7 @@ mod tests {
         use tokio::task;
 
         let provider = TestKmsProvider::Working;
-        let encryption = Arc::new(Envelope::new(provider).await.unwrap());
+        let encryption = Arc::new(Envelope::new(provider, TEST_BACKEND).await.unwrap());
 
         let mut handles = vec![];
         for i in 0..10 {
@@ -358,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn test_corrupted_cipher_text_with_key_fails() {
         let provider = TestKmsProvider::Working;
-        let encryption = Envelope::new(provider).await.unwrap();
+        let encryption = Envelope::new(provider, TEST_BACKEND).await.unwrap();
 
         let aad = "test-aad";
         let plaintext = SecretValue::from("secret");
@@ -380,6 +387,7 @@ mod tests {
         let material = SecretValue::new((0..32).collect());
         let encryption = Envelope::with_algorithm(
             TestKmsProvider::Generating(material.clone()),
+            TEST_BACKEND,
             AeadAlgorithm::Aes256Gcm,
         )
         .await
@@ -394,10 +402,13 @@ mod tests {
 
     #[tokio::test]
     async fn new_dek_falls_back_to_the_backend_without_a_kms_generator() {
-        let encryption =
-            Envelope::with_algorithm(TestKmsProvider::Working, AeadAlgorithm::Aes128Gcm)
-                .await
-                .unwrap();
+        let encryption = Envelope::with_algorithm(
+            TestKmsProvider::Working,
+            TEST_BACKEND,
+            AeadAlgorithm::Aes128Gcm,
+        )
+        .await
+        .unwrap();
 
         let (first, _) = KmsAeadEnvelopeEncryption::<&str>::generate_new_dek(&encryption)
             .await
@@ -412,7 +423,7 @@ mod tests {
 
     #[tokio::test]
     async fn generate_key_material_of_the_wrong_length_fails() {
-        let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm).unwrap();
+        let cipher = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm).unwrap();
         let provider = TestKmsProvider::Generating(SecretValue::new(vec![0x42; 64]));
 
         let result = cipher.generate_data_encryption_key_with(&provider).await;
@@ -424,7 +435,7 @@ mod tests {
     const FIXTURE_SECRET: &str = "fixture-secret";
 
     async fn decrypt_released_envelope(envelope_hex: &str) -> KmsAeadResult<SecretValue> {
-        let encryption = Envelope::new(TestKmsProvider::Working).await?;
+        let encryption = Envelope::new(TestKmsProvider::Working, TEST_BACKEND).await?;
         let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
         encryption.decrypt_value(&FIXTURE_AAD, &envelope).await
     }

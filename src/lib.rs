@@ -24,16 +24,16 @@
 //!
 //! # Backends
 //!
-//! The AEAD runs on a crypto library chosen by a feature and named as a type from [`backend`],
-//! the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`]. A build may enable any number
-//! of them, and there is no default one.
+//! The AEAD runs on a crypto library that a feature compiles in and an [`AeadBackend`] value
+//! selects at runtime, passed to [`AeadCipher::new`] and to the [`KmsAeadEnvelope`]
+//! constructors. A build may enable any number of them, and there is no default one.
 //!
-//! | Feature | Type | Algorithms |
+//! | Feature | Variant | Algorithms |
 //! |---|---|---|
-//! | `ring` | `Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
-//! | `aws-lc` | `AwsLc` | every [`AeadAlgorithm`] |
-//! | `aws-lc-fips` | `AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
-//! | `rustcrypto` | `RustCrypto` | every [`AeadAlgorithm`] |
+//! | `ring` | `AeadBackend::Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
+//! | `aws-lc` | `AeadBackend::AwsLc` | every [`AeadAlgorithm`] |
+//! | `aws-lc-fips` | `AeadBackend::AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
+//! | `rustcrypto` | `AeadBackend::RustCrypto` | every [`AeadAlgorithm`] |
 //!
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
@@ -51,14 +51,13 @@
 //! ```rust,no_run
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::backend::Ring;
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeEncryption};
+//! use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeEncryption};
 //! use secret_vault_value::SecretValue;
 //!
 //! let kms_ref = AwsKmsKeyRef::new("123456789012".into(), "alias/orders".into());
-//! let encryption: KmsAeadEnvelope<AwsKmsProvider, Ring> =
-//!     KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?).await?;
+//! let encryption =
+//!     KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?, AeadBackend::Ring).await?;
 //!
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = "orders/1042".to_string();
@@ -76,11 +75,10 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::backend::Ring;
-//! use kms_aead::{AeadAlgorithm, AeadCipher, AeadEncryption};
+//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption};
 //! use secret_vault_value::SecretValue;
 //!
-//! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
+//! let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
 //! let key = cipher.generate_data_encryption_key()?;
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = "orders/1042";
@@ -183,7 +181,8 @@ pub use api::*;
 mod algorithm;
 pub use algorithm::*;
 
-pub mod backend;
+mod backend;
+pub use backend::AeadBackend;
 
 mod aead_cipher;
 pub use aead_cipher::*;
