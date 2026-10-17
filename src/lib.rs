@@ -37,6 +37,13 @@
 //!
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
+//! # Store-less mode and the DEK cache
+//!
+//! A [`KmsAeadEnvelope`] built with a [`DekReusePolicy`] encrypts many values under one DEK and
+//! renews it by age or by count, so that a write calls the KMS only to renew. Values unwrap
+//! through a [`cache::DekCache`], which keeps the plaintext DEKs for a TTL and zeroizes each one
+//! as it leaves the cache. The per-call envelope, the default, keeps no DEK past the call.
+//!
 //! # Other features
 //!
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].

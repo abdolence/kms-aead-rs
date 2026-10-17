@@ -291,7 +291,8 @@ mod aes_siv_cipher {
             algorithm: DeterministicAlgorithm,
             encrypted_key: &EncryptedDataEncryptionKey,
         ) -> KmsAeadResult<DeterministicDataEncryptionKey> {
-            spans::in_span(spans::decrypt_dek("deterministic", algorithm), async {
+            let span = spans::decrypt_dek("deterministic", algorithm, self.dek_cache());
+            spans::in_span(span, async {
                 let key = self
                     .provider
                     .decrypt_data_encryption_key(encrypted_key)

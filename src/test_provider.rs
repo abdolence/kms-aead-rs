@@ -82,11 +82,12 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     }
 }
 
-/// A [`TestKmsProvider`] under a KEK of its own, which counts its unwraps and can hold them, once
-/// counted, until the test opens its gate.
+/// A [`TestKmsProvider`] under a KEK of its own, which counts its wraps and unwraps and can hold
+/// them, once counted, until the test opens its gate.
 pub(crate) struct CountingKmsProvider {
     inner: TestKmsProvider,
     kek: KekRef,
+    wraps: AtomicUsize,
     unwraps: AtomicUsize,
     gate: watch::Sender<bool>,
 }
@@ -97,12 +98,13 @@ impl CountingKmsProvider {
         Self {
             inner,
             kek: KekRef::new(KekProvider::Other("test".to_string()), kek),
+            wraps: AtomicUsize::new(0),
             unwraps: AtomicUsize::new(0),
             gate: watch::Sender::new(true),
         }
     }
 
-    /// A provider whose unwraps wait until [`open_gate`](Self::open_gate).
+    /// A provider whose calls wait until [`open_gate`](Self::open_gate).
     pub(crate) fn gated(inner: TestKmsProvider, kek: &str) -> Self {
         let provider = Self::new(inner, kek);
         provider.gate.send_replace(false);
@@ -111,6 +113,10 @@ impl CountingKmsProvider {
 
     pub(crate) fn open_gate(&self) {
         self.gate.send_replace(true);
+    }
+
+    pub(crate) fn wraps(&self) -> usize {
+        self.wraps.load(Ordering::SeqCst)
     }
 
     pub(crate) fn unwraps(&self) -> usize {
@@ -132,6 +138,8 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        self.wraps.fetch_add(1, Ordering::SeqCst);
+        self.pass_gate().await;
         self.inner.encrypt_data_encryption_key(encryption_key).await
     }
 

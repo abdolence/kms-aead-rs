@@ -49,9 +49,10 @@ pub trait AeadEncryption<Aad> {
 /// [`KmsAeadEncryptionProvider`] for the KMS step, with the codes the KMS provider reports.
 #[async_trait]
 pub trait KmsAeadEnvelopeEncryption<Aad> {
-    /// Encrypts `plain_text` under a new DEK, wraps the DEK with the KMS, and returns both in one
-    /// [`CipherTextWithEncryptedKey`]. Calls the KMS once to wrap, and once more for the key
-    /// material when the provider uses the KMS generator.
+    /// Encrypts `plain_text` under a new DEK, or under the reused DEK of a store-less
+    /// [`KmsAeadEnvelope`], and returns it with the wrapped DEK in one
+    /// [`CipherTextWithEncryptedKey`]. A new DEK costs one KMS call to wrap it, and one more for
+    /// the key material when the provider uses the KMS generator.
     ///
     /// # Errors
     ///
@@ -64,13 +65,15 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
         plain_text: &SecretValue,
     ) -> KmsAeadResult<CipherTextWithEncryptedKey>;
 
-    /// Unwraps the DEK stored in `cipher_text` with the KMS and opens the value with it.
+    /// Unwraps the DEK stored in `cipher_text`, through the envelope's
+    /// [`DekCache`](crate::cache::DekCache), and opens the value with it.
     ///
     /// # Errors
     ///
     /// Besides the AEAD and KMS errors, `UNKNOWN_CIPHER_TEXT_LAYOUT`,
     /// `INVALID_CIPHER_TEXT_FORMAT` or `INVALID_KEY_VERSION` when `cipher_text` cannot be read
-    /// (see [`CipherTextWithEncryptedKey::separate`]).
+    /// (see [`CipherTextWithEncryptedKey::separate`]), and `DEK_REVOKED` when the cache revoked
+    /// the key between its lookup and the open, after which a retry unwraps it again.
     async fn decrypt_value(
         &self,
         aad: &Aad,
@@ -86,8 +89,8 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText>;
 
-    /// Unwraps `dek` with the KMS and encrypts `plain_text` under it. The caller stores the
-    /// wrapped DEK beside the returned cipher text.
+    /// Unwraps `dek`, through the envelope's [`DekCache`](crate::cache::DekCache), and encrypts
+    /// `plain_text` under it. The caller stores the wrapped DEK beside the returned cipher text.
     async fn encrypt_value_with_encrypted_dek(
         &self,
         aad: &Aad,
@@ -103,7 +106,8 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
         data_encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue>;
 
-    /// Unwraps `encrypted_data_encryption_key` with the KMS and opens `cipher_text` with it.
+    /// Unwraps `encrypted_data_encryption_key`, through the envelope's
+    /// [`DekCache`](crate::cache::DekCache), and opens `cipher_text` with it.
     async fn decrypt_value_with_encrypted_dek(
         &self,
         aad: &Aad,

@@ -10,6 +10,7 @@ use std::future::Future;
 
 use tracing::{debug_span, field, Instrument, Span};
 
+use crate::cache::{DekCache, DekCacheOutcome};
 use crate::KmsAeadResult;
 
 const MODE: &str = "/kms_aead/mode";
@@ -24,8 +25,10 @@ const FROM_FORMAT: &str = "/kms_aead/from_format";
 #[cfg(feature = "legacy-formats")]
 const TO_FORMAT: &str = "/kms_aead/to_format";
 
-/// The `dek_cache` value of every envelope call: the per-call envelope has no unwrap cache.
-const DEK_CACHE_DISABLED: &str = "disabled";
+/// The `dek_cache` value of a call that unwraps through the provider although the envelope has
+/// a cache.
+#[cfg(feature = "deterministic")]
+const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// The spans of the calls to a KMS, which the providers open.
 pub(crate) mod kms {
@@ -124,17 +127,24 @@ pub(crate) mod kms {
     }
 }
 
-/// `KMS AEAD encrypt`, around the envelope's encrypt calls. `mode` is `per_call` for
-/// `encrypt_value` and `caller_dek` for the calls that take a key.
-pub(crate) fn aead_encrypt(mode: &str, algorithm: impl Display, backend: impl Display) -> Span {
-    debug_span!(
+/// `KMS AEAD encrypt`, around the envelope's encrypt calls. `mode` is `per_call` or
+/// `store_less` for `encrypt_value` and `caller_dek` for the calls that take a key.
+pub(crate) fn aead_encrypt(
+    mode: &str,
+    algorithm: impl Display,
+    backend: impl Display,
+    dek_cache: &DekCache,
+) -> Span {
+    let span = debug_span!(
         "KMS AEAD encrypt",
         { MODE } = mode,
         { ALGORITHM } = %algorithm,
         { BACKEND } = %backend,
-        { DEK_CACHE } = DEK_CACHE_DISABLED,
+        { DEK_CACHE } = field::Empty,
         { ERROR_CODE } = field::Empty,
-    )
+    );
+    record_disabled_cache(&span, dek_cache);
+    span
 }
 
 /// `KMS AEAD decrypt`, around the envelope's decrypt calls, with the layout of the stored value
@@ -143,6 +153,7 @@ pub(crate) fn aead_decrypt(
     mode: &str,
     algorithm: impl Display,
     backend: impl Display,
+    dek_cache: &DekCache,
     format: Option<&str>,
 ) -> Span {
     let span = debug_span!(
@@ -150,14 +161,28 @@ pub(crate) fn aead_decrypt(
         { MODE } = mode,
         { ALGORITHM } = %algorithm,
         { BACKEND } = %backend,
-        { DEK_CACHE } = DEK_CACHE_DISABLED,
+        { DEK_CACHE } = field::Empty,
         { FORMAT } = field::Empty,
         { ERROR_CODE } = field::Empty,
     );
+    record_disabled_cache(&span, dek_cache);
     if let Some(format) = format {
         span.record(FORMAT, format);
     }
     span
+}
+
+/// Records `dek_cache` as `disabled` for an envelope without a cache. With one, a call records
+/// what its lookup found, and a call that looks nothing up leaves the field unrecorded.
+fn record_disabled_cache(span: &Span, dek_cache: &DekCache) {
+    if !dek_cache.is_enabled() {
+        span.record(DEK_CACHE, field::display(DekCacheOutcome::Disabled));
+    }
+}
+
+/// Records on the current envelope span where the key of the call came from.
+pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
+    Span::current().record(DEK_CACHE, field::display(outcome));
 }
 
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
@@ -172,17 +197,22 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: impl
     )
 }
 
-/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a key the caller stored. `purpose` is
-/// `randomized` or `deterministic`.
+/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a key the caller stored, which never
+/// goes through the cache. `purpose` is `randomized` or `deterministic`.
 #[cfg(feature = "deterministic")]
-pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display) -> Span {
-    debug_span!(
+pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display, dek_cache: &DekCache) -> Span {
+    let span = debug_span!(
         "KMS AEAD decrypt DEK",
         { PURPOSE } = purpose,
         { ALGORITHM } = %algorithm,
-        { DEK_CACHE } = DEK_CACHE_DISABLED,
+        { DEK_CACHE } = field::Empty,
         { ERROR_CODE } = field::Empty,
-    )
+    );
+    record_disabled_cache(&span, dek_cache);
+    if dek_cache.is_enabled() {
+        span.record(DEK_CACHE, DEK_CACHE_BYPASSED);
+    }
+    span
 }
 
 /// Runs `operation`, the re-framing of a stored value, inside a `KMS AEAD upgrade` span.
