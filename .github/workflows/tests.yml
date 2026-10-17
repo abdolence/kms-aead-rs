@@ -24,7 +24,7 @@ jobs:
           - name: vault-roots-ring
             features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-ring
           - name: vault-webpki-ring
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
           - name: azure-native-tls
             features: gcp-kms-encryption,aws-kms-encryption,serde,ring,azure-kms-encryption-native-tls
           - name: azure-rustls-aws-lc-rs
