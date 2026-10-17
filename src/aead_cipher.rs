@@ -1,10 +1,8 @@
-use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
-use zeroize::Zeroizing;
 
 use crate::backend::sealed::{Failure, Nonce, Token};
 use crate::backend::AeadBackend;
@@ -17,6 +15,7 @@ use crate::{
 /// Randomized AEAD with the algorithm it was made with, on the backend `B`, without a KMS.
 ///
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
+#[derive(Debug, Clone)]
 pub struct AeadCipher<B> {
     algorithm: AeadAlgorithm,
     backend: PhantomData<fn() -> B>,
@@ -89,9 +88,10 @@ impl<B: AeadBackend> AeadCipher<B> {
 
         // Allocated once at its final size, since growing it would leave a copy of the plaintext
         // in freed memory, and zeroized if sealing fails.
-        let mut value = Zeroizing::new(Vec::with_capacity(
+        let mut buffer = SecretValue::new(Vec::with_capacity(
             AeadAlgorithm::NONCE_LEN + plain_text.len() + AeadAlgorithm::TAG_LEN,
         ));
+        let value = buffer.ref_sensitive_value_mut();
         value.extend_from_slice(&nonce);
         value.extend_from_slice(plain_text);
         let tag = B::seal_in_place(
@@ -111,7 +111,7 @@ impl<B: AeadBackend> AeadCipher<B> {
             }
         })?;
         value.extend_from_slice(&tag);
-        Ok(CipherText(std::mem::take(&mut *value)))
+        Ok(CipherText(std::mem::take(value)))
     }
 
     /// Opens `[nonce][ciphertext][tag]` into a buffer the returned `SecretValue` owns, so that
@@ -177,25 +177,6 @@ impl<B: AeadBackend> AeadCipher<B> {
                 ),
             ))
         }
-    }
-}
-
-// Written out because the derives would require `B: Clone` and `B: Debug`.
-impl<B> Clone for AeadCipher<B> {
-    fn clone(&self) -> Self {
-        Self {
-            algorithm: self.algorithm,
-            backend: PhantomData,
-        }
-    }
-}
-
-impl<B: AeadBackend> Debug for AeadCipher<B> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AeadCipher")
-            .field("algorithm", &self.algorithm)
-            .field("backend", &Self::backend_name())
-            .finish()
     }
 }
 

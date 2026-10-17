@@ -6,6 +6,8 @@
 //! There is no default backend: with Cargo's feature unification, a default chosen by features
 //! would change for every crate in a build when one crate enables another backend.
 
+use std::fmt::Debug;
+
 #[cfg(feature = "ring")]
 mod ring;
 #[cfg(feature = "ring")]
@@ -29,7 +31,7 @@ mod contract;
 
 /// A crypto library that implements the AEAD algorithms. Sealed: only the types in this module
 /// implement it, and only this crate can call its methods.
-pub trait AeadBackend: sealed::Sealed + Send + Sync + 'static {}
+pub trait AeadBackend: sealed::Sealed + Copy + Debug + Send + Sync + 'static {}
 
 pub(crate) mod sealed {
     use crate::AeadAlgorithm;

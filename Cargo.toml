@@ -36,9 +36,12 @@ aes-gcm = { version = "0.11.1", default-features = false, features = ["aes"], op
 aes-gcm-siv = { version = "0.12.1", default-features = false, features = ["aes"], optional = true }
 chacha20poly1305 = { version = "0.11.0", default-features = false, optional = true }
 aes-siv = { version = "0.8.0", default-features = false, optional = true }
+# Depended on only to turn on their `zeroize` features. The AES and CMAC key schedules inside
+# aes-gcm-siv and aes-siv are not zeroized otherwise: aes-siv's own `zeroize` does not reach them.
+aes = { version = "0.9", default-features = false, optional = true }
+cmac = { version = "0.8", default-features = false, optional = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
-zeroize = "1"
 serde = { version = "1", features = ["derive"], optional = true }
 gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
@@ -90,9 +93,20 @@ rustcrypto = [
     "aes-gcm/zeroize",
     "aes-gcm-siv/zeroize",
     "chacha20poly1305/zeroize",
+    "dep:aes",
+    "aes/zeroize",
 ]
 # `aes-siv/alloc` carries the `siv::Aes256Siv` calls that take the associated data as a list.
-deterministic = ["dep:aes-siv", "aes-siv/alloc", "aes-siv/zeroize", "dep:getrandom"]
+deterministic = [
+    "dep:aes-siv",
+    "aes-siv/alloc",
+    "aes-siv/zeroize",
+    "dep:aes",
+    "aes/zeroize",
+    "dep:cmac",
+    "cmac/zeroize",
+    "dep:getrandom",
+]
 # Deprecated: reads the layouts written up to 0.28.1. Reading them will be removed in a later
 # breaking release.
 legacy-formats = []
