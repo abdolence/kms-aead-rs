@@ -1,7 +1,11 @@
 //! The KMS providers, one per feature: `GcpKmsProvider` (`gcp-kms-encryption`),
 //! `AwsKmsProvider` (`aws-kms-encryption`), `AzureKmsProvider` (`azure-kms-encryption`) and
 //! `VaultTransitProvider` (`vault-transit-kms-encryption`), each with the key reference and
-//! options types it is built from.
+//! options types it is built from. `LocalKmsProvider`, with a key encryption key the
+//! application holds, is in every build.
+
+mod local_kms_encryption;
+pub use local_kms_encryption::*;
 
 #[cfg(feature = "aws-kms-encryption")]
 mod aws_kms_encryption;
