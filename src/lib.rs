@@ -202,10 +202,7 @@ pub use types::*;
 
 pub mod providers;
 
-#[cfg(all(
-    test,
-    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
-))]
+#[cfg(test)]
 mod test_provider;
 
 #[cfg(all(

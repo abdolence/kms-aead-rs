@@ -1,13 +1,21 @@
 //! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext key itself,
 //! and the backend those tests run on.
+// Without a backend, only the read-error tests compile; the envelope tests that use the rest of
+// this module need a backend.
+#![cfg_attr(
+    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
+    allow(dead_code)
+)]
 
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadEncryptionError;
+#[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+use crate::AeadBackend;
 use crate::{
-    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
+    KmsAeadResult,
 };
 
 #[cfg(feature = "ring")]

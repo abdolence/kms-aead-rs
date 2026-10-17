@@ -1076,7 +1076,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
     #[test]
     fn read_errors_echo_no_stored_bytes() {
         use crate::test_provider::renderings;
