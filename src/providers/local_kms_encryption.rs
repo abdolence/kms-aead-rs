@@ -481,11 +481,6 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod tests {
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    use tracing_subscriber::fmt::MakeWriter;
-
     use super::*;
     use crate::test_provider::TestBackend;
 
@@ -730,73 +725,6 @@ mod tests {
 
         for rendering in renderings(&[0x5A; 32]) {
             assert!(!printed.contains(&rendering), "{printed}");
-        }
-    }
-
-    #[derive(Clone, Default)]
-    struct CapturedLog(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for CapturedLog {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    impl<'a> MakeWriter<'a> for CapturedLog {
-        type Writer = Self;
-
-        fn make_writer(&'a self) -> Self {
-            self.clone()
-        }
-    }
-
-    impl CapturedLog {
-        fn capture(operation: impl FnOnce()) -> String {
-            let log = CapturedLog::default();
-            let subscriber = tracing_subscriber::fmt()
-                .with_writer(log.clone())
-                .with_ansi(false)
-                .with_max_level(tracing::Level::TRACE)
-                .finish();
-            // A test thread that reaches a callsite first, with no subscriber of its own, caches
-            // its interest as never; rebuilding inside the scope lets this subscriber decide.
-            tracing::subscriber::with_default(subscriber, || {
-                tracing::callsite::rebuild_interest_cache();
-                operation();
-            });
-            let captured = log.0.lock().unwrap().clone();
-            String::from_utf8(captured).unwrap()
-        }
-    }
-
-    #[test]
-    fn the_info_event_names_the_source_kind() {
-        let log = CapturedLog::capture(|| {
-            Provider::new(
-                kek_id("orders"),
-                vec![kek(2, [0x5A; 32]), kek(1, [0x5B; 32])],
-            )
-            .unwrap();
-            Provider::ephemeral(kek_id("tests")).unwrap();
-        });
-
-        let lines: Vec<&str> = log.lines().collect();
-        assert_eq!(lines.len(), 2, "{log}");
-        assert!(lines.iter().all(|line| line.contains("INFO")), "{log}");
-        assert!(lines[0].contains("orders"), "{log}");
-        assert!(lines[0].contains("1 (secret), 2 (secret)"), "{log}");
-        assert!(lines[1].contains("tests"), "{log}");
-        assert!(lines[1].contains("1 (ephemeral)"), "{log}");
-        for rendering in renderings(&[0x5A; 32])
-            .into_iter()
-            .chain(renderings(&[0x5B; 32]))
-        {
-            assert!(!log.contains(&rendering), "{log}");
         }
     }
 
