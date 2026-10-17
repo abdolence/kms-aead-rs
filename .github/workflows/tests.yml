@@ -49,22 +49,26 @@ jobs:
           fi
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
+  # cargo-public-api reads the rustdoc JSON of one range of nightlies, so both are pinned and
+  # move together.
   public-api:
     name: public-api
     runs-on: ubuntu-latest
+    env:
+      PUBLIC_API_NIGHTLY: nightly-2026-09-27
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly
+          toolchain: ${{ env.PUBLIC_API_NIGHTLY }}
       - uses: actions-rs/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           default: true
-      - run: cargo install cargo-public-api --locked
-      - run: scripts/check-public-api.sh
+      - run: cargo install cargo-public-api@0.52.0 --locked
+      - run: RUSTUP_TOOLCHAIN="$PUBLIC_API_NIGHTLY" scripts/check-public-api.sh
   vault-live:
     name: vault-live
     runs-on: ubuntu-latest
