@@ -134,7 +134,7 @@ azure-kms-encryption-native-tls = ["azure-kms-encryption-base", "reqwest/native-
 azure-kms-encryption = ["azure-kms-encryption-tls-aws-lc-rs"]
 ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
 ci-aws = ["aws-kms-encryption"] # Live tests against an AWS KMS key
-vault-transit-kms-encryption-base = [
+hashicorp-vault-transit-kms-encryption-base = [
     "dep:hyper",
     "dep:hyper-util",
     "dep:hyper-rustls",
@@ -146,16 +146,16 @@ vault-transit-kms-encryption-base = [
     "dep:tokio",
 ]
 # TLS root store variants - user can choose one
-vault-transit-kms-encryption-tls-roots = ["vault-transit-kms-encryption-base", "dep:rustls-native-certs"]
-vault-transit-kms-encryption-tls-webpki = ["vault-transit-kms-encryption-base", "dep:webpki-roots"]
+hashicorp-vault-transit-kms-encryption-tls-roots = ["hashicorp-vault-transit-kms-encryption-base", "dep:rustls-native-certs"]
+hashicorp-vault-transit-kms-encryption-tls-webpki = ["hashicorp-vault-transit-kms-encryption-base", "dep:webpki-roots"]
 # TLS crypto provider variants - user can choose one
-vault-transit-kms-encryption-tls-aws-lc-rs = ["vault-transit-kms-encryption-base", "rustls/aws_lc_rs"]
-vault-transit-kms-encryption-tls-ring = ["vault-transit-kms-encryption-base", "rustls/ring"]
-vault-transit-kms-encryption = ["vault-transit-kms-encryption-tls-roots", "vault-transit-kms-encryption-tls-aws-lc-rs"]
+hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs = ["hashicorp-vault-transit-kms-encryption-base", "rustls/aws_lc_rs"]
+hashicorp-vault-transit-kms-encryption-tls-ring = ["hashicorp-vault-transit-kms-encryption-base", "rustls/ring"]
+hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryption-tls-roots", "hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs"]
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "vault-transit-kms-encryption"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
 
 [[example]]
 name = "aws_kms"
@@ -168,9 +168,9 @@ path = "examples/gcp_kms.rs"
 required-features = ["gcp-kms-encryption", "ring"]
 
 [[example]]
-name = "vault_transit_kms"
-path = "examples/vault_transit_kms.rs"
-required-features = ["vault-transit-kms-encryption-base", "ring"]
+name = "hc_vault_transit_kms"
+path = "examples/hc_vault_transit_kms.rs"
+required-features = ["hashicorp-vault-transit-kms-encryption-base", "ring"]
 
 [[example]]
 name = "azure_kms"

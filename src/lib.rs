@@ -15,12 +15,12 @@
 //! | Google Cloud KMS | `GcpKmsProvider` | `gcp-kms-encryption` |
 //! | AWS KMS | `AwsKmsProvider` | `aws-kms-encryption` |
 //! | Azure Key Vault and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
-//! | HashiCorp Vault Transit | `VaultTransitProvider` | `vault-transit-kms-encryption` |
+//! | HashiCorp Vault Transit | `HcVaultTransitProvider` | `hashicorp-vault-transit-kms-encryption` |
 //! | A KEK the process holds | `LocalKmsProvider` | none, in every build |
 //!
-//! The GCP, Azure and Vault Transit features have variants that choose the TLS stack, the root
-//! store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build with a
-//! provider needs a backend.
+//! The GCP, Azure and HashiCorp Vault Transit features have variants that choose the TLS stack,
+//! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
+//! with a provider needs a backend.
 //!
 //! # Backends
 //!
@@ -96,37 +96,37 @@
 #![warn(missing_docs)]
 
 #[cfg(all(
-    feature = "vault-transit-kms-encryption-base",
-    not(feature = "vault-transit-kms-encryption-tls-roots"),
-    not(feature = "vault-transit-kms-encryption-tls-webpki")
+    feature = "hashicorp-vault-transit-kms-encryption-base",
+    not(feature = "hashicorp-vault-transit-kms-encryption-tls-roots"),
+    not(feature = "hashicorp-vault-transit-kms-encryption-tls-webpki")
 ))]
 compile_error!(
-    "You must enable either \"vault-transit-kms-encryption-tls-roots\" or \"vault-transit-kms-encryption-tls-webpki\" when using Vault Transit features"
+    "You must enable either \"hashicorp-vault-transit-kms-encryption-tls-roots\" or \"hashicorp-vault-transit-kms-encryption-tls-webpki\" when using HashiCorp Vault Transit features"
 );
 
 #[cfg(all(
-    feature = "vault-transit-kms-encryption-tls-roots",
-    feature = "vault-transit-kms-encryption-tls-webpki"
+    feature = "hashicorp-vault-transit-kms-encryption-tls-roots",
+    feature = "hashicorp-vault-transit-kms-encryption-tls-webpki"
 ))]
 compile_error!(
-    "You cannot enable both \"vault-transit-kms-encryption-tls-roots\" (enabled by \"vault-transit-kms-encryption\") and \"vault-transit-kms-encryption-tls-webpki\" at the same time"
+    "You cannot enable both \"hashicorp-vault-transit-kms-encryption-tls-roots\" (enabled by \"hashicorp-vault-transit-kms-encryption\") and \"hashicorp-vault-transit-kms-encryption-tls-webpki\" at the same time"
 );
 
 #[cfg(all(
-    feature = "vault-transit-kms-encryption-base",
-    not(feature = "vault-transit-kms-encryption-tls-aws-lc-rs"),
-    not(feature = "vault-transit-kms-encryption-tls-ring")
+    feature = "hashicorp-vault-transit-kms-encryption-base",
+    not(feature = "hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs"),
+    not(feature = "hashicorp-vault-transit-kms-encryption-tls-ring")
 ))]
 compile_error!(
-    "You must enable either \"vault-transit-kms-encryption-tls-aws-lc-rs\" or \"vault-transit-kms-encryption-tls-ring\" when using Vault Transit features"
+    "You must enable either \"hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs\" or \"hashicorp-vault-transit-kms-encryption-tls-ring\" when using HashiCorp Vault Transit features"
 );
 
 #[cfg(all(
-    feature = "vault-transit-kms-encryption-tls-aws-lc-rs",
-    feature = "vault-transit-kms-encryption-tls-ring"
+    feature = "hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs",
+    feature = "hashicorp-vault-transit-kms-encryption-tls-ring"
 ))]
 compile_error!(
-    "You cannot enable both \"vault-transit-kms-encryption-tls-aws-lc-rs\" (enabled by \"vault-transit-kms-encryption\") and \"vault-transit-kms-encryption-tls-ring\" at the same time"
+    "You cannot enable both \"hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs\" (enabled by \"hashicorp-vault-transit-kms-encryption\") and \"hashicorp-vault-transit-kms-encryption-tls-ring\" at the same time"
 );
 
 extern crate core;
@@ -136,7 +136,7 @@ extern crate core;
         feature = "gcp-kms-encryption-base",
         feature = "aws-kms-encryption",
         feature = "azure-kms-encryption-base",
-        feature = "vault-transit-kms-encryption-base"
+        feature = "hashicorp-vault-transit-kms-encryption-base"
     ),
     not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))
 ))]
@@ -212,7 +212,7 @@ mod test_provider;
     test,
     any(
         feature = "aws-kms-encryption",
-        feature = "vault-transit-kms-encryption-base"
+        feature = "hashicorp-vault-transit-kms-encryption-base"
     )
 ))]
 mod test_http;

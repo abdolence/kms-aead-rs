@@ -267,7 +267,7 @@ pub enum KekProvider {
     /// Azure Key Vault or Managed HSM.
     Azure,
     /// The Transit secrets engine of HashiCorp Vault.
-    VaultTransit,
+    HcVaultTransit,
     /// A KEK held by the application itself.
     Local,
     /// An application's own provider, named by the application.
@@ -281,7 +281,7 @@ impl KekProvider {
             KekProvider::Gcp => "gcp",
             KekProvider::Aws => "aws",
             KekProvider::Azure => "azure",
-            KekProvider::VaultTransit => "vault_transit",
+            KekProvider::HcVaultTransit => "hc_vault_transit",
             KekProvider::Local => "local",
             KekProvider::Other(name) => name,
         }
