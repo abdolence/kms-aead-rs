@@ -423,25 +423,32 @@ mod tests {
     const ENVELOPE_V1: &str = "010000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901328f5ffd046ddc430b18ba1d85738d440000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c2fb61160bcd48c2e564c02d5020110803b5d02b9463971cf911780d692666861a56101335c3d3d047dad9187a4dd15295189e5489017cb4c745c93064abfe217335d46e0cd8f6da27c8997e5ec392560da00e258e81877a60cc0e2a1d06cedfaef2b10d45bb80fda1cb2b81a5f038b24e8c607";
 
     #[test]
-    fn envelopes_from_a_live_key_split_into_key_version_and_wrapped_key() {
-        let (legacy_cipher_text, legacy_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
-                .separate()
-                .unwrap();
+    fn envelope_v1_from_a_live_key_splits_into_key_version_and_wrapped_key() {
         let (v1_cipher_text, v1_dek) =
             CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap())
                 .separate()
                 .unwrap();
 
-        assert_eq!(legacy_dek.key_version(), None);
-        assert_eq!(legacy_dek.wrapped().len(), 184);
         assert_eq!(v1_dek.key_version(), None);
         assert_eq!(v1_dek.wrapped().len(), 184);
         // Nonce, the 11 bytes of `test-secret` and the tag.
-        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
         assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
     }
 
+    #[cfg(feature = "legacy-formats")]
+    #[test]
+    fn envelope_from_0_28_1_splits_into_a_wrapped_key_without_key_version() {
+        let (legacy_cipher_text, legacy_dek) =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
+                .separate()
+                .unwrap();
+
+        assert_eq!(legacy_dek.key_version(), None);
+        assert_eq!(legacy_dek.wrapped().len(), 184);
+        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
+    }
+
+    #[cfg(feature = "legacy-formats")]
     #[test]
     fn wrapped_key_stored_by_0_28_1_reads_as_a_bare_wrapped_key() {
         let (_, legacy_dek) =
@@ -460,17 +467,47 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn values_stored_by_0_28_1_need_legacy_formats() {
+        let separated =
+            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap()).separate();
+        assert!(
+            matches!(&separated, Err(KmsAeadError::LegacyFormat(error))
+                if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope),
+            "{separated:?}"
+        );
+
+        // The hex of the wrapped key, after the 8-byte length.
+        let wrapped_key = &ENVELOPE_FROM_0_28_1[16..16 + 2 * 184];
+        for read in [
+            EncryptedDataEncryptionKey::try_from(hex::decode(wrapped_key).unwrap().as_slice()),
+            EncryptedDataEncryptionKey::try_from_hex_string(wrapped_key),
+        ] {
+            assert!(
+                matches!(&read, Err(KmsAeadError::LegacyFormat(error))
+                    if error.format == KmsAeadLegacyFormat::BareEncryptedKey),
+                "{read:?}"
+            );
+        }
+    }
+
     #[tokio::test]
     #[cfg(feature = "ring")]
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    async fn live_key_decrypts_envelopes_from_0_28_1_and_v1() -> KmsAeadResult<()> {
+    async fn live_key_decrypts_stored_envelopes() -> KmsAeadResult<()> {
         let key_ref = AwsKmsKeyRef::new(
             std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         );
         let encryption =
             KmsAeadEnvelope::new(AwsKmsProvider::new(&key_ref).await?, AeadBackend::Ring).await?;
-        for envelope in [ENVELOPE_FROM_0_28_1, ENVELOPE_V1] {
+        let envelopes = if cfg!(feature = "legacy-formats") {
+            vec![ENVELOPE_FROM_0_28_1, ENVELOPE_V1]
+        } else {
+            vec![ENVELOPE_V1]
+        };
+        for envelope in envelopes {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
             let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
             assert_eq!(secret, SecretValue::from("test-secret"));
