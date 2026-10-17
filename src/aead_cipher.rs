@@ -182,14 +182,10 @@ impl<B: AeadBackend> AeadCipher<B> {
         if key.len() == self.algorithm.key_len() {
             Ok(key)
         } else {
-            Err(KmsAeadEncryptionError::create(
-                "INVALID_KEY_LENGTH",
-                &format!(
-                    "A key of {} bytes does not fit {}, which takes {} bytes",
-                    key.len(),
-                    self.algorithm,
-                    self.algorithm.key_len()
-                ),
+            Err(KmsAeadEncryptionError::invalid_key_length(
+                key.len(),
+                self.algorithm,
+                self.algorithm.key_len(),
             ))
         }
     }

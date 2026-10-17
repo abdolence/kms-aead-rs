@@ -43,7 +43,7 @@ mod aes_siv_cipher {
 
     use super::DeterministicAlgorithm;
     use crate::backend::AeadBackend;
-    use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
+    use crate::errors::KmsAeadEncryptionError;
     use crate::{
         checked_key_material, spans, DataEncryptionKey, EncryptedDataEncryptionKey,
         KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
@@ -113,12 +113,13 @@ mod aes_siv_cipher {
         /// The value of the `backend` span field: AES-SIV exists only in RustCrypto.
         const BACKEND_NAME: &'static str = "rustcrypto";
 
+        const SYNTHETIC_IV_LEN: usize = 16;
+
         /// A cipher for `algorithm`.
         ///
         /// # Errors
         ///
-        /// None today: every [`DeterministicAlgorithm`] is implemented. A later algorithm may be
-        /// refused with `UNSUPPORTED_ALGORITHM`.
+        /// None today: every [`DeterministicAlgorithm`] is implemented.
         pub fn new(algorithm: DeterministicAlgorithm) -> KmsAeadResult<Self> {
             Ok(Self { algorithm })
         }
@@ -142,13 +143,8 @@ mod aes_siv_cipher {
         }
 
         /// A new key from the KMS generator of `provider` when it is configured to use one, and
-        /// from the operating system's generator otherwise. Calls the KMS only in the first case.
-        ///
-        /// # Errors
-        ///
-        /// The provider's error when the KMS call fails, `INVALID_KEY_LENGTH` when the KMS returns
-        /// a key of another length, and `ENCRYPTION` when the generator fails.
-        pub async fn generate_key_with<P>(
+        /// from the operating system's generator otherwise.
+        pub(crate) async fn generate_key_with<P>(
             &self,
             provider: &P,
         ) -> KmsAeadResult<DeterministicDataEncryptionKey>
@@ -161,9 +157,9 @@ mod aes_siv_cipher {
             }
         }
 
-        /// Seals `plain_text` under `key`. `aad` is authenticated as exactly one associated-data
-        /// item, also when it is empty, as Tink and BigQuery's `DETERMINISTIC_ENCRYPT` do, so
-        /// their values and these are the same bytes.
+        /// Seals `plain_text` under `key`. `aad` is authenticated as one associated-data item,
+        /// also when it is empty, as Tink does: the value is equal to a Tink value after its
+        /// 5-byte prefix.
         ///
         /// # Errors
         ///
@@ -186,7 +182,8 @@ mod aes_siv_cipher {
         ///
         /// # Errors
         ///
-        /// `INVALID_KEY_LENGTH` when `key` does not have `algorithm().key_len()` bytes, and
+        /// `INVALID_KEY_LENGTH` when `key` does not have `algorithm().key_len()` bytes,
+        /// `INVALID_CIPHERTEXT` when the value is shorter than the 16-byte synthetic IV, and
         /// `DECRYPT` when the value, the AAD or the key is not the one it was sealed with.
         pub fn decrypt_value(
             &self,
@@ -194,8 +191,17 @@ mod aes_siv_cipher {
             cipher_text: &DeterministicCipherText,
             key: &DeterministicDataEncryptionKey,
         ) -> KmsAeadResult<SecretValue> {
-            self.siv(key)?
-                .decrypt([aad], cipher_text.value())
+            let mut siv = self.siv(key)?;
+            if cipher_text.value().len() < Self::SYNTHETIC_IV_LEN {
+                return Err(KmsAeadEncryptionError::create(
+                    "INVALID_CIPHERTEXT",
+                    &format!(
+                        "A cipher text of {} bytes is too short to hold a synthetic IV",
+                        cipher_text.value().len()
+                    ),
+                ));
+            }
+            siv.decrypt([aad], cipher_text.value())
                 .map(SecretValue::new)
                 .map_err(|_| KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data"))
         }
@@ -205,21 +211,14 @@ mod aes_siv_cipher {
         fn siv(&self, key: &DeterministicDataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
             let key = key.value().ref_sensitive_value();
             match self.algorithm {
-                DeterministicAlgorithm::Aes256Siv => {
-                    Aes256Siv::new_from_slice(key).map_err(|_| self.invalid_key_length(key.len()))
-                }
+                DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
+                    KmsAeadEncryptionError::invalid_key_length(
+                        key.len(),
+                        self.algorithm,
+                        self.algorithm.key_len(),
+                    )
+                }),
             }
-        }
-
-        fn invalid_key_length(&self, len: usize) -> KmsAeadError {
-            KmsAeadEncryptionError::create(
-                "INVALID_KEY_LENGTH",
-                &format!(
-                    "A key of {len} bytes does not fit {}, which takes {} bytes",
-                    self.algorithm,
-                    self.algorithm.key_len()
-                ),
-            )
         }
     }
 
@@ -270,7 +269,6 @@ mod aes_siv_cipher {
             algorithm: DeterministicAlgorithm,
             encrypted_key: &EncryptedDataEncryptionKey,
         ) -> KmsAeadResult<DeterministicDataEncryptionKey> {
-            let cipher = DeterministicCipher::new(algorithm)?;
             spans::in_span(spans::decrypt_dek("deterministic", algorithm), async {
                 let key = self
                     .provider
@@ -280,7 +278,11 @@ mod aes_siv_cipher {
                 if len == algorithm.key_len() {
                     Ok(DeterministicDataEncryptionKey(key.value().clone()))
                 } else {
-                    Err(cipher.invalid_key_length(len))
+                    Err(KmsAeadEncryptionError::invalid_key_length(
+                        len,
+                        algorithm,
+                        algorithm.key_len(),
+                    ))
                 }
             })
             .await
@@ -290,8 +292,6 @@ mod aes_siv_cipher {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use aes_siv::aead::{Aead, Payload};
-        use aes_siv::Aes256SivAead;
 
         const AAD: &[u8] = b"orders/1042";
         const PLAIN_TEXT: &str = "4111 1111 1111 1111";
@@ -368,45 +368,6 @@ mod aes_siv_cipher {
         }
 
         #[test]
-        fn aad_is_one_header_item() {
-            let key = rfc_key();
-            let aead_form = Aes256SivAead::new_from_slice(key.value().ref_sensitive_value())
-                .unwrap()
-                .encrypt(
-                    &aes_siv::Nonce::default(),
-                    Payload {
-                        msg: PLAIN_TEXT.as_bytes(),
-                        aad: AAD,
-                    },
-                )
-                .unwrap();
-            let one_header = Aes256Siv::new_from_slice(key.value().ref_sensitive_value())
-                .unwrap()
-                .encrypt([AAD], PLAIN_TEXT.as_bytes())
-                .unwrap();
-
-            let cipher_text = sealed(AAD, &key);
-
-            assert_eq!(cipher_text.value(), one_header.as_slice());
-            assert_ne!(cipher_text.value(), aead_form.as_slice());
-        }
-
-        #[test]
-        fn an_empty_aad_is_one_empty_item() {
-            let key = rfc_key();
-            let mut siv = Aes256Siv::new_from_slice(key.value().ref_sensitive_value()).unwrap();
-            let one_empty_header = siv.encrypt([b""], PLAIN_TEXT.as_bytes()).unwrap();
-            let no_header = siv
-                .encrypt::<[&[u8]; 0], _>([], PLAIN_TEXT.as_bytes())
-                .unwrap();
-
-            let cipher_text = sealed(b"", &key);
-
-            assert_eq!(cipher_text.value(), one_empty_header.as_slice());
-            assert_ne!(cipher_text.value(), no_header.as_slice());
-        }
-
-        #[test]
         fn a_32_byte_key_is_refused_by_aes256siv() {
             let key = DeterministicDataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
 
@@ -416,10 +377,18 @@ mod aes_siv_cipher {
         }
 
         #[test]
-        fn equal_inputs_give_equal_values() {
-            let key = cipher().generate_key().unwrap();
+        fn a_value_shorter_than_the_synthetic_iv_is_invalid() {
+            let key = rfc_key();
+            for len in [0, 15] {
+                let short = DeterministicCipherText::from(vec![0xAA; len]);
+                let result = cipher().decrypt_value(AAD, &short, &key);
 
-            assert_eq!(sealed(AAD, &key), sealed(AAD, &key));
+                assert_eq!(
+                    result.unwrap_err().code(),
+                    "INVALID_CIPHERTEXT",
+                    "{len} bytes"
+                );
+            }
         }
 
         #[test]

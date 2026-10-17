@@ -293,6 +293,18 @@ impl KmsAeadEncryptionError {
             message.to_string(),
         ))
     }
+
+    /// `INVALID_KEY_LENGTH`: a key of `len` bytes given to `algorithm`, which takes `key_len`.
+    pub(crate) fn invalid_key_length(
+        len: usize,
+        algorithm: impl Display,
+        key_len: usize,
+    ) -> KmsAeadError {
+        Self::create(
+            "INVALID_KEY_LENGTH",
+            &format!("A key of {len} bytes does not fit {algorithm}, which takes {key_len} bytes"),
+        )
+    }
 }
 
 impl Display for KmsAeadEncryptionError {
