@@ -3,6 +3,9 @@
 
 use std::collections::HashSet;
 
+use proptest::collection::vec;
+use proptest::prelude::*;
+use proptest::test_runner::TestRunner;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
@@ -47,33 +50,26 @@ async fn seal<B: AeadBackend>(
         .unwrap_or_else(|e| panic!("{} seals: {e}", cipher.algorithm()))
 }
 
-pub(crate) async fn every_supported_algorithm_round_trips<B: AeadBackend>() {
-    let plain_texts = [
-        SecretValue::from(PLAIN_TEXT),
-        SecretValue::new(Vec::new()),
-        SecretValue::new(vec![0x42; 100_000]),
-    ];
-    let aads: [&[u8]; 3] = [AAD, b"", &[0x00, 0xFF, 0xDE, 0xAD, 0xBE, 0xEF, 0x00]];
+/// Opening a sealed value gives back the plain text, for any plain text and AAD, and the value
+/// is the nonce, the cipher text and the tag.
+pub(crate) fn every_supported_algorithm_round_trips<B: AeadBackend>() {
+    let inputs = (vec(any::<u8>(), 0..4096), vec(any::<u8>(), 0..256));
     for cipher in supported_ciphers::<B>() {
         let key = cipher.generate_data_encryption_key().unwrap();
-        for plain_text in &plain_texts {
-            for aad in aads {
-                let cipher_text = cipher.encrypt_value(&aad, plain_text, &key).await.unwrap();
-                assert_eq!(
+        TestRunner::default()
+            .run(&inputs, |(plain_text, aad)| {
+                let plain_text = SecretValue::new(plain_text);
+                let cipher_text = cipher.seal(&aad, &plain_text, &key).unwrap();
+                prop_assert_eq!(
                     cipher_text.value().len(),
                     AeadAlgorithm::NONCE_LEN
                         + plain_text.ref_sensitive_value().len()
-                        + AeadAlgorithm::TAG_LEN,
-                    "{}",
-                    cipher.algorithm()
+                        + AeadAlgorithm::TAG_LEN
                 );
-                let opened = cipher
-                    .decrypt_value(&aad, &cipher_text, &key)
-                    .await
-                    .unwrap();
-                assert_eq!(&opened, plain_text, "{}", cipher.algorithm());
-            }
-        }
+                prop_assert_eq!(cipher.open(&aad, &cipher_text, &key).unwrap(), plain_text);
+                Ok(())
+            })
+            .unwrap_or_else(|failure| panic!("{}: {failure}", cipher.algorithm()));
     }
 }
 

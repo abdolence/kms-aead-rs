@@ -107,9 +107,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn every_supported_algorithm_round_trips() {
-        contract::every_supported_algorithm_round_trips::<Ring>().await;
+    #[test]
+    fn every_supported_algorithm_round_trips() {
+        contract::every_supported_algorithm_round_trips::<Ring>();
     }
 
     #[tokio::test]

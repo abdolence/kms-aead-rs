@@ -26,16 +26,6 @@ pub(crate) enum TestKmsProvider {
     Generating(SecretValue),
 }
 
-impl TestKmsProvider {
-    pub(crate) fn new() -> Self {
-        TestKmsProvider::Working
-    }
-
-    pub(crate) fn generating(key_material: SecretValue) -> Self {
-        TestKmsProvider::Generating(key_material)
-    }
-}
-
 #[async_trait]
 impl KmsAeadEncryptionProvider for TestKmsProvider {
     fn kek(&self) -> KekRef {
