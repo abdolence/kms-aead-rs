@@ -20,7 +20,7 @@ impl CipherText {
 
 impl PartialEq for CipherText {
     fn eq(&self, other: &Self) -> bool {
-        constant_time_eq(self.value(), other.value())
+        self.value().ct_eq(other.value()).into()
     }
 }
 
@@ -44,10 +44,10 @@ impl From<SecretValue> for DataEncryptionKey {
 
 impl PartialEq for DataEncryptionKey {
     fn eq(&self, other: &Self) -> bool {
-        constant_time_eq(
-            self.value().as_sensitive_bytes(),
-            other.value().as_sensitive_bytes(),
-        )
+        self.value()
+            .as_sensitive_bytes()
+            .ct_eq(other.value().as_sensitive_bytes())
+            .into()
     }
 }
 
@@ -270,7 +270,7 @@ impl Debug for EncryptedDataEncryptionKey {
 impl PartialEq for EncryptedDataEncryptionKey {
     fn eq(&self, other: &Self) -> bool {
         // The key version is not secret, so it compares in variable time.
-        constant_time_eq(&self.wrapped, &other.wrapped) && self.key_version == other.key_version
+        bool::from(self.wrapped.ct_eq(&other.wrapped)) && self.key_version == other.key_version
     }
 }
 
@@ -427,13 +427,8 @@ impl Debug for CipherTextWithEncryptedKey {
 
 impl PartialEq for CipherTextWithEncryptedKey {
     fn eq(&self, other: &Self) -> bool {
-        constant_time_eq(self.value(), other.value())
+        self.value().ct_eq(other.value()).into()
     }
-}
-
-/// Compares in time that depends on the lengths only, never on where the bytes differ.
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    left.ct_eq(right).into()
 }
 
 #[cfg(test)]
