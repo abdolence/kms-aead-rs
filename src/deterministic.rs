@@ -141,6 +141,26 @@ mod aes_siv_cipher {
             Ok(DeterministicDataEncryptionKey(key))
         }
 
+        /// A new key from the KMS generator of `provider` when it is configured to use one, and
+        /// from the operating system's generator otherwise. Calls the KMS only in the first case.
+        ///
+        /// # Errors
+        ///
+        /// The provider's error when the KMS call fails, `INVALID_KEY_LENGTH` when the KMS returns
+        /// key material of another length, and `ENCRYPTION` when the generator fails.
+        pub async fn generate_key_with<P>(
+            &self,
+            provider: &P,
+        ) -> KmsAeadResult<DeterministicDataEncryptionKey>
+        where
+            P: KmsAeadEncryptionProvider + Sync + ?Sized,
+        {
+            match checked_key_material(provider, self.algorithm.key_len()).await? {
+                Some(material) => Ok(DeterministicDataEncryptionKey(material)),
+                None => self.generate_key(),
+            }
+        }
+
         /// Seals `plain_text` under `key`. `aad` is authenticated as one associated-data item,
         /// also when it is empty, as Tink does: the value is equal to a Tink value after its
         /// 5-byte prefix.
@@ -253,10 +273,8 @@ mod aes_siv_cipher {
                 DeterministicCipher::BACKEND_NAME,
             );
             spans::in_span(span, async {
-                let key = match checked_key_material(&self.provider, algorithm.key_len()).await? {
-                    Some(material) => DataEncryptionKey::from(material),
-                    None => DataEncryptionKey::from(cipher.generate_key()?.0),
-                };
+                let key =
+                    DataEncryptionKey::from(cipher.generate_key_with(&self.provider).await?.0);
                 let encrypted_key = self.provider.encrypt_data_encryption_key(&key).await?;
                 Ok((
                     DeterministicDataEncryptionKey(key.into_value()),
