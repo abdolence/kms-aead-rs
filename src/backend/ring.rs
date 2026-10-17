@@ -1,9 +1,10 @@
 use ::ring::aead::{
-    Aad, Algorithm, LessSafeKey, Nonce, UnboundKey, AES_128_GCM, AES_256_GCM, CHACHA20_POLY1305,
+    Aad, Algorithm, LessSafeKey, Nonce as AeadNonce, UnboundKey, AES_128_GCM, AES_256_GCM,
+    CHACHA20_POLY1305,
 };
 use ::ring::rand::{SecureRandom, SystemRandom};
 
-use super::{AeadBackendOps, Failure, Tag};
+use super::{AeadBackendOps, Failure, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 pub(super) struct RingOps;
@@ -45,13 +46,13 @@ impl AeadBackendOps for RingOps {
         &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<Tag, Failure> {
         let tag = Self::key(algorithm, key)?
             .seal_in_place_separate_tag(
-                Nonce::assume_unique_for_key(*nonce),
+                AeadNonce::assume_unique_for_key(*nonce),
                 Aad::from(aad),
                 in_out,
             )
@@ -63,12 +64,16 @@ impl AeadBackendOps for RingOps {
         &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure> {
         Self::key(algorithm, key)?
-            .open_in_place(Nonce::assume_unique_for_key(*nonce), Aad::from(aad), in_out)
+            .open_in_place(
+                AeadNonce::assume_unique_for_key(*nonce),
+                Aad::from(aad),
+                in_out,
+            )
             .map(|plain_text| plain_text.len())
             .map_err(|_| Failure::Operation)
     }

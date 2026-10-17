@@ -1,9 +1,9 @@
-use aes_gcm::aead::{AeadInOut, KeyInit, Nonce, Tag as AeadTag};
+use aes_gcm::aead::{AeadInOut, KeyInit, Nonce as AeadNonce, Tag as AeadTag};
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use aes_gcm_siv::Aes256GcmSiv;
 use chacha20poly1305::ChaCha20Poly1305;
 
-use super::{AeadBackendOps, Failure, Tag};
+use super::{AeadBackendOps, Failure, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 pub(super) struct RustCryptoOps;
@@ -11,12 +11,12 @@ pub(super) struct RustCryptoOps;
 impl RustCryptoOps {
     fn seal<C: KeyInit + AeadInOut>(
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<Tag, Failure> {
         let cipher = C::new_from_slice(key).map_err(|_| Failure::Key)?;
-        let nonce = <&Nonce<C>>::try_from(nonce.as_slice()).map_err(|_| Failure::Operation)?;
+        let nonce = <&AeadNonce<C>>::try_from(nonce.as_slice()).map_err(|_| Failure::Operation)?;
         let tag = cipher
             .encrypt_inout_detached(nonce, aad, in_out.into())
             .map_err(|_| Failure::Operation)?;
@@ -25,12 +25,12 @@ impl RustCryptoOps {
 
     fn open<C: KeyInit + AeadInOut>(
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure> {
         let cipher = C::new_from_slice(key).map_err(|_| Failure::Key)?;
-        let nonce = <&Nonce<C>>::try_from(nonce.as_slice()).map_err(|_| Failure::Operation)?;
+        let nonce = <&AeadNonce<C>>::try_from(nonce.as_slice()).map_err(|_| Failure::Operation)?;
         let plain_text_len = in_out
             .len()
             .checked_sub(AeadAlgorithm::TAG_LEN)
@@ -66,7 +66,7 @@ impl AeadBackendOps for RustCryptoOps {
         &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<Tag, Failure> {
@@ -84,7 +84,7 @@ impl AeadBackendOps for RustCryptoOps {
         &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
-        nonce: &super::Nonce,
+        nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure> {
