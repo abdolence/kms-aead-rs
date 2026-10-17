@@ -468,6 +468,36 @@ impl DekCache {
     }
 }
 
+/// Filling the cache for the crate's own callers, kept off the public API of [`DekCache`]: a
+/// key inserted under the wrong wrapped bytes would seal values that no unwrap opens.
+pub(crate) trait InsertDek {
+    /// Caches `key`, which `kek` has just wrapped into `encrypted`, as an unwrap of `encrypted`
+    /// would have. A disabled cache drops it.
+    fn insert_dek(
+        &self,
+        kek: KekRef,
+        encrypted: &EncryptedDataEncryptionKey,
+        key: DataEncryptionKey,
+    );
+}
+
+impl InsertDek for DekCache {
+    fn insert_dek(
+        &self,
+        kek: KekRef,
+        encrypted: &EncryptedDataEncryptionKey,
+        key: DataEncryptionKey,
+    ) {
+        if let Some(cache) = &self.0 {
+            cache.randomized.lock().insert(
+                CacheKey::new(kek, encrypted),
+                Arc::new(key),
+                cache.options.max_entries,
+            );
+        }
+    }
+}
+
 /// The options of an enabled cache, never its entries.
 impl Debug for DekCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

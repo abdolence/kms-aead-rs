@@ -4,7 +4,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::cache::{DekCache, DekCacheOptions};
+use crate::cache::{DekCache, DekCacheOptions, InsertDek};
+use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::spans;
 use crate::*;
 use async_trait::*;
@@ -51,7 +52,8 @@ pub struct KmsAeadEnvelopeOptions {
     pub dek_reuse: Option<DekReusePolicy>,
     /// The cache the envelope unwraps DEKs through. `None`, the default, is
     /// [`DekCache::disabled`] per call and `DekCache::new(DekCacheOptions::new())` in store-less
-    /// mode. A cache passed here may be shared with other envelopes.
+    /// mode, which needs an enabled cache. A cache passed here may be shared with other
+    /// envelopes.
     pub dek_cache: Option<DekCache>,
 }
 
@@ -59,8 +61,12 @@ pub struct KmsAeadEnvelopeOptions {
 /// first encryption past `max_age` or past `max_uses`, whichever comes first.
 ///
 /// A renewal makes one KMS wrap call, and the values under the previous DEK stay readable, since
-/// each value carries its wrapped DEK. The DEK in use stays in the process's memory for
-/// `max_age` at most, with the values of that window readable by whoever reads that memory.
+/// each value carries its wrapped DEK.
+///
+/// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
+/// so it is zeroized at the cache's TTL, whatever `max_age`, and the first encryption after that
+/// unwraps it again with one KMS call. The values sealed while the cache holds the DEK are
+/// readable by whoever reads the process's memory in that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
@@ -74,53 +80,83 @@ pub struct DekReusePolicy {
     pub max_uses: NonZeroU64,
 }
 
-/// The DEK a store-less envelope encrypts under, renewed by its policy.
+/// The DEK a store-less envelope encrypts under, renewed by its policy. Its plaintext lives in
+/// the envelope's cache, never here.
 struct DekReuse {
     policy: DekReusePolicy,
     current: RwLock<Option<Arc<CurrentDek>>>,
-    /// Held across a renewal's KMS call, so that one caller renews and the others take its DEK.
-    renewal: tokio::sync::Mutex<()>,
+    /// Held across a renewal's KMS calls, so that one writer renews at a time. It holds the error
+    /// of the last attempt when that attempt failed.
+    renewal: tokio::sync::Mutex<Option<KmsAeadError>>,
+    /// The renewal attempts that ended, which tells a writer whether one ended while it waited
+    /// for `renewal`. A cancelled attempt does not end.
+    ended_renewals: AtomicU64,
 }
 
-/// The DEK in use, with the wrapped form every value under it carries.
+/// The DEK in use: the wrapped form every value under it carries, and what the policy counts.
 struct CurrentDek {
-    key: DataEncryptionKey,
     encrypted: EncryptedDataEncryptionKey,
     created_at: Instant,
     uses: AtomicU64,
 }
 
 impl DekReuse {
-    fn new(policy: DekReusePolicy) -> Self {
-        Self {
+    /// The reuse of `policy`, whose DEK lives in `dek_cache`, which must be enabled.
+    fn new(policy: DekReusePolicy, dek_cache: &DekCache) -> KmsAeadResult<Self> {
+        if !dek_cache.is_enabled() {
+            return Err(KmsAeadSystemError::create(
+                "INVALID_DEK_REUSE_POLICY",
+                "Store-less mode keeps its DEK in the DEK cache, which is disabled",
+            ));
+        }
+        Ok(Self {
             policy,
             current: RwLock::new(None),
-            renewal: tokio::sync::Mutex::new(()),
-        }
+            renewal: tokio::sync::Mutex::new(None),
+            ended_renewals: AtomicU64::new(0),
+        })
     }
 
-    /// The DEK to encrypt one value under, from `renew` when the policy renews the current one.
+    /// The DEK to encrypt one value under, wrapped by `renew` when the policy renews the current
+    /// one. A writer that waited while an attempt failed returns that attempt's error rather than
+    /// calling the KMS again; a writer arriving after it retries.
     async fn claim_or_renew<F, Fut>(&self, renew: F) -> KmsAeadResult<Arc<CurrentDek>>
     where
         F: FnOnce() -> Fut,
-        Fut: Future<Output = KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>>,
+        Fut: Future<Output = KmsAeadResult<EncryptedDataEncryptionKey>>,
     {
         if let Some(dek) = self.claim() {
             return Ok(dek);
         }
-        let _renewal = self.renewal.lock().await;
+        let ended_on_arrival = self.ended_renewals.load(Ordering::Relaxed);
+        let mut last_failure = self.renewal.lock().await;
         if let Some(dek) = self.claim() {
             return Ok(dek);
         }
-        let (key, encrypted) = renew().await?;
-        let dek = Arc::new(CurrentDek {
-            key,
-            encrypted,
-            created_at: Instant::now(),
-            uses: AtomicU64::new(1),
-        });
-        *self.current.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&dek));
-        Ok(dek)
+        if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival {
+            if let Some(error) = &*last_failure {
+                return Err(error.clone());
+            }
+        }
+        let renewed = renew().await;
+        self.ended_renewals.fetch_add(1, Ordering::Relaxed);
+        match renewed {
+            Ok(encrypted) => {
+                *last_failure = None;
+                let dek = Arc::new(CurrentDek {
+                    encrypted,
+                    created_at: Instant::now(),
+                    uses: AtomicU64::new(1),
+                });
+                *self.current.write().unwrap_or_else(PoisonError::into_inner) =
+                    Some(Arc::clone(&dek));
+                Ok(dek)
+            }
+            Err(error) => {
+                *last_failure = Some(error.clone());
+                Err(error)
+            }
+        }
     }
 
     /// The current DEK with one of its uses taken, or `None` when the policy renews it.
@@ -169,7 +205,9 @@ where
     ///
     /// # Errors
     ///
-    /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement the algorithm of `options`.
+    /// `UNSUPPORTED_ALGORITHM` when `backend` does not implement the algorithm of `options`,
+    /// `INVALID_DEK_REUSE_POLICY` for a reuse policy beside [`DekCache::disabled`], and the
+    /// errors of [`DekCache::new`] for the default cache of store-less mode.
     pub async fn with_options(
         provider: P,
         backend: AeadBackend,
@@ -180,11 +218,15 @@ where
             None if options.dek_reuse.is_some() => DekCache::new(DekCacheOptions::new())?,
             None => DekCache::disabled(),
         };
+        let dek_reuse = options
+            .dek_reuse
+            .map(|policy| DekReuse::new(policy, &dek_cache))
+            .transpose()?;
         Ok(Self {
             provider,
             cipher: AeadCipher::new(backend, options.algorithm)?,
             dek_cache,
-            dek_reuse: options.dek_reuse.map(DekReuse::new),
+            dek_reuse,
         })
     }
 
@@ -206,6 +248,15 @@ where
             .await?;
         let encrypted_dek = self.provider.encrypt_data_encryption_key(&dek).await?;
         Ok((dek, encrypted_dek))
+    }
+
+    /// A new DEK for store-less mode, wrapped once and cached under its wrapped bytes, so that
+    /// the first value sealed under it needs no unwrap.
+    async fn renew_dek(&self) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        let (dek, encrypted) = self.new_dek().await?;
+        self.dek_cache
+            .insert_dek(self.provider.kek(), &encrypted, dek);
+        Ok(encrypted)
     }
 
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
@@ -266,8 +317,12 @@ where
         spans::in_span(self.encrypt_span(self.mode()), async {
             match &self.dek_reuse {
                 Some(dek_reuse) => {
-                    let dek = dek_reuse.claim_or_renew(|| self.new_dek()).await?;
-                    let cipher_text = self.cipher.seal(aad.as_ref(), plain_text, &dek.key)?;
+                    let dek = dek_reuse.claim_or_renew(|| self.renew_dek()).await?;
+                    let cipher_text = self
+                        .with_dek(&dek.encrypted, |key| {
+                            self.cipher.seal(aad.as_ref(), plain_text, key)
+                        })
+                        .await?;
                     CipherTextWithEncryptedKey::new(&cipher_text, &dek.encrypted)
                 }
                 None => {
@@ -364,9 +419,9 @@ where
 mod tests {
     use super::*;
     #[cfg(not(feature = "legacy-formats"))]
-    use crate::errors::{KmsAeadError, KmsAeadLegacyFormat};
+    use crate::errors::KmsAeadLegacyFormat;
     use crate::test_provider::{
-        let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
+        let_spawned_tasks_wait, wait_until, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
         TEST_BACKEND,
     };
 
@@ -671,33 +726,41 @@ mod tests {
 
     #[tokio::test]
     async fn an_explicit_cache_overrides_the_default_of_the_mode() -> KmsAeadResult<()> {
-        let per_call = CountingEnvelope::with_options(
+        let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )
         .await?;
-        let store_less = CountingEnvelope::with_options(
+
+        let value = envelope
+            .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
+            .await?;
+        for _ in 0..2 {
+            envelope.decrypt_value(&AAD, &value).await?;
+        }
+
+        assert_eq!(envelope.provider.unwraps(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn store_less_mode_needs_an_enabled_cache() {
+        let result = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             TEST_BACKEND,
             KmsAeadEnvelopeOptions::new()
                 .with_dek_reuse(DekReusePolicy::new())
                 .with_dek_cache(DekCache::disabled()),
         )
-        .await?;
+        .await;
 
-        for envelope in [&per_call, &store_less] {
-            let value = envelope
-                .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
-                .await?;
-            for _ in 0..2 {
-                envelope.decrypt_value(&AAD, &value).await?;
-            }
-        }
-
-        assert_eq!(per_call.provider.unwraps(), 1);
-        assert_eq!(store_less.provider.unwraps(), 2);
-        Ok(())
+        assert!(
+            matches!(&result, Err(KmsAeadError::SystemError(error))
+                if error.public.code == "INVALID_DEK_REUSE_POLICY"),
+            "{:?}",
+            result.as_ref().err()
+        );
     }
 
     #[tokio::test]
@@ -835,7 +898,85 @@ mod tests {
         }
 
         assert_eq!(envelope.provider.wraps(), 3);
-        assert_eq!(envelope.provider.unwraps(), 3);
+        assert_eq!(envelope.provider.unwraps(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_quiet_writer_key_is_zeroized_at_the_cache_ttl() -> KmsAeadResult<()> {
+        let ttl = Duration::from_millis(200);
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            TEST_BACKEND,
+            KmsAeadEnvelopeOptions::new()
+                .with_dek_reuse(DekReusePolicy::new())
+                .with_dek_cache(DekCache::new(DekCacheOptions::new().with_ttl(ttl))?),
+        )
+        .await?;
+
+        let first = envelope
+            .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
+            .await?;
+        let (_, writer_dek) = first.separate()?;
+        let cached = envelope
+            .dek_cache()
+            .cached_dek(&envelope.provider.kek(), &writer_dek);
+        wait_until(|| cached.as_ref().is_some_and(|dek| dek.strong_count() == 0));
+        let after_ttl = envelope
+            .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
+            .await?;
+
+        assert!(cached.is_some_and(|dek| dek.strong_count() == 0));
+        assert_eq!(after_ttl.separate()?.1, writer_dek);
+        assert_eq!(envelope.provider.wraps(), 1);
+        assert_eq!(envelope.provider.unwraps(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn renewal_failure_is_shared_with_queued_writers() -> KmsAeadResult<()> {
+        let envelope = Arc::new(
+            CountingEnvelope::with_options(
+                CountingKmsProvider::gated(TestKmsProvider::FailingToWrap, ORDERS_KEK),
+                TEST_BACKEND,
+                KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
+            )
+            .await?,
+        );
+
+        let encryptions: Vec<_> = (0..CONCURRENT_CALLS)
+            .map(|_| {
+                let envelope = Arc::clone(&envelope);
+                tokio::spawn(async move {
+                    envelope
+                        .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
+                        .await
+                })
+            })
+            .collect();
+        let_spawned_tasks_wait().await;
+        envelope.provider.open_gate();
+        let mut results = Vec::new();
+        for encryption in encryptions {
+            results.push(encryption.await.unwrap());
+        }
+        let wraps_of_one_attempt = envelope.provider.wraps();
+        results.push(
+            envelope
+                .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
+                .await,
+        );
+
+        for result in &results {
+            assert!(
+                matches!(result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "TEST_WRAP"),
+                "{:?}",
+                result.as_ref().err()
+            );
+        }
+        assert_eq!(wraps_of_one_attempt, 1);
+        assert_eq!(envelope.provider.wraps(), 2);
         Ok(())
     }
 }

@@ -40,9 +40,10 @@
 //! # Store-less mode and the DEK cache
 //!
 //! A [`KmsAeadEnvelope`] built with a [`DekReusePolicy`] encrypts many values under one DEK and
-//! renews it by age or by count, so that a write calls the KMS only to renew. Values unwrap
-//! through a [`cache::DekCache`], which keeps the plaintext DEKs for a TTL and zeroizes each one
-//! as it leaves the cache. The per-call envelope, the default, keeps no DEK past the call.
+//! renews it by age or by count, so that a write calls the KMS only to renew it, and to unwrap it
+//! again once per cache TTL. Its DEK, and the DEKs of the values it reads, live in a
+//! [`cache::DekCache`], which keeps each plaintext DEK for a TTL and zeroizes it as it leaves the
+//! cache. The per-call envelope, the default, keeps no DEK past the call.
 //!
 //! # Other features
 //!

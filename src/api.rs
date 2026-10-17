@@ -52,7 +52,8 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
     /// Encrypts `plain_text` under a new DEK, or under the reused DEK of a store-less
     /// [`KmsAeadEnvelope`], and returns it with the wrapped DEK in one
     /// [`CipherTextWithEncryptedKey`]. A new DEK costs one KMS call to wrap it, and one more for
-    /// the key material when the provider uses the KMS generator.
+    /// the key material when the provider uses the KMS generator. A reused DEK costs one KMS
+    /// unwrap per TTL of the envelope's [`DekCache`](crate::cache::DekCache).
     ///
     /// # Errors
     ///
