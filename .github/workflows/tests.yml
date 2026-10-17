@@ -49,6 +49,22 @@ jobs:
           fi
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
+  public-api:
+    name: public-api
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          default: true
+      - run: cargo install cargo-public-api --locked
+      - run: scripts/check-public-api.sh
   vault-live:
     name: vault-live
     runs-on: ubuntu-latest
