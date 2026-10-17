@@ -59,6 +59,31 @@ fn routed<T>(message: T, resource: &str) -> KmsAeadResult<tonic::Request<T>> {
     Ok(request)
 }
 
+// The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt for `key`. It is
+// recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
+// wrapped key.
+fn crypto_key_version(key: &str, name: &str) -> Option<KmsKeyVersion> {
+    let version = name
+        .strip_prefix(key)?
+        .strip_prefix("/cryptoKeyVersions/")?;
+    KmsKeyVersion::try_from(version.to_string()).ok()
+}
+
+/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one.
+fn decrypt_request(
+    key: &str,
+    encrypted_key: &EncryptedDataEncryptionKey,
+) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
+    routed(
+        DecryptRequest {
+            name: key.to_string(),
+            ciphertext: encrypted_key.wrapped().to_vec(),
+            ..Default::default()
+        },
+        key,
+    )
+}
+
 /// Options for [`GcpKmsProvider`].
 #[derive(Debug, Clone, Builder)]
 pub struct GcpKmsProviderOptions {
@@ -79,7 +104,7 @@ pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
     options: GcpKmsProviderOptions,
     kek: KekRef,
-    /// `projects/<project>/locations/<location>`, the resource `GenerateRandomBytes` names.
+    // `projects/<project>/locations/<location>`, the resource `GenerateRandomBytes` names.
     location: String,
 }
 
@@ -127,31 +152,6 @@ impl GcpKmsProvider {
             location: kms_key_ref.to_location_ref(),
         }
     }
-
-    // The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt. It is
-    // recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
-    // wrapped key.
-    fn crypto_key_version(&self, name: &str) -> Option<KmsKeyVersion> {
-        let version = name
-            .strip_prefix(self.kek.key())?
-            .strip_prefix("/cryptoKeyVersions/")?;
-        KmsKeyVersion::try_from(version.to_string()).ok()
-    }
-
-    /// Names the configured CryptoKey, so that Cloud KMS refuses a key wrapped under another one.
-    fn decrypt_request(
-        &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
-        routed(
-            DecryptRequest {
-                name: self.kek.key().to_string(),
-                ciphertext: encrypted_key.wrapped().to_vec(),
-                ..Default::default()
-            },
-            self.kek.key(),
-        )
-    }
 }
 
 #[async_trait]
@@ -183,7 +183,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
 
-            let key_version = self.crypto_key_version(&name);
+            let key_version = crypto_key_version(self.kek.key(), &name);
             if key_version.is_none() {
                 warn!(name, "No key version in the GCP KMS encrypt response");
             }
@@ -201,7 +201,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
-            let decrypt_request = self.decrypt_request(encrypted_key)?;
+            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
                 .await
                 .map_err(KmsAeadError::from_gcp_status)?;
@@ -246,52 +246,28 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gcloud_sdk::google_cloud_auth::credentials::anonymous;
     use gcloud_sdk::tonic::codegen::Bytes;
     use gcloud_sdk::tonic::metadata::MetadataMap;
     use gcloud_sdk::tonic::{Code, Status};
     use rvstruct::ValueStruct;
-    use tokio::net::TcpListener;
 
     const KEY_NAME: &str =
         "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key";
     const KEY_MARKER: &str = "data-key-marker-value-of-32bytes";
 
-    /// A provider whose client connects to a local endpoint that accepts connections and never
-    /// answers, for the tests that only build requests.
-    async fn offline_provider() -> GcpKmsProvider {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        tokio::spawn(async move {
-            let mut connections = Vec::new();
-            while let Ok((connection, _)) = listener.accept().await {
-                connections.push(connection);
-            }
-        });
-        let client = GoogleApi::from_function_with_credentials(
-            KeyManagementServiceClient::new,
-            endpoint,
-            None,
-            anonymous::Builder::new().build(),
-        )
-        .await
-        .unwrap();
+    #[test]
+    fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
         let key_ref = GcpKmsKeyRef::new(
             "my-project".into(),
             "global".into(),
             "my-ring".into(),
             "my-key".into(),
         );
-        GcpKmsProvider::with_client(&key_ref, GcpKmsProviderOptions::new(), client)
-    }
 
-    #[tokio::test]
-    async fn unwrap_names_the_configured_kek() {
-        let provider = offline_provider().await;
-
-        let request = provider
-            .decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None))
-            .unwrap();
+        let request = decrypt_request(
+            &key_ref.to_google_ref(),
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
+        )?;
 
         assert_eq!(request.get_ref().name, KEY_NAME);
         assert_eq!(request.get_ref().ciphertext, b"wrapped");
@@ -299,7 +275,7 @@ mod tests {
             request.metadata().get("x-goog-request-params").unwrap(),
             format!("name={KEY_NAME}").as_str()
         );
-        assert_eq!(provider.kek(), KekRef::new(KekProvider::Gcp, KEY_NAME));
+        Ok(())
     }
 
     #[test]
@@ -345,18 +321,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
-        let provider = offline_provider().await;
-
+    #[test]
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
         assert_eq!(
-            provider.crypto_key_version(
+            crypto_key_version(
+                KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
             ),
             Some(KmsKeyVersion::try_from("18".to_string()).unwrap())
         );
         assert_eq!(
-            provider.crypto_key_version(
+            crypto_key_version(
+                KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
             ),
             None
