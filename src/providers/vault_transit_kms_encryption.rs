@@ -215,15 +215,33 @@ impl VaultTransitProvider {
             token: options.token,
             namespace,
             timeout: options.timeout,
-            kek: KekRef::new(
-                KekProvider::VaultTransit,
-                format!(
-                    "{}/keys/{}",
-                    key_ref.mount.trim_matches('/'),
-                    key_ref.key_name
-                ),
-            ),
+            kek: Self::kek_ref(&address, options.namespace.as_deref(), key_ref),
         })
+    }
+
+    /// `<address>/<namespace>/<mount>/keys/<name>`, without the namespace segment when none is
+    /// set. The address and the namespace are part of it because the same mount and key name
+    /// exist on every Vault server and in every Enterprise namespace, and a cache keyed by the
+    /// KEK must never serve one tenant's data key to another.
+    fn kek_ref(address: &Uri, namespace: Option<&str>, key_ref: &VaultTransitKeyRef) -> KekRef {
+        let address = address.to_string();
+        let namespace = namespace
+            .map(|namespace| namespace.trim_matches('/'))
+            .filter(|namespace| !namespace.is_empty());
+        let mount = key_ref.mount.trim_matches('/');
+        let key = match namespace {
+            Some(namespace) => format!(
+                "{}/{namespace}/{mount}/keys/{}",
+                address.trim_end_matches('/'),
+                key_ref.key_name
+            ),
+            None => format!(
+                "{}/{mount}/keys/{}",
+                address.trim_end_matches('/'),
+                key_ref.key_name
+            ),
+        };
+        KekRef::new(KekProvider::VaultTransit, key)
     }
 
     async fn post(&self, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
@@ -654,6 +672,7 @@ mod tests {
     #[tokio::test]
     async fn unwrap_names_the_configured_kek() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
         let provider = local_provider(&listener);
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
         let heads = answer_with(
@@ -681,11 +700,45 @@ mod tests {
             heads[0]
         );
         assert_eq!(
-            provider.kek(),
+            provider.kek().key(),
+            format!("http://{address}/transit/keys/{TEST_KEY}")
+        );
+    }
+
+    fn kek_of(address: &str, namespace: Option<&str>) -> KekRef {
+        let options = VaultTransitProviderOptions::new(address.into())
+            .opt_namespace(namespace.map(str::to_string));
+        VaultTransitProvider::with_options(&VaultTransitKeyRef::new(TEST_KEY.into()), options)
+            .unwrap()
+            .kek()
+    }
+
+    #[test]
+    fn kek_names_the_address_the_namespace_and_the_key() {
+        assert_eq!(
+            kek_of("https://vault.example.com:8200/", Some("/tenant-a/")),
             KekRef::new(
                 KekProvider::VaultTransit,
-                format!("transit/keys/{TEST_KEY}")
+                format!("https://vault.example.com:8200/tenant-a/transit/keys/{TEST_KEY}")
             )
+        );
+        assert_eq!(
+            kek_of("https://vault.example.com:8200", None).key(),
+            format!("https://vault.example.com:8200/transit/keys/{TEST_KEY}")
+        );
+    }
+
+    #[test]
+    fn keks_differ_across_namespaces_and_addresses() {
+        let address = "https://vault.example.com:8200";
+        assert_ne!(
+            kek_of(address, Some("tenant-a")),
+            kek_of(address, Some("tenant-b"))
+        );
+        assert_ne!(kek_of(address, None), kek_of(address, Some("tenant-a")));
+        assert_ne!(
+            kek_of(address, None),
+            kek_of("https://vault.example.org:8200", None)
         );
     }
 
