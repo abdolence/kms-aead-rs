@@ -33,6 +33,10 @@ firestore = { version = "0.58", optional = true }
 # Never below 0.8.1: earlier releases overflow the length prefix of a large value in the wire
 # protocol.
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
+# The version kms-aead's GCP provider depends on, so that one copy is in the tree.
+gcloud-sdk = { version = "0.33", optional = true, default-features = false }
+# The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
+tokio-stream = { version = "0.1", optional = true, default-features = false }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -65,6 +69,11 @@ postgres = ["dep:sqlx", "tokio/macros"]
 postgres-tls-rustls = ["postgres", "sqlx/tls-rustls-aws-lc-rs"]
 postgres-tls-rustls-ring = ["postgres", "sqlx/tls-rustls-ring"]
 postgres-tls-native = ["postgres", "sqlx/tls-native-tls"]
+# `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
+# feature from the application, or one of the two below, to build.
+gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
+gcs-tls-roots = ["gcs", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
+gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 
 [lints.clippy]
 mod_module_files = "deny"

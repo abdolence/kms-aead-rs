@@ -320,6 +320,8 @@ pub enum Identifier {
     FieldName,
     /// The table name of the PostgreSQL store.
     PostgresTable,
+    /// The bucket name of the GCS store.
+    GcsBucketName,
 }
 
 impl Display for Identifier {
@@ -331,6 +333,7 @@ impl Display for Identifier {
             Identifier::EntityId => "entity id",
             Identifier::FieldName => "field name",
             Identifier::PostgresTable => "PostgreSQL table name",
+            Identifier::GcsBucketName => "GCS bucket name",
         })
     }
 }

@@ -54,6 +54,7 @@
 //! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
 //! | Firestore, with a listener for push | `store::FirestoreKeyringStore` | `firestore` |
 //! | PostgreSQL, through sqlx, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
+//! | Cloud Storage, with generation preconditions and no push | `store::GcsKeyringStore` | `gcs` |
 //!
 //! # Features
 //!
@@ -65,8 +66,10 @@
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and [`Json`], a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
-//! | `postgres` | the PostgreSQL store, and sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] as `BYTEA` |
+//! | `postgres` | `store::PostgresKeyringStore`, and sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] as `BYTEA` |
 //! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |
+//! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
+//! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //!
 //! # Example
 //!

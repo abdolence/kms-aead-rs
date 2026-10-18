@@ -17,12 +17,26 @@ fn unique_keyring_id() -> KeyringResult<KeyringId> {
 }
 
 /// The wrapped key of every version of [`record`]: `[0xFF][0x01][0x00]` starts encrypted key
-/// layout v1 with no key version, and `wrapped` follows. A store error never contains it.
+/// layout v1 with no key version, and `wrapped` follows.
 const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
+
+/// As [`WRAPPED_DEK`], with `record-bytes-marker` after the layout bytes: a wrapped key whose
+/// bytes a test looks for in the store's errors.
+#[cfg(any(feature = "firestore", feature = "postgres", feature = "gcs"))]
+const MARKED_WRAPPED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
 
 /// The record of `id` after `rotations` rotations: randomized versions 1 to `rotations`
 /// decrypt only, and the next one is active.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
+    record_wrapping(id, rotations, WRAPPED_DEK)
+}
+
+/// As [`record`], with every version's wrapped key `wrapped_dek`, in standard base64.
+fn record_wrapping(
+    id: &KeyringId,
+    rotations: u32,
+    wrapped_dek: &str,
+) -> KeyringResult<KeyringRecord> {
     let versions: Vec<_> = (1..=rotations + 1)
         .map(|key_id| {
             json!({
@@ -32,7 +46,7 @@ fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
                 "compromised": null,
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
-                "wrapped_dek": WRAPPED_DEK,
+                "wrapped_dek": wrapped_dek,
             })
         })
         .collect();
@@ -220,6 +234,43 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
     Ok(())
 }
 
+/// A store error carries none of the record it failed to write: the wrapped key appears neither
+/// as text nor as bytes in the error's `Display`, its `Debug`, or those of its causes.
+/// `failing` is a store whose write at `expected` fails.
+#[cfg(any(feature = "firestore", feature = "postgres", feature = "gcs"))]
+async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
+    failing: S,
+    expected: Option<&S::Revision>,
+) -> TestResult {
+    let marked = record_wrapping(&unique_keyring_id()?, 0, MARKED_WRAPPED_DEK)?;
+    let error = match failing.compare_and_swap(&marked, expected).await {
+        Err(error) => error,
+        Ok(swap) => return Err(format!("the write did not fail: {swap:?}").into()),
+    };
+    assert!(matches!(error, kms_aead_keyring::KeyringError::Store(_)));
+    let mut rendered = format!("{error}\n{error:?}");
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        rendered.push_str(&format!("\n{cause}\n{cause:?}"));
+        source = cause.source();
+    }
+    let marker = b"record-bytes-marker";
+    let as_bytes = |bytes: &[u8]| {
+        let listed = format!("{bytes:?}");
+        listed[1..listed.len() - 1].to_string()
+    };
+    for leaked in [
+        "record-bytes-marker".to_string(),
+        MARKED_WRAPPED_DEK.to_string(),
+        as_bytes(marker),
+        as_bytes(MARKED_WRAPPED_DEK.as_bytes()),
+        marker.iter().map(|byte| format!("{byte:02x}")).collect(),
+    ] {
+        assert!(!rendered.contains(&leaked), "the error carries {leaked}");
+    }
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
 async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
@@ -249,7 +300,6 @@ mod firestore_store {
 
     use firestore::{FirestoreDb, FirestoreTimestamp};
     use kms_aead_keyring::store::FirestoreKeyringStore;
-    use kms_aead_keyring::KeyringError;
 
     use super::*;
 
@@ -265,30 +315,14 @@ mod firestore_store {
         conformance(|| store.clone()).await
     }
 
+    /// Firestore refuses an update time that is not a whole microsecond.
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let store = store().await?;
-        let record = record(&unique_keyring_id()?, 2)?;
-        let created = written(store.compare_and_swap(&record, None).await?)?;
-        // Firestore refuses an update time that is not a whole microsecond.
-        let misaligned =
-            FirestoreTimestamp(created.0.checked_add(jiff::SignedDuration::from_nanos(1))?);
-        let error = store
-            .compare_and_swap(&record, Some(&misaligned))
-            .await
-            .err()
-            .ok_or("Firestore took a misaligned update time")?;
-        assert!(matches!(error, KeyringError::Store(_)));
-        let mut texts = vec![error.to_string(), format!("{error:?}")];
-        let mut source = error.source();
-        while let Some(cause) = source {
-            texts.push(cause.to_string());
-            texts.push(format!("{cause:?}"));
-            source = cause.source();
-        }
-        assert!(texts.iter().all(|text| !text.contains(WRAPPED_DEK)));
-        Ok(())
+        let misaligned = FirestoreTimestamp(
+            jiff::Timestamp::now().checked_add(jiff::SignedDuration::from_nanos(1))?,
+        );
+        super::a_store_error_carries_no_record_bytes(store().await?, Some(&misaligned)).await
     }
 }
 
@@ -299,7 +333,7 @@ mod postgres {
     use std::time::{Duration, Instant};
 
     use kms_aead_keyring::store::{
-        KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresTable, StoreOperation, WatchEvent,
+        KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresTable, WatchEvent,
     };
     use kms_aead_keyring::{Encrypted, KeyringError, KeyringResult};
     use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
@@ -354,13 +388,13 @@ mod postgres {
         drop_table(&pool, &table).await
     }
 
+    /// A server error may quote the row: a check violation's detail quotes its first bytes, and a
+    /// trigger whatever it chooses. This one quotes the whole record.
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
         let pool = connect().await?;
         let table = create_table(&pool).await?;
-        // A server error may quote the row: a check violation's detail quotes its first bytes,
-        // and a trigger whatever it chooses. This one quotes the whole record.
         sqlx::raw_sql(AssertSqlSafe(format!(
             "CREATE FUNCTION {table}_refuse() RETURNS trigger LANGUAGE plpgsql AS $$
             BEGIN
@@ -371,27 +405,8 @@ mod postgres {
         )))
         .execute(&pool)
         .await?;
-        let store = PostgresKeyringStore::with_table(pool.clone(), table.clone());
-        let error = match store
-            .compare_and_swap(&record(&unique_keyring_id()?, 0)?, None)
-            .await
-        {
-            Err(error) => error,
-            Ok(swap) => return Err(format!("the write was not refused: {swap:?}").into()),
-        };
-        assert!(
-            matches!(&error, KeyringError::Store(store_error) if store_error.operation == StoreOperation::CompareAndSwap)
-        );
-        let mut rendered = format!("{error} {error:?}");
-        let mut source = std::error::Error::source(&error);
-        while let Some(cause) = source {
-            rendered.push_str(&format!(" {cause} {cause:?}"));
-            source = cause.source();
-        }
-        // The fixture's wrapped DEK, `[0xFF][0x01][0x00]wrapped`, in base64 and in hex.
-        for marker in ["d3JhcHBlZA", "ff0100777261707065", "wrapped_dek"] {
-            assert!(!rendered.contains(marker), "{marker} in {rendered}");
-        }
+        let failing = PostgresKeyringStore::with_table(pool.clone(), table.clone());
+        super::a_store_error_carries_no_record_bytes(failing, None).await?;
         drop_table(&pool, &table).await?;
         sqlx::query(AssertSqlSafe(format!("DROP FUNCTION {table}_refuse")))
             .execute(&pool)
@@ -617,5 +632,43 @@ mod postgres {
             drop(keyring);
             drop_table(&pool, &table).await
         }
+    }
+}
+
+/// The GCS store against the bucket `KEYRING_GCS_BUCKET` names, with the application default
+/// credentials. Each run writes under a prefix of its own, `kms-keyrings-conformance/<uuid>/`,
+/// and leaves its objects for the bucket's lifecycle rule.
+#[cfg(feature = "gcs")]
+mod gcs {
+    use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
+    use gcloud_sdk::GoogleApi;
+    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore};
+
+    use super::{conformance, TestResult};
+
+    async fn store() -> Result<GcsKeyringStore, Box<dyn std::error::Error>> {
+        let bucket = GcsBucketName::try_from(std::env::var("KEYRING_GCS_BUCKET")?)?;
+        let client =
+            GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
+                .await?;
+        Ok(GcsKeyringStore::new(client, bucket)?.with_prefix(format!(
+            "kms-keyrings-conformance/{}/",
+            uuid::Uuid::now_v7()
+        )))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn the_gcs_store_conforms() -> TestResult {
+        let store = store().await?;
+        conformance(|| store.clone()).await
+    }
+
+    /// An object name past the service's 1,024-byte limit makes every write fail.
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn a_store_error_carries_no_record_bytes() -> TestResult {
+        let failing = store().await?.with_prefix("x".repeat(1100));
+        super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 }
