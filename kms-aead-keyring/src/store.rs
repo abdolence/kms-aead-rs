@@ -16,6 +16,10 @@ pub use memory::*;
 mod firestore;
 #[cfg(feature = "firestore")]
 pub use self::firestore::*;
+#[cfg(feature = "postgres")]
+mod postgres;
+#[cfg(feature = "postgres")]
+pub use postgres::*;
 
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///
@@ -161,16 +165,19 @@ pub enum StoreKind {
     Memory,
     /// `FirestoreKeyringStore`, of the `firestore` feature.
     Firestore,
+    /// PostgreSQL, the store of the `postgres` feature.
+    Postgres,
     /// An application's own store, by the name it gives.
     Other(&'static str),
 }
 
-/// `memory`, `firestore`, or the application's name: the value of the `store` span field.
+/// `memory`, `firestore`, `postgres`, or the application's name: the value of the `store` span field.
 impl Display for StoreKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             StoreKind::Memory => "memory",
             StoreKind::Firestore => "firestore",
+            StoreKind::Postgres => "postgres",
             StoreKind::Other(name) => name,
         })
     }
