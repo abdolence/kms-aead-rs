@@ -128,7 +128,7 @@ jobs:
         with:
           mdbook-version: '0.5.4'
       - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export"
       - run: cd docs && mdbook build
   # `rust-version` in Cargo.toml: the docs.rs feature set builds on it, on dependencies resolved
   # for it.
