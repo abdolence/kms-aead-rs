@@ -70,20 +70,21 @@ stored value holds:
   record is the place for central rotation and retirement of keys, and for values that BigQuery
   and Tink read across rotations. See [Keyring and field encryption](./keyring.md).
 
-| | Per-call envelope | Store-less DEK reuse | Keyring |
-|---|---|---|---|
-| Crate | `kms-aead` | `kms-aead` | `kms-aead-keyring` |
-| DEKs | one per value | one per process at a time, renewed by age or count | one per key version of a scope |
-| KMS calls on write | one encryption per value | one encryption per renewed DEK | no encryption, and one decryption per key version per DEK cache TTL |
-| KMS calls on read | one decryption per value, or per DEK cache miss | one decryption per DEK per cache TTL | one decryption per key version per cache TTL |
-| A value carries | its encrypted DEK | its encrypted DEK | a 4-byte key id |
-| Infrastructure | a KMS | a KMS | a KMS and a keyring store |
-| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
-| Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |
-| BigQuery and Tink readers | no | no | yes: BigQuery with a Cloud KMS KEK, Tink with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit |
-| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
+| | Per-call envelope | Store-less DEK reuse | One fixed key | Keyring |
+|---|---|---|---|---|
+| Crate | `kms-aead` | `kms-aead` | `kms-aead` | `kms-aead-keyring` |
+| DEKs | one per value | one per process at a time, renewed by age or count | one, encrypted once by an administrative job | one per key version of a scope |
+| KMS calls on write | one encryption per value | one encryption per renewed DEK | no encryption, and one decryption per DEK cache TTL | no encryption, and one decryption per key version per DEK cache TTL |
+| KMS calls on read | one decryption per value, or per DEK cache miss | one decryption per DEK per cache TTL | one decryption per cache TTL | one decryption per key version per cache TTL |
+| A value carries | its encrypted DEK | its encrypted DEK | a 4-byte key id | a 4-byte key id |
+| Infrastructure | a KMS | a KMS | a KMS, and the encrypted DEK in the application's settings | a KMS and a keyring store |
+| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | the KEK in the KMS; the DEK is not rotated | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
+| Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with `DeterministicCipher` | yes, with queries across rotations |
+| BigQuery readers | no | no | yes, with a keyset of the key encrypted by a Cloud KMS KEK | yes, with a Cloud KMS KEK |
+| Tink readers | yes, with `KmsEnvelopeAead` for GCP and AWS keys | yes, with `KmsEnvelopeAead` for GCP and AWS keys | yes, with a keyset of the key | yes, with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit |
+| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
 
-Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
+No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
 [Migrating from envelope values](./operations.md#migrating-from-envelope-values).
 
 Both envelope modes seal a value of a Rust type, such as an application newtype, into an
