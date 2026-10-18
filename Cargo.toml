@@ -109,7 +109,7 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 default = []
 serde = ["dep:serde", "dep:serde_bytes", "secret-vault-value/serde"]
 # `Json`, a plaintext stored as its JSON.
-serde-json = ["serde", "dep:serde_json"]
+serde-json = ["dep:serde", "dep:serde_json"]
 # `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`.
 postgres = ["dep:postgres-types", "dep:bytes"]
 # sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for `Encrypted` on Postgres, as `BYTEA`.
