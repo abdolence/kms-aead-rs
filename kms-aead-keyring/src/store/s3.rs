@@ -8,7 +8,7 @@ use aws_sdk_s3::primitives::ByteStream;
 
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, KeyringStoreError};
-use crate::record::stored::MAX_DOCUMENT_LEN;
+use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
 use crate::{KeyringId, KeyringRecord};
 
 /// The name of an S3 bucket, such as `my-keyrings`: lowercase ASCII letters, digits, `-`, `_`
@@ -167,7 +167,7 @@ impl S3KeyringStore {
         // it, and a read never buffers more than the cap and one chunk.
         let mut body = response.body;
         let mut document = Vec::new();
-        while document.len() <= MAX_DOCUMENT_LEN {
+        while document.len() <= MAX_RECORD_DOCUMENT_LEN {
             match body.try_next().await {
                 Ok(Some(chunk)) => document.extend_from_slice(&chunk),
                 Ok(None) => break,

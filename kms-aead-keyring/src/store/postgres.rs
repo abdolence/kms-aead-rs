@@ -18,9 +18,9 @@ use crate::errors::{Identifier, IdentifierRule, KeyringResult, KeyringStoreError
 use crate::{KeyringError, KeyringId, KeyringRecord};
 
 /// The delay before the second attempt to replace a lost listener connection. The first attempt
-/// is immediate, and the delay doubles up to [`MAX_RETRY_DELAY`].
-const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
-const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+/// is immediate, and the delay doubles up to [`LISTENER_MAX_RETRY_DELAY`].
+const LISTENER_FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
+const LISTENER_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 /// A keyring store on PostgreSQL: one row per keyring in a table the operator creates, with a
 /// `revision` counter for the compare-and-swap and `NOTIFY` for push.
@@ -230,8 +230,8 @@ where
 
     /// Forwards the notifications on `table`'s channel to the watches of the keyring each one
     /// names, until every watch is dropped. A lost connection is reported to every watch and
-    /// replaced at once, then after a delay that doubles from [`FIRST_RETRY_DELAY`] up to
-    /// [`MAX_RETRY_DELAY`] while PostgreSQL stays unreachable.
+    /// replaced at once, then after a delay that doubles from [`LISTENER_FIRST_RETRY_DELAY`] up to
+    /// [`LISTENER_MAX_RETRY_DELAY`] while PostgreSQL stays unreachable.
     async fn forward(
         self: Arc<Self>,
         mut listener: Listener<T::Stream>,
@@ -256,7 +256,7 @@ where
                 }
             }
             watches.signal(None, WatchEvent::Disconnected);
-            let mut delay = FIRST_RETRY_DELAY;
+            let mut delay = LISTENER_FIRST_RETRY_DELAY;
             listener = loop {
                 let Some(senders) = watches.live() else {
                     return;
@@ -268,7 +268,7 @@ where
                     _ = join_all(senders.iter().map(mpsc::Sender::closed)) => {}
                     () = tokio::time::sleep(delay) => {}
                 }
-                delay = (delay * 2).min(MAX_RETRY_DELAY);
+                delay = (delay * 2).min(LISTENER_MAX_RETRY_DELAY);
             };
             watches.signal(None, WatchEvent::Reconnected);
         }

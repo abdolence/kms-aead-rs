@@ -20,8 +20,8 @@ use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
 /// version, so this holds a few thousand versions.
-pub(crate) const MAX_DOCUMENT_LEN: usize = 1 << 20;
-const SCHEMA: u32 = 1;
+pub(crate) const MAX_RECORD_DOCUMENT_LEN: usize = 1 << 20;
+const RECORD_SCHEMA_VERSION: u32 = 1;
 
 /// The JSON document of a record. Its fields are primitives, so that every rule of the record
 /// is checked once, in [`KeyringRecord::from_json`], with a reason naming the rule.
@@ -89,7 +89,7 @@ impl From<&KeyringRecord> for StoredRecord {
             })
             .collect();
         Self {
-            schema: SCHEMA,
+            schema: RECORD_SCHEMA_VERSION,
             id: record.id.to_string(),
             kek: StoredKek {
                 provider: record.kek.provider().to_string(),
@@ -131,7 +131,7 @@ impl KeyringRecord {
     ///
     /// [`KeyringError::RecordInvalid`] with the first cap or invariant the document breaks.
     pub fn from_json(id: &KeyringId, document: &[u8]) -> KeyringResult<Self> {
-        if document.len() > MAX_DOCUMENT_LEN {
+        if document.len() > MAX_RECORD_DOCUMENT_LEN {
             return Err(KeyringError::record_invalid(
                 id,
                 RecordInvalidReason::TooLarge,
@@ -140,7 +140,7 @@ impl KeyringRecord {
         let stored: StoredRecord = serde_json::from_slice(document)
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         let invalid = |reason| KeyringError::record_invalid(id, reason);
-        if stored.schema != SCHEMA {
+        if stored.schema != RECORD_SCHEMA_VERSION {
             return Err(invalid(RecordInvalidReason::UnsupportedSchema(
                 stored.schema,
             )));

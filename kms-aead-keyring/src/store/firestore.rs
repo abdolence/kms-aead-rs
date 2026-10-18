@@ -19,10 +19,10 @@ use crate::errors::{KeyringError, KeyringResult, KeyringStoreError};
 use crate::{KeyringId, KeyringRecord};
 
 /// The one target of a watch's listener, which listens to nothing else.
-const WATCH_TARGET: FirestoreListenerTarget = FirestoreListenerTarget::new(1);
+const WATCH_LISTENER_TARGET: FirestoreListenerTarget = FirestoreListenerTarget::new(1);
 /// How long a watch waits for Firestore's first state of the document. The keyring awaits the
 /// watch when it opens, and the load just before it reached Firestore.
-const WATCH_START: Duration = Duration::from_secs(10);
+const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A keyring store on Firestore. The record of a keyring is the document `<collection>/<id>`,
 /// whose fields are those of the record's JSON document, and its revision is the document's
@@ -179,7 +179,7 @@ impl KeyringStore for FirestoreKeyringStore {
             .select()
             .by_id_in(&self.collection)
             .batch_listen([id.as_str()])
-            .add_target(WATCH_TARGET, &mut listener)
+            .add_target(WATCH_LISTENER_TARGET, &mut listener)
             .map_err(failed)?;
         let (sender, receiver) = mpsc::channel(16);
         let signals = sender.clone();
@@ -232,9 +232,10 @@ impl KeyringStore for FirestoreKeyringStore {
             })
             .await
             .map_err(failed)?;
-        let started = tokio::time::timeout(WATCH_START, first_current.wait_for(|live| *live))
-            .await
-            .is_ok_and(|current| current.is_ok());
+        let started =
+            tokio::time::timeout(WATCH_START_TIMEOUT, first_current.wait_for(|live| *live))
+                .await
+                .is_ok_and(|current| current.is_ok());
         if !started {
             let _ = listener.shutdown().await;
             return Err(KeyringError::Store(KeyringStoreError::new(

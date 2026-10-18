@@ -13,9 +13,9 @@ use kms_aead::KeyId;
 
 use crate::errors::{KeyPurposeMismatchError, KeyringError, KeyringResult};
 
-const DETERMINISTIC: u32 = 1 << 31;
-const BEACON: u32 = 1 << 30;
-const ORDINAL: u32 = BEACON - 1;
+const DETERMINISTIC_KEY_ID_BIT: u32 = 1 << 31;
+const BEACON_KEY_ID_BIT: u32 = 1 << 30;
+const KEY_ID_ORDINAL_MASK: u32 = BEACON_KEY_ID_BIT - 1;
 
 /// What a key version is for. A key of one purpose never serves another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -39,9 +39,9 @@ impl Purpose {
     /// deterministic, so callers check [`is_reserved`] first where the id is not a version's.
     pub(crate) fn of(key_id: KeyId) -> Self {
         let id = key_id.as_u32();
-        if id & DETERMINISTIC != 0 {
+        if id & DETERMINISTIC_KEY_ID_BIT != 0 {
             Purpose::Deterministic
-        } else if id & BEACON != 0 {
+        } else if id & BEACON_KEY_ID_BIT != 0 {
             Purpose::Beacon
         } else {
             Purpose::Randomized
@@ -52,8 +52,8 @@ impl Purpose {
     pub(crate) fn first_key_id(self) -> KeyId {
         KeyId::new(match self {
             Purpose::Randomized => 1,
-            Purpose::Deterministic => DETERMINISTIC | 1,
-            Purpose::Beacon => BEACON | 1,
+            Purpose::Deterministic => DETERMINISTIC_KEY_ID_BIT | 1,
+            Purpose::Beacon => BEACON_KEY_ID_BIT | 1,
         })
     }
 
@@ -90,7 +90,9 @@ impl Display for Purpose {
 /// Whether no version can have `key_id`: its ordinal is zero, or it sets both purpose bits.
 pub(crate) fn is_reserved(key_id: KeyId) -> bool {
     let id = key_id.as_u32();
-    id & ORDINAL == 0 || id & (DETERMINISTIC | BEACON) == DETERMINISTIC | BEACON
+    id & KEY_ID_ORDINAL_MASK == 0
+        || id & (DETERMINISTIC_KEY_ID_BIT | BEACON_KEY_ID_BIT)
+            == DETERMINISTIC_KEY_ID_BIT | BEACON_KEY_ID_BIT
 }
 
 /// `key_id` when it is not reserved: the check of an id a caller names before the keyring reads
@@ -110,7 +112,7 @@ pub(crate) fn unreserved(key_id: KeyId) -> KeyringResult<KeyId> {
 /// purpose run out at 2^30 - 1.
 pub(crate) fn next_key_id(key_id: KeyId) -> Option<KeyId> {
     let id = key_id.as_u32();
-    (id & ORDINAL != ORDINAL).then(|| KeyId::new(id + 1))
+    (id & KEY_ID_ORDINAL_MASK != KEY_ID_ORDINAL_MASK).then(|| KeyId::new(id + 1))
 }
 
 /// Serde for an optional key id as a number or `null`, which refuses a reserved id on read.

@@ -12,13 +12,13 @@ use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, KeyringStoreError};
-use crate::record::stored::MAX_DOCUMENT_LEN;
+use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
 use crate::{KeyringId, KeyringRecord};
 
 /// The most a read returns of an object: one byte past the record cap, so that an object over
 /// the cap still reads as over it, and a read never buffers more than that. The cap is 1 MiB, so
 /// the cast cannot overflow.
-const READ_LIMIT: i64 = MAX_DOCUMENT_LEN as i64 + 1;
+const MAX_OBJECT_READ_LEN: i64 = MAX_RECORD_DOCUMENT_LEN as i64 + 1;
 
 /// The name of a Cloud Storage bucket, such as `my-keyrings`: lowercase ASCII letters, digits,
 /// `-`, `_` and `.`, the characters Cloud Storage allows. The other bucket rules are the
@@ -164,7 +164,7 @@ impl GcsKeyringStore {
             bucket: self.bucket.clone(),
             object: self.object_name(id),
             if_generation_not_match: if_generation_not_match.map(|generation| generation.0),
-            read_limit: READ_LIMIT,
+            read_limit: MAX_OBJECT_READ_LEN,
             ..Default::default()
         });
         let refused = |status: tonic::Status| match status.code() {

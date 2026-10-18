@@ -18,30 +18,30 @@ use crate::store::StoreKind;
 use crate::sweep::SweepReport;
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, Purpose};
 
-const KEYRING: &str = "/kms_aead_keyring/keyring";
-const PURPOSE: &str = "/kms_aead_keyring/purpose";
-const KEY_ID: &str = "/kms_aead_keyring/key_id";
-const ALGORITHM: &str = "/kms_aead_keyring/algorithm";
-const BACKEND: &str = "/kms_aead_keyring/backend";
-const DEK_CACHE: &str = "/kms_aead_keyring/dek_cache";
-const KEY_STATE: &str = "/kms_aead_keyring/key_state";
-const RELOAD: &str = "/kms_aead_keyring/reload";
-const STORE: &str = "/kms_aead_keyring/store";
-const REASON: &str = "/kms_aead_keyring/reason";
-const CHANGED: &str = "/kms_aead_keyring/changed";
-const REVISION: &str = "/kms_aead_keyring/revision";
-const RESPONSE_TIME: &str = "/kms_aead_keyring/response_time";
-const FROM_KEY_ID: &str = "/kms_aead_keyring/from_key_id";
-const TO_KEY_ID: &str = "/kms_aead_keyring/to_key_id";
-const CAS_RETRIES: &str = "/kms_aead_keyring/cas_retries";
-const VERSIONS: &str = "/kms_aead_keyring/versions";
-const ERROR_CODE: &str = "/kms_aead_keyring/error_code";
-const SCANNED: &str = "/kms_aead_keyring/scanned";
-const RESEALED: &str = "/kms_aead_keyring/resealed";
-const RESEALED_FROM_COMPROMISED: &str = "/kms_aead_keyring/resealed_from_compromised";
-const SKIPPED: &str = "/kms_aead_keyring/skipped";
-const FAILED: &str = "/kms_aead_keyring/failed";
-const RECORD: &str = "/kms_aead_keyring/record";
+const FIELD_KEYRING: &str = "/kms_aead_keyring/keyring";
+const FIELD_PURPOSE: &str = "/kms_aead_keyring/purpose";
+const FIELD_KEY_ID: &str = "/kms_aead_keyring/key_id";
+const FIELD_ALGORITHM: &str = "/kms_aead_keyring/algorithm";
+const FIELD_BACKEND: &str = "/kms_aead_keyring/backend";
+const FIELD_DEK_CACHE: &str = "/kms_aead_keyring/dek_cache";
+const FIELD_KEY_STATE: &str = "/kms_aead_keyring/key_state";
+const FIELD_RELOAD: &str = "/kms_aead_keyring/reload";
+const FIELD_STORE: &str = "/kms_aead_keyring/store";
+const FIELD_REASON: &str = "/kms_aead_keyring/reason";
+const FIELD_CHANGED: &str = "/kms_aead_keyring/changed";
+const FIELD_REVISION: &str = "/kms_aead_keyring/revision";
+const FIELD_RESPONSE_TIME: &str = "/kms_aead_keyring/response_time";
+const FIELD_FROM_KEY_ID: &str = "/kms_aead_keyring/from_key_id";
+const FIELD_TO_KEY_ID: &str = "/kms_aead_keyring/to_key_id";
+const FIELD_CAS_RETRIES: &str = "/kms_aead_keyring/cas_retries";
+const FIELD_VERSIONS: &str = "/kms_aead_keyring/versions";
+const FIELD_ERROR_CODE: &str = "/kms_aead_keyring/error_code";
+const FIELD_SCANNED: &str = "/kms_aead_keyring/scanned";
+const FIELD_RESEALED: &str = "/kms_aead_keyring/resealed";
+const FIELD_RESEALED_FROM_COMPROMISED: &str = "/kms_aead_keyring/resealed_from_compromised";
+const FIELD_SKIPPED: &str = "/kms_aead_keyring/skipped";
+const FIELD_FAILED: &str = "/kms_aead_keyring/failed";
+const FIELD_RECORD: &str = "/kms_aead_keyring/record";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the keyring has a
 /// cache: `reencrypt_deks`, a keyset export, and a compromised version read by
@@ -54,13 +54,13 @@ const DEK_CACHE_BYPASSED: &str = "bypassed";
 pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<&str>) -> Span {
     debug_span!(
         "Keyring encrypt",
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %purpose,
-        { KEY_ID } = field::Empty,
-        { ALGORITHM } = field::Empty,
-        { BACKEND } = backend.map(field::display),
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %purpose,
+        { FIELD_KEY_ID } = field::Empty,
+        { FIELD_ALGORITHM } = field::Empty,
+        { FIELD_BACKEND } = backend.map(field::display),
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -69,11 +69,11 @@ pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<&st
 pub(crate) fn beacon(keyring: &KeyringId) -> Span {
     debug_span!(
         "Keyring beacon",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = field::Empty,
-        { ALGORITHM } = field::Empty,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = field::Empty,
+        { FIELD_ALGORITHM } = field::Empty,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -81,13 +81,13 @@ pub(crate) fn beacon(keyring: &KeyringId) -> Span {
 pub(crate) fn decrypt(keyring: &KeyringId, purpose: Purpose, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring decrypt",
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %purpose,
-        { KEY_ID } = %key_id.as_u32(),
-        { KEY_STATE } = field::Empty,
-        { RELOAD } = field::Empty,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %purpose,
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_KEY_STATE } = field::Empty,
+        { FIELD_RELOAD } = field::Empty,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -96,13 +96,13 @@ pub(crate) fn decrypt(keyring: &KeyringId, purpose: Purpose, key_id: KeyId) -> S
 pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) -> Span {
     debug_span!(
         "Keyring load",
-        { KEYRING } = keyring.as_str(),
-        { STORE } = %store,
-        { REASON } = reason,
-        { CHANGED } = field::Empty,
-        { REVISION } = field::Empty,
-        { RESPONSE_TIME } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_STORE } = %store,
+        { FIELD_REASON } = reason,
+        { FIELD_CHANGED } = field::Empty,
+        { FIELD_REVISION } = field::Empty,
+        { FIELD_RESPONSE_TIME } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -110,11 +110,11 @@ pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) 
 pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
     debug_span!(
         "Keyring export",
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %purpose,
-        { VERSIONS } = field::Empty,
-        { DEK_CACHE } = DEK_CACHE_BYPASSED,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %purpose,
+        { FIELD_VERSIONS } = field::Empty,
+        { FIELD_DEK_CACHE } = DEK_CACHE_BYPASSED,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -123,12 +123,12 @@ pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
 pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
     debug_span!(
         "Keyring rotate",
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %purpose,
-        { FROM_KEY_ID } = field::Empty,
-        { TO_KEY_ID } = field::Empty,
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %purpose,
+        { FIELD_FROM_KEY_ID } = field::Empty,
+        { FIELD_TO_KEY_ID } = field::Empty,
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -136,53 +136,53 @@ pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
 pub(crate) fn promote(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring promote",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { FROM_KEY_ID } = field::Empty,
-        { TO_KEY_ID } = field::Empty,
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_FROM_KEY_ID } = field::Empty,
+        { FIELD_TO_KEY_ID } = field::Empty,
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
 pub(crate) fn mark_compromised(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring mark compromised",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { TO_KEY_ID } = field::Empty,
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_TO_KEY_ID } = field::Empty,
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
 pub(crate) fn retire(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring retire",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
 pub(crate) fn reinstate(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring reinstate",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
 pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring destroy",
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -190,11 +190,11 @@ pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyId) -> Span {
 pub(crate) fn reencrypt_deks(keyring: &KeyringId) -> Span {
     debug_span!(
         "Keyring re-encrypt DEKs",
-        { KEYRING } = keyring.as_str(),
-        { VERSIONS } = field::Empty,
-        { DEK_CACHE } = DEK_CACHE_BYPASSED,
-        { CAS_RETRIES } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_VERSIONS } = field::Empty,
+        { FIELD_DEK_CACHE } = DEK_CACHE_BYPASSED,
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -206,7 +206,7 @@ pub(crate) async fn in_span<T>(
 ) -> KeyringResult<T> {
     let result = operation.instrument(span.clone()).await;
     if let Err(error) = &result {
-        span.record(ERROR_CODE, error.code());
+        span.record(FIELD_ERROR_CODE, error.code());
     }
     result
 }
@@ -214,57 +214,57 @@ pub(crate) async fn in_span<T>(
 /// Records on the current `Keyring encrypt` span the version that seals.
 pub(crate) fn record_sealing_version(version: &KeyVersion) {
     let span = Span::current();
-    span.record(KEY_ID, field::display(version.id().as_u32()));
-    span.record(ALGORITHM, field::display(version.algorithm()));
+    span.record(FIELD_KEY_ID, field::display(version.id().as_u32()));
+    span.record(FIELD_ALGORITHM, field::display(version.algorithm()));
 }
 
 /// Records on the current `Keyring decrypt` span the state of the version that opens.
 pub(crate) fn record_key_state(version: &KeyVersion) {
     let span = Span::current();
     match version.compromised() {
-        Some(_) => span.record(KEY_STATE, "compromised"),
-        None => span.record(KEY_STATE, field::display(version.state())),
+        Some(_) => span.record(FIELD_KEY_STATE, "compromised"),
+        None => span.record(FIELD_KEY_STATE, field::display(version.state())),
     };
 }
 
 /// Records `key_state` as `unknown` on the current span.
 pub(crate) fn record_unknown_version() {
-    Span::current().record(KEY_STATE, "unknown");
+    Span::current().record(FIELD_KEY_STATE, "unknown");
 }
 
 /// Records on the current span what an unknown key id caused: `none`, `reloaded` or
 /// `rate_limited`.
 pub(crate) fn record_reload(reload: &'static str) {
-    Span::current().record(RELOAD, reload);
+    Span::current().record(FIELD_RELOAD, reload);
 }
 
 /// Records on the current span where the key of the call came from.
 pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
-    Span::current().record(DEK_CACHE, field::display(outcome));
+    Span::current().record(FIELD_DEK_CACHE, field::display(outcome));
 }
 
 /// Records on the current span that the key was decrypted past the DEK cache.
 pub(crate) fn record_dek_cache_bypassed() {
-    Span::current().record(DEK_CACHE, DEK_CACHE_BYPASSED);
+    Span::current().record(FIELD_DEK_CACHE, DEK_CACHE_BYPASSED);
 }
 
 /// Records on the current span the versions of a rotation.
 pub(crate) fn record_rotation(previous: Option<KeyId>, current: KeyId) {
     let span = Span::current();
     if let Some(previous) = previous {
-        span.record(FROM_KEY_ID, field::display(previous.as_u32()));
+        span.record(FIELD_FROM_KEY_ID, field::display(previous.as_u32()));
     }
-    span.record(TO_KEY_ID, field::display(current.as_u32()));
+    span.record(FIELD_TO_KEY_ID, field::display(current.as_u32()));
 }
 
 /// Records on the current span the conflicts an administrative write retried.
 pub(crate) fn record_cas_retries(conflicts: u32) {
-    Span::current().record(CAS_RETRIES, conflicts);
+    Span::current().record(FIELD_CAS_RETRIES, conflicts);
 }
 
 /// Records on the current span how many versions were encrypted again.
 pub(crate) fn record_versions(versions: usize) {
-    Span::current().record(VERSIONS, versions);
+    Span::current().record(FIELD_VERSIONS, versions);
 }
 
 /// Records on the current `Keyring load` span what the read did and the revision it read:
@@ -272,9 +272,9 @@ pub(crate) fn record_versions(versions: usize) {
 /// it moves backwards.
 pub(crate) fn record_load(changed: &'static str, revision: Option<&impl Display>) {
     let span = Span::current();
-    span.record(CHANGED, changed);
+    span.record(FIELD_CHANGED, changed);
     if let Some(revision) = revision {
-        span.record(REVISION, field::display(revision));
+        span.record(FIELD_REVISION, field::display(revision));
     }
 }
 
@@ -283,15 +283,15 @@ pub(crate) async fn timed<T>(request: impl Future<Output = T>) -> T {
     let started = tokio::time::Instant::now();
     let response = request.await;
     let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    Span::current().record(RESPONSE_TIME, elapsed);
+    Span::current().record(FIELD_RESPONSE_TIME, elapsed);
     response
 }
 
 /// A read of a compromised version under `CompromisedReadPolicy::Allow`.
 pub(crate) fn compromised_read_allowed(keyring: &KeyringId, key_id: KeyId) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
         "Decrypted a value under a compromised key version, as the Allow policy permits"
     );
 }
@@ -300,9 +300,9 @@ pub(crate) fn compromised_read_allowed(keyring: &KeyringId, key_id: KeyId) {
 /// the event is for an operator watching a sweep.
 pub(crate) fn read_refused(keyring: &KeyringId, version: &KeyVersion) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %version.id().as_u32(),
-        { KEY_STATE } = %version.state(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %version.id().as_u32(),
+        { FIELD_KEY_STATE } = %version.state(),
         "Refused a value under a key version that no longer decrypts"
     );
 }
@@ -310,8 +310,8 @@ pub(crate) fn read_refused(keyring: &KeyringId, version: &KeyVersion) {
 /// A reload for an unknown key id refused inside the reload interval.
 pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId) {
     tracing::debug!(
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
         "Not reloading the keyring record for an unknown key id inside the reload interval"
     );
 }
@@ -319,8 +319,8 @@ pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId) {
 /// A revalidation that failed: the cached record stays in use.
 pub(crate) fn revalidation_failed(keyring: &KeyringId, error: &KeyringError) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { ERROR_CODE } = error.code(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_ERROR_CODE } = error.code(),
         "The keyring record could not be revalidated; the cached record stays in use"
     );
 }
@@ -328,7 +328,7 @@ pub(crate) fn revalidation_failed(keyring: &KeyringId, error: &KeyringError) {
 /// A record the store no longer holds: the cached record stays in use.
 pub(crate) fn record_missing_kept(keyring: &KeyringId) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         "The keyring store no longer holds the keyring record; the cached record stays in use"
     );
 }
@@ -337,7 +337,7 @@ pub(crate) fn record_missing_kept(keyring: &KeyringId) {
 /// restored record.
 pub(crate) fn record_regressed(keyring: &KeyringId, rule: RegressionRule) {
     tracing::error!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         rule = %rule,
         "Refused a keyring record that moves backwards from the record this process holds"
     );
@@ -350,9 +350,9 @@ pub(crate) fn compromised_without_rotation(
     error: &KeyringError,
 ) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id.as_u32(),
-        { ERROR_CODE } = error.code(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_ERROR_CODE } = error.code(),
         "Flagged the active key version compromised without a new one, since the new key could \
          not be encrypted: nothing encrypts until rotate succeeds"
     );
@@ -366,10 +366,10 @@ pub(crate) fn active_version_changed(
     to: Option<KeyId>,
 ) {
     tracing::info!(
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %purpose,
-        { FROM_KEY_ID } = from.map(|key_id| field::display(key_id.as_u32())),
-        { TO_KEY_ID } = to.map(|key_id| field::display(key_id.as_u32())),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %purpose,
+        { FIELD_FROM_KEY_ID } = from.map(|key_id| field::display(key_id.as_u32())),
+        { FIELD_TO_KEY_ID } = to.map(|key_id| field::display(key_id.as_u32())),
         "The active key version changed"
     );
 }
@@ -377,7 +377,7 @@ pub(crate) fn active_version_changed(
 /// A compare-and-swap conflict that the write retries.
 pub(crate) fn write_conflict(keyring: &KeyringId, attempt: u32) {
     tracing::debug!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         attempt,
         "The keyring record changed during a write; reading it again"
     );
@@ -386,7 +386,7 @@ pub(crate) fn write_conflict(keyring: &KeyringId, attempt: u32) {
 /// The store's listener lost its connection.
 pub(crate) fn watch_disconnected(keyring: &KeyringId) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         "The keyring store's change listener disconnected; the record TTL bounds how late a \
          change is seen until it reconnects"
     );
@@ -395,7 +395,7 @@ pub(crate) fn watch_disconnected(keyring: &KeyringId) {
 /// The store's listener is connected again.
 pub(crate) fn watch_reconnected(keyring: &KeyringId) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         "The keyring store's change listener reconnected; revalidating the record"
     );
 }
@@ -403,8 +403,8 @@ pub(crate) fn watch_reconnected(keyring: &KeyringId) {
 /// The store's listener did not start.
 pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { ERROR_CODE } = error.code(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_ERROR_CODE } = error.code(),
         "The keyring store's change listener did not start: the record TTL alone bounds how late \
          this process sees a change"
     );
@@ -413,7 +413,7 @@ pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
 /// No tokio runtime to run the task that follows the store's signals.
 pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
+        { FIELD_KEYRING } = keyring.as_str(),
         "No tokio runtime runs the call, so the keyring store's change signals are not followed: \
          the record TTL alone bounds how late this process sees a change"
     );
@@ -424,13 +424,13 @@ pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
 pub(crate) fn decrypt_envelope(keyring: &KeyringId) -> Span {
     debug_span!(
         "Keyring decrypt",
-        { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %Purpose::Randomized,
-        { KEY_ID } = field::Empty,
-        { KEY_STATE } = field::Empty,
-        { RELOAD } = field::Empty,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %Purpose::Randomized,
+        { FIELD_KEY_ID } = field::Empty,
+        { FIELD_KEY_STATE } = field::Empty,
+        { FIELD_RELOAD } = field::Empty,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -438,31 +438,34 @@ pub(crate) fn decrypt_envelope(keyring: &KeyringId) -> Span {
 pub(crate) fn sweep(keyring: &KeyringId) -> Span {
     debug_span!(
         "Keyring sweep",
-        { KEYRING } = keyring.as_str(),
-        { SCANNED } = field::Empty,
-        { RESEALED } = field::Empty,
-        { RESEALED_FROM_COMPROMISED } = field::Empty,
-        { SKIPPED } = field::Empty,
-        { FAILED } = field::Empty,
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_SCANNED } = field::Empty,
+        { FIELD_RESEALED } = field::Empty,
+        { FIELD_RESEALED_FROM_COMPROMISED } = field::Empty,
+        { FIELD_SKIPPED } = field::Empty,
+        { FIELD_FAILED } = field::Empty,
     )
 }
 
 /// Records the counts of a sweep on its span.
 pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
-    span.record(SCANNED, report.scanned);
-    span.record(RESEALED, report.resealed);
-    span.record(RESEALED_FROM_COMPROMISED, report.resealed_from_compromised);
-    span.record(SKIPPED, report.skipped);
-    span.record(FAILED, report.failed);
+    span.record(FIELD_SCANNED, report.scanned);
+    span.record(FIELD_RESEALED, report.resealed);
+    span.record(
+        FIELD_RESEALED_FROM_COMPROMISED,
+        report.resealed_from_compromised,
+    );
+    span.record(FIELD_SKIPPED, report.skipped);
+    span.record(FIELD_FAILED, report.failed);
 }
 
 /// A record the sweep could not re-seal, by the application's candidate for it, which is often
 /// an entity id: the sweep's log is read as an administrative log.
 pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &KeyringError) {
     tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        { RECORD } = %candidate,
-        { ERROR_CODE } = error.code(),
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_RECORD } = %candidate,
+        { FIELD_ERROR_CODE } = error.code(),
         "The sweep could not re-seal a record"
     );
 }
