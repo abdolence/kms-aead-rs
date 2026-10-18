@@ -31,9 +31,11 @@ equal values of two tenants apart.
 
 ## Usage
 
-`DeterministicCipher` seals and opens with a `DeterministicDataEncryptionKey`. It is a type of its
-own, with no conversion to or from `DataEncryptionKey`, so a key is not handed to the cipher of the
-other purpose by mistake.
+`DeterministicCipher` seals and opens with a `DataEncryptionKey` of
+`DeterministicAlgorithm::key_len()` bytes, 64 for AES-SIV, and refuses a key of another length
+with `INVALID_KEY_LENGTH`, such as the 16 or 32 bytes of a randomized algorithm's key. The
+application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
+key ids.
 
 ```rust
 use kms_aead::{DeterministicAlgorithm, DeterministicCipher};
@@ -87,7 +89,7 @@ assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from
 ```
 
 `decrypt_deterministic_dek` calls the provider every time and does not go through the envelope's
-DEK cache. To cache deterministic keys, use `DekCache::with_deterministic_key`, which keeps them
-apart from randomized keys.
+DEK cache. To cache deterministic keys, use `DekCache::with_key`, which holds the keys of both
+kinds of algorithm.
 
 `DeterministicCipher::generate_wrapped_key` does the same with any provider.

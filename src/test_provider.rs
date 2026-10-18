@@ -47,9 +47,6 @@ pub(crate) enum TestKmsProvider {
     /// holds to the unwrap, as a little-endian `u64`, so that a caller can tell how old the key
     /// it is given is.
     Stamping(Instant),
-    /// Unwraps every key into the key it holds, whatever the wrapped bytes.
-    #[cfg(feature = "deterministic")]
-    Unwrapping(SecretValue),
 }
 
 #[async_trait]
@@ -91,8 +88,6 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
                 key.extend(nanos.to_le_bytes());
                 Ok(DataEncryptionKey::from(SecretValue::new(key)))
             }
-            #[cfg(feature = "deterministic")]
-            TestKmsProvider::Unwrapping(key) => Ok(DataEncryptionKey::from(key.clone())),
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
                 encrypted_key.wrapped().to_vec(),
             ))),

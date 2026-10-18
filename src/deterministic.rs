@@ -17,6 +17,13 @@ pub enum DeterministicAlgorithm {
 }
 
 impl DeterministicAlgorithm {
+    /// Every algorithm. [`DekCache::with_key`](crate::cache::DekCache::with_key) refuses a key
+    /// whose length fits none of these and none of [`AeadAlgorithm::ALL`], so a variant left out
+    /// here has its keys refused.
+    ///
+    /// [`AeadAlgorithm::ALL`]: crate::AeadAlgorithm::ALL
+    pub(crate) const ALL: [DeterministicAlgorithm; 1] = [DeterministicAlgorithm::Aes256Siv];
+
     /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -60,11 +67,12 @@ mod tests {
 
     #[test]
     fn every_name_parses_back_and_another_name_is_refused() -> KmsAeadResult<()> {
-        let algorithm = DeterministicAlgorithm::Aes256Siv;
-        assert_eq!(
-            algorithm.to_string().parse::<DeterministicAlgorithm>()?,
-            algorithm
-        );
+        for algorithm in DeterministicAlgorithm::ALL {
+            assert_eq!(
+                algorithm.to_string().parse::<DeterministicAlgorithm>()?,
+                algorithm
+            );
+        }
         let unknown = "aes-128-siv".parse::<DeterministicAlgorithm>();
         assert!(
             matches!(&unknown, Err(e) if e.code() == "UNKNOWN_ALGORITHM"),
@@ -94,44 +102,6 @@ mod aes_siv_cipher {
         checked_key_material, spans, DataEncryptionKey, EncryptedDataEncryptionKey,
         KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
     };
-
-    /// A key for deterministic encryption only, zeroized on drop and shown as `***` by `Debug`.
-    /// It is a type of its own with no conversion to or from [`DataEncryptionKey`], so that a
-    /// key is not handed to the cipher of the other purpose by mistake. Both are built from a
-    /// `SecretValue`, so the types do not stop a caller from building both from the same bytes.
-    #[derive(Debug)]
-    pub struct DeterministicDataEncryptionKey(SecretValue);
-
-    impl DeterministicDataEncryptionKey {
-        /// The key bytes.
-        pub fn value(&self) -> &SecretValue {
-            &self.0
-        }
-    }
-
-    impl From<SecretValue> for DeterministicDataEncryptionKey {
-        fn from(value: SecretValue) -> Self {
-            Self(value)
-        }
-    }
-
-    /// `key`, as a provider unwrapped it, as a deterministic key for `algorithm`. The one place
-    /// that checks an unwrapped key against a deterministic algorithm.
-    pub(crate) fn checked_deterministic_key(
-        key: DataEncryptionKey,
-        algorithm: DeterministicAlgorithm,
-    ) -> KmsAeadResult<DeterministicDataEncryptionKey> {
-        let len = key.value().ref_sensitive_value().len();
-        if len == algorithm.key_len() {
-            Ok(DeterministicDataEncryptionKey(key.into_value()))
-        } else {
-            Err(KmsAeadEncryptionError::invalid_key_length(
-                len,
-                algorithm,
-                algorithm.key_len(),
-            ))
-        }
-    }
 
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
     /// output order of RFC 5297. Equal plaintexts and AADs under one key give equal values.
@@ -197,7 +167,7 @@ mod aes_siv_cipher {
         /// # Errors
         ///
         /// `RANDOM_GENERATOR` when the generator fails.
-        pub fn generate_key(&self) -> KmsAeadResult<DeterministicDataEncryptionKey> {
+        pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
             let mut key = SecretValue::new(vec![0; self.algorithm.key_len()]);
             getrandom::fill(key.ref_sensitive_value_mut()).map_err(|_| {
                 KmsAeadEncryptionError::create(
@@ -205,7 +175,7 @@ mod aes_siv_cipher {
                     "Unable to generate a random key",
                 )
             })?;
-            Ok(DeterministicDataEncryptionKey(key))
+            Ok(DataEncryptionKey::from(key))
         }
 
         /// A new key and the same key wrapped by `provider`, to store. The key comes from the
@@ -219,22 +189,16 @@ mod aes_siv_cipher {
         pub async fn generate_wrapped_key<P>(
             &self,
             provider: &P,
-        ) -> KmsAeadResult<(DeterministicDataEncryptionKey, EncryptedDataEncryptionKey)>
+        ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
-            let material = match checked_key_material(provider, self.algorithm.key_len()).await? {
-                Some(material) => material,
-                None => self.generate_key()?.0,
+            let key = match checked_key_material(provider, self.algorithm.key_len()).await? {
+                Some(material) => DataEncryptionKey::from(material),
+                None => self.generate_key()?,
             };
-            // The provider wraps a `DataEncryptionKey`, whose bytes then move into the
-            // deterministic key, so that no copy of the key is left behind.
-            let key = DataEncryptionKey::from(material);
             let encrypted_key = provider.encrypt_data_encryption_key(&key).await?;
-            Ok((
-                DeterministicDataEncryptionKey(key.into_value()),
-                encrypted_key,
-            ))
+            Ok((key, encrypted_key))
         }
 
         /// Seals `plain_text` under `key`. `aad` is authenticated as one associated-data item,
@@ -248,7 +212,7 @@ mod aes_siv_cipher {
             &self,
             aad: &[u8],
             plain_text: &SecretValue,
-            key: &DeterministicDataEncryptionKey,
+            key: &DataEncryptionKey,
         ) -> KmsAeadResult<DeterministicCipherText> {
             let cipher_text = self
                 .siv(key)?
@@ -269,7 +233,7 @@ mod aes_siv_cipher {
             &self,
             aad: &[u8],
             cipher_text: &DeterministicCipherText,
-            key: &DeterministicDataEncryptionKey,
+            key: &DataEncryptionKey,
         ) -> KmsAeadResult<SecretValue> {
             let mut siv = self.siv(key)?;
             if cipher_text.value().len() < Self::SYNTHETIC_IV_LEN {
@@ -288,7 +252,7 @@ mod aes_siv_cipher {
 
         /// The cipher keyed with `key`: the first half keys S2V's CMAC and the second half CTR,
         /// the order of RFC 5297 and of Tink's `AesSivKey`.
-        fn siv(&self, key: &DeterministicDataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
+        fn siv(&self, key: &DataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
             let key = key.value().ref_sensitive_value();
             match self.algorithm {
                 DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
@@ -318,7 +282,7 @@ mod aes_siv_cipher {
         pub async fn generate_new_deterministic_dek(
             &self,
             algorithm: DeterministicAlgorithm,
-        ) -> KmsAeadResult<(DeterministicDataEncryptionKey, EncryptedDataEncryptionKey)> {
+        ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
             let cipher = DeterministicCipher::new(algorithm)?;
             let span = spans::generate_dek(
                 "deterministic",
@@ -339,14 +303,23 @@ mod aes_siv_cipher {
             &self,
             algorithm: DeterministicAlgorithm,
             encrypted_key: &EncryptedDataEncryptionKey,
-        ) -> KmsAeadResult<DeterministicDataEncryptionKey> {
+        ) -> KmsAeadResult<DataEncryptionKey> {
             let span = spans::decrypt_dek("deterministic", algorithm, self.dek_cache());
             spans::in_span(span, async {
                 let key = self
                     .provider
                     .decrypt_data_encryption_key(encrypted_key)
                     .await?;
-                checked_deterministic_key(key, algorithm)
+                let len = key.value().ref_sensitive_value().len();
+                if len == algorithm.key_len() {
+                    Ok(key)
+                } else {
+                    Err(KmsAeadEncryptionError::invalid_key_length(
+                        len,
+                        algorithm,
+                        algorithm.key_len(),
+                    ))
+                }
             })
             .await
         }
@@ -401,9 +374,8 @@ mod aes_siv_cipher {
         fn seals_and_opens_the_published_vectors() -> KmsAeadResult<()> {
             let cipher = DeterministicCipher::new(DeterministicAlgorithm::Aes256Siv)?;
             for vector in VECTORS {
-                let key = DeterministicDataEncryptionKey::from(SecretValue::new(
-                    hex::decode(vector.key).unwrap(),
-                ));
+                let key =
+                    DataEncryptionKey::from(SecretValue::new(hex::decode(vector.key).unwrap()));
                 let aad = hex::decode(vector.aad).unwrap();
                 let plain_text = SecretValue::new(hex::decode(vector.plain_text).unwrap());
 
@@ -415,15 +387,23 @@ mod aes_siv_cipher {
         }
 
         #[test]
-        fn a_32_byte_key_is_refused_by_aes256siv() -> KmsAeadResult<()> {
+        fn a_deterministic_cipher_refuses_a_key_of_another_length() -> KmsAeadResult<()> {
             let cipher = DeterministicCipher::new(DeterministicAlgorithm::Aes256Siv)?;
-            let key = DeterministicDataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
+            let plain_text = SecretValue::from(PLAIN_TEXT);
+            let sealed = cipher.encrypt_value(AAD, &plain_text, &cipher.generate_key()?)?;
+            let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
 
-            let result = cipher.encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT), &key);
+            let encrypted = cipher.encrypt_value(AAD, &plain_text, &key);
+            let decrypted = cipher.decrypt_value(AAD, &sealed, &key);
 
             assert!(
-                matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
-                "{result:?}"
+                matches!(&encrypted, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
+                "{encrypted:?}"
+            );
+            assert!(
+                matches!(&decrypted, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
+                "{:?}",
+                decrypted.err()
             );
             Ok(())
         }

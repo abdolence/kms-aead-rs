@@ -55,9 +55,9 @@ Deterministic encryption with AES-SIV takes no random nonce.
 
 ## Key lifetime and zeroization
 
-`DataEncryptionKey`, `DeterministicDataEncryptionKey`, `LocalKek` and the Vault token are zeroized
-on drop and shown as `***` by `Debug`. The DEK cache zeroizes a key when its entry leaves the cache
-and no `with_key` closure holds it.
+`DataEncryptionKey`, `LocalKek` and the Vault token are zeroized on drop and shown as `***` by
+`Debug`. The DEK cache zeroizes a key when its entry leaves the cache and no `with_key` closure
+holds it.
 
 Some copies are out of the library's reach:
 

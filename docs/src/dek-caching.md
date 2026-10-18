@@ -47,8 +47,7 @@ The cache:
 
 - serves an entry for its TTL after it was inserted, however often it is used, 15 minutes by
   default;
-- holds at most `max_entries` entries of each purpose, randomized and deterministic, 1024 by
-  default, and evicts the oldest entry of that purpose past it;
+- holds at most `max_entries` entries, 1024 by default, and evicts the oldest entry past it;
 - makes one provider call for concurrent misses of the same key, and every caller receives its
   result, the key or the error;
 - keeps no entry for a failed unwrap, so during a KMS outage every call fails as fast as the KMS

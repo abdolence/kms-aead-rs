@@ -21,8 +21,11 @@ pub enum AeadAlgorithm {
 }
 
 impl AeadAlgorithm {
-    /// Every algorithm. [`DekCache::with_key`](crate::DekCache::with_key) refuses a key whose
-    /// length fits none of these, so a variant left out here has its keys refused.
+    /// Every algorithm. [`DekCache::with_key`](crate::cache::DekCache::with_key) refuses a key
+    /// whose length fits none of these and none of [`DeterministicAlgorithm::ALL`], so a variant
+    /// left out here has its keys refused.
+    ///
+    /// [`DeterministicAlgorithm::ALL`]: crate::DeterministicAlgorithm::ALL
     pub(crate) const ALL: [AeadAlgorithm; 4] = [
         AeadAlgorithm::ChaCha20Poly1305,
         AeadAlgorithm::Aes128Gcm,
