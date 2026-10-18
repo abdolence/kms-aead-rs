@@ -128,7 +128,7 @@ jobs:
         with:
           mdbook-version: '0.5.4'
       - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export"
       - run: cd docs && mdbook build
   # `rust-version` in each crate's Cargo.toml: its docs.rs feature set builds on it, on
   # dependencies resolved for it.
@@ -143,7 +143,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.91
       - uses: dtolnay/rust-toolchain@1.94
       - run: cargo +1.91 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo +1.94 check -p kms-aead-keyring --lib --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export"
+      - run: cargo +1.94 check -p kms-aead-keyring --lib --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -260,6 +260,37 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # S3 runs on MinIO, so that the job needs no credentials. MinIO publishes no image any more, and
+  # its last one writes an object on an update whose object does not exist, which breaks the
+  # compare-and-swap, so the job runs pgsty's build of a later release. Its default command is not
+  # `server`, which a service container cannot be given.
+  keyring-s3:
+    name: keyring-s3
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,s3
+      KEYRING_S3_ENDPOINT: http://127.0.0.1:9000
+      KEYRING_S3_BUCKET: kms-aead-keyrings-ci
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: |
+          docker run -d -p 9000:9000 -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+          for attempt in $(seq 1 60); do
+            curl -sf "$KEYRING_S3_ENDPOINT/minio/health/ready" && break
+            sleep 1
+          done
+          curl -sf --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+            -X PUT "$KEYRING_S3_ENDPOINT/$KEYRING_S3_BUCKET"
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
   # only, as keyring-gcs does. The keyring lives in the memory store, and the queries read
   # literals, so the job creates no table.
@@ -327,9 +358,9 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
-      FEATURES: ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export
+      FEATURES: ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export
       KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
-      ABSENT: firestore sqlx
+      ABSENT: firestore sqlx aws-sdk-s3
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
