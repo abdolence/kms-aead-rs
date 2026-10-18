@@ -135,15 +135,8 @@ impl KeyringRecord {
     /// [`KeyringError::RecordInvalid`] with [`RecordInvalidReason::UnknownKekProvider`] when
     /// the KEK names a KMS this release cannot store, which no provider of kms-aead does.
     pub fn to_json(&self) -> KeyringResult<Vec<u8>> {
-        serde_json::to_vec(&StoredRecord::try_from(self)?).map_err(|error| {
-            KeyringError::record_invalid(
-                &self.id,
-                RecordInvalidReason::Malformed(MalformedRecord {
-                    line: error.line(),
-                    column: error.column(),
-                }),
-            )
-        })
+        serde_json::to_vec(&StoredRecord::try_from(self)?)
+            .map_err(|error| malformed(&self.id, &error))
     }
 
     /// Parses the JSON document a store holds for the keyring `id`, and checks it: at most
@@ -159,15 +152,7 @@ impl KeyringRecord {
                 RecordInvalidReason::TooLarge,
             ));
         }
-        let stored = serde_json::from_slice(document).map_err(|error| {
-            KeyringError::record_invalid(
-                id,
-                RecordInvalidReason::Malformed(MalformedRecord {
-                    line: error.line(),
-                    column: error.column(),
-                }),
-            )
-        })?;
+        let stored = serde_json::from_slice(document).map_err(|error| malformed(id, &error))?;
         Self::from_stored(id, stored)
     }
 
@@ -266,7 +251,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
                     .decode(encoded)
                     .ok()
                     .and_then(|bytes| EncryptedDataEncryptionKey::try_from(bytes.as_slice()).ok())
-                    .ok_or(RecordInvalidReason::WrappedDek(key_id))
+                    .ok_or(RecordInvalidReason::MalformedWrappedDek(key_id))
             })
             .transpose()?;
         let compromised = stored
@@ -298,6 +283,19 @@ impl TryFrom<StoredVersion> for KeyVersion {
             state,
         })
     }
+}
+
+/// The `Malformed` error of `id` at the position of serde_json's `error`, whose message is left
+/// out: it quotes the value it refused, which can be a wrapped key.
+fn malformed(id: &KeyringId, error: &serde_json::Error) -> KeyringError {
+    let position = |at: usize| (at > 0).then_some(at);
+    KeyringError::record_invalid(
+        id,
+        RecordInvalidReason::Malformed(MalformedRecord {
+            line: position(error.line()),
+            column: position(error.column()),
+        }),
+    )
 }
 
 fn algorithm(name: &str) -> Option<KeyAlgorithm> {

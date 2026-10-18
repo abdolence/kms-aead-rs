@@ -44,10 +44,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .encrypt(&aad, &"alice@example.com".to_string())
         .await?;
 
-    println!(
-        "rotated from key version {:?} to {}",
-        rotation.previous, rotation.current
-    );
+    match rotation.previous {
+        Some(previous) => println!(
+            "rotated from key version {previous} to {}",
+            rotation.current
+        ),
+        None => println!("created key version {}", rotation.current),
+    }
     println!(
         "value under {}: {}",
         before.key_id(),

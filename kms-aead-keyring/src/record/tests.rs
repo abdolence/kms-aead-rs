@@ -202,7 +202,7 @@ fn a_wrapped_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
         active["wrapped_dek"] = json!(wrapped_dek);
         assert_eq!(
             refusal(&document(vec![active])),
-            Some(RecordInvalidReason::WrappedDek(key_id(1)?))
+            Some(RecordInvalidReason::MalformedWrappedDek(key_id(1)?))
         );
     }
     Ok(())

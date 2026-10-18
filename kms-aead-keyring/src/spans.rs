@@ -39,7 +39,7 @@ const ERROR_CODE: &str = "/kms_aead_keyring/error_code";
 
 /// The `dek_cache` value of a call that unwraps through the provider although the keyring has a
 /// cache: `rewrap`, and a compromised version read by `decrypt_with_status`.
-pub(crate) const DEK_CACHE_BYPASSED: &str = "bypassed";
+const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// `Keyring encrypt`.
 pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: AeadBackend) -> Span {

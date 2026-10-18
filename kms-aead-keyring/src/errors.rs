@@ -411,7 +411,7 @@ pub enum RecordInvalidReason {
     /// A version whose ordinal is not above every earlier version of its purpose.
     OrdinalOrder(KeyId),
     /// A wrapped key that is not standard base64 of encrypted key layout v1.
-    WrappedDek(KeyId),
+    MalformedWrappedDek(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
 }
@@ -423,11 +423,16 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::TooManyVersions => {
                 f.write_str("the record holds more than 10000 versions")
             }
-            RecordInvalidReason::Malformed(malformed) => write!(
-                f,
-                "the document is not a keyring record, at line {} column {}",
-                malformed.line, malformed.column
-            ),
+            RecordInvalidReason::Malformed(malformed) => {
+                f.write_str("the document is not a keyring record")?;
+                if let Some(line) = malformed.line {
+                    write!(f, ", at line {line}")?;
+                }
+                if let Some(column) = malformed.column {
+                    write!(f, " column {column}")?;
+                }
+                Ok(())
+            }
             RecordInvalidReason::UnsupportedSchema(schema) => {
                 write!(f, "schema {schema} is not 1")
             }
@@ -466,7 +471,7 @@ impl Display for RecordInvalidReason {
                 f,
                 "key version {key_id} is not above every earlier version of its purpose"
             ),
-            RecordInvalidReason::WrappedDek(key_id) => {
+            RecordInvalidReason::MalformedWrappedDek(key_id) => {
                 write!(f, "the wrapped key of key version {key_id} does not parse")
             }
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
@@ -481,10 +486,10 @@ impl Display for RecordInvalidReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MalformedRecord {
-    /// The line, from 1, or 0 when the parser reported none.
-    pub line: usize,
-    /// The column, from 1, or 0 when the parser reported none.
-    pub column: usize,
+    /// The line, from 1, or `None` when the parser reported none.
+    pub line: Option<usize>,
+    /// The column, from 1, or `None` when the parser reported none.
+    pub column: Option<usize>,
 }
 
 /// See [`KeyringError::RecordRegressed`].
