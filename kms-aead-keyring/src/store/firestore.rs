@@ -66,11 +66,8 @@ impl FirestoreKeyringStore {
 
     /// The store in `collection` instead. Firestore's rules for a collection id apply, and
     /// Firestore checks them on the first call.
-    pub fn with_collection(self, collection: impl Into<String>) -> Self {
-        Self {
-            collection: collection.into(),
-            ..self
-        }
+    pub fn with_collection(self, collection: String) -> Self {
+        Self { collection, ..self }
     }
 
     async fn document(

@@ -68,16 +68,20 @@ struct Statements {
 impl PostgresKeyringStore {
     /// The store on the table `kms_keyrings` of `pool`'s database.
     pub fn new(pool: PgPool) -> Self {
-        Self::with_table(pool, PostgresTable(String::from("kms_keyrings")))
-    }
-
-    /// The store on `table` of `pool`'s database.
-    pub fn with_table(pool: PgPool, table: PostgresTable) -> Self {
-        let statements = Arc::new(Statements::new(&table));
+        let table = PostgresTable(String::from("kms_keyrings"));
         Self {
             pool,
+            statements: Arc::new(Statements::new(&table)),
             table,
-            statements,
+        }
+    }
+
+    /// The store on `table` instead.
+    pub fn with_table(self, table: PostgresTable) -> Self {
+        Self {
+            statements: Arc::new(Statements::new(&table)),
+            table,
+            ..self
         }
     }
 }

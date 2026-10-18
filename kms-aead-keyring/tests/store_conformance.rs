@@ -305,7 +305,7 @@ mod firestore_store {
 
     async fn store() -> Result<FirestoreKeyringStore, Box<dyn Error>> {
         let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
-        Ok(FirestoreKeyringStore::new(db).with_collection("kms_aead_rs_ci_keyrings"))
+        Ok(FirestoreKeyringStore::new(db).with_collection("kms_aead_rs_ci_keyrings".to_string()))
     }
 
     #[tokio::test]
@@ -384,7 +384,7 @@ mod postgres {
     async fn the_postgres_store_conforms() -> TestResult {
         let pool = connect().await?;
         let table = create_table(&pool).await?;
-        conformance(|| PostgresKeyringStore::with_table(pool.clone(), table.clone())).await?;
+        conformance(|| PostgresKeyringStore::new(pool.clone()).with_table(table.clone())).await?;
         drop_table(&pool, &table).await
     }
 
@@ -405,7 +405,7 @@ mod postgres {
         )))
         .execute(&pool)
         .await?;
-        let failing = PostgresKeyringStore::with_table(pool.clone(), table.clone());
+        let failing = PostgresKeyringStore::new(pool.clone()).with_table(table.clone());
         super::a_store_error_carries_no_record_bytes(failing, None).await?;
         drop_table(&pool, &table).await?;
         sqlx::query(AssertSqlSafe(format!("DROP FUNCTION {table}_refuse")))
@@ -475,7 +475,7 @@ mod postgres {
         let table = create_table(&admin).await?;
         let application = format!("listener-{}", uuid::Uuid::now_v7().simple());
         let pool = PgPool::connect_with(connect_options()?.application_name(&application)).await?;
-        let store = PostgresKeyringStore::with_table(pool, table.clone());
+        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
         let id = unique_keyring_id()?;
         let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
         sqlx::query(
@@ -504,7 +504,7 @@ mod postgres {
             .acquire_timeout(Duration::from_millis(500))
             .connect_with(connect_options()?)
             .await?;
-        let store = PostgresKeyringStore::with_table(pool, table.clone());
+        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
         let id = unique_keyring_id()?;
         let watch = store.watch(&id).await?.ok_or("the store has no push")?;
         assert!(matches!(store.load(&id).await, Err(KeyringError::Store(_))));
@@ -585,7 +585,7 @@ mod postgres {
             let table = create_table(&pool).await?;
             let revalidations = Arc::new(AtomicUsize::new(0));
             let store = CountingStore {
-                inner: PostgresKeyringStore::with_table(pool.clone(), table.clone()),
+                inner: PostgresKeyringStore::new(pool.clone()).with_table(table.clone()),
                 revalidations: revalidations.clone(),
             };
             let interval = Duration::from_millis(500);
