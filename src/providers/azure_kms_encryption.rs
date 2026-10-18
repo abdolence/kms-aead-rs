@@ -11,6 +11,7 @@ use azure_security_keyvault_keys::models::{
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use std::sync::Arc;
 
+use super::KmsKeyVersion;
 use crate::formats::azure::AzureWrappedKey;
 use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;

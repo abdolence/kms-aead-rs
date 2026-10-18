@@ -12,7 +12,9 @@ use azure_security_keyvault_keys::models::{
 };
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+use kms_aead::providers::{
+    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
+};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;

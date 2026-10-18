@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::envelope::EnvelopeLayout;
 use super::{unwrap_key, wrap_key};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
+use crate::providers::KmsKeyVersion;
 use crate::types::checked_key_bytes;
 use crate::{
     AeadBackend, CipherText, CipherTextWithEncryptedKey, EncryptedDataEncryptionKey, KekProvider,
-    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, KmsKeyVersion,
+    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
 };
 
 /// A wrapped key as 0.29 and earlier stored it: the KMS's wrapped key, with the key version beside
