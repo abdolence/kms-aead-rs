@@ -6,7 +6,9 @@
 //! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serializes it.
 //!
 //! The public items here are what a keyring of Tink keys needs on top of that:
-//! [`TinkOutputPrefix`], the prefix of its values, and [`TinkKeyset`], the keyset BigQuery reads.
+//! [`TinkOutputPrefix`], the prefix of its values, and [`TinkKeyset`], the keyset BigQuery reads,
+//! and the [`Format`] of an [`Encrypted`](crate::Encrypted) value: [`Envelope`], [`Randomized`]
+//! or [`Deterministic`].
 
 use crate::errors::KmsAeadLegacyFormat;
 use crate::{
@@ -15,6 +17,9 @@ use crate::{
 };
 
 pub(crate) mod envelope;
+
+mod field;
+pub use field::{Deterministic, Envelope, Format, Randomized};
 
 mod tink;
 pub use tink::{TinkKeyType, TinkKeyset, TinkOutputPrefix};

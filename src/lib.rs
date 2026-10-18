@@ -71,12 +71,21 @@
 //! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
 //! plaintext DEK in request and response buffers that kms-aead cannot zeroize.
 //!
+//! # Typed fields
+//!
+//! [`KmsAeadEnvelope::encrypt_field`] encrypts a value of a [`Plaintext`] type, such as an
+//! application newtype, into an [`Encrypted<T, Envelope>`](Encrypted), the bytes to store, and
+//! [`KmsAeadEnvelope::decrypt_field`] reads it back as a `T`. Stored bytes become an `Encrypted`
+//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its
+//! [`Format`](formats::Format), and the `serde` feature reads and writes it.
+//!
 //! # Other features
 //!
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].
 //! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated.
-//! - `serde`: `Serialize` and `Deserialize` for [`errors::KmsAeadErrorPublicGenericDetails`] and
-//!   for `SecretValue`.
+//! - `serde`: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
+//!   [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`;
+//! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON.
 //!
 //! # Examples
 //!
@@ -234,6 +243,9 @@ pub mod cache;
 mod deterministic;
 pub use deterministic::*;
 
+mod encrypted;
+pub use encrypted::Encrypted;
+
 pub mod errors;
 
 pub mod formats;
@@ -242,13 +254,17 @@ pub use formats::envelope::CipherTextWithEncryptedKey;
 mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;
 
+mod plaintext;
+pub use plaintext::*;
+
 mod spans;
 
 mod types;
 pub use types::*;
 
 /// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
-/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`] and [`DeterministicCipherText`].
+/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`], [`DeterministicCipherText`]
+/// and [`Encrypted`].
 pub use rvstruct::ValueStruct;
 
 pub mod providers;

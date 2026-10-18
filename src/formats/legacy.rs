@@ -83,7 +83,7 @@ impl CipherTextWithEncryptedKey {
         &self,
         kek: &KekProvider,
     ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let layout = EnvelopeLayout::try_from(self)?;
+        let layout = EnvelopeLayout::try_from(self.0.as_slice())?;
         let fields = match layout {
             EnvelopeLayout::Tink => return self.separate(),
             EnvelopeLayout::V1 => self.0.split_first().and_then(|(_, header)| {
@@ -196,7 +196,7 @@ where
         &self,
         value: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<Option<CipherTextWithEncryptedKey>> {
-        let layout = EnvelopeLayout::try_from(value)?;
+        let layout = EnvelopeLayout::try_from(value.0.as_slice())?;
         let (cipher_text, encrypted_dek) =
             value.separate_any_layout(self.provider.kek().provider())?;
         #[expect(

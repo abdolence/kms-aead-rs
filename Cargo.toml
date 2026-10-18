@@ -100,6 +100,8 @@ azure_identity = { version = "1.0", default-features = false }
 [features]
 default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
+# `Json`, a plaintext stored as its JSON.
+serde-json = ["serde", "dep:serde_json"]
 # AEAD backends: any number of them in one build.
 ring = ["dep:ring"]
 # `aws-lc-rs` is the implicit feature of the optional dependency, the one gate of the AwsLc

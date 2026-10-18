@@ -11,9 +11,11 @@ use tracing::Span;
 
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
+use crate::formats::Envelope;
 use crate::{
     spans, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
-    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    KmsAeadResult, Plaintext, ValueStruct,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -35,6 +37,9 @@ const MAX_USES: u64 = 1 << 32;
 /// - per call, the default: a new DEK per value, one KMS wrap per value;
 /// - store-less, with a [`DekReusePolicy`] in the options: one DEK for many values, renewed by
 ///   the policy and whenever the DEK leaves the envelope's cache, one KMS wrap per renewal.
+///
+/// [`encrypt_field`](Self::encrypt_field) and [`decrypt_field`](Self::decrypt_field) do the same
+/// for a value of a [`Plaintext`] type, held as an [`Encrypted<T, Envelope>`](Encrypted).
 ///
 /// `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap
 /// through the envelope's [`DekCache`], which is disabled in a per-call envelope unless the
@@ -303,54 +308,7 @@ where
         aad: &[u8],
         plain_text: &SecretValue,
     ) -> KmsAeadResult<CipherTextWithEncryptedKey> {
-        spans::in_span(self.encrypt_span(self.mode()), async {
-            match &self.dek_reuse {
-                Some(dek_reuse) => {
-                    // The cache holds the only plaintext copy of the DEK, so a renewal caches
-                    // it. Once it has left the cache, expired, invalidated or cleared, the writer
-                    // renews instead of unwrapping it again, so that `invalidate` and `clear`
-                    // end its use.
-                    let renew = || async {
-                        let (dek, encrypted) =
-                            self.cipher.generate_wrapped_key(&self.provider).await?;
-                        if let Some(enabled) = &self.dek_cache.0 {
-                            enabled.insert(self.provider.kek(), &encrypted, dek);
-                        }
-                        Ok(encrypted)
-                    };
-                    let dek = dek_reuse.claim_or_renew(renew).await?;
-                    let sealed = self.dek_cache.0.as_ref().and_then(|enabled| {
-                        enabled.with_cached_key(self.provider.kek(), &dek.encrypted, |key| {
-                            self.cipher.encrypt_value(aad, plain_text, key)
-                        })
-                    });
-                    let (dek, cipher_text) = match sealed {
-                        Some(cipher_text) => {
-                            spans::record_dek_cache(DekCacheOutcome::Hit);
-                            (dek, cipher_text?)
-                        }
-                        None => {
-                            dek_reuse.retire(&dek);
-                            let dek = dek_reuse.claim_or_renew(renew).await?;
-                            let cipher_text = self
-                                .with_dek(&dek.encrypted, |key| {
-                                    self.cipher.encrypt_value(aad, plain_text, key)
-                                })
-                                .await?;
-                            (dek, cipher_text)
-                        }
-                    };
-                    CipherTextWithEncryptedKey::join(&cipher_text, &dek.encrypted)
-                }
-                None => {
-                    let (dek, encrypted_dek) =
-                        self.cipher.generate_wrapped_key(&self.provider).await?;
-                    let cipher_text = self.cipher.encrypt_value(aad, plain_text, &dek)?;
-                    CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)
-                }
-            }
-        })
-        .await
+        spans::in_span(self.encrypt_span(self.mode()), self.seal(aad, plain_text)).await
     }
 
     /// Unwraps the DEK stored in `cipher_text`, through the envelope's [`DekCache`], and opens
@@ -370,16 +328,42 @@ where
         aad: &[u8],
         cipher_text: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<SecretValue> {
+        spans::in_span(self.decrypt_span(self.mode()), self.open(aad, cipher_text)).await
+    }
+
+    /// Encrypts `value`, as [`Plaintext`] encodes it, as [`encrypt_value`](Self::encrypt_value)
+    /// encrypts a value: under a new DEK, or under the reused DEK of a store-less envelope.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `encrypt_value`, and `INVALID_PLAINTEXT` when `value` does not encode.
+    pub async fn encrypt_field<T: Plaintext>(
+        &self,
+        aad: &[u8],
+        value: &T,
+    ) -> KmsAeadResult<Encrypted<T, Envelope>> {
+        spans::in_span(self.encrypt_span(self.mode()), async {
+            let sealed = self.seal(aad, &value.to_plaintext()?).await?;
+            Encrypted::try_from(sealed.into_value())
+        })
+        .await
+    }
+
+    /// Opens `field` as [`decrypt_value`](Self::decrypt_value) opens a value, unwrapping its DEK
+    /// through the envelope's [`DekCache`], and decodes the plaintext as a `T`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `decrypt_value`, and `INVALID_PLAINTEXT` when the plaintext is not an
+    /// encoding of `T`.
+    pub async fn decrypt_field<T: Plaintext>(
+        &self,
+        aad: &[u8],
+        field: &Encrypted<T, Envelope>,
+    ) -> KmsAeadResult<T> {
         spans::in_span(self.decrypt_span(self.mode()), async {
-            #[cfg(feature = "legacy-formats")]
-            let (cipher_text, encrypted_dek) =
-                cipher_text.separate_any_layout(self.provider.kek().provider())?;
-            #[cfg(not(feature = "legacy-formats"))]
-            let (cipher_text, encrypted_dek) = cipher_text.separate()?;
-            self.with_dek(&encrypted_dek, |key| {
-                self.cipher.decrypt_value(aad, &cipher_text, key)
-            })
-            .await
+            let value = CipherTextWithEncryptedKey(field.value().clone());
+            T::from_plaintext(self.open(aad, &value).await?)
         })
         .await
     }
@@ -466,6 +450,73 @@ where
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
         let span = spans::generate_dek("randomized", self.cipher.algorithm(), B::NAME);
         spans::in_span(span, self.cipher.generate_wrapped_key(&self.provider)).await
+    }
+
+    /// Encrypts `plain_text` as `encrypt_value` does, in the span of the caller.
+    async fn seal(
+        &self,
+        aad: &[u8],
+        plain_text: &SecretValue,
+    ) -> KmsAeadResult<CipherTextWithEncryptedKey> {
+        match &self.dek_reuse {
+            Some(dek_reuse) => {
+                // The cache holds the only plaintext copy of the DEK, so a renewal caches it.
+                // Once it has left the cache, expired, invalidated or cleared, the writer renews
+                // instead of unwrapping it again, so that `invalidate` and `clear` end its use.
+                let renew = || async {
+                    let (dek, encrypted) = self.cipher.generate_wrapped_key(&self.provider).await?;
+                    if let Some(enabled) = &self.dek_cache.0 {
+                        enabled.insert(self.provider.kek(), &encrypted, dek);
+                    }
+                    Ok(encrypted)
+                };
+                let dek = dek_reuse.claim_or_renew(renew).await?;
+                let sealed = self.dek_cache.0.as_ref().and_then(|enabled| {
+                    enabled.with_cached_key(self.provider.kek(), &dek.encrypted, |key| {
+                        self.cipher.encrypt_value(aad, plain_text, key)
+                    })
+                });
+                let (dek, cipher_text) = match sealed {
+                    Some(cipher_text) => {
+                        spans::record_dek_cache(DekCacheOutcome::Hit);
+                        (dek, cipher_text?)
+                    }
+                    None => {
+                        dek_reuse.retire(&dek);
+                        let dek = dek_reuse.claim_or_renew(renew).await?;
+                        let cipher_text = self
+                            .with_dek(&dek.encrypted, |key| {
+                                self.cipher.encrypt_value(aad, plain_text, key)
+                            })
+                            .await?;
+                        (dek, cipher_text)
+                    }
+                };
+                CipherTextWithEncryptedKey::join(&cipher_text, &dek.encrypted)
+            }
+            None => {
+                let (dek, encrypted_dek) = self.cipher.generate_wrapped_key(&self.provider).await?;
+                let cipher_text = self.cipher.encrypt_value(aad, plain_text, &dek)?;
+                CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)
+            }
+        }
+    }
+
+    /// Opens `value` as `decrypt_value` does, in the span of the caller.
+    async fn open(
+        &self,
+        aad: &[u8],
+        value: &CipherTextWithEncryptedKey,
+    ) -> KmsAeadResult<SecretValue> {
+        #[cfg(feature = "legacy-formats")]
+        let (cipher_text, encrypted_dek) =
+            value.separate_any_layout(self.provider.kek().provider())?;
+        #[cfg(not(feature = "legacy-formats"))]
+        let (cipher_text, encrypted_dek) = value.separate()?;
+        self.with_dek(&encrypted_dek, |key| {
+            self.cipher.decrypt_value(aad, &cipher_text, key)
+        })
+        .await
     }
 
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
@@ -1136,6 +1187,87 @@ mod tests {
         }
         assert_eq!(wraps_of_one_attempt, 1);
         assert_eq!(envelope.provider.wraps(), 2);
+        Ok(())
+    }
+
+    /// An application newtype, sealed as the UTF-8 bytes of the `String` it holds.
+    #[derive(Debug, PartialEq)]
+    struct Email(String);
+
+    impl Plaintext for Email {
+        fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+            self.0.to_plaintext()
+        }
+
+        fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+            String::from_plaintext(plaintext).map(Email)
+        }
+    }
+
+    /// `value` written by `encrypt_field` and read back by `decrypt_field`.
+    async fn through_a_field<T: Plaintext>(envelope: &Envelope, value: &T) -> KmsAeadResult<T> {
+        let field = envelope.encrypt_field(AAD, value).await?;
+        envelope.decrypt_field(AAD, &field).await
+    }
+
+    #[tokio::test]
+    async fn every_plaintext_type_round_trips_through_a_field() -> KmsAeadResult<()> {
+        let envelope = Envelope::new(TestKmsProvider::Working)?;
+
+        let card = PLAIN_TEXT.to_string();
+        assert_eq!(through_a_field(&envelope, &card).await?, card);
+        let bytes = vec![0x00, 0xFF, 0x7F];
+        assert_eq!(through_a_field(&envelope, &bytes).await?, bytes);
+        let secret = SecretValue::from(PLAIN_TEXT);
+        assert_eq!(through_a_field(&envelope, &secret).await?, secret);
+        assert!(through_a_field(&envelope, &true).await?);
+        assert!(!through_a_field(&envelope, &false).await?);
+        assert_eq!(through_a_field(&envelope, &i32::MIN).await?, i32::MIN);
+        assert_eq!(through_a_field(&envelope, &i64::MIN).await?, i64::MIN);
+        assert_eq!(through_a_field(&envelope, &u32::MAX).await?, u32::MAX);
+        assert_eq!(through_a_field(&envelope, &u64::MAX).await?, u64::MAX);
+        #[cfg(feature = "serde-json")]
+        {
+            let plan = crate::Json(vec![("plan".to_string(), 3u32)]);
+            assert_eq!(through_a_field(&envelope, &plan).await?, plan);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_newtype_field_is_the_envelope_of_its_string() -> KmsAeadResult<()> {
+        let envelope = Envelope::new(TestKmsProvider::Working)?;
+        let email = Email("alice@example.com".to_string());
+
+        let field: Encrypted<Email, crate::formats::Envelope> =
+            envelope.encrypt_field(AAD, &email).await?;
+        let stored = Encrypted::<Email, crate::formats::Envelope>::try_from(field.into_value())?;
+
+        assert_eq!(envelope.decrypt_field(AAD, &stored).await?, email);
+        assert_eq!(
+            envelope
+                .decrypt_value(AAD, &CipherTextWithEncryptedKey(stored.into_value()))
+                .await?,
+            SecretValue::from("alice@example.com")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn store_less_fields_reuse_the_dek_through_the_cache() -> KmsAeadResult<()> {
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
+        )?;
+        let card = PLAIN_TEXT.to_string();
+
+        let first = envelope.encrypt_field(AAD, &card).await?;
+        let second = envelope.encrypt_field(AAD, &card).await?;
+
+        assert_eq!(envelope.decrypt_field(AAD, &first).await?, card);
+        assert_eq!(envelope.decrypt_field(AAD, &second).await?, card);
+        assert_eq!(envelope.provider.wraps(), 1);
+        assert_eq!(envelope.provider.unwraps(), 0);
         Ok(())
     }
 

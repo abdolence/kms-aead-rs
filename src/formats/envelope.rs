@@ -42,11 +42,11 @@ pub(crate) enum EnvelopeLayout {
     LengthPrefixed,
 }
 
-impl TryFrom<&CipherTextWithEncryptedKey> for EnvelopeLayout {
+impl TryFrom<&[u8]> for EnvelopeLayout {
     type Error = KmsAeadError;
 
-    fn try_from(value: &CipherTextWithEncryptedKey) -> KmsAeadResult<Self> {
-        match value.0.as_slice() {
+    fn try_from(value: &[u8]) -> KmsAeadResult<Self> {
+        match value {
             [0x00, 0x00, 0x00, 0x00, ..] => Ok(EnvelopeLayout::LengthPrefixed),
             [0x00, ..] => Ok(EnvelopeLayout::Tink),
             [0x01, ..] => Ok(EnvelopeLayout::V1),
@@ -109,7 +109,21 @@ impl CipherTextWithEncryptedKey {
     ///   starting with `0x01`, and with [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on one
     ///   starting with four zero bytes, with or without `legacy-formats`.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        match EnvelopeLayout::try_from(self)? {
+        let (wrapped, cipher_text) = Self::split(&self.0)?;
+        Ok((
+            CipherText(cipher_text.to_vec()),
+            EncryptedDataEncryptionKey::new(wrapped.to_vec()),
+        ))
+    }
+
+    /// The wrapped DEK and the cipher text of `value` in Tink's KMS envelope format, borrowed
+    /// from it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`separate`](Self::separate).
+    pub(crate) fn split(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
+        match EnvelopeLayout::try_from(value)? {
             EnvelopeLayout::Tink => {}
             EnvelopeLayout::V1 => {
                 return Err(KmsAeadLegacyFormatError::create(
@@ -128,22 +142,18 @@ impl CipherTextWithEncryptedKey {
                 &format!(
                     "The wrapped key length of a cipher text of {} bytes is not 1 to {} bytes \
                      within it",
-                    self.0.len(),
+                    value.len(),
                     Self::MAX_ENCRYPTED_KEY_LEN
                 ),
             )
         };
-        let (wrapped_len, rest) = self.0.split_first_chunk::<4>().ok_or_else(invalid)?;
+        let (wrapped_len, rest) = value.split_first_chunk::<4>().ok_or_else(invalid)?;
         let wrapped_len = u32::from_be_bytes(*wrapped_len);
         if wrapped_len > Self::MAX_ENCRYPTED_KEY_LEN {
             return Err(invalid());
         }
         let wrapped_len = usize::try_from(wrapped_len).map_err(|_| invalid())?;
-        let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len).ok_or_else(invalid)?;
-        Ok((
-            CipherText(cipher_text.to_vec()),
-            EncryptedDataEncryptionKey::new(wrapped.to_vec()),
-        ))
+        rest.split_at_checked(wrapped_len).ok_or_else(invalid)
     }
 
     /// The lowercase hex of the value.

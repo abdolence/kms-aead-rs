@@ -21,6 +21,9 @@ impl DeterministicAlgorithm {
     #[cfg(test)]
     pub(crate) const ALL: [DeterministicAlgorithm; 1] = [DeterministicAlgorithm::Aes256Siv];
 
+    /// Every algorithm writes this synthetic IV before the cipher text.
+    pub(crate) const SYNTHETIC_IV_LEN: usize = 16;
+
     /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -146,8 +149,6 @@ mod aes_siv_cipher {
     }
 
     impl<B: AeadBackend> DeterministicCipher<B> {
-        const SYNTHETIC_IV_LEN: usize = 16;
-
         /// A cipher for `algorithm` on the backend `B`.
         ///
         /// # Errors
@@ -233,7 +234,7 @@ mod aes_siv_cipher {
             key: &DataEncryptionKey,
         ) -> KmsAeadResult<SecretValue> {
             let mut siv = self.siv(key)?;
-            if cipher_text.value().len() < Self::SYNTHETIC_IV_LEN {
+            if cipher_text.value().len() < DeterministicAlgorithm::SYNTHETIC_IV_LEN {
                 return Err(KmsAeadEncryptionError::create(
                     "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(

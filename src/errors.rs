@@ -315,6 +315,30 @@ impl KmsAeadEncryptionError {
             &format!("A key of {len} bytes does not fit {algorithm}, which takes {key_len} bytes"),
         )
     }
+
+    /// `INVALID_PLAINTEXT`: a plaintext that does not convert to or from `T`, for `reason`, which
+    /// never quotes the plaintext.
+    pub(crate) fn invalid_plaintext<T>(reason: impl Display) -> KmsAeadError {
+        Self::create(
+            "INVALID_PLAINTEXT",
+            &format!(
+                "The plaintext does not convert to or from {}: {reason}",
+                std::any::type_name::<T>()
+            ),
+        )
+    }
+
+    /// `INVALID_PLAINTEXT` for the JSON of `T`, with serde_json's category and position of
+    /// `error`, never its message, which quotes the input.
+    #[cfg(feature = "serde-json")]
+    pub(crate) fn invalid_json<T>(error: &serde_json::Error) -> KmsAeadError {
+        Self::invalid_plaintext::<T>(format_args!(
+            "{:?} error at line {} column {}",
+            error.classify(),
+            error.line(),
+            error.column()
+        ))
+    }
 }
 
 impl Display for KmsAeadEncryptionError {
