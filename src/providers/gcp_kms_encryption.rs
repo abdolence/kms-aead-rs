@@ -13,8 +13,7 @@ use tracing::*;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
 
-/// A Google Cloud KMS CryptoKey that wraps data encryption keys. Available with the
-/// `gcp-kms-encryption-base` feature.
+/// A Google Cloud KMS CryptoKey that wraps data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct GcpKmsKeyRef {
     /// The project that holds the key ring.
@@ -122,8 +121,7 @@ pub struct GcpKmsProviderOptions {
     pub use_kms_random_gen: bool,
 }
 
-/// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey. Available with the
-/// `gcp-kms-encryption-base` feature.
+/// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey.
 ///
 /// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
 /// is the gRPC status code, such as `PermissionDenied` or `NotFound`.

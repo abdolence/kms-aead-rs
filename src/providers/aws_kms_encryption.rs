@@ -15,14 +15,18 @@ use std::collections::HashMap;
 /// wrapped before the change fail to unwrap.
 const BINDING_CONTEXT_KEY: &str = "kms-aead";
 
-/// An AWS KMS key that wraps data encryption keys. Available with the `aws-kms-encryption`
-/// feature.
+/// An AWS KMS key that wraps data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct AwsKmsKeyRef {
     /// The AWS account that owns the key, used to build its ARN.
     pub account_id: String,
     /// The key as AWS KMS accepts it: a key id, a key ARN, an alias name such as
     /// `alias/orders`, or an alias ARN.
+    ///
+    /// An unwrap names the configured key. Configure the key ARN rather than an alias: a key
+    /// wrapped under an alias that later moves to another key fails to unwrap with
+    /// `IncorrectKeyException`. Outside the `aws` partition, such as in GovCloud or China, give
+    /// the full ARN, since a key id or an alias name becomes an `arn:aws:` ARN.
     pub key_id: String,
     /// The region of the key. Without one, [`AwsKmsProvider::new`] takes the region of the AWS
     /// configuration it loads.
@@ -56,8 +60,7 @@ pub struct AwsKmsProviderOptions {
     pub use_kms_random_gen: bool,
 }
 
-/// Wraps and unwraps data encryption keys with an AWS KMS key. Available with the
-/// `aws-kms-encryption` feature.
+/// Wraps and unwraps data encryption keys with an AWS KMS key.
 ///
 /// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
@@ -73,12 +76,20 @@ impl AwsKmsProvider {
     /// configuration from the environment.
     ///
     /// It sends no request, so missing credentials or an unreachable endpoint fail the first
-    /// wrap or unwrap; it returns `Ok` for every key reference.
+    /// wrap or unwrap.
+    ///
+    /// # Errors
+    ///
+    /// None: it returns `Ok` for every key reference.
     pub async fn new(kms_key_ref: &AwsKmsKeyRef) -> KmsAeadResult<Self> {
         Self::with_options(kms_key_ref, AwsKmsProviderOptions::new()).await
     }
 
     /// As [`new`](Self::new), with `options`.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new).
     pub async fn with_options(
         kms_key_ref: &AwsKmsKeyRef,
         options: AwsKmsProviderOptions,

@@ -14,8 +14,7 @@ use std::sync::Arc;
 use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
 
-/// A Key Vault or Managed HSM key that wraps data encryption keys. Available with the
-/// `azure-kms-encryption-base` feature.
+/// A Key Vault or Managed HSM key that wraps data encryption keys.
 ///
 /// Without `key_version` the latest version wraps new keys. Each encrypted key records the
 /// version that wrapped it, and unwrapping uses that recorded version, so keys wrapped before a
@@ -44,8 +43,7 @@ pub struct AzureKmsProviderOptions {
     pub client_options: Option<KeyClientOptions>,
 }
 
-/// Wraps and unwraps data encryption keys with an Azure Key Vault key. Available with the
-/// `azure-kms-encryption-base` feature.
+/// Wraps and unwraps data encryption keys with an Azure Key Vault key.
 ///
 /// A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
 /// `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a

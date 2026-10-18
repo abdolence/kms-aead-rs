@@ -140,8 +140,7 @@ impl HcVaultTransitProviderOptions {
 }
 
 /// Wraps and unwraps data encryption keys with a key of the HashiCorp Vault Transit secrets
-/// engine. Available with the `hashicorp-vault-transit-kms-encryption-base` feature and one TLS
-/// root store and one crypto provider feature.
+/// engine. It needs one TLS root store feature and one crypto provider feature.
 ///
 /// A response with an error status is `VAULT_STATUS_<status>`: a
 /// [`NetworkError`](crate::errors::KmsAeadError::NetworkError) for a server error or a rate
@@ -149,6 +148,10 @@ impl HcVaultTransitProviderOptions {
 /// `VAULT_HTTP` and `VAULT_TIMEOUT` are network errors for a request that got no complete
 /// response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` encryption
 /// errors for a response or an encrypted key that cannot be read.
+///
+/// A [`DekBinding`] is sent as Transit `associated_data`, which needs Vault 1.13 or later and an
+/// AEAD key type such as `aes256-gcm96`. A bound wrap or unwrap fails with
+/// `VAULT_BINDING_IGNORED`, an encryption error, when Vault reports that it ignored the field.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
 /// the key version, so it still decrypts after the key is rotated. That version is also recorded
