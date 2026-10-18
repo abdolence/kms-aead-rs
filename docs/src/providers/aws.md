@@ -66,6 +66,14 @@ an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN alway
 
 ## Errors
 
-Every error is an `EncryptionError` whose code is the AWS error code, such as
-`IncorrectKeyException` or `NotFoundException`, and whose message is the one AWS KMS returned.
-Its root cause is the SDK error.
+An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyException` or
+`NotFoundException`, and the message AWS KMS returned. A `NetworkError`:
+
+- `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException` and
+  `KeyUnavailableException`;
+- any 5xx or 429 status;
+- a timeout, a connection failure, or a response the SDK could not read.
+
+Any other error, such as `AccessDeniedException`, `DisabledException` or a request that could not
+be built or signed, is an `EncryptionError` whose root cause is the SDK error. See
+[Error handling](../errors.md#retries).

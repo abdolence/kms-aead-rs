@@ -23,11 +23,14 @@ pub enum KmsAeadError {
     /// The configuration or the environment: invalid provider options or a KMS client that
     /// cannot be built.
     SystemError(KmsAeadSystemError),
-    /// A KMS that could not be reached or did not answer in time, a server error or a rate limit
-    /// from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS.
+    /// A KMS that could not be reached, did not answer in time, failed on its side or limited
+    /// the rate of requests. The same call may succeed later, so a caller may retry it, with a
+    /// backoff.
     NetworkError(KmsAeadNetworkError),
-    /// Encrypting or decrypting a value or a DEK failed, or a stored value could not be
-    /// read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault refused.
+    /// Encrypting or decrypting a value or a DEK failed, a stored value could not be read, or a
+    /// KMS refused the request: a denied permission, a key that does not exist or is disabled,
+    /// an invalid request or encrypted DEK. The same call fails the same way again, so a caller
+    /// should not retry it.
     EncryptionError(KmsAeadEncryptionError),
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
@@ -60,47 +63,102 @@ impl KmsAeadError {
         )
     }
 
+    /// A status that a retry may clear is a network error; one about the request, the key or the
+    /// caller's permissions is an encryption error. Google's client libraries retry Cloud KMS
+    /// calls on `Unavailable` and `DeadlineExceeded` only; the other network codes are the ones
+    /// gRPC defines as transient or server-side.
     #[cfg(feature = "gcp")]
     pub(crate) fn from_gcp_status(status: gcloud_sdk::tonic::Status) -> Self {
-        KmsAeadNetworkError::create(&format!("{:?}", status.code()), &format!("{status}"))
+        use gcloud_sdk::tonic::Code;
+        let code = format!("{:?}", status.code());
+        let message = format!("{status}");
+        match status.code() {
+            Code::Unavailable
+            | Code::DeadlineExceeded
+            | Code::ResourceExhausted
+            | Code::Aborted
+            | Code::Internal
+            | Code::Unknown
+            | Code::Cancelled => KmsAeadNetworkError::create(&code, &message),
+            Code::PermissionDenied
+            | Code::Unauthenticated
+            | Code::NotFound
+            | Code::InvalidArgument
+            | Code::FailedPrecondition
+            | Code::OutOfRange
+            | Code::Unimplemented
+            | Code::AlreadyExists
+            | Code::DataLoss
+            | Code::Ok => KmsAeadEncryptionError::create(&code, &message),
+        }
     }
 
     /// A service error keeps the code the service returned, such as `IncorrectKeyException`, and
     /// the modelled service error as the root cause. No variant keeps the raw response: the body
     /// of a response that failed to parse can be a successful decryption, which holds the data
     /// encryption key.
+    ///
+    /// The network errors are the failures the SDK's own retry classifiers treat as transient: a
+    /// timeout, an I/O or timeout failure of the connector, a response that could not be read,
+    /// AWS KMS's throttling and internal error codes, and a 5xx or 429 status. Everything else,
+    /// a request that could not be built or signed included, is an encryption error.
     #[cfg(feature = "aws-kms-encryption")]
-    pub(crate) fn from_aws_sdk_error<E, R>(e: aws_sdk_kms::error::SdkError<E, R>) -> Self
+    pub(crate) fn from_aws_sdk_error<E>(
+        e: aws_sdk_kms::error::SdkError<E, aws_sdk_kms::config::http::HttpResponse>,
+    ) -> Self
     where
         E: aws_sdk_kms::error::ProvideErrorMetadata + Error + Send + Sync + 'static,
-        R: std::fmt::Debug + Send + Sync + 'static,
     {
         use aws_sdk_kms::error::SdkError;
-        let (code, message, root_cause): (String, String, Option<Arc<dyn Error + Send + Sync>>) =
-            match e {
-                SdkError::ServiceError(context) => {
-                    let service_error = context.into_err();
-                    let code = service_error
-                        .code()
-                        .map_or_else(|| "service error".to_string(), str::to_string);
-                    let message = match service_error.message() {
-                        Some(message) => format!("AWS KMS returned {code}: {message}"),
-                        None => format!("AWS KMS returned {code}"),
-                    };
-                    (code, message, Some(Arc::new(service_error)))
+        let transport_failure = match &e {
+            SdkError::TimeoutError(_) => true,
+            SdkError::DispatchFailure(failure) => failure.is_io() || failure.is_timeout(),
+            _ => false,
+        };
+        match e {
+            SdkError::ServiceError(context) => {
+                let status = context.raw().status();
+                let service_error = context.into_err();
+                let code = service_error
+                    .code()
+                    .map_or_else(|| "service error".to_string(), str::to_string);
+                let message = match service_error.message() {
+                    Some(message) => format!("AWS KMS returned {code}: {message}"),
+                    None => format!("AWS KMS returned {code}"),
+                };
+                if AWS_KMS_RETRYABLE_ERROR_CODES.contains(&code.as_str())
+                    || status.is_server_error()
+                    || status.as_u16() == 429
+                {
+                    KmsAeadNetworkError::create(&code, &message)
+                } else {
+                    KmsAeadError::EncryptionError(
+                        KmsAeadEncryptionError::new(
+                            KmsAeadErrorPublicGenericDetails::new(code),
+                            message,
+                        )
+                        .with_root_cause(Arc::new(service_error)),
+                    )
                 }
-                SdkError::ResponseError(_) => (e.to_string(), format!("AWS KMS error: {e}"), None),
-                other => (
-                    other.to_string(),
+            }
+            SdkError::ResponseError(_) => {
+                KmsAeadNetworkError::create(&e.to_string(), &format!("AWS KMS error: {e}"))
+            }
+            transport if transport_failure => {
+                KmsAeadError::NetworkError(KmsAeadNetworkError::with_error_chain(
+                    &transport.to_string(),
+                    "AWS KMS error",
+                    &transport,
+                ))
+            }
+            other => KmsAeadError::EncryptionError(
+                KmsAeadEncryptionError::new(
+                    KmsAeadErrorPublicGenericDetails::new(other.to_string()),
                     format!("AWS KMS error: {other}"),
-                    Some(Arc::new(other)),
-                ),
-            };
-        KmsAeadError::EncryptionError(KmsAeadEncryptionError {
-            public: KmsAeadErrorPublicGenericDetails::new(code),
-            message,
-            root_cause,
-        })
+                )
+                .with_root_cause(Arc::new(other)),
+            ),
+        }
     }
 
     #[cfg(feature = "hashicorp-vault-transit-kms-encryption-base")]
@@ -169,6 +227,16 @@ impl KmsAeadError {
         }
     }
 }
+
+/// The AWS KMS error codes of a request that may succeed later: throttling, an internal error, a
+/// custom key store that did not answer in time, and a key that is temporarily unavailable.
+#[cfg(feature = "aws-kms-encryption")]
+const AWS_KMS_RETRYABLE_ERROR_CODES: &[&str] = &[
+    "ThrottlingException",
+    "KMSInternalException",
+    "DependencyTimeoutException",
+    "KeyUnavailableException",
+];
 
 impl Display for KmsAeadError {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
@@ -270,7 +338,10 @@ impl KmsAeadNetworkError {
 
     /// For an error whose message and source chain carry no secret. The chain goes into the
     /// message, since the top-level message of an HTTP error rarely says what failed.
-    #[cfg(feature = "hashicorp-vault-transit-kms-encryption-base")]
+    #[cfg(any(
+        feature = "hashicorp-vault-transit-kms-encryption-base",
+        feature = "aws-kms-encryption"
+    ))]
     pub(crate) fn with_error_chain(code: &str, context: &str, e: &(dyn Error + 'static)) -> Self {
         let mut message = format!("{context}: {e}");
         let mut source = e.source();
