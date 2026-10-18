@@ -20,7 +20,7 @@ use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
 /// version, so this holds a few thousand versions.
-const MAX_DOCUMENT_LEN: usize = 1 << 20;
+pub(crate) const MAX_DOCUMENT_LEN: usize = 1 << 20;
 const MAX_VERSIONS: usize = 10_000;
 const SCHEMA: u32 = 1;
 

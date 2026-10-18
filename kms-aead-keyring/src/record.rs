@@ -13,7 +13,7 @@ use crate::errors::{
 };
 use crate::{KeyId, Purpose, Rotation};
 
-mod stored;
+pub(crate) mod stored;
 
 /// The id of a keyring, the scope it encrypts for, such as a tenant: 1 to 128 ASCII
 /// alphanumerics, `-`, `_` and `.`, except `.` and `..` as the whole id and ids that start and

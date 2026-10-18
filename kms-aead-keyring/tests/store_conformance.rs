@@ -641,10 +641,15 @@ mod postgres {
 #[cfg(feature = "gcs")]
 mod gcs {
     use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
-    use gcloud_sdk::GoogleApi;
-    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore};
+    use gcloud_sdk::google::storage::v2::{
+        write_object_request, ChecksummedData, Object, WriteObjectRequest, WriteObjectSpec,
+    };
+    use gcloud_sdk::{tonic, GoogleApi};
+    use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
+    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore};
+    use kms_aead_keyring::KeyringError;
 
-    use super::{conformance, TestResult};
+    use super::{conformance, unique_keyring_id, TestResult};
 
     async fn store() -> Result<GcsKeyringStore, Box<dyn std::error::Error>> {
         let bucket = GcsBucketName::try_from(std::env::var("KEYRING_GCS_BUCKET")?)?;
@@ -670,5 +675,53 @@ mod gcs {
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
         let failing = store().await?.with_prefix("x".repeat(1100));
         super::a_store_error_carries_no_record_bytes(failing, None).await
+    }
+
+    /// An object past the 1 MiB record cap loads as too large, whatever it holds.
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn an_object_over_the_record_cap_is_too_large() -> TestResult {
+        let bucket = std::env::var("KEYRING_GCS_BUCKET")?;
+        let resource = format!("projects/_/buckets/{bucket}");
+        let prefix = format!("kms-keyrings-conformance/{}/", uuid::Uuid::now_v7());
+        let id = unique_keyring_id()?;
+        let client =
+            GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
+                .await?;
+        let mut request = tonic::Request::new(tokio_stream::once(WriteObjectRequest {
+            finish_write: true,
+            first_message: Some(write_object_request::FirstMessage::WriteObjectSpec(
+                WriteObjectSpec {
+                    resource: Some(Object {
+                        bucket: resource.clone(),
+                        name: format!("{prefix}{id}.json"),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+            data: Some(write_object_request::Data::ChecksummedData(
+                ChecksummedData {
+                    content: vec![b' '; (1 << 20) + 1],
+                    crc32c: None,
+                },
+            )),
+            ..Default::default()
+        }));
+        request.metadata_mut().insert(
+            "x-goog-request-params",
+            format!("bucket={resource}").parse()?,
+        );
+        client.get().write_object(request).await?;
+        let store =
+            GcsKeyringStore::new(client, GcsBucketName::try_from(bucket)?)?.with_prefix(prefix);
+        assert!(matches!(
+            store.load(&id).await,
+            Err(KeyringError::RecordInvalid(RecordInvalidError {
+                reason: RecordInvalidReason::TooLarge,
+                ..
+            }))
+        ));
+        Ok(())
     }
 }
