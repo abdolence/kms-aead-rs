@@ -32,7 +32,8 @@ const WATCH_START: Duration = Duration::from_secs(10);
 ///
 /// A create fails when the document exists, and an update carries the expected update time as
 /// its precondition, so that Firestore refuses a write over a record that changed since it was
-/// read. [`watch`](KeyringStore::watch) opens a listener on the document.
+/// read. [`watch`](KeyringStore::watch) opens a listener on the document: each keyring holds one
+/// listen stream.
 ///
 /// [`FirestoreDb`] and [`FirestoreTimestamp`] are firestore-rs's own types, a deliberate
 /// integration point: the application builds the client, with the project, the database and the

@@ -1,7 +1,9 @@
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
+use futures_util::future::join_all;
 use sqlx::postgres::{PgListener, PgPool};
 use sqlx::AssertSqlSafe;
 use tokio::sync::mpsc;
@@ -37,13 +39,16 @@ use crate::{KeyringError, KeyringId, KeyringRecord};
 /// [`WatchEvent::Reconnected`], on which the keyring revalidates.
 ///
 /// The [`PgPool`] is sqlx's, a deliberate integration point: the application owns the pool, its
-/// connection options and its TLS stack, which the `postgres-tls-*` features select. Each watch
-/// holds one connection of the pool for as long as it runs. `Clone` shares the pool.
+/// connection options and its TLS stack, which the `postgres-tls-*` features select. The watches
+/// of a store share one listener, which holds one connection of the pool from the first watch
+/// until the last one is dropped, however many keyrings watch. `Clone` shares the pool and the
+/// listener.
 #[derive(Clone)]
 pub struct PostgresKeyringStore {
     pool: PgPool,
     table: PostgresTable,
     statements: Arc<Statements>,
+    watches: Arc<Watches>,
 }
 
 /// The name of the table of a [`PostgresKeyringStore`], which is also its `NOTIFY` channel:
@@ -65,6 +70,14 @@ struct Statements {
     update: String,
 }
 
+/// The senders of the live watches of a store, by keyring id, which its listener task signals.
+///
+/// The map is not empty exactly while the task runs: a watch that finds it empty starts the
+/// task, and the task ends when it finds every watch dropped. Only the task removes senders, so
+/// that both decisions are taken under the one lock.
+#[derive(Default)]
+struct Watches(Mutex<HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>>);
+
 impl PostgresKeyringStore {
     /// The store on the table `kms_keyrings` of `pool`'s database.
     pub fn new(pool: PgPool) -> Self {
@@ -73,6 +86,7 @@ impl PostgresKeyringStore {
             pool,
             statements: Arc::new(Statements::new(&table)),
             table,
+            watches: Arc::default(),
         }
     }
 
@@ -81,7 +95,71 @@ impl PostgresKeyringStore {
         Self {
             statements: Arc::new(Statements::new(&table)),
             table,
+            watches: Arc::default(),
             ..self
+        }
+    }
+}
+
+impl Watches {
+    /// The map stays consistent through a panic elsewhere: no code under the lock panics
+    /// between two changes of it.
+    fn lock(&self) -> MutexGuard<'_, HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Adds `events` to the watches of `id` when the listener task runs, and gives it back when
+    /// none does.
+    fn join(
+        &self,
+        id: &KeyringId,
+        events: mpsc::Sender<WatchEvent>,
+    ) -> Result<(), mpsc::Sender<WatchEvent>> {
+        let mut watches = self.lock();
+        if watches.is_empty() {
+            return Err(events);
+        }
+        watches.entry(id.clone()).or_default().push(events);
+        Ok(())
+    }
+
+    /// Adds `events` to the watches of `id`, and returns `true` when no listener task runs, so
+    /// that the caller starts one.
+    fn insert(&self, id: &KeyringId, events: mpsc::Sender<WatchEvent>) -> bool {
+        let mut watches = self.lock();
+        let start = watches.is_empty();
+        watches.entry(id.clone()).or_default().push(events);
+        start
+    }
+
+    /// Forgets the dropped watches, and returns a sender of each live one, or `None` when every
+    /// watch is dropped, after which the listener task ends.
+    fn live(&self) -> Option<Vec<mpsc::Sender<WatchEvent>>> {
+        let mut watches = self.lock();
+        watches.retain(|_, senders| {
+            senders.retain(|events| !events.is_closed());
+            !senders.is_empty()
+        });
+        (!watches.is_empty()).then(|| watches.values().flatten().cloned().collect())
+    }
+
+    /// Sends `event` to the watches of the keyring `payload` names, or to every watch when it is
+    /// `None`. A full channel already holds a signal, and the revalidation it causes covers this
+    /// one too.
+    fn signal(&self, payload: Option<&str>, event: WatchEvent) {
+        let watches = self.lock();
+        let senders: Vec<_> = match payload {
+            None => watches.values().flatten().collect(),
+            Some(payload) => KeyringId::try_from(payload.to_string())
+                .ok()
+                .and_then(|id| watches.get(&id))
+                .into_iter()
+                .flatten()
+                .collect(),
+        };
+        for events in senders {
+            // A dropped watch is forgotten by `live`.
+            let _ = events.try_send(event);
         }
     }
 }
@@ -192,70 +270,61 @@ fn stored(
 /// A listener on `table`'s channel, on a connection of its own from `pool`.
 async fn listen(pool: &PgPool, table: &PostgresTable) -> Result<PgListener, sqlx::Error> {
     let mut listener = PgListener::connect_with(pool).await?;
-    // `forward` replaces a lost connection itself, so that the watch reports both ends of the
-    // gap.
+    // `forward` replaces a lost connection itself, so that every watch hears of both ends of
+    // the gap.
     listener.eager_reconnect(false);
     listener.listen(&table.0).await?;
     Ok(listener)
 }
 
-/// Sends `event`, and returns `false` once the watch is dropped. A full channel already holds a
-/// signal, and the revalidation it causes covers this one too.
-fn signal(events: &mpsc::Sender<WatchEvent>, event: WatchEvent) -> bool {
-    !matches!(
-        events.try_send(event),
-        Err(mpsc::error::TrySendError::Closed(_))
-    )
-}
-
-/// Forwards the notifications for `id` to `events` until the watch is dropped or the pool is
-/// closed. A lost connection is replaced at once, then after a delay that doubles up to 30
-/// seconds while PostgreSQL stays unreachable.
+/// Forwards the notifications on `table`'s channel to the watches of the keyring each one names,
+/// until every watch is dropped or the pool is closed. A lost connection is reported to every
+/// watch and replaced at once, then after a delay that doubles up to 30 seconds while
+/// PostgreSQL stays unreachable.
 async fn forward(
     mut listener: PgListener,
     pool: PgPool,
     table: PostgresTable,
-    id: KeyringId,
-    events: mpsc::Sender<WatchEvent>,
+    watches: Arc<Watches>,
 ) {
     const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
     const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
     loop {
         loop {
+            let Some(senders) = watches.live() else {
+                return;
+            };
             let received = tokio::select! {
-                () = events.closed() => return,
+                _ = join_all(senders.iter().map(mpsc::Sender::closed)) => continue,
                 received = listener.try_recv() => received,
             };
             match received {
-                Ok(Some(notification)) if notification.payload() == id.as_str() => {
-                    if !signal(&events, WatchEvent::Changed) {
-                        return;
-                    }
+                Ok(Some(notification)) => {
+                    watches.signal(Some(notification.payload()), WatchEvent::Changed);
                 }
-                Ok(Some(_)) => {}
                 Ok(None) | Err(_) => break,
             }
         }
-        if !signal(&events, WatchEvent::Disconnected) {
-            return;
-        }
+        watches.signal(None, WatchEvent::Disconnected);
         let mut delay = FIRST_RETRY_DELAY;
         listener = loop {
+            let Some(senders) = watches.live() else {
+                return;
+            };
             if pool.is_closed() {
+                watches.lock().clear();
                 return;
             }
             if let Ok(listener) = listen(&pool, &table).await {
                 break listener;
             }
             tokio::select! {
-                () = events.closed() => return,
+                _ = join_all(senders.iter().map(mpsc::Sender::closed)) => {}
                 () = tokio::time::sleep(delay) => {}
             }
             delay = (delay * 2).min(MAX_RETRY_DELAY);
         };
-        if !signal(&events, WatchEvent::Reconnected) {
-            return;
-        }
+        watches.signal(None, WatchEvent::Reconnected);
     }
 }
 
@@ -322,19 +391,25 @@ impl KeyringStore for PostgresKeyringStore {
         }))
     }
 
-    /// A listener on its own connection of the pool, held until the watch is dropped.
+    /// A watch on the store's shared listener. The first watch starts the listener on a
+    /// connection of the pool, which it returns once the last watch is dropped.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
-        let listener = listen(&self.pool, &self.table)
-            .await
-            .map_err(|error| store_error(StoreOperation::Watch, error))?;
         let (events, receiver) = mpsc::channel(16);
-        tokio::spawn(forward(
-            listener,
-            self.pool.clone(),
-            self.table.clone(),
-            id.clone(),
-            events,
-        ));
+        if let Err(events) = self.watches.join(id, events) {
+            let listener = listen(&self.pool, &self.table)
+                .await
+                .map_err(|error| store_error(StoreOperation::Watch, error))?;
+            // Another watch may have started the listener meanwhile; this one is then dropped,
+            // and its connection goes back to the pool.
+            if self.watches.insert(id, events) {
+                tokio::spawn(forward(
+                    listener,
+                    self.pool.clone(),
+                    self.table.clone(),
+                    self.watches.clone(),
+                ));
+            }
+        }
         Ok(Some(KeyringWatch::new(receiver)))
     }
 }
