@@ -61,4 +61,7 @@ around another provider. The implementation:
 - keeps key material, plaintext or encrypted, out of its errors' `Display` and `Debug`.
 
 `generate_key_material` has a default implementation that returns `Ok(None)`, so the backend
-generates the key.
+generates the key. `key_version` has one that returns `Ok(None)` too, for encrypted DEKs that name
+no KEK version: a provider whose bytes name one reads it from them, and a wrapper returns the inner
+provider's `key_version`, see
+[Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).

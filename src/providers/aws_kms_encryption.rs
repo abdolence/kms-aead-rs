@@ -73,6 +73,9 @@ impl AwsKmsProviderOptions {
 /// `AccessDeniedException` or a request that could not be built or signed, is an
 /// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose root cause is the SDK
 /// error.
+///
+/// AWS KMS keeps the key material of every rotation and exposes no versions of a key, so
+/// [`key_version`](crate::KmsAeadEncryptionProvider::key_version) returns `None`.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,

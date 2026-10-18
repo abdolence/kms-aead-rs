@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
+use super::KmsKeyVersion;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
@@ -238,7 +239,9 @@ impl std::fmt::Debug for LocalKek {
 /// ```
 ///
 /// with the header up to the version as the associated data, so neither the id nor the version
-/// can be changed. A decryption refuses a key encrypted under another KEK id before it opens it.
+/// can be changed. A decryption refuses a key encrypted under another KEK id before it opens it,
+/// and so does [`key_version`](KmsAeadEncryptionProvider::key_version), which reads the version
+/// from the header.
 ///
 /// # Limits
 ///
@@ -366,21 +369,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let layout = LocalEncryptedDek::split(encrypted_dek.value()).ok_or_else(|| {
-                KmsAeadEncryptionError::create(
-                    "LOCAL_ENCRYPTED_DEK_FORMAT",
-                    "The encrypted DEK is not in the layout of the local KMS",
-                )
-            })?;
-            if layout.kek_id != self.kek.key().as_bytes() {
-                return Err(KmsAeadEncryptionError::create(
-                    "LOCAL_KEK_ID_MISMATCH",
-                    &format!(
-                        "The key was encrypted under another local KEK than {}",
-                        self.kek.key()
-                    ),
-                ));
-            }
+            let layout = self.encrypted_dek_layout(encrypted_dek)?;
             let version = layout.kek_version;
             kms::record_key_version(&version.to_string());
             let material = self.keks.get(&version).ok_or_else(|| {
@@ -401,6 +390,45 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             Ok(DataEncryptionKey::from(key))
         })
         .await
+    }
+
+    /// The KEK version in the layout, once the KEK id in it is this provider's.
+    fn key_version(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<Option<KmsKeyVersion>> {
+        let layout = self.encrypted_dek_layout(encrypted_dek)?;
+        Ok(Some(KmsKeyVersion::from(layout.kek_version)))
+    }
+}
+
+impl<B> LocalKmsProvider<B> {
+    /// The parts of `encrypted_dek`, a key this provider's KEK id encrypted.
+    ///
+    /// # Errors
+    ///
+    /// `LOCAL_ENCRYPTED_DEK_FORMAT` when the bytes are not in the layout, and
+    /// `LOCAL_KEK_ID_MISMATCH` when another KEK id encrypted them.
+    fn encrypted_dek_layout<'e>(
+        &self,
+        encrypted_dek: &'e EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<LocalEncryptedDek<'e>> {
+        let layout = LocalEncryptedDek::split(encrypted_dek.value()).ok_or_else(|| {
+            KmsAeadEncryptionError::create(
+                "LOCAL_ENCRYPTED_DEK_FORMAT",
+                "The encrypted DEK is not in the layout of the local KMS",
+            )
+        })?;
+        if layout.kek_id != self.kek.key().as_bytes() {
+            return Err(KmsAeadEncryptionError::create(
+                "LOCAL_KEK_ID_MISMATCH",
+                &format!(
+                    "The key was encrypted under another local KEK than {}",
+                    self.kek.key()
+                ),
+            ));
+        }
+        Ok(layout)
     }
 }
 
@@ -488,7 +516,14 @@ mod tests {
 
         let new_encrypted_dek = rotated.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(&new_encrypted_dek.value()[8..12], [0, 0, 0, 3]);
+        assert_eq!(
+            rotated.key_version(&old_encrypted_dek)?,
+            Some(KmsKeyVersion::from(v1))
+        );
+        assert_eq!(
+            rotated.key_version(&new_encrypted_dek)?,
+            Some(KmsKeyVersion::from(v3))
+        );
         for encrypted_dek in [old_encrypted_dek, new_encrypted_dek] {
             assert_eq!(
                 rotated.decrypt_data_encryption_key(&encrypted_dek).await?,
@@ -567,14 +602,20 @@ mod tests {
                 )?],
             )
         });
+        let (orders, invoices) = (orders?, invoices?);
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let encrypted_dek = orders?.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = orders.encrypt_data_encryption_key(&dek).await?;
 
-        let result = invoices?.decrypt_data_encryption_key(&encrypted_dek).await;
+        let decrypted = invoices.decrypt_data_encryption_key(&encrypted_dek).await;
+        let key_version = invoices.key_version(&encrypted_dek);
 
         assert!(
-            matches!(&result, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
-            "{result:?}"
+            matches!(&decrypted, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
+            "{decrypted:?}"
+        );
+        assert!(
+            matches!(&key_version, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
+            "{key_version:?}"
         );
         Ok(())
     }

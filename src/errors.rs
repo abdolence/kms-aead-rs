@@ -35,7 +35,9 @@ pub enum KmsAeadError {
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
     /// A stored value in a layout written by 0.29 or earlier, which only the `legacy-formats`
-    /// feature reads.
+    /// feature reads. The envelope's [`reencrypt_dek`](crate::KmsAeadEnvelope::reencrypt_dek) and
+    /// [`reencrypt_encrypted_dek`](crate::KmsAeadEnvelope::reencrypt_encrypted_dek) return it with
+    /// the feature too: the upgrades rewrite such a value.
     LegacyFormat(KmsAeadLegacyFormatError),
 }
 

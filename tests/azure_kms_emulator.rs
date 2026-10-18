@@ -6,9 +6,10 @@
 //!   cargo test --features azure-kms-encryption,aws-lc --test azure_kms_emulator -- --ignored
 //! ```
 
-use azure_core::http::{ClientOptions, RequestContent, Transport};
+use azure_core::http::{ClientOptions, RequestContent, RetryOptions, Transport};
 use azure_security_keyvault_keys::models::{
-    CreateKeyParameters, EncryptionAlgorithm, KeyOperation, KeyOperationParameters, KeyType,
+    CreateKeyParameters, EncryptionAlgorithm, KeyAttributes, KeyClientUpdateKeyPropertiesOptions,
+    KeyOperation, KeyOperationParameters, KeyType, UpdateKeyPropertiesParameters,
 };
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
@@ -46,7 +47,8 @@ impl Emulator {
     }
 
     /// The emulator serves a self-signed certificate and names itself, not a Key Vault domain,
-    /// as the authentication challenge resource.
+    /// as the authentication challenge resource. It answers some refusals with a 500, which the
+    /// SDK would retry for over a minute.
     fn client_options() -> TestResult<KeyClientOptions> {
         common::install_crypto_provider();
         let http_client = reqwest::Client::builder()
@@ -55,6 +57,7 @@ impl Emulator {
         Ok(KeyClientOptions {
             client_options: ClientOptions {
                 transport: Some(Transport::new(Arc::new(http_client))),
+                retry: RetryOptions::none(),
                 ..Default::default()
             },
             verify_challenge_resource: Some(false),
@@ -142,6 +145,56 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
         .await?;
 
     assert_eq!(decrypted.as_sensitive_str(), "test-secret");
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs the Lowkey Vault emulator, see the module docs"]
+async fn a_reencrypted_value_opens_with_the_old_key_version_disabled() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-encrypting-key")?;
+    let first_version = emulator.create_rsa_key_version(&key_name).await?;
+    let aad = b"test-aad";
+    let value: Encrypted<SecretValue, Envelope> = emulator
+        .encryption(&key_name, first_version.clone())
+        .await?
+        .encrypt(aad, &SecretValue::from("test-secret"))
+        .await?;
+    let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
+    let rotated = emulator
+        .encryption(&key_name, rotated_version.clone())
+        .await?;
+
+    let reencrypted = rotated.reencrypt_dek(&value).await?;
+
+    let disabled = UpdateKeyPropertiesParameters {
+        key_attributes: Some(KeyAttributes {
+            enabled: Some(false),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    emulator
+        .client
+        .update_key_properties(
+            &key_name,
+            RequestContent::try_from(disabled)?,
+            Some(KeyClientUpdateKeyPropertiesOptions {
+                key_version: Some(first_version.to_string()),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    let (_, reencrypted_dek) = reencrypted.separate()?;
+    assert_eq!(
+        rotated.provider().key_version(&reencrypted_dek)?,
+        Some(rotated_version)
+    );
+    let decrypted: SecretValue = rotated.decrypt(aad, &reencrypted).await?;
+    assert_eq!(decrypted.as_sensitive_str(), "test-secret");
+    // Key Vault refuses a disabled version with 403 Forbidden, and Lowkey Vault with a 500.
+    let before_reencryption: KmsAeadResult<SecretValue> = rotated.decrypt(aad, &value).await;
+    assert!(before_reencryption.is_err(), "{before_reencryption:?}");
     Ok(())
 }
 

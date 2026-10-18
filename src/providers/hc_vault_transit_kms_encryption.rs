@@ -21,6 +21,7 @@ use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
+use super::KmsKeyVersion;
 use crate::errors::*;
 use crate::spans::{self, kms};
 use crate::*;
@@ -171,7 +172,8 @@ impl HcVaultTransitProviderOptions {
 /// errors for a response or an encrypted key that cannot be read.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
-/// the key version, so it still decrypts after the key is rotated.
+/// the key version, so it still decrypts after the key is rotated, and
+/// [`key_version`](KmsAeadEncryptionProvider::key_version) reads that version from it.
 #[derive(Clone)]
 pub struct HcVaultTransitProvider {
     http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
@@ -407,12 +409,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let ciphertext = std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
-                KmsAeadEncryptionError::create(
-                    "VAULT_CIPHERTEXT",
-                    "The encrypted data encryption key is not a Vault Transit ciphertext",
-                )
-            })?;
+            let ciphertext = transit_ciphertext(encrypted_dek)?;
             if let Some(key_version) = transit_key_version(ciphertext) {
                 kms::record_key_version(key_version);
             }
@@ -432,6 +429,21 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             Ok(DataEncryptionKey::from(plaintext))
         })
         .await
+    }
+
+    /// The `N` of the ciphertext's `vault:vN:` prefix.
+    fn key_version(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<Option<KmsKeyVersion>> {
+        let key_version =
+            transit_key_version(transit_ciphertext(encrypted_dek)?).ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "VAULT_CIPHERTEXT",
+                    "The Vault Transit ciphertext names no key version",
+                )
+            })?;
+        KmsKeyVersion::try_from(key_version.to_string()).map(Some)
     }
 }
 
@@ -497,8 +509,22 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     })
 }
 
-/// The `N` of the `vault:vN:` prefix of a Transit ciphertext, for the span only: Vault reads
-/// the version from its own ciphertext at decrypt.
+/// `encrypted_dek` as the Transit ciphertext it holds.
+///
+/// # Errors
+///
+/// `VAULT_CIPHERTEXT` when the bytes are not UTF-8.
+fn transit_ciphertext(encrypted_dek: &EncryptedDataEncryptionKey) -> KmsAeadResult<&str> {
+    std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
+        KmsAeadEncryptionError::create(
+            "VAULT_CIPHERTEXT",
+            "The encrypted data encryption key is not a Vault Transit ciphertext",
+        )
+    })
+}
+
+/// The `N` of the `vault:vN:` prefix of a Transit ciphertext. Vault reads the version from its
+/// own ciphertext at decrypt, so the provider reads it only for the span and for `key_version`.
 fn transit_key_version(ciphertext: &str) -> Option<&str> {
     let (version, _) = ciphertext.strip_prefix("vault:v")?.split_once(':')?;
     (!version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())).then_some(version)
@@ -985,18 +1011,31 @@ mod tests {
         assert!(format!("{error}").chars().count() < 2 * MAX_VAULT_ERROR_CHARS);
     }
 
-    #[test]
-    fn key_version_is_read_from_the_transit_ciphertext() {
-        assert_eq!(transit_key_version("vault:v3:AbCd+/ef=="), Some("3"));
+    #[tokio::test]
+    async fn key_version_is_read_from_the_transit_ciphertext() -> KmsAeadResult<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+
+        let key_version = provider.key_version(&EncryptedDataEncryptionKey::new(
+            b"vault:v3:AbCd+/ef==".to_vec(),
+        ))?;
+
+        assert_eq!(key_version, Some(KmsKeyVersion::try_from("3".to_string())?));
         for malformed in [
-            "vault:3:AbCd",
-            "vault:v:AbCd",
-            "vault:v3",
-            "AbCd",
-            "vault:v3-x:AbCd",
+            &b"vault:3:AbCd"[..],
+            b"vault:v:AbCd",
+            b"vault:v3",
+            b"AbCd",
+            b"vault:v3-x:AbCd",
+            &[0xFF, 0x01, 0x00],
         ] {
-            assert_eq!(transit_key_version(malformed), None, "{malformed}");
+            let result = provider.key_version(&EncryptedDataEncryptionKey::new(malformed.to_vec()));
+            assert!(
+                matches!(&result, Err(e) if e.code() == "VAULT_CIPHERTEXT"),
+                "{malformed:?}: {result:?}"
+            );
         }
+        Ok(())
     }
 
     #[test]
@@ -1064,6 +1103,58 @@ mod tests {
                 secret
             );
         }
+    }
+
+    /// Creates a Transit key of its own on the server in `VAULT_ADDR`, since it rotates the key
+    /// and moves its `min_decryption_version`.
+    #[tokio::test]
+    #[ignore = "needs a Vault server with the Transit secrets engine"]
+    async fn a_reencrypted_value_opens_once_vault_refuses_the_old_version() -> KmsAeadResult<()> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let provider = HcVaultTransitProvider::new(&HcVaultTransitKeyRef::new(format!(
+            "reencrypted-{nanos}"
+        )))?;
+        let key_uri = provider
+            .encrypt_uri
+            .to_string()
+            .replace("/encrypt/", "/keys/");
+        provider
+            .post(&Uri::try_from(key_uri.clone()).unwrap(), Vec::new())
+            .await?;
+        let envelope =
+            KmsAeadEnvelope::<HcVaultTransitProvider, TestBackend>::new(provider.clone())?;
+        let secret = SecretValue::from("order-secret");
+        let value = envelope.encrypt(b"orders-aad", &secret).await?;
+        provider
+            .post(
+                &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
+                Vec::new(),
+            )
+            .await?;
+
+        let reencrypted = envelope.reencrypt_dek(&value).await?;
+
+        provider
+            .post(
+                &Uri::try_from(format!("{key_uri}/config")).unwrap(),
+                br#"{"min_decryption_version": 2}"#.to_vec(),
+            )
+            .await?;
+        let (_, reencrypted_dek) = reencrypted.separate()?;
+        assert_eq!(
+            provider.key_version(&reencrypted_dek)?,
+            Some(KmsKeyVersion::try_from("2".to_string())?)
+        );
+        assert_eq!(envelope.decrypt(b"orders-aad", &reencrypted).await?, secret);
+        let before_reencryption = envelope.decrypt(b"orders-aad", &value).await;
+        assert!(
+            matches!(&before_reencryption, Err(e) if e.code() == "VAULT_STATUS_400"),
+            "{before_reencryption:?}"
+        );
+        Ok(())
     }
 
     #[tokio::test]

@@ -123,6 +123,20 @@ To rotate, add `kek-v2` the same way and list both versions. Version 2 encrypts 
 DEKs encrypted under version 1 still decrypt. Version 1 can be dropped once nothing encrypted under
 it is left.
 
+## Key versions and rotation
+
+A rotation is a new version in the provider's list, which encrypts new DEKs in every process that
+loads the list. A process that lists only the old versions fails on a DEK of the new one with
+`LOCAL_KEK_UNKNOWN_VERSION`, so every process that reads the stored values lists the new version
+before any of them encrypts under it.
+
+`key_version` reads the version of an encrypted DEK from its layout, with no decryption. After a
+sweep with `reencrypt_dek`, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+it shows whether any stored value still needs the old version. Dropping the old version from the
+list then disables it, and listing it again restores it. Destroying it means destroying every copy
+of its material, backups included.
+
 ## Limits
 
 - No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
