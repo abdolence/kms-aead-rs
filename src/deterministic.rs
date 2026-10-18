@@ -99,9 +99,10 @@ mod aes_siv_cipher {
 
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
+    use crate::types::checked_key_bytes;
     use crate::{
-        checked_key_material, generate_random_bytes, spans, AeadBackend, DataEncryptionKey,
-        EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
+        generate_random_bytes, spans, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey,
+        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
     };
 
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
@@ -191,13 +192,12 @@ mod aes_siv_cipher {
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
-            let key = match checked_key_material(provider, self.algorithm.key_len()).await? {
-                Some(material) => DataEncryptionKey::from(material),
-                None => self.generate_key()?,
-            };
-            let encrypted_key =
-                crate::formats::wrap_key(&key, self.algorithm.into(), provider).await?;
-            Ok((key, encrypted_key))
+            crate::formats::generate_wrapped_key::<B, P>(
+                self.algorithm.into(),
+                self.algorithm.key_len(),
+                provider,
+            )
+            .await
         }
 
         /// Seals `plain_text` under `key`. `aad` is authenticated as one associated-data item,
@@ -303,16 +303,8 @@ mod aes_siv_cipher {
             let span = spans::decrypt_dek("deterministic", algorithm, self.dek_cache());
             spans::in_span(span, async {
                 let (key, _) = crate::formats::unwrap_key(encrypted_key, &self.provider).await?;
-                let len = key.value().ref_sensitive_value().len();
-                if len == algorithm.key_len() {
-                    Ok(key)
-                } else {
-                    Err(KmsAeadEncryptionError::invalid_key_length(
-                        len,
-                        algorithm,
-                        algorithm.key_len(),
-                    ))
-                }
+                checked_key_bytes(&key, algorithm, algorithm.key_len())?;
+                Ok(key)
             })
             .await
         }

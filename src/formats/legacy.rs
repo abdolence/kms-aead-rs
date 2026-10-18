@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::envelope::EnvelopeLayout;
 use super::{unwrap_key, wrap_key};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
+use crate::types::checked_key_bytes;
 use crate::{
     AeadBackend, CipherText, CipherTextWithEncryptedKey, EncryptedDataEncryptionKey, KekProvider,
     KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, KmsKeyVersion,
@@ -244,14 +245,7 @@ where
             return Ok(None);
         }
         let algorithm = self.algorithm();
-        let len = key.value().ref_sensitive_value().len();
-        if len != algorithm.key_len() {
-            return Err(KmsAeadEncryptionError::invalid_key_length(
-                len,
-                algorithm,
-                algorithm.key_len(),
-            ));
-        }
+        checked_key_bytes(&key, algorithm, algorithm.key_len())?;
         wrap_key(&key, algorithm.into(), &self.provider)
             .await
             .map(Some)

@@ -53,6 +53,30 @@ impl DataEncryptionKey {
     }
 }
 
+/// The bytes of `key`, checked against `algorithm`, whose keys have `key_len` bytes, before any
+/// cipher sees them: a key of another length, such as a 64-byte deterministic key, is never cut
+/// or padded to fit.
+///
+/// # Errors
+///
+/// `INVALID_KEY_LENGTH` when `key` has another length.
+pub(crate) fn checked_key_bytes(
+    key: &DataEncryptionKey,
+    algorithm: impl Display,
+    key_len: usize,
+) -> KmsAeadResult<&[u8]> {
+    let key = key.value().ref_sensitive_value();
+    if key.len() == key_len {
+        Ok(key)
+    } else {
+        Err(KmsAeadEncryptionError::invalid_key_length(
+            key.len(),
+            algorithm,
+            key_len,
+        ))
+    }
+}
+
 impl From<SecretValue> for DataEncryptionKey {
     fn from(value: SecretValue) -> Self {
         Self(value)

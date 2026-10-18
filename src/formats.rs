@@ -13,8 +13,8 @@
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadResult, ValueStruct,
+    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
 };
 
 pub(crate) mod envelope;
@@ -61,6 +61,40 @@ where
             provider.encrypt_data_encryption_key(&serialized).await
         }
     }
+}
+
+/// A new key of `key_len` bytes and the same key wrapped by `provider` as a key of `key_type`, as
+/// [`wrap_key`] wraps it. The key comes from the KMS generator when the provider is configured to
+/// use one, and from the CSPRNG of `B` otherwise.
+///
+/// # Errors
+///
+/// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material of
+/// another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
+pub(crate) async fn generate_wrapped_key<B, P>(
+    key_type: TinkKeyType,
+    key_len: usize,
+    provider: &P,
+) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
+where
+    B: AeadBackend,
+    P: KmsAeadEncryptionProvider + Sync + ?Sized,
+{
+    let key = match provider.generate_key_material(key_len).await? {
+        Some(material) if material.ref_sensitive_value().len() != key_len => {
+            return Err(KmsAeadEncryptionError::create(
+                "INVALID_KEY_LENGTH",
+                &format!(
+                    "The KMS generator returned {} bytes for a key of {key_len} bytes",
+                    material.ref_sensitive_value().len()
+                ),
+            ));
+        }
+        Some(material) => DataEncryptionKey::from(material),
+        None => DataEncryptionKey::from(generate_random_bytes::<B>(key_len)?),
+    };
+    let encrypted_key = wrap_key(&key, key_type, provider).await?;
+    Ok((key, encrypted_key))
 }
 
 /// The data encryption key `encrypted` wraps, unwrapped by `provider`, and the layout written by

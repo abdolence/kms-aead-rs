@@ -5,9 +5,10 @@ use secret_vault_value::SecretValue;
 
 use crate::backend::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
+use crate::types::checked_key_bytes;
 use crate::{
-    checked_key_material, generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText,
-    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey,
+    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// Randomized authenticated encryption with associated data (AEAD) under a data encryption key
@@ -73,12 +74,12 @@ impl<B: AeadBackend> AeadCipher<B> {
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        let key = match checked_key_material(provider, self.algorithm.key_len()).await? {
-            Some(material) => DataEncryptionKey::from(material),
-            None => self.generate_key()?,
-        };
-        let encrypted_key = crate::formats::wrap_key(&key, self.algorithm.into(), provider).await?;
-        Ok((key, encrypted_key))
+        crate::formats::generate_wrapped_key::<B, P>(
+            self.algorithm.into(),
+            self.algorithm.key_len(),
+            provider,
+        )
+        .await
     }
 
     /// Seals `plain_text` with `key` and a fresh random nonce, so that sealing the same input
@@ -95,7 +96,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         plain_text: &SecretValue,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
-        let key = self.key_bytes(key)?;
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
         let plain_text = plain_text.ref_sensitive_value();
 
         let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
@@ -146,7 +147,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         cipher_text: &CipherText,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
-        let key = self.key_bytes(key)?;
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
         let (nonce, sealed) = cipher_text
             .value()
             .split_first_chunk::<{ AeadAlgorithm::NONCE_LEN }>()
@@ -181,20 +182,5 @@ impl<B: AeadBackend> AeadCipher<B> {
             .ref_sensitive_value_mut()
             .truncate(plain_text_len);
         Ok(plain_text)
-    }
-
-    /// The key, checked against the algorithm before any backend sees it: a key of another
-    /// length, such as a 64-byte deterministic key, is never cut or padded to fit.
-    fn key_bytes<'k>(&self, key: &'k DataEncryptionKey) -> KmsAeadResult<&'k [u8]> {
-        let key = key.value().ref_sensitive_value();
-        if key.len() == self.algorithm.key_len() {
-            Ok(key)
-        } else {
-            Err(KmsAeadEncryptionError::invalid_key_length(
-                key.len(),
-                self.algorithm,
-                self.algorithm.key_len(),
-            ))
-        }
     }
 }
