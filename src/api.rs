@@ -5,14 +5,12 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
-use crate::providers::KmsKeyVersion;
 use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 
 /// Encrypts and decrypts data encryption keys with a key encryption key (KEK) held by a KMS.
 ///
 /// Applications may implement it, for a KMS of their own or as a wrapper around another
-/// provider, such as a cache. A wrapper returns the inner provider's [`kek`](Self::kek) and
-/// [`key_version`](Self::key_version).
+/// provider, such as a cache. A wrapper returns the inner provider's [`kek`](Self::kek).
 ///
 /// An implementation's errors carry no key material in any form, plaintext or encrypted, in
 /// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
@@ -56,26 +54,6 @@ pub trait KmsAeadEncryptionProvider {
     /// `INVALID_KEY_LENGTH` when the KMS returned another one.
     async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
         let _ = len;
-        Ok(None)
-    }
-
-    /// The version of the KEK that encrypted `encrypted_dek`, read from the bytes this provider
-    /// returned, without a KMS call, so that a sweep after a KEK rotation finds the stored keys
-    /// that still need an older version.
-    ///
-    /// `None` means the provider's encrypted DEKs name no version that can be read. That is what
-    /// the default implementation returns, and what the GCP and AWS providers return: their KMS
-    /// ciphertexts are opaque. The local, Azure and Vault Transit providers read the version from
-    /// their bytes.
-    ///
-    /// # Errors
-    ///
-    /// The provider's error for bytes it refuses to decrypt, such as `AZURE_ENCRYPTED_DEK_FORMAT`.
-    fn key_version(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<Option<KmsKeyVersion>> {
-        let _ = encrypted_dek;
         Ok(None)
     }
 }

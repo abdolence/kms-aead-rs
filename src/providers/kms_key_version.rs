@@ -1,13 +1,10 @@
 use std::fmt::{Display, Formatter};
 
-use super::LocalKekVersion;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::KmsAeadResult;
 
-/// The version of the KMS key that encrypted a data encryption key, as
-/// [`key_version`](crate::KmsAeadEncryptionProvider::key_version) reports it: 1 to 255 ASCII
-/// alphanumeric characters, such as the version of an Azure Key Vault key, the `N` of a Vault
-/// Transit ciphertext or a local KEK version in decimal.
+/// The version of the KMS key that encrypted a data encryption key: 1 to 255 ASCII alphanumeric
+/// characters, such as the version of an Azure Key Vault key.
 ///
 /// The same rule validates every key version read back from the Azure provider's encrypted DEKs
 /// and from the layouts of 0.29, so it may only ever loosen: a stricter rule makes stored data
@@ -57,14 +54,6 @@ impl TryFrom<String> for KmsKeyVersion {
 
     fn try_from(value: String) -> KmsAeadResult<Self> {
         read_key_version(value.as_bytes())
-    }
-}
-
-/// The version in decimal, as the local provider's
-/// [`key_version`](crate::KmsAeadEncryptionProvider::key_version) reports it.
-impl From<LocalKekVersion> for KmsKeyVersion {
-    fn from(version: LocalKekVersion) -> Self {
-        Self(version.to_string())
     }
 }
 

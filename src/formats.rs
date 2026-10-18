@@ -21,7 +21,9 @@
 //! read them with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
 
 use crate::backends::AeadBackend;
-use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError};
+use crate::errors::{
+    KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
+};
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
     KmsAeadResult, ValueStruct,
@@ -159,8 +161,9 @@ where
 /// # Errors
 ///
 /// The provider's errors, `INVALID_KEY_FORMAT` as for [`decrypt_dek`], and `LEGACY_FORMAT` for a
-/// layout of 0.29 or earlier, with or without `legacy-formats`.
-pub(crate) async fn reencrypt_dek<P>(
+/// layout of 0.29 or earlier, with or without `legacy-formats`, naming the upgrades rather than
+/// the feature.
+pub(crate) async fn reencrypt_encrypted_dek<P>(
     encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey>
@@ -169,15 +172,19 @@ where
 {
     let kek = provider.kek().provider();
     if encrypted_dek_v1_body(encrypted_dek, kek).is_some() {
-        return Err(KmsAeadLegacyFormatError::create(
+        return Err(KmsAeadLegacyFormatError::refused_by_reencryption(
             KmsAeadLegacyFormat::EncryptedDekV1,
         ));
     }
     let decrypted_dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
-    if let (_, Some(format)) = key_from_decrypted(decrypted_dek.clone(), kek)? {
-        return Err(KmsAeadLegacyFormatError::create(format));
+    match key_from_decrypted(decrypted_dek.clone(), kek) {
+        Ok((_, None)) => provider.encrypt_data_encryption_key(&decrypted_dek).await,
+        Ok((_, Some(format)))
+        | Err(KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError { format, .. })) => {
+            Err(KmsAeadLegacyFormatError::refused_by_reencryption(format))
+        }
+        Err(error) => Err(error),
     }
-    provider.encrypt_data_encryption_key(&decrypted_dek).await
 }
 
 /// The bytes after `[0xFF][0x01]` when `encrypted_dek`, given to a built-in provider of `kek`, is in

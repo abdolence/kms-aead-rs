@@ -9,7 +9,6 @@ use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
-use super::KmsKeyVersion;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
@@ -61,7 +60,8 @@ impl Display for LocalKekId {
 }
 
 /// The version of a local key encryption key. The highest version a [`LocalKmsProvider`] holds
-/// encrypts new keys; every version it holds decrypts.
+/// encrypts new keys, unless the provider is set to encrypt with another; every version it holds
+/// decrypts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalKekVersion(pub(crate) NonZeroU32);
 
@@ -230,18 +230,18 @@ impl std::fmt::Debug for LocalKek {
 ///
 /// # Encrypted keys
 ///
-/// The highest version encrypts, and every version the provider holds decrypts, so a new KEK
-/// version can be added while the keys encrypted under the older ones stay readable. The encrypted
-/// key, the bytes of the [`EncryptedDataEncryptionKey`], is
+/// The highest version encrypts, or the one
+/// [`with_encrypting_version`](LocalKmsProvider::with_encrypting_version) names, and every version
+/// the provider holds decrypts, so a new KEK version can be added while the keys encrypted under
+/// the older ones stay readable. The encrypted key, the bytes of the
+/// [`EncryptedDataEncryptionKey`], is
 ///
 /// ```text
 /// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
 /// ```
 ///
 /// with the header up to the version as the associated data, so neither the id nor the version
-/// can be changed. A decryption refuses a key encrypted under another KEK id before it opens it,
-/// and so does [`key_version`](KmsAeadEncryptionProvider::key_version), which reads the version
-/// from the header.
+/// can be changed. A decryption refuses a key encrypted under another KEK id before it opens it.
 ///
 /// # Limits
 ///
@@ -269,12 +269,16 @@ pub struct LocalKmsProvider<B> {
     kek: KekRef,
     /// The material of each KEK version.
     keks: BTreeMap<LocalKekVersion, SecretValue>,
+    /// Always a key of `keks`.
+    encrypting: LocalKekVersion,
     cipher: AeadCipher<B>,
 }
 
 impl<B: AeadBackend> LocalKmsProvider<B> {
     /// A provider for the KEK `id` with the versions in `keks`, encrypting on the backend `B`. The
-    /// highest version encrypts; every version listed decrypts.
+    /// highest version encrypts, unless
+    /// [`with_encrypting_version`](Self::with_encrypting_version) names another; every version
+    /// listed decrypts.
     ///
     /// # Errors
     ///
@@ -292,12 +296,12 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
             }
             sources.push((kek.version, kek.source));
         }
-        if by_version.is_empty() {
+        let Some(&encrypting) = by_version.keys().next_back() else {
             return Err(KmsAeadSystemError::create(
                 "LOCAL_KEK_VERSIONS",
                 &format!("The local KEK {id} has no version"),
             ));
-        }
+        };
 
         sources.sort();
         let versions = sources
@@ -310,8 +314,31 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
         Ok(Self {
             kek: KekRef::new(KekProvider::Local, id.to_string()),
             keks: by_version,
+            encrypting,
             cipher,
         })
+    }
+
+    /// The provider with `version` encrypting new DEKs in place of the highest version listed,
+    /// which every version listed still decrypts beside. A rotation lists the new version on every
+    /// process while an older one encrypts, then makes the new one encrypt once every process
+    /// lists it, so no process meets a DEK under a version it does not hold.
+    ///
+    /// # Errors
+    ///
+    /// `LOCAL_KEK_VERSIONS` when the provider does not list `version`.
+    pub fn with_encrypting_version(mut self, version: LocalKekVersion) -> KmsAeadResult<Self> {
+        if !self.keks.contains_key(&version) {
+            return Err(KmsAeadSystemError::create(
+                "LOCAL_KEK_VERSIONS",
+                &format!(
+                    "The local KEK {} does not list version {version} to encrypt with",
+                    self.kek.key()
+                ),
+            ));
+        }
+        self.encrypting = version;
+        Ok(self)
     }
 
     /// A provider with one random version-1 KEK from the CSPRNG of the backend `B`, which lives
@@ -342,10 +369,11 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let (&version, material) = self.keks.last_key_value().ok_or_else(|| {
+            let version = self.encrypting;
+            let material = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
-                    &format!("The local KEK {} has no version", self.kek.key()),
+                    &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
             kms::record_key_version(&version.to_string());
@@ -369,7 +397,21 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let layout = self.encrypted_dek_layout(encrypted_dek)?;
+            let layout = LocalEncryptedDek::split(encrypted_dek.value()).ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "LOCAL_ENCRYPTED_DEK_FORMAT",
+                    "The encrypted DEK is not in the layout of the local KMS",
+                )
+            })?;
+            if layout.kek_id != self.kek.key().as_bytes() {
+                return Err(KmsAeadEncryptionError::create(
+                    "LOCAL_KEK_ID_MISMATCH",
+                    &format!(
+                        "The key was encrypted under another local KEK than {}",
+                        self.kek.key()
+                    ),
+                ));
+            }
             let version = layout.kek_version;
             kms::record_key_version(&version.to_string());
             let material = self.keks.get(&version).ok_or_else(|| {
@@ -390,45 +432,6 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             Ok(DataEncryptionKey::from(key))
         })
         .await
-    }
-
-    /// The KEK version in the layout, once the KEK id in it is this provider's.
-    fn key_version(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<Option<KmsKeyVersion>> {
-        let layout = self.encrypted_dek_layout(encrypted_dek)?;
-        Ok(Some(KmsKeyVersion::from(layout.kek_version)))
-    }
-}
-
-impl<B> LocalKmsProvider<B> {
-    /// The parts of `encrypted_dek`, a key this provider's KEK id encrypted.
-    ///
-    /// # Errors
-    ///
-    /// `LOCAL_ENCRYPTED_DEK_FORMAT` when the bytes are not in the layout, and
-    /// `LOCAL_KEK_ID_MISMATCH` when another KEK id encrypted them.
-    fn encrypted_dek_layout<'e>(
-        &self,
-        encrypted_dek: &'e EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<LocalEncryptedDek<'e>> {
-        let layout = LocalEncryptedDek::split(encrypted_dek.value()).ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "LOCAL_ENCRYPTED_DEK_FORMAT",
-                "The encrypted DEK is not in the layout of the local KMS",
-            )
-        })?;
-        if layout.kek_id != self.kek.key().as_bytes() {
-            return Err(KmsAeadEncryptionError::create(
-                "LOCAL_KEK_ID_MISMATCH",
-                &format!(
-                    "The key was encrypted under another local KEK than {}",
-                    self.kek.key()
-                ),
-            ));
-        }
-        Ok(layout)
     }
 }
 
@@ -516,20 +519,65 @@ mod tests {
 
         let new_encrypted_dek = rotated.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(
-            rotated.key_version(&old_encrypted_dek)?,
-            Some(KmsKeyVersion::from(v1))
-        );
-        assert_eq!(
-            rotated.key_version(&new_encrypted_dek)?,
-            Some(KmsKeyVersion::from(v3))
-        );
+        assert_eq!(&new_encrypted_dek.value()[8..12], [0, 0, 0, 3]);
         for encrypted_dek in [old_encrypted_dek, new_encrypted_dek] {
             assert_eq!(
                 rotated.decrypt_data_encryption_key(&encrypted_dek).await?,
                 dek
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_dek_from_a_process_listing_a_new_version_opens_where_only_the_old_one_is_listed(
+    ) -> KmsAeadResult<()> {
+        let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let not_restarted = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(
+                v1,
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
+        )?;
+        let restarted = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![
+                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
+                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+            ],
+        )?
+        .with_encrypting_version(v1)?;
+
+        let encrypted_dek = restarted.encrypt_data_encryption_key(&dek).await?;
+
+        assert_eq!(
+            not_restarted
+                .decrypt_data_encryption_key(&encrypted_dek)
+                .await?,
+            dek
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_encrypting_version_outside_the_list_is_refused() -> KmsAeadResult<()> {
+        let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let provider = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(
+                v1,
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
+        )?;
+
+        let result = provider.with_encrypting_version(v2);
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::SystemError(e)) if e.public.code == "LOCAL_KEK_VERSIONS"),
+            "{result:?}"
+        );
         Ok(())
     }
 
@@ -602,20 +650,14 @@ mod tests {
                 )?],
             )
         });
-        let (orders, invoices) = (orders?, invoices?);
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let encrypted_dek = orders.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = orders?.encrypt_data_encryption_key(&dek).await?;
 
-        let decrypted = invoices.decrypt_data_encryption_key(&encrypted_dek).await;
-        let key_version = invoices.key_version(&encrypted_dek);
+        let result = invoices?.decrypt_data_encryption_key(&encrypted_dek).await;
 
         assert!(
-            matches!(&decrypted, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
-            "{decrypted:?}"
-        );
-        assert!(
-            matches!(&key_version, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
-            "{key_version:?}"
+            matches!(&result, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
+            "{result:?}"
         );
         Ok(())
     }

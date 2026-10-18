@@ -545,11 +545,9 @@ where
     /// the old encrypted DEK serves until it expires: it holds the same key, and the values not
     /// swept yet still carry it.
     ///
-    /// Every call encrypts again, also for a value already under the current version. Where the
-    /// provider names its versions, [`key_version`](KmsAeadEncryptionProvider::key_version) tells a
-    /// sweep which values need the call, without a KMS call. Values that share a DEK, as a
-    /// store-less envelope writes them, each receive an encrypted DEK of their own here: to keep
-    /// them sharing one, re-encrypt each distinct encrypted DEK once with
+    /// Every call encrypts again, also for a value already under the current version. Values that
+    /// share a DEK, as a store-less envelope writes them, each receive an encrypted DEK of their own
+    /// here: to keep them sharing one, re-encrypt each distinct encrypted DEK once with
     /// [`reencrypt_encrypted_dek`](Self::reencrypt_encrypted_dek) and [`Encrypted::join`] it with
     /// each of its values.
     ///
@@ -566,7 +564,7 @@ where
         spans::in_span(spans::reencrypt_dek(&self.dek_cache), async {
             let (bare, encrypted_dek) = value.separate()?;
             let encrypted_dek =
-                crate::formats::reencrypt_dek(&encrypted_dek, &self.provider).await?;
+                crate::formats::reencrypt_encrypted_dek(&encrypted_dek, &self.provider).await?;
             Encrypted::join(&bare, &encrypted_dek)
         })
         .await
@@ -589,7 +587,7 @@ where
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(
             spans::reencrypt_dek(&self.dek_cache),
-            crate::formats::reencrypt_dek(encrypted_dek, &self.provider),
+            crate::formats::reencrypt_encrypted_dek(encrypted_dek, &self.provider),
         )
         .await
     }
@@ -739,9 +737,7 @@ mod tests {
     use super::*;
     use crate::errors::KmsAeadLegacyFormat;
     use crate::formats::TinkKeyType;
-    use crate::providers::{
-        KmsKeyVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
-    };
+    use crate::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
     use crate::test_provider::{
         encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
         TestKmsProvider, CONCURRENT_CALLS,
@@ -1117,14 +1113,8 @@ mod tests {
         let reencrypted = rotated.reencrypt_dek(&value).await?;
 
         let (bare, _) = value.separate()?;
-        let (reencrypted_bare, reencrypted_dek) = reencrypted.separate()?;
+        let (reencrypted_bare, _) = reencrypted.separate()?;
         assert_eq!(reencrypted_bare.value(), bare.value());
-        assert_eq!(
-            old_version_removed
-                .provider()
-                .key_version(&reencrypted_dek)?,
-            Some(KmsKeyVersion::from(v2))
-        );
         assert_eq!(
             old_version_removed.decrypt(AAD, &reencrypted).await?,
             SecretValue::from(PLAIN_TEXT)

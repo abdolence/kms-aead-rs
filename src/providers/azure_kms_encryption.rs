@@ -67,8 +67,7 @@ impl AzureKmsProviderOptions {
 /// [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault encrypted DEK]
 /// ```
 ///
-/// [`key_version`](KmsAeadEncryptionProvider::key_version) reads the version from these bytes,
-/// and a decryption of other bytes fails with `AZURE_ENCRYPTED_DEK_FORMAT` before any request.
+/// A decryption of other bytes fails with `AZURE_ENCRYPTED_DEK_FORMAT` before any request.
 ///
 /// For the same reason, the plaintext Key Vault encrypts is the raw data encryption key of 16, 32
 /// or 64 bytes, not the key as Tink serialises it, so every wrap algorithm takes it: AES key wrap
@@ -267,14 +266,5 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
             Ok(DataEncryptionKey::from(SecretValue::new(key)))
         })
         .await
-    }
-
-    /// The key version the encrypted key carries, the one Key Vault named when it encrypted.
-    fn key_version(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<Option<KmsKeyVersion>> {
-        AzureWrappedKey::try_from(encrypted_dek.value().as_slice())
-            .map(|wrapped_key| Some(wrapped_key.key_version))
     }
 }

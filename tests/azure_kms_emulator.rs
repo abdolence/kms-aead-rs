@@ -161,9 +161,7 @@ async fn a_reencrypted_value_opens_with_the_old_key_version_disabled() -> TestRe
         .encrypt(aad, &SecretValue::from("test-secret"))
         .await?;
     let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
-    let rotated = emulator
-        .encryption(&key_name, rotated_version.clone())
-        .await?;
+    let rotated = emulator.encryption(&key_name, rotated_version).await?;
 
     let reencrypted = rotated.reencrypt_dek(&value).await?;
 
@@ -185,11 +183,6 @@ async fn a_reencrypted_value_opens_with_the_old_key_version_disabled() -> TestRe
             }),
         )
         .await?;
-    let (_, reencrypted_dek) = reencrypted.separate()?;
-    assert_eq!(
-        rotated.provider().key_version(&reencrypted_dek)?,
-        Some(rotated_version)
-    );
     let decrypted: SecretValue = rotated.decrypt(aad, &reencrypted).await?;
     assert_eq!(decrypted.as_sensitive_str(), "test-secret");
     // Key Vault refuses a disabled version with 403 Forbidden, and Lowkey Vault with a 500.

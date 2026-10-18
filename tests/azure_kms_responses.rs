@@ -7,9 +7,7 @@ use azure_core::http::{
 use azure_security_keyvault_keys::models::EncryptionAlgorithm;
 use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{
-    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
-};
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
 use kms_aead::*;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -188,17 +186,11 @@ async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -
         azure_core::base64::encode_url_safe(&wrapped)
     );
 
-    let provider = provider_over(StatusCode::Ok, body)?;
-
-    let encrypted_dek = provider
+    let encrypted_dek = provider_over(StatusCode::Ok, body)?
         .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
     assert_eq!(encrypted_dek, self::encrypted_key(&wrapped));
-    assert_eq!(
-        provider.key_version(&encrypted_dek)?,
-        Some(KmsKeyVersion::try_from(KEY_VERSION.to_string())?)
-    );
     Ok(())
 }
 
@@ -248,21 +240,14 @@ async fn encrypted_key_outside_the_layout_is_rejected_before_any_request() -> Km
         format!(r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "AAAA"}}"#),
     )?;
 
-    let encrypted_dek = EncryptedDataEncryptionKey::new(b"wrapped".to_vec());
-
     let err = provider
-        .decrypt_data_encryption_key(&encrypted_dek)
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()))
         .await
         .unwrap_err();
-    let key_version = provider.key_version(&encrypted_dek);
 
     assert!(
         matches!(&err, KmsAeadError::EncryptionError(e) if e.public.code == "AZURE_ENCRYPTED_DEK_FORMAT"),
         "{err:?}"
-    );
-    assert!(
-        matches!(&key_version, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "AZURE_ENCRYPTED_DEK_FORMAT"),
-        "{key_version:?}"
     );
     Ok(())
 }

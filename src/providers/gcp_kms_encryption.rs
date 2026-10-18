@@ -122,12 +122,6 @@ impl GcpKmsProviderOptions {
 /// [`NetworkError`](crate::errors::KmsAeadError::NetworkError), any other code, such as
 /// `PermissionDenied` or `NotFound`, an
 /// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError).
-///
-/// The provider encrypts under the primary version of the CryptoKey. The encrypted DEK is the
-/// Cloud KMS ciphertext as it is, the bytes Tink and BigQuery read, and Cloud KMS keeps the
-/// version inside it in a form it does not document, so
-/// [`key_version`](KmsAeadEncryptionProvider::key_version) returns `None`. The `KMS encrypt DEK`
-/// span records the version Cloud KMS names in its response.
 #[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
@@ -483,30 +477,6 @@ mod tests {
             std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         )
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
-    async fn live_key_reencrypts_a_dek_whose_version_it_cannot_read() -> KmsAeadResult<()> {
-        let envelope = KmsAeadEnvelope::<GcpKmsProvider, TestBackend>::new(
-            GcpKmsProvider::new(&live_key_ref()).await?,
-        )?;
-        let value = envelope
-            .encrypt(b"orders/1042", &SecretValue::from("4111 1111 1111 1111"))
-            .await?;
-
-        let reencrypted = envelope.reencrypt_dek(&value).await?;
-
-        let (bare, encrypted_dek) = value.separate()?;
-        let (reencrypted_bare, reencrypted_dek) = reencrypted.separate()?;
-        assert_eq!(reencrypted_bare.value(), bare.value());
-        assert_ne!(reencrypted_dek, encrypted_dek);
-        assert_eq!(envelope.provider().key_version(&reencrypted_dek)?, None);
-        assert_eq!(
-            envelope.decrypt(b"orders/1042", &reencrypted).await?,
-            SecretValue::from("4111 1111 1111 1111")
-        );
-        Ok(())
     }
 
     // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
