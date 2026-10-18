@@ -495,6 +495,10 @@ impl Routes {
                     let target = route.target.clone();
                     self.end(&target);
                 }
+                // firestore-rs also ends a target refused as an invalid argument or a failed
+                // precondition when it added the target without a resume state, which the
+                // callback cannot tell from one it adds back. Such a route stays disconnected,
+                // and the record TTL bounds its keyring.
                 (Ok(FirestoreListenerTargetChangeType::Remove), Some(_)) => {
                     route.removed = true;
                     route.signal(WatchEvent::Disconnected);
