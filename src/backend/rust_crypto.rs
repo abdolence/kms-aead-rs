@@ -2,9 +2,11 @@ use aes_gcm::aead::{AeadInOut, KeyInit, Nonce as AeadNonce, Tag as AeadTag};
 use aes_gcm::{Aes128Gcm, Aes256Gcm};
 use aes_gcm_siv::Aes256GcmSiv;
 use chacha20poly1305::ChaCha20Poly1305;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use super::private::Sealed;
-use super::{AeadBackend, AeadBackendOps, Failure, Nonce, Tag};
+use super::{AeadBackend, AeadBackendOps, Failure, HmacSha256, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the `rustcrypto`
@@ -62,6 +64,11 @@ impl AeadBackendOps for RustCrypto {
             AeadAlgorithm::Aes256Gcm => open::<Aes256Gcm>(key, nonce, aad, in_out),
             AeadAlgorithm::Aes256GcmSiv => open::<Aes256GcmSiv>(key, nonce, aad, in_out),
         }
+    }
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<HmacSha256, Failure> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(|_| Failure::Key)?;
+        mac.update(message);
+        Ok(mac.finalize().into_bytes().into())
     }
 }
 

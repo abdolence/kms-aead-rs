@@ -124,6 +124,8 @@ pub fn generate_random_bytes<B: AeadBackend>(len: usize) -> KmsAeadResult<Secret
 
 pub(crate) type Nonce = [u8; AeadAlgorithm::NONCE_LEN];
 pub(crate) type Tag = [u8; AeadAlgorithm::TAG_LEN];
+/// An HMAC-SHA256 output.
+pub(crate) type HmacSha256 = [u8; 32];
 
 /// Crypto libraries report no detail on failure, and none is lost here.
 #[cfg_attr(
@@ -168,4 +170,7 @@ pub(crate) trait AeadBackendOps {
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure>;
+
+    /// HMAC-SHA256 of `message` under `key`.
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<HmacSha256, Failure>;
 }

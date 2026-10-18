@@ -57,6 +57,9 @@ cmac = { version = "0.8", default-features = false, optional = true }
 # and the POLYVAL key of AES-256-GCM-SIV are not zeroized otherwise.
 poly1305 = { version = "0.9", default-features = false, optional = true }
 polyval = { version = "0.7", default-features = false, optional = true }
+# HMAC-SHA256 of the beacons.
+hmac = { version = "0.13", optional = true }
+sha2 = { version = "0.11", default-features = false, optional = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
@@ -139,6 +142,10 @@ rustcrypto = [
     "poly1305/zeroize",
     "dep:polyval",
     "polyval/zeroize",
+    "dep:hmac",
+    "hmac/zeroize",
+    "dep:sha2",
+    "sha2/zeroize",
 ]
 # `aes-siv/alloc` carries the `siv::Aes256Siv` calls that take the associated data as a list.
 deterministic = [

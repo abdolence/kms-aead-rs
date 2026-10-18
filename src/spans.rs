@@ -167,6 +167,19 @@ pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
     Span::current().record(DEK_CACHE, field::display(outcome));
 }
 
+/// `KMS AEAD beacon`, around the envelope's beacon of a value.
+pub(crate) fn beacon(algorithm: impl Display, backend: &str, dek_cache: &DekCache) -> Span {
+    let span = debug_span!(
+        "KMS AEAD beacon",
+        { ALGORITHM } = %algorithm,
+        { BACKEND } = %backend,
+        { DEK_CACHE } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    );
+    record_disabled_cache(&span, dek_cache);
+    span
+}
+
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
 /// `deterministic`.
 pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
