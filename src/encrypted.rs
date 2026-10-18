@@ -37,7 +37,7 @@ mod sqlx;
 /// different values, so equal bytes say nothing about the plaintexts; compare `value()` to tell
 /// whether two values are the same stored bytes.
 ///
-/// `Debug` shows the length only. The `serde` feature serializes it as bytes, and deserializes it
+/// `Debug` shows the length only. The `serde` feature serialises it as bytes, and deserialises it
 /// through `TryFrom<Vec<u8>>`. The `postgres` and `sqlx` features store it as `BYTEA` and read it
 /// through `TryFrom<Vec<u8>>` too.
 pub struct Encrypted<T, F: Format> {

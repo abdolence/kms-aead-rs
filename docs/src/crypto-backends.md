@@ -133,7 +133,7 @@ assert_eq!(
 
 ## ring
 
-ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. ring does not zeroize
+ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. ring does not zeroise
 its expanded key schedules, so they stay in freed memory after each call.
 
 ## aws-lc-rs and FIPS
@@ -158,4 +158,4 @@ them.
 
 Every algorithm, in pure Rust, with `getrandom` as the CSPRNG. It needs no C compiler. The
 feature turns on the crates' `zeroize` features, so their key objects, and the Poly1305 and
-POLYVAL keys each call derives, are zeroized when dropped.
+POLYVAL keys each call derives, are zeroised when dropped.

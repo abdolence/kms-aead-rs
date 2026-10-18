@@ -183,7 +183,7 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
 }
 
 /// What [`TestKmsProvider`] returns when kms-aead wraps `key` as a key of `key_type`: the key as
-/// Tink serializes it.
+/// Tink serialises it.
 pub(crate) fn wrapped_by_test_provider(
     key_type: impl Into<TinkKeyType>,
     key: &[u8],

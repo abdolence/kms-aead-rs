@@ -2,7 +2,7 @@
 
 Feature `deterministic`.
 
-Randomized encryption gives a different cipher text every time, even for the same value. A
+Randomised encryption gives a different cipher text every time, even for the same value. A
 deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
 sealed column can be compared, joined or looked up by equality without opening it.
 
@@ -27,17 +27,20 @@ So do not use deterministic encryption:
 
 - for a column with few distinct values or a skewed distribution;
 - when equality itself is sensitive;
-- when the value is never looked up by equality: randomized encryption leaks nothing of the
+- when the value is never looked up by equality: randomised encryption leaks nothing of the
   kind.
 
 The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.
 
+A beacon finds rows by equality as well and keeps the value randomised, see
+[Beacon or deterministic field](./envelope-encryption.md#beacon-or-deterministic-field).
+
 ## Usage
 
 `DeterministicCipher` seals and opens with a `DataEncryptionKey` of
 `DeterministicAlgorithm::key_len()` bytes, 64 for AES-SIV, and refuses a key of another length
-with `INVALID_KEY_LENGTH`, such as the 16 or 32 bytes of a randomized algorithm's key. The
+with `INVALID_KEY_LENGTH`, such as the 16 or 32 bytes of a randomised algorithm's key. The
 application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
 key ids.
 

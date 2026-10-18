@@ -376,6 +376,22 @@ beacon. kms-aead-keyring does this with key versions.
 `Beacon<T>` is stored as `Encrypted` is, with the `serde`, `postgres` and `sqlx` features, and
 read back through `TryFrom`, which checks its layout. See [Formats](./formats.md#beacons).
 
+### Beacon or deterministic field
+
+A [deterministic field](./deterministic.md) also finds rows by equality, by its cipher text:
+
+| | Beacon | Deterministic field |
+|---|---|---|
+| Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
+| Match | The truncated HMAC, with deliberate collisions | Always the exact value |
+| Key | A beacon key, rotated separately from the data keys | The field's own key |
+| Cost | An extra column, and a decrypt and filter of the candidates on every lookup | Nothing beyond the field |
+| BigQuery | SQL cannot compute a beacon; it matches beacons the application computed | SQL decrypts the field and searches it by equality |
+
+With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
+emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
+about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.
+
 ## AAD
 
 The AAD is authenticated but not encrypted: a value opens only with the AAD it was sealed with,

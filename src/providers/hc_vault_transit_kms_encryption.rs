@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
 use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE};
@@ -42,7 +43,7 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// A Vault token: non-empty visible ASCII, zeroized on drop, shown as `***` by `Debug`.
+/// A Vault token: non-empty visible ASCII, zeroised on drop, shown as `***` by `Debug`.
 #[derive(Debug, Clone)]
 pub struct HcVaultTransitToken(SecretValue);
 
@@ -63,7 +64,7 @@ impl TryFrom<SecretValue> for HcVaultTransitToken {
 }
 
 impl HcVaultTransitToken {
-    /// The HTTP stack copies the value into buffers this crate cannot zeroize. Marking it
+    /// The HTTP stack copies the value into buffers this crate cannot zeroise. Marking it
     /// sensitive keeps it out of the `Debug` output of the request headers.
     fn header_value(&self) -> KmsAeadResult<HeaderValue> {
         let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value()).map_err(|_| {
@@ -316,7 +317,7 @@ impl HcVaultTransitProvider {
                 .await
                 .map_err(KmsAeadError::from_vault_http_error)?;
             let status = response.status();
-            // The body buffer belongs to the HTTP stack and is freed without being zeroized.
+            // The body buffer belongs to the HTTP stack and is freed without being zeroised.
             let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
                 .collect()
                 .await
@@ -379,7 +380,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
-            // The request buffer belongs to the HTTP stack and is freed without being zeroized.
+            // The request buffer belongs to the HTTP stack and is freed without being zeroised.
             let request = serde_json::to_vec(&EncryptRequest {
                 plaintext: &plaintext,
             })
@@ -539,7 +540,10 @@ fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
             .and_then(|days| days.checked_mul(24 * 60 * 60))
             .map(Duration::from_secs)
     } else {
-        go_duration(text)
+        GoDuration::try_from(text)
+            .ok()
+            .and_then(|timeout| u64::try_from(timeout.nanoseconds()).ok())
+            .map(Duration::from_nanos)
     };
     timeout.filter(|timeout| !timeout.is_zero()).ok_or_else(|| {
         KmsAeadSystemError::create(
@@ -549,60 +553,6 @@ fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
             ),
         )
     })
-}
-
-/// A non-negative duration in the syntax of Go's `time.ParseDuration`: an optional `+`, then
-/// decimal numbers that each carry a unit of `ns`, `us`, `µs`, `ms`, `s`, `m` or `h`. Digits of
-/// a fraction below one nanosecond are dropped, as Go drops them. `None` for anything else.
-fn go_duration(text: &str) -> Option<Duration> {
-    let mut rest = text.strip_prefix('+').unwrap_or(text);
-    if rest == "0" {
-        return Some(Duration::ZERO);
-    }
-    if rest.is_empty() {
-        return None;
-    }
-    let mut nanos: u128 = 0;
-    while !rest.is_empty() {
-        let number_end = rest
-            .find(|c: char| !c.is_ascii_digit() && c != '.')
-            .unwrap_or(rest.len());
-        let (number, after_number) = rest.split_at(number_end);
-        let unit_end = after_number
-            .find(|c: char| c.is_ascii_digit() || c == '.')
-            .unwrap_or(after_number.len());
-        let (unit, after_unit) = after_number.split_at(unit_end);
-        let unit_nanos: u128 = match unit {
-            "ns" => 1,
-            "us" | "µs" | "μs" => 1_000,
-            "ms" => 1_000_000,
-            "s" => 1_000_000_000,
-            "m" => 60 * 1_000_000_000,
-            "h" => 60 * 60 * 1_000_000_000,
-            _ => return None,
-        };
-        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
-        if (whole.is_empty() && fraction.is_empty()) || fraction.contains('.') {
-            return None;
-        }
-        let whole: u128 = if whole.is_empty() {
-            0
-        } else {
-            whole.parse().ok()?
-        };
-        let mut fraction_nanos = 0;
-        let mut digit_nanos = unit_nanos;
-        for digit in fraction.bytes() {
-            digit_nanos /= 10;
-            fraction_nanos += u128::from(digit - b'0') * digit_nanos;
-        }
-        nanos = whole
-            .checked_mul(unit_nanos)?
-            .checked_add(fraction_nanos)?
-            .checked_add(nanos)?;
-        rest = after_unit;
-    }
-    u64::try_from(nanos).ok().map(Duration::from_nanos)
 }
 
 /// A Vault address: an `http` or `https` URI with a host and no query. Its text without the

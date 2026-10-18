@@ -10,7 +10,7 @@ use crate::{
     KmsAeadResult, ValueStruct,
 };
 
-/// A Tink key type: the `google.crypto.tink` message a key of an algorithm is serialized as, with
+/// A Tink key type: the `google.crypto.tink` message a key of an algorithm is serialised as, with
 /// `version` 0 and the key in `key_value`, as Tink writes it into a keyset and wraps it in a KMS
 /// envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -79,7 +79,7 @@ impl TinkKeyType {
     }
 }
 
-/// `key` serialized as a key of `key_type`. `version` 0 is proto3's default and so is not
+/// `key` serialised as a key of `key_type`. `version` 0 is proto3's default and so is not
 /// written, as Tink writes it.
 pub(crate) fn serialize_tink_key(key_type: TinkKeyType, key: &DataEncryptionKey) -> SecretValue {
     let key = key.value().ref_sensitive_value();
@@ -91,7 +91,7 @@ pub(crate) fn serialize_tink_key(key_type: TinkKeyType, key: &DataEncryptionKey)
     serialized
 }
 
-/// The key a serialized Tink key holds: an `AesGcmKey` or `AesGcmSivKey` of 16 or 32 bytes, a
+/// The key a serialised Tink key holds: an `AesGcmKey` or `AesGcmSivKey` of 16 or 32 bytes, a
 /// `ChaCha20Poly1305Key` of 32 bytes or an `AesSivKey` of 64 bytes, with `version` 0 and no
 /// other field. The message does not name its type, so a key of one type is read as a key
 /// of another of the same field and length: AES-256-GCM and AES-256-GCM-SIV keys are written
@@ -99,14 +99,14 @@ pub(crate) fn serialize_tink_key(key_type: TinkKeyType, key: &DataEncryptionKey)
 ///
 /// # Errors
 ///
-/// `INVALID_KEY_FORMAT` for any other bytes, such as a serialized keyset. The message never
+/// `INVALID_KEY_FORMAT` for any other bytes, such as a serialised keyset. The message never
 /// quotes them.
 pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKey> {
     let invalid = || {
         KmsAeadEncryptionError::create(
             "INVALID_KEY_FORMAT",
             &format!(
-                "The unwrapped key of {} bytes is not a serialized Tink AES-GCM, AES-GCM-SIV, \
+                "The unwrapped key of {} bytes is not a serialised Tink AES-GCM, AES-GCM-SIV, \
                  ChaCha20-Poly1305 or AES-SIV key",
                 serialized.len()
             ),
@@ -186,11 +186,11 @@ pub(crate) fn split_tink_output_prefix(value: &[u8]) -> Option<(TinkKeyId, &[u8]
     }
 }
 
-/// A Tink keyset, the serialized `google.crypto.tink.Keyset` of keys that are all enabled,
+/// A Tink keyset, the serialised `google.crypto.tink.Keyset` of keys that are all enabled,
 /// symmetric and TINK-prefixed, as `tinkey` writes one. It is the plaintext of the keyset that
 /// BigQuery's `KEYS.KEYSET_CHAIN` unwraps.
 ///
-/// It holds the key bytes, zeroized when it is dropped. `Debug` shows the key ids only.
+/// It holds the key bytes, zeroised when it is dropped. `Debug` shows the key ids only.
 pub struct TinkKeyset(Keyset);
 
 impl TinkKeyset {
@@ -235,12 +235,12 @@ impl TinkKeyset {
         Ok(())
     }
 
-    /// The serialized keyset.
+    /// The serialised keyset.
     pub fn to_bytes(&self) -> SecretValue {
         SecretValue::new(self.0.encode_to_vec())
     }
 
-    /// The keyset encrypted by `provider`, serialized as Tink serializes an encrypted keyset: a
+    /// The keyset encrypted by `provider`, serialised as Tink serialises an encrypted keyset: a
     /// `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset` is the KMS ciphertext of
     /// [`to_bytes`](Self::to_bytes), wrapped with no associated data, and with no
     /// `keyset_info`.
@@ -251,8 +251,8 @@ impl TinkKeyset {
     /// `tink.read_keyset_handle` in Python. A KEK without a Tink key URI wraps it as well, but no
     /// Tink KMS client reads it.
     ///
-    /// It takes the keyset so that its keys are zeroized before the KMS call, leaving the
-    /// serialized keyset as their one copy while the call is in flight.
+    /// It takes the keyset so that its keys are zeroised before the KMS call, leaving the
+    /// serialised keyset as their one copy while the call is in flight.
     ///
     /// # Errors
     ///
@@ -321,7 +321,7 @@ struct EncryptedKeyset {
     encrypted_keyset: Vec<u8>,
 }
 
-/// `google.crypto.tink.KeyData`. `value` is the serialized key, so it is zeroized on drop and
+/// `google.crypto.tink.KeyData`. `value` is the serialised key, so it is zeroised on drop and
 /// left out of `Debug`.
 #[derive(Message)]
 #[prost(skip_debug)]
@@ -344,7 +344,7 @@ impl Debug for KeyData {
 
 impl Drop for KeyData {
     fn drop(&mut self) {
-        // Dropping the bytes inside a SecretValue zeroizes them.
+        // Dropping the bytes inside a SecretValue zeroises them.
         drop(SecretValue::new(std::mem::take(&mut self.value)));
     }
 }

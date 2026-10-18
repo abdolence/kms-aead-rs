@@ -12,7 +12,7 @@ use crate::{
     EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
-/// Randomized authenticated encryption with associated data (AEAD) under a data encryption key
+/// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
 /// the caller holds, on the backend `B` and with the algorithm it was made with, without a KMS.
 ///
 /// Values are `[nonce][ciphertext][tag]`, with a random nonce. The AAD is authenticated but not
@@ -60,7 +60,7 @@ impl<B: AeadBackend> AeadCipher<B> {
 
     /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
     /// generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is wrapped as Tink wraps a data encryption key, serialized as the Tink key
+    /// otherwise. It is wrapped as Tink wraps a data encryption key, serialised as the Tink key
     /// of the algorithm, or raw under an Azure KEK, so it can go into a
     /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey).
     ///
@@ -186,7 +186,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         })?;
 
         // Allocated once at its final size, since growing it would leave a copy of the plaintext
-        // in freed memory, and zeroized if sealing fails.
+        // in freed memory, and zeroised if sealing fails.
         let mut buffer = SecretValue::new(Vec::with_capacity(
             prefix.len() + AeadAlgorithm::NONCE_LEN + plain_text.len() + AeadAlgorithm::TAG_LEN,
         ));

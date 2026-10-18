@@ -115,7 +115,7 @@ impl BeaconBits {
 /// under one key and one context come from equal plaintexts, or from a collision of the
 /// truncated HMAC.
 ///
-/// `Debug` shows the key id only. The `serde` feature serializes it as bytes, and the `postgres`
+/// `Debug` shows the key id only. The `serde` feature serialises it as bytes, and the `postgres`
 /// and `sqlx` features store it as `BYTEA`, as for [`Encrypted`](crate::Encrypted).
 pub struct Beacon<T> {
     key_id: TinkKeyId,
@@ -249,7 +249,7 @@ impl<B: AeadBackend> BeaconMac<B> {
 
     /// A new beacon key and the same key wrapped by `provider`, to store. The key comes from the
     /// KMS generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is wrapped as a serialized Tink key with the key in `key_value`, so that
+    /// otherwise. It is wrapped as a serialised Tink key with the key in `key_value`, so that
     /// [`DekCache::with_key`](crate::cache::DekCache::with_key) unwraps it.
     ///
     /// # Errors
@@ -264,7 +264,7 @@ impl<B: AeadBackend> BeaconMac<B> {
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         // Tink's `HmacPrfKey` and `AesGcmKey` both hold their key in field 3, `key_value`, so a
-        // 32-byte beacon key serializes to the bytes of a 32-byte `AesGcmKey`.
+        // 32-byte beacon key serialises to the bytes of a 32-byte `AesGcmKey`.
         crate::formats::generate_wrapped_key::<B, P>(
             TinkKeyType::AesGcm,
             self.algorithm.key_len(),

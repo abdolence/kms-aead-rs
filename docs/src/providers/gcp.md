@@ -53,7 +53,7 @@ found:
 - On Google Compute Engine, Cloud Run, GKE, etc., the metadata server.
 
 For local development don't confuse `gcloud auth login` with `gcloud auth application-default login`,
-since the first one authorizes only the `gcloud` tool to access the Cloud Platform.
+since the first one authorises only the `gcloud` tool to access the Cloud Platform.
 
 `GcpKmsProvider::with_client` takes a client the application built itself, for other
 credentials.

@@ -80,8 +80,8 @@ impl Display for DekCacheOutcome {
 /// set of KEK material: two [`LocalKmsProvider`](crate::providers::LocalKmsProvider)s with one
 /// id share their entries.
 ///
-/// Keys of randomized and deterministic algorithms share the entries: the same wrapped bytes
-/// unwrap to the same key whatever the caller seals with it. An entry holds the key a serialized
+/// Keys of randomised and deterministic algorithms share the entries: the same wrapped bytes
+/// unwrap to the same key whatever the caller seals with it. An entry holds the key a serialised
 /// Tink key carries, and the cipher a key is used with checks its length.
 ///
 /// - A key reaches a caller only inside the closure of [`with_key`](Self::with_key), and stays
@@ -99,7 +99,7 @@ impl Display for DekCacheOutcome {
 ///
 /// # Key lifetime
 ///
-/// A key is dropped, which zeroizes its bytes, when its entry leaves the cache: once the entry
+/// A key is dropped, which zeroises its bytes, when its entry leaves the cache: once the entry
 /// is evicted for capacity, invalidated, cleared or purged after it expired. A `with_key` call
 /// that looked the key up before its entry left keeps it until its closure returns, and a call
 /// waiting on an unwrap that started before an [`invalidate`](Self::invalidate) or a
@@ -411,7 +411,7 @@ impl DekCache {
     ///
     /// # Errors
     ///
-    /// The provider's error, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized Tink
+    /// The provider's error, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialised Tink
     /// key, and without the `legacy-formats` feature
     /// [`KmsAeadError::LegacyFormat`](crate::errors::KmsAeadError::LegacyFormat) for a key
     /// wrapped by 0.29 or earlier. Every caller waiting on the same unwrap receives the error,
@@ -452,7 +452,7 @@ impl DekCache {
         }
     }
 
-    /// Drops the expired entries, which zeroizes their keys once no [`with_key`](Self::with_key)
+    /// Drops the expired entries, which zeroises their keys once no [`with_key`](Self::with_key)
     /// call holds them. Every call on the cache does this first. An application whose process can
     /// sit idle while the cache holds keys calls it from a timer of its own, on whatever runtime
     /// it uses, to drop them at the TTL; see "Key lifetime" on [`DekCache`].
@@ -484,7 +484,7 @@ impl Debug for DekCache {
 #[cfg(test)]
 impl DekCache {
     /// The key cached for `encrypted` under `kek`, as a `Weak` that stops upgrading once the key
-    /// is dropped, and its bytes with it zeroized.
+    /// is dropped, and its bytes with it zeroised.
     pub(crate) fn cached_dek(
         &self,
         kek: &KekRef,
@@ -897,7 +897,7 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(ttl))?;
         let started = Instant::now();
         let provider = CountingKmsProvider::new(TestKmsProvider::Stamping(started), ORDERS_KEK);
-        // The start of a serialized 32-byte AesGcmKey, whose last 8 bytes are the stamp.
+        // The start of a serialised 32-byte AesGcmKey, whose last 8 bytes are the stamp.
         let keys: Vec<_> = (1..=3)
             .map(|byte| EncryptedDataEncryptionKey::new([&[0x1a, 0x20][..], &[byte; 24]].concat()))
             .collect();

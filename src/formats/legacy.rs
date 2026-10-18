@@ -230,7 +230,7 @@ where
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is neither a raw key
-    /// nor a serialized Tink key, `INVALID_ENCRYPTED_KEY_FORMAT` and `INVALID_KEY_VERSION` on
+    /// nor a serialised Tink key, `INVALID_ENCRYPTED_KEY_FORMAT` and `INVALID_KEY_VERSION` on
     /// 0.29's encrypted key layout that cannot be read, and `INVALID_KEY_LENGTH` when the key
     /// does not fit the envelope's algorithm.
     #[deprecated(

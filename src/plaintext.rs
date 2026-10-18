@@ -39,7 +39,7 @@ use crate::KmsAeadResult;
 /// ```
 ///
 /// The decrypted value belongs to the application, which protects it: only [`SecretValue`] as
-/// `T` is zeroized on drop. `String` and `Vec<u8>` take over the decrypted buffer without a
+/// `T` is zeroised on drop. `String` and `Vec<u8>` take over the decrypted buffer without a
 /// copy.
 pub trait Plaintext: Sized + Send + Sync {
     /// The bytes to seal.
@@ -87,7 +87,7 @@ impl Plaintext for String {
     fn from_plaintext(mut plaintext: SecretValue) -> KmsAeadResult<Self> {
         String::from_utf8(std::mem::take(plaintext.ref_sensitive_value_mut())).map_err(|error| {
             let reason = error.utf8_error().to_string();
-            // Dropping the bytes inside a SecretValue zeroizes them.
+            // Dropping the bytes inside a SecretValue zeroises them.
             drop(SecretValue::new(error.into_bytes()));
             KmsAeadEncryptionError::invalid_plaintext::<Self>(reason)
         })

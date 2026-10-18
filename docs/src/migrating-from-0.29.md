@@ -93,8 +93,8 @@ An application's own implementation of the provider trait:
 - returns `EncryptedDataEncryptionKey::new(bytes)`. A KMS that needs the key version to unwrap
   gets it from those bytes, as the Azure provider's do.
 
-The plaintext the provider wraps is the DEK serialized as a Tink key, see
-[Formats](./formats.md#serialized-deks). The library never inspects the provider's own bytes.
+The plaintext the provider wraps is the DEK serialised as a Tink key, see
+[Formats](./formats.md#serialised-deks). The library never inspects the provider's own bytes.
 
 ## Errors
 
@@ -164,7 +164,7 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 
 ## Old values
 
-0.30 writes Tink's KMS envelope, and wraps every DEK but Azure's as a serialized Tink key. 0.29 wrote envelope
+0.30 writes Tink's KMS envelope, and wraps every DEK but Azure's as a serialised Tink key. 0.29 wrote envelope
 layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a length-prefixed
 envelope, all with the raw DEK wrapped. 0.30 reads them only with the deprecated `legacy-formats`
 feature, and fails with `LEGACY_FORMAT` without it, see [Formats](./formats.md#values-written-by-029-and-earlier).

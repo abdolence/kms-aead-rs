@@ -51,7 +51,7 @@ The cache:
   result, the key or the error;
 - keeps no entry for a failed unwrap, so during a KMS outage every call fails as fast as the KMS
   does;
-- zeroizes a key when its entry leaves the cache: once it is evicted, invalidated, cleared, or
+- zeroises a key when its entry leaves the cache: once it is evicted, invalidated, cleared, or
   purged after it expired.
 
 `DekCache::disabled()` holds nothing, and every lookup calls the provider. It is what a per-call

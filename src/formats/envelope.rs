@@ -16,7 +16,7 @@ use crate::{CipherText, EncryptedDataEncryptionKey, KmsAeadResult};
 /// ```
 ///
 /// The wrapped DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
-/// DEK as Tink serializes it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink implementation reads. The
+/// DEK as Tink serialises it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink implementation reads. The
 /// rest is the [`CipherText`] of the DEK. The layout records neither the algorithm nor the KMS
 /// key version, so the writer and the reader of a value are configured with the same algorithm.
 ///
