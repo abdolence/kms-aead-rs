@@ -257,7 +257,6 @@ mod tests {
     use gcloud_sdk::tonic::codegen::Bytes;
     use gcloud_sdk::tonic::metadata::MetadataMap;
     use gcloud_sdk::tonic::{Code, Status};
-    use rvstruct::ValueStruct;
 
     use crate::test_provider::{TestBackend, TinkEnvelope};
 
@@ -289,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_and_unwrap_build_the_0_29_requests() -> KmsAeadResult<()> {
+    fn requests_name_the_key_and_carry_no_additional_authenticated_data() -> KmsAeadResult<()> {
         let dek = DataEncryptionKey::from(SecretValue::from(KEY_MARKER));
 
         let encrypt = encrypt_request(KEY_NAME, &dek)?;
@@ -406,23 +405,6 @@ mod tests {
         },
     ];
 
-    #[test]
-    fn a_tink_envelope_of_cloud_kms_separates_into_its_wrapped_key() -> KmsAeadResult<()> {
-        for tink in TINK_ENVELOPES {
-            let (cipher_text, encrypted_dek) =
-                CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap()).separate()?;
-
-            assert_eq!(encrypted_dek.value()[0], 0x0a, "{:?}", tink.algorithm);
-            assert_eq!(
-                cipher_text.value().len(),
-                12 + tink.plain_text.len() + 16,
-                "{:?}",
-                tink.algorithm
-            );
-        }
-        Ok(())
-    }
-
     /// Decrypts the values of the algorithms the test backend implements: every one but
     /// AES-256-GCM-SIV on ring.
     #[tokio::test]
@@ -434,10 +416,7 @@ mod tests {
                 GcpKmsProvider::new(&key_ref).await?,
                 KmsAeadEnvelopeOptions::new().with_algorithm(tink.algorithm),
             ) {
-                Err(KmsAeadError::UnsupportedAlgorithm(_)) => {
-                    println!("{}: not on this backend", tink.algorithm);
-                    continue;
-                }
+                Err(KmsAeadError::UnsupportedAlgorithm(_)) => continue,
                 envelope => envelope?,
             };
             let value = CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap());

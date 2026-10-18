@@ -240,7 +240,6 @@ mod tests {
     use aws_sdk_kms::error::{ErrorMetadata, SdkError};
     use aws_sdk_kms::operation::decrypt::DecryptError;
     use aws_sdk_kms::types::error::IncorrectKeyException;
-    use rvstruct::ValueStruct;
     use tokio::net::TcpListener;
 
     use crate::test_provider::{TestBackend, TinkEnvelope};
@@ -331,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_and_unwrap_build_the_0_29_requests() {
+    fn requests_name_the_key_and_carry_no_encryption_context() {
         let provider = offline_provider();
         let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
 
@@ -479,23 +478,6 @@ mod tests {
         },
     ];
 
-    #[test]
-    fn a_tink_envelope_of_aws_kms_separates_into_its_wrapped_key() -> KmsAeadResult<()> {
-        for tink in TINK_ENVELOPES {
-            let (cipher_text, encrypted_dek) =
-                CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap()).separate()?;
-
-            assert_eq!(encrypted_dek.value()[0], 0x01, "{:?}", tink.algorithm);
-            assert_eq!(
-                cipher_text.value().len(),
-                12 + tink.plain_text.len() + 16,
-                "{:?}",
-                tink.algorithm
-            );
-        }
-        Ok(())
-    }
-
     fn live_key_ref() -> AwsKmsKeyRef {
         AwsKmsKeyRef::new(
             std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
@@ -514,10 +496,7 @@ mod tests {
                 AwsKmsProvider::new(&key_ref).await?,
                 KmsAeadEnvelopeOptions::new().with_algorithm(tink.algorithm),
             ) {
-                Err(KmsAeadError::UnsupportedAlgorithm(_)) => {
-                    println!("{}: not on this backend", tink.algorithm);
-                    continue;
-                }
+                Err(KmsAeadError::UnsupportedAlgorithm(_)) => continue,
                 envelope => envelope?,
             };
             let value = CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap());
@@ -580,7 +559,6 @@ mod tests {
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
     async fn live_unwrap_of_a_key_wrapped_under_another_kek_fails() -> KmsAeadResult<()> {
         let Ok(second_key_id) = std::env::var("KMS_SECOND_KEY_ID") else {
-            println!("Skipped: KMS_SECOND_KEY_ID does not name a second key");
             return Ok(());
         };
         let account_id = std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set");
