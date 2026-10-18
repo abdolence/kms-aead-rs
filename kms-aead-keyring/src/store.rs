@@ -11,6 +11,11 @@ use crate::{KeyringId, KeyringRecord};
 mod memory;
 pub use memory::*;
 
+#[cfg(feature = "postgres")]
+mod postgres;
+#[cfg(feature = "postgres")]
+pub use postgres::*;
+
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///
 /// The store's access control is what the record's integrity rests on: only the administrative
@@ -153,15 +158,18 @@ pub enum WatchEvent {
 pub enum StoreKind {
     /// [`MemoryKeyringStore`].
     Memory,
+    /// PostgreSQL, the store of the `postgres` feature.
+    Postgres,
     /// An application's own store, by the name it gives.
     Other(&'static str),
 }
 
-/// `memory`, or the application's name: the value of the `store` span field.
+/// `memory`, `postgres`, or the application's name: the value of the `store` span field.
 impl Display for StoreKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             StoreKind::Memory => "memory",
+            StoreKind::Postgres => "postgres",
             StoreKind::Other(name) => name,
         })
     }

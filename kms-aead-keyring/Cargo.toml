@@ -29,6 +29,9 @@ subtle = { workspace = true }
 # `rt` runs the task that follows a store's change signals and `time` spaces its revalidations.
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing = { workspace = true }
+# Never below 0.8.1: earlier releases overflow the length prefix of a large value in the wire
+# protocol.
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -52,6 +55,13 @@ legacy-formats = ["kms-aead/legacy-formats"]
 serde = ["kms-aead/serde"]
 # `Json<T>`, a plaintext stored as its JSON.
 serde-json = ["serde"]
+# `PostgresKeyringStore`, and `Type`, `Encode` and `Decode` for `Encrypted` as `BYTEA`. The
+# store's listener task waits on its notifications and on the watch with `tokio::select!`.
+postgres = ["dep:sqlx", "tokio/macros"]
+# sqlx's TLS stacks for the store's connections, one of which a TLS connection needs.
+postgres-tls-rustls = ["postgres", "sqlx/tls-rustls-aws-lc-rs"]
+postgres-tls-rustls-ring = ["postgres", "sqlx/tls-rustls-ring"]
+postgres-tls-native = ["postgres", "sqlx/tls-native-tls"]
 
 [lints.clippy]
 mod_module_files = "deny"
@@ -59,7 +69,7 @@ unwrap_used = "deny"
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "deterministic", "serde-json"]
+features = ["ring", "deterministic", "serde-json", "postgres-tls-rustls"]
 
 [[example]]
 name = "local_kms"

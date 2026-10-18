@@ -210,6 +210,53 @@ mod encrypted_serde {
     }
 }
 
+/// sqlx's PostgreSQL traits, so that a value binds and decodes as a `BYTEA`, and a slice of
+/// values as a `BYTEA[]` for `= ANY($1)`. They are a deliberate integration point with sqlx.
+#[cfg(feature = "postgres")]
+mod encrypted_sqlx {
+    use sqlx::encode::IsNull;
+    use sqlx::error::BoxDynError;
+    use sqlx::postgres::{PgArgumentBuffer, PgHasArrayType, PgTypeInfo, PgValueRef};
+    use sqlx::{Decode, Encode, Postgres, Type};
+
+    use super::{Encrypted, Mode};
+
+    /// `BYTEA`.
+    impl<T, M> Type<Postgres> for Encrypted<T, M> {
+        fn type_info() -> PgTypeInfo {
+            <Vec<u8> as Type<Postgres>>::type_info()
+        }
+
+        fn compatible(ty: &PgTypeInfo) -> bool {
+            <Vec<u8> as Type<Postgres>>::compatible(ty)
+        }
+    }
+
+    /// `BYTEA[]`.
+    impl<T, M> PgHasArrayType for Encrypted<T, M> {
+        fn array_type_info() -> PgTypeInfo {
+            <Vec<u8> as PgHasArrayType>::array_type_info()
+        }
+    }
+
+    /// The value's bytes.
+    impl<T, M> Encode<'_, Postgres> for Encrypted<T, M> {
+        fn encode_by_ref(&self, buf: &mut PgArgumentBuffer) -> Result<IsNull, BoxDynError> {
+            <&[u8] as Encode<Postgres>>::encode(&self.bytes, buf)
+        }
+    }
+
+    /// Checked as `TryFrom<Vec<u8>>` checks the bytes: a malformed stored value fails in the
+    /// decode, before any decrypt.
+    impl<T, M: Mode> Decode<'_, Postgres> for Encrypted<T, M> {
+        fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
+            Ok(Encrypted::try_from(<Vec<u8> as Decode<Postgres>>::decode(
+                value,
+            )?)?)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

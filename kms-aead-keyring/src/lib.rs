@@ -52,6 +52,7 @@
 //! | Store | Type | Feature |
 //! |---|---|---|
 //! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
+//! | PostgreSQL, through sqlx, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
 //!
 //! # Features
 //!
@@ -62,6 +63,8 @@
 //! | `legacy-formats` | kms-aead's `legacy-formats` |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and [`Json`], a plaintext stored as its JSON |
+//! | `postgres` | the PostgreSQL store, and sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] as `BYTEA` |
+//! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |
 //!
 //! # Example
 //!
