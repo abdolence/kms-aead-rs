@@ -80,8 +80,9 @@ Some copies are out of the library's reach:
 - the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;
 - an expired DEK stays in the cache's memory until the next call on the cache or
   `purge_expired`;
-- a plaintext value returned to the application is a `SecretValue`, zeroised on drop, and what the
-  application does with it afterwards is its own.
+- `decrypt` returns the application's own `T: Plaintext`. Only `SecretValue` as `T` is zeroised on
+  drop; `String` and `Vec<u8>` take over the decrypted buffer and leave it in freed memory, and
+  what the application does with the value afterwards is its own.
 
 ## What rotation does not protect
 
