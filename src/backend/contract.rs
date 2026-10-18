@@ -214,7 +214,7 @@ async fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
             let opened = cipher.decrypt_value(&AAD, &short, &key).await;
             assert!(
                 matches!(&opened, Err(KmsAeadError::EncryptionError(error))
-                    if error.public.code == "INVALID_CIPHERTEXT"),
+                    if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
                 "{cipher:?} with {len} bytes: {opened:?}"
             );
         }

@@ -79,6 +79,8 @@ pub use aes_siv_cipher::*;
 
 #[cfg(feature = "deterministic")]
 mod aes_siv_cipher {
+    use std::fmt::{Debug, Formatter};
+
     use aes_siv::siv::Aes256Siv;
     use aes_siv::KeyInit;
     use secret_vault_value::SecretValue;
@@ -131,8 +133,17 @@ mod aes_siv_cipher {
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
     /// output order of RFC 5297. Equal plaintexts and AADs under one key give equal values.
     /// Equality compares in constant time.
-    #[derive(Debug, Clone)]
+    #[derive(Clone)]
     pub struct DeterministicCipherText(Vec<u8>);
+
+    /// The length only: the bytes tell which values are equal.
+    impl Debug for DeterministicCipherText {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("DeterministicCipherText")
+                .field("len", &self.0.len())
+                .finish()
+        }
+    }
 
     impl DeterministicCipherText {
         /// The sealed bytes.
@@ -193,11 +204,14 @@ mod aes_siv_cipher {
         ///
         /// # Errors
         ///
-        /// `ENCRYPTION` when the generator fails.
+        /// `RANDOM_GENERATOR` when the generator fails.
         pub fn generate_key(&self) -> KmsAeadResult<DeterministicDataEncryptionKey> {
             let mut key = SecretValue::new(vec![0; self.algorithm.key_len()]);
             getrandom::fill(key.ref_sensitive_value_mut()).map_err(|_| {
-                KmsAeadEncryptionError::create("ENCRYPTION", "Unable to initialise a random key")
+                KmsAeadEncryptionError::create(
+                    "RANDOM_GENERATOR",
+                    "Unable to generate a random key",
+                )
             })?;
             Ok(DeterministicDataEncryptionKey(key))
         }
@@ -208,7 +222,7 @@ mod aes_siv_cipher {
         /// # Errors
         ///
         /// The provider's error when the KMS call fails, `INVALID_KEY_LENGTH` when the KMS returns
-        /// key material of another length, and `ENCRYPTION` when the generator fails.
+        /// key material of another length, and `RANDOM_GENERATOR` when the generator fails.
         pub async fn generate_key_with<P>(
             &self,
             provider: &P,
@@ -248,7 +262,7 @@ mod aes_siv_cipher {
         /// # Errors
         ///
         /// `INVALID_KEY_LENGTH` when `key` does not have `algorithm().key_len()` bytes,
-        /// `INVALID_CIPHERTEXT` when the value is shorter than the 16-byte synthetic IV, and
+        /// `INVALID_CIPHER_TEXT_FORMAT` when the value is shorter than the 16-byte synthetic IV, and
         /// `DECRYPT` when the value, the AAD or the key is not the one it was sealed with.
         pub fn decrypt_value(
             &self,
@@ -259,7 +273,7 @@ mod aes_siv_cipher {
             let mut siv = self.siv(key)?;
             if cipher_text.value().len() < Self::SYNTHETIC_IV_LEN {
                 return Err(KmsAeadEncryptionError::create(
-                    "INVALID_CIPHERTEXT",
+                    "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(
                         "A cipher text of {} bytes is too short to hold a synthetic IV",
                         cipher_text.value().len()
@@ -442,9 +456,20 @@ mod aes_siv_cipher {
 
                 assert_eq!(
                     result.unwrap_err().code(),
-                    "INVALID_CIPHERTEXT",
+                    "INVALID_CIPHER_TEXT_FORMAT",
                     "{len} bytes"
                 );
+            }
+        }
+
+        #[test]
+        fn debug_shows_no_cipher_text_bytes() {
+            let sealed = DeterministicCipherText::from(b"zq-cipher-marker-zq".to_vec());
+
+            let debug = format!("{sealed:?}");
+
+            for rendering in crate::test_provider::renderings(b"zq-cipher-marker-zq") {
+                assert!(!debug.contains(&rendering), "{debug}");
             }
         }
 

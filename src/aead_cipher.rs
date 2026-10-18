@@ -50,13 +50,16 @@ impl AeadCipher {
     ///
     /// # Errors
     ///
-    /// `ENCRYPTION` when the CSPRNG fails.
+    /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn generate_data_encryption_key(&self) -> KmsAeadResult<DataEncryptionKey> {
         let ops: &dyn AeadBackendOps = self.backend.into();
         let mut key = SecretValue::new(vec![0; self.algorithm.key_len()]);
         ops.fill_random(key.ref_sensitive_value_mut())
             .map_err(|_| {
-                KmsAeadEncryptionError::create("ENCRYPTION", "Unable to initialise a random key")
+                KmsAeadEncryptionError::create(
+                    "RANDOM_GENERATOR",
+                    "Unable to generate a random key",
+                )
             })?;
         Ok(DataEncryptionKey::from(key))
     }
@@ -67,7 +70,7 @@ impl AeadCipher {
     /// # Errors
     ///
     /// The provider's error when the KMS call fails, `INVALID_KEY_LENGTH` when the KMS returns a
-    /// key of another length, and `ENCRYPTION` when the CSPRNG fails.
+    /// key of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
     pub async fn generate_data_encryption_key_with<P>(
         &self,
         provider: &P,
@@ -111,7 +114,7 @@ impl Cipher for AeadCipher {
 
         let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
         ops.fill_random(&mut nonce).map_err(|_| {
-            KmsAeadEncryptionError::create("ENCRYPTION", "Unable to initialise a random nonce")
+            KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate a random nonce")
         })?;
 
         // Allocated once at its final size, since growing it would leave a copy of the plaintext
@@ -156,7 +159,7 @@ impl Cipher for AeadCipher {
             .filter(|(_, sealed)| sealed.len() >= AeadAlgorithm::TAG_LEN)
             .ok_or_else(|| {
                 KmsAeadEncryptionError::create(
-                    "INVALID_CIPHERTEXT",
+                    "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(
                         "A cipher text of {} bytes is too short to hold a nonce and a tag",
                         cipher_text.value().len()

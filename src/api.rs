@@ -18,7 +18,7 @@ pub trait AeadEncryption<Aad> {
     /// # Errors
     ///
     /// [`AeadCipher`] fails with `INVALID_KEY_LENGTH` when the key does not have the length of
-    /// its algorithm, `ENCRYPTION` when the random nonce cannot be generated, and `ENCRYPT_KEY`
+    /// its algorithm, `RANDOM_GENERATOR` when the random nonce cannot be generated, and `ENCRYPT_KEY`
     /// or `ENCRYPT` when the backend refuses the key or fails to seal.
     async fn encrypt_value(
         &self,
@@ -33,7 +33,7 @@ pub trait AeadEncryption<Aad> {
     /// # Errors
     ///
     /// [`AeadCipher`] fails with `INVALID_KEY_LENGTH` when the key does not have the length of
-    /// its algorithm, `INVALID_CIPHERTEXT` when the value is shorter than a nonce and a tag,
+    /// its algorithm, `INVALID_CIPHER_TEXT_FORMAT` when the value is shorter than a nonce and a tag,
     /// `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
     /// authentic under the key, the nonce and the AAD.
     async fn decrypt_value(
@@ -123,7 +123,7 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
     /// # Errors
     ///
     /// Besides the KMS errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
-    /// of the wrong length, and `ENCRYPTION` when the backend's CSPRNG fails.
+    /// of the wrong length, and `RANDOM_GENERATOR` when the backend's CSPRNG fails.
     async fn generate_new_dek(
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>;

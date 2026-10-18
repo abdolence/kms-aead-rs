@@ -12,8 +12,17 @@ use subtle::ConstantTimeEq;
 /// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
 /// It holds no key, so it is not a storage form for envelope encryption without the wrapped key
 /// that opens it.
-#[derive(Debug, Clone, ValueStruct)]
+#[derive(Clone, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
+
+/// The length only.
+impl Debug for CipherText {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CipherText")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
 
 impl CipherText {
     /// The lowercase hex of the value.
@@ -944,6 +953,17 @@ mod tests {
             "{debug}"
         );
         assert!(!debug.contains(&hex::encode(GOLDEN_WRAPPED_KEY)), "{debug}");
+    }
+
+    #[test]
+    fn cipher_text_debug_shows_no_cipher_text_bytes() {
+        use crate::test_provider::renderings;
+
+        let debug = format!("{:?}", CipherText(CIPHER_TEXT_MARKER.to_vec()));
+
+        for rendering in renderings(CIPHER_TEXT_MARKER) {
+            assert!(!debug.contains(&rendering), "{debug}");
+        }
     }
 
     #[test]

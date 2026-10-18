@@ -275,7 +275,7 @@ impl std::fmt::Debug for LocalKek {
 ///
 /// # Errors
 ///
-/// A wrap fails with `ENCRYPTION` when the backend's CSPRNG fails. An unwrap fails with
+/// A wrap fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. An unwrap fails with
 /// `LOCAL_WRAPPED_KEY_FORMAT` when the key is not in the layout above, `LOCAL_KEK_ID_MISMATCH`
 /// when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION` when the provider does
 /// not hold its version, and `DECRYPT` when it is not authentic under that version.
@@ -339,7 +339,7 @@ impl LocalKmsProvider {
     ///
     /// # Errors
     ///
-    /// `ENCRYPTION` when the CSPRNG fails.
+    /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn ephemeral(id: LocalKekId, backend: AeadBackend) -> KmsAeadResult<Self> {
         let material = AeadCipher::new(backend, AeadAlgorithm::Aes256Gcm)?
             .generate_data_encryption_key()?
