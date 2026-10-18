@@ -60,9 +60,9 @@ secrets the application generates itself.
 
 | Algorithm | Key | `Ring` | `AwsLc` | `RustCrypto` |
 |---|---|---|---|---|
-| `ChaCha20Poly1305` (RFC 8439), the envelope's default | 32 bytes | yes | yes | yes |
+| `ChaCha20Poly1305` (RFC 8439) | 32 bytes | yes | yes | yes |
 | `Aes128Gcm` | 16 bytes | yes | yes | yes |
-| `Aes256Gcm` | 32 bytes | yes | yes | yes |
+| `Aes256Gcm`, the envelope's default | 32 bytes | yes | yes | yes |
 | `Aes256GcmSiv` (RFC 8452) | 32 bytes | no | yes | yes |
 
 Every algorithm writes `[nonce: 12][ciphertext][tag: 16]`, with a random nonce from the backend's

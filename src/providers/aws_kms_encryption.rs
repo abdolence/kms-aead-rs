@@ -534,8 +534,9 @@ mod tests {
         Ok(())
     }
 
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, with the AWS
-    // key that the live tests configure. That key stays enabled while these exist.
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
+    // default ChaCha20-Poly1305 and the AWS key that the live tests configure. That key stays
+    // enabled while these exist.
     #[cfg(feature = "legacy-formats")]
     const ENVELOPE_FROM_0_28_1: &str = "00000000000000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f9016d64cc226f7525698a42aa79440d72eb0000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c0197410ab39e7f2e03fcb949020110803b199d4e5e7f622192544e6afd92c61bf191d969c8e2bd79558786d3adf0453ebe0883967e7031d5c67d4dbebddd4f05aeca971b7636dbde5946860e8b8069a47514d7c98af6d41f881e50d921ed7eb7568617f632b87134c3d01dc25b292fb39badbe";
     #[cfg(feature = "legacy-formats")]
@@ -546,8 +547,10 @@ mod tests {
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
     #[expect(deprecated, reason = "tests the deprecated upgrade")]
     async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
-        let encryption =
-            KmsAeadEnvelope::<_, TestBackend>::new(AwsKmsProvider::new(&live_key_ref()).await?)?;
+        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
+            AwsKmsProvider::new(&live_key_ref()).await?,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
         for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
             let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
 

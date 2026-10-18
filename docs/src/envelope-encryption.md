@@ -12,14 +12,14 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-// ChaCha20-Poly1305 by default
+// AES-256-GCM by default
 let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
 // Or another algorithm
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
     provider,
-    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
 )?;
 # let _ = envelope;
 # Ok(())
@@ -28,8 +28,10 @@ let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
 
 The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-[Crypto backends](./crypto-backends.md). For values that every Tink implementation reads too,
-configure AES-256-GCM, see [Formats](./formats.md#tinks-kms-envelope).
+[Crypto backends](./crypto-backends.md). The default, AES-256-GCM, is read by every Tink
+implementation too, see [Formats](./formats.md#tinks-kms-envelope). Values that 0.29 and earlier
+sealed under their default open only with ChaCha20-Poly1305 configured, see
+[Migrating from 0.29](./migrating-from-0.29.md#default-algorithm).
 
 ## Encrypting values
 

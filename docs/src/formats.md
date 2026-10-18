@@ -60,8 +60,9 @@ kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK 
 | AES-128-GCM, AES-256-GCM | `AesGcmKey` | reads and writes | reads and writes |
 | AES-256-GCM-SIV | `AesGcmSivKey` | reads and writes | reads and writes |
 
-ChaCha20-Poly1305 stays the default of `KmsAeadEnvelope::new`, the algorithm of every earlier
-release. Configure AES-256-GCM for values that every Tink implementation reads.
+AES-256-GCM is the default of `KmsAeadEnvelope::new`, so every Tink implementation reads the
+values of an envelope that names no algorithm. The default of 0.29 and earlier was
+ChaCha20-Poly1305, see [Migrating from 0.29](./migrating-from-0.29.md#default-algorithm).
 
 Tink for Python reads a kms-aead value with the key URI of the provider's key:
 
@@ -198,7 +199,12 @@ and return `None` when it already is in it, so a sweep writes only the rows that
 Each unwraps the DEK with the provider, without the DEK cache, and wraps it again as a serialized
 Tink key when it was in an older layout: one KMS call for a current value, two for an old one. A
 value in Tink's framing needs the unwrap to be told from the 32-bit layout before 0.24.0. The AEAD
-bytes stay as they are. The envelope's algorithm is the one the values were sealed with.
+bytes stay as they are.
+
+The envelope's algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
+0.29 and earlier sealed under their default. The upgrade does not open the value, so under another
+algorithm with a key of the same length it succeeds and records that algorithm's Tink key type in
+the wrapped DEK.
 
 A sweep over stored rows:
 
@@ -229,7 +235,7 @@ where
     Ok(upgraded)
 }
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, Ring};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, Ring};
 # use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
@@ -242,7 +248,10 @@ where
 # let mut legacy = u64::try_from(wrapped.value().len()).unwrap().to_be_bytes().to_vec();
 # legacy.extend_from_slice(wrapped.value());
 # legacy.extend_from_slice(cipher_text.value());
-# let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+# let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
+#     provider,
+#     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+# )?;
 # let mut rows = vec![legacy];
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);

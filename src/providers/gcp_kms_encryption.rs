@@ -463,8 +463,9 @@ mod tests {
         )
     }
 
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, with the GCP
-    // key that the live tests configure. That key stays enabled while these exist.
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
+    // default ChaCha20-Poly1305 and the GCP key that the live tests configure. That key stays
+    // enabled while these exist.
     #[cfg(feature = "legacy-formats")]
     const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
     #[cfg(feature = "legacy-formats")]
@@ -475,8 +476,10 @@ mod tests {
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
     #[expect(deprecated, reason = "tests the deprecated upgrade")]
     async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
-        let encryption =
-            KmsAeadEnvelope::<_, TestBackend>::new(GcpKmsProvider::new(&live_key_ref()).await?)?;
+        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
+            GcpKmsProvider::new(&live_key_ref()).await?,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
         for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
             let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
 

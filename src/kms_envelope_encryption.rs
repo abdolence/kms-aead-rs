@@ -70,9 +70,10 @@ pub struct KmsAeadEnvelopeOptions {
 }
 
 impl KmsAeadEnvelopeOptions {
-    /// The default [`algorithm`](Self::algorithm): ChaCha20-Poly1305, the algorithm of every
-    /// release before 0.30, so that a configuration that never named one reads its values.
-    pub const DEFAULT_ALGORITHM: AeadAlgorithm = AeadAlgorithm::ChaCha20Poly1305;
+    /// The default [`algorithm`](Self::algorithm): AES-256-GCM, which every Tink implementation
+    /// reads in a KMS envelope. The default of every release before 0.30 was ChaCha20-Poly1305,
+    /// and the values sealed under it open only with ChaCha20-Poly1305 configured.
+    pub const DEFAULT_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 }
 
 /// When a store-less envelope renews the data encryption key (DEK) it encrypts under: at the
@@ -234,12 +235,12 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
     B: AeadBackend,
 {
-    /// An envelope on the backend `B` with the default options: ChaCha20-Poly1305, a DEK per
-    /// value, no cache.
+    /// An envelope on the backend `B` with the default options: AES-256-GCM, a DEK per value,
+    /// no cache.
     ///
     /// # Errors
     ///
-    /// `UNSUPPORTED_ALGORITHM` when `B` does not implement ChaCha20-Poly1305.
+    /// None today: every backend implements AES-256-GCM.
     pub fn new(provider: P) -> KmsAeadResult<Self> {
         Self::with_options(provider, KmsAeadEnvelopeOptions::new())
     }
@@ -572,10 +573,7 @@ mod tests {
 
         assert_eq!(
             encrypted_dek,
-            wrapped_by_test_provider(
-                TinkKeyType::ChaCha20Poly1305,
-                dek.value().ref_sensitive_value()
-            )
+            wrapped_by_test_provider(TinkKeyType::AesGcm, dek.value().ref_sensitive_value())
         );
         Ok(())
     }
@@ -630,10 +628,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_aes_256_gcm_algorithm() -> KmsAeadResult<()> {
+    async fn test_chacha20_poly1305_algorithm() -> KmsAeadResult<()> {
         let encryption = Envelope::with_options(
             TestKmsProvider::Working,
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
         )?;
         let plaintext = SecretValue::from("secret message");
 
@@ -732,7 +730,8 @@ mod tests {
     }
 
     // The same secret under the AAD `fixture-aad`, with the test provider's raw key as the
-    // wrapped key, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0.
+    // wrapped key, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0, sealed
+    // with ChaCha20-Poly1305, the default of those releases.
     const FIXTURE_AAD: &[u8] = b"fixture-aad";
     #[cfg(feature = "legacy-formats")]
     const FIXTURE_SECRET: &str = "fixture-secret";
@@ -743,7 +742,10 @@ mod tests {
     #[cfg(feature = "legacy-formats")]
     #[tokio::test]
     async fn envelopes_from_0_29_and_earlier_decrypt() -> KmsAeadResult<()> {
-        let encryption = Envelope::new(TestKmsProvider::Working)?;
+        let encryption = Envelope::with_options(
+            TestKmsProvider::Working,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
         for envelope_hex in [
             ENVELOPE_FROM_0_28_1,
             ENVELOPE_FROM_0_29,
@@ -759,7 +761,10 @@ mod tests {
     #[cfg(not(feature = "legacy-formats"))]
     #[tokio::test]
     async fn envelopes_from_0_29_and_earlier_need_legacy_formats() -> KmsAeadResult<()> {
-        let encryption = Envelope::new(TestKmsProvider::Working)?;
+        let encryption = Envelope::with_options(
+            TestKmsProvider::Working,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
         for (envelope_hex, format) in [
             (
                 ENVELOPE_FROM_0_28_1,
@@ -785,10 +790,10 @@ mod tests {
     #[tokio::test]
     #[expect(deprecated, reason = "tests the deprecated upgrade")]
     async fn envelopes_from_0_29_and_earlier_upgrade_to_tink() -> KmsAeadResult<()> {
-        let encryption = CountingEnvelope::new(CountingKmsProvider::new(
-            TestKmsProvider::Working,
-            ORDERS_KEK,
-        ))?;
+        let encryption = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
         for envelope_hex in [
             ENVELOPE_FROM_0_28_1,
             ENVELOPE_FROM_0_29,

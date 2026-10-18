@@ -4,7 +4,8 @@
 the DEK cache, deterministic encryption and the local KMS, and makes ring optional. It writes
 Tink's KMS envelope format for every provider, so values written by 0.29 and earlier read only
 with the deprecated `legacy-formats` feature, which also rewrites them in the new format, see
-[Old values](#old-values).
+[Old values](#old-values). The default algorithm of the envelope is AES-256-GCM, see
+[Default algorithm](#default-algorithm).
 
 ## Features
 
@@ -28,7 +29,7 @@ The crate declares `rust-version = "1.99"`.
 | 0.29 | 0.30 |
 |---|---|
 | `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P, Ring>`, with the backend as a type parameter |
-| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<_, Ring>::new(provider)?`, not `async` |
+| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<_, Ring>::new(provider)?`, not `async`, on AES-256-GCM rather than ChaCha20-Poly1305, see [Default algorithm](#default-algorithm) |
 | `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
 | `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, options)` |
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
@@ -132,6 +133,34 @@ A deployment that relied on unwrapping under a second key configures a provider 
 An alias name such as `alias/orders` becomes an alias ARN, where 0.29 built a key ARN of it.
 Configure the key ARN rather than an alias, see [AWS KMS](./providers/aws.md#key-arn-and-aliases).
 
+## Default algorithm
+
+The default algorithm of `KmsAeadEnvelope` is AES-256-GCM, which every Tink implementation reads
+in a KMS envelope. The default of 0.29 was ChaCha20-Poly1305.
+
+A value does not record its algorithm. Values sealed under the default of 0.29 open only with
+ChaCha20-Poly1305 configured, and an envelope on the new default fails them with `DECRYPT`. A 0.29
+envelope that named no algorithm becomes:
+
+```rust,no_run
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+
+# async fn example(key_ref: GcpKmsKeyRef) -> kms_aead::KmsAeadResult<()> {
+// 0.29: KmsAeadRingEnvelopeEncryption::new(provider).await?
+let envelope = KmsAeadEnvelope::<GcpKmsProvider, Ring>::with_options(
+    GcpKmsProvider::new(&key_ref).await?,
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+)?;
+# let _ = envelope;
+# Ok(())
+# }
+```
+
+Configure it on every envelope that reads those values, on the one that upgrades them, see
+[Old values](#old-values), and on every envelope that writes new values beside them: a reader
+cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0.29 values.
+
 ## Old values
 
 0.30 writes Tink's KMS envelope, and wraps every DEK as a serialized Tink key. 0.29 wrote envelope
@@ -139,10 +168,8 @@ layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier
 envelope, all with the raw DEK wrapped. 0.30 reads them only with the deprecated `legacy-formats`
 feature, and fails with `LEGACY_FORMAT` without it, see [Formats](./formats.md#values-written-by-029-and-earlier).
 
-The algorithm needs no change: the default stays ChaCha20-Poly1305, so a configuration that never
-named one keeps reading its values. Tink for C++ and Python has no ChaCha20-Poly1305: for values
-they read, configure AES-256-GCM for new values only, since a value opens only with the algorithm
-it was sealed with.
+The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
+[Default algorithm](#default-algorithm).
 
 To move stored values to the new format:
 
