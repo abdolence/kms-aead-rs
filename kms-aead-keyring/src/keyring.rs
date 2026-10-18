@@ -856,6 +856,12 @@ impl WatchTask {
     /// `WARN` for a failure, when the store has no push, its listener does not start, or no
     /// tokio runtime runs the call: the record TTL alone then bounds how late a change is seen.
     async fn start<S: KeyringStore>(cache: &Arc<RecordCache<S>>) -> Option<Self> {
+        // Checked before `watch`, since a store's listener may spawn a task of its own, and
+        // `tokio::spawn` panics outside a runtime.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            spans::watch_without_runtime(cache.id());
+            return None;
+        };
         let watch = match cache.store().watch(cache.id()).await {
             Ok(watch) => watch?,
             Err(error) => {
@@ -863,21 +869,13 @@ impl WatchTask {
                 return None;
             }
         };
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                let task = runtime.spawn(RecordCache::follow(
-                    Arc::downgrade(cache),
-                    cache.id().clone(),
-                    cache.reload_min_interval(),
-                    watch,
-                ));
-                Some(Self(task.abort_handle()))
-            }
-            Err(_) => {
-                spans::watch_without_runtime(cache.id());
-                None
-            }
-        }
+        let task = runtime.spawn(RecordCache::follow(
+            Arc::downgrade(cache),
+            cache.id().clone(),
+            cache.reload_min_interval(),
+            watch,
+        ));
+        Some(Self(task.abort_handle()))
     }
 }
 

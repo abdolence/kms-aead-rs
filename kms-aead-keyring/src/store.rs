@@ -90,7 +90,8 @@ pub trait KeyringStore: Send + Sync + 'static {
     ) -> impl Future<Output = KeyringResult<Swap<Self::Revision>>> + Send;
 
     /// Change signals for `id`, or `None` for a store that has no push. A signal carries no
-    /// record: the keyring revalidates when it receives one.
+    /// record: the keyring revalidates when it receives one. The keyring calls it only on a
+    /// tokio runtime, so an implementation may spawn its listener with `tokio::spawn`.
     ///
     /// # Errors
     ///
