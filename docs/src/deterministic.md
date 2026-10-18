@@ -63,6 +63,8 @@ assert_eq!(cipher.decrypt_value(aad, &first, &key)?, SecretValue::from("user@exa
 `DeterministicCipherText` is `[synthetic IV: 16][ciphertext]`, the output order of RFC 5297. Its
 equality compares in constant time, and its `Debug` prints only the length, since the bytes tell
 which values are equal. Its value is equal to a Tink AES-SIV value after Tink's 5-byte prefix.
+`encrypt_field` writes a typed field with that prefix, an `Encrypted<T, Deterministic>`, see
+[One fixed key](./envelope-encryption.md#one-fixed-key).
 
 ## Keys wrapped by a KMS
 

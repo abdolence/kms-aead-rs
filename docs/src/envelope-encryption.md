@@ -173,6 +173,108 @@ async fn load(pool: &PgPool, id: i64) -> sqlx::Result<Encrypted<Email, Envelope>
 }
 ```
 
+### One fixed key
+
+`AeadCipher::encrypt_field` seals a field under a key the application holds, in Tink's layout of
+a key whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an
+`Encrypted<T, Randomized>`. `DeterministicCipher::encrypt_field` does the same for an
+`Encrypted<T, Deterministic>`. The key id is a `TinkKeyId`, the application's constant, and Tink
+and BigQuery read the values with a keyset of the one key under that id:
+
+```rust,no_run
+use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::formats::{Randomized, TinkKeyId, TinkKeyType, TinkKeyset};
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, Ring,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+// The id of the one key, in every value and in the keyset
+const EMAIL_KEY: TinkKeyId = TinkKeyId::new(1);
+
+# async fn example() -> KmsAeadResult<()> {
+let key_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let provider = GcpKmsProvider::new(&key_ref).await?;
+let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
+let cache = DekCache::new(DekCacheOptions::new())?;
+
+// Once, by an administrative job: the key wrapped by Cloud KMS, stored in the settings
+let (_, wrapped_key): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+    cipher.generate_wrapped_key(&provider).await?;
+
+// On every write and read: the key unwrapped through the cache, no KMS call while it is cached
+let email = Email("alice@example.com".to_string());
+let (encrypted, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        cipher.encrypt_field(EMAIL_KEY, b"users/1042/email", &email, key)
+    })
+    .await?;
+let encrypted: Encrypted<Email, Randomized> = encrypted?;
+
+let (decrypted, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        cipher.decrypt_field(b"users/1042/email", &encrypted, key)
+    })
+    .await?;
+assert_eq!(decrypted?, email);
+
+// Once, for BigQuery: the keyset of the one key, wrapped by the same Cloud KMS key
+let mut keyset = TinkKeyset::new(EMAIL_KEY);
+let (added, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), key)
+    })
+    .await?;
+added?;
+let first_level_keyset: EncryptedDataEncryptionKey = provider
+    .encrypt_data_encryption_key(&DataEncryptionKey::from(keyset.to_bytes()))
+    .await?;
+# let _ = first_level_keyset;
+# Ok(())
+# }
+```
+
+BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the wrapped keyset, passed as a `BYTES`
+query parameter:
+
+```sql
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(
+    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
+    @first_level_keyset),
+  u.email,
+  CONCAT('users/', CAST(u.id AS STRING), '/email'))
+FROM users u;
+```
+
+- BigQuery reads AES-256-GCM values with `AEAD.DECRYPT_STRING` and `AEAD.DECRYPT_BYTES`, and
+  the AES-SIV values of `DeterministicCipher` with `DETERMINISTIC_DECRYPT_STRING` and
+  `DETERMINISTIC_DECRYPT_BYTES`. `KEYS.KEYSET_CHAIN` unwraps with Cloud KMS only;
+- `decrypt_field` reads the values Tink and BigQuery write under the same key and id. The
+  caller picks the key by `key_id()`, which the prefix names without authenticating it;
+- a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
+  kms-aead-keyring keeps those versions.
+
 ## Beacons
 
 A beacon, or blind index, finds rows by a field's value without decrypting the column: an
@@ -181,7 +283,7 @@ query computes the beacon of the value it looks for and matches it by equality. 
 the bytes to store, and the beacon key is a 32-byte key wrapped by the KMS, as a DEK is:
 
 ```rust
-use kms_aead::formats::Envelope;
+use kms_aead::formats::{Envelope, TinkKeyId};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
     Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KmsAeadEnvelope, KmsAeadResult,
@@ -191,6 +293,9 @@ use secret_vault_value::SecretValue;
 
 #[derive(Debug, PartialEq)]
 struct Email(String);
+
+// The application's id of its beacon key, which every beacon names
+const EMAIL_BEACON_KEY: TinkKeyId = TinkKeyId::new(1);
 
 impl Email {
     // The beacon of an email matches regardless of case
@@ -214,7 +319,7 @@ impl Plaintext for Email {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
-// Once, by an administrative job: the beacon key 1, stored beside the application's settings
+// Once, by an administrative job: the beacon key, stored beside the application's settings
 let (_, wrapped_key) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
     .generate_wrapped_key(envelope.provider())
     .await?;
@@ -224,12 +329,18 @@ let email = Email::new("Alice@Example.com");
 let encrypted: Encrypted<Email, Envelope> =
     envelope.encrypt_field(b"users/1042/email", &email).await?;
 let beacon: Beacon<Email> = envelope
-    .beacon(1, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &email)
+    .beacon(EMAIL_BEACON_KEY, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &email)
     .await?;
 
 // A lookup: the beacon of the value looked for, then a decrypt of each matching row
-let probe = envelope
-    .beacon(1, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &Email::new("alice@example.com"))
+let probe: Beacon<Email> = envelope
+    .beacon(
+        EMAIL_BEACON_KEY,
+        &wrapped_key,
+        b"users/email",
+        BeaconBits::DEFAULT,
+        &Email::new("alice@example.com"),
+    )
     .await?;
 assert_eq!(probe, beacon);
 assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email);
@@ -246,8 +357,8 @@ assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email
 - normalisation is the application's: the beacon of `Alice@Example.com` and of
   `alice@example.com` differ unless the type normalises the value before it is sealed, as
   `Email::new` does;
-- the key id is the application's number for the beacon key, written into every beacon so that a
-  column can hold beacons of two keys at once;
+- the key id, a `TinkKeyId`, is the application's number for the beacon key, written into every
+  beacon so that a column can hold beacons of two keys at once;
 - the beacon key is unwrapped through the envelope's DEK cache, as a DEK is.
 
 A beacon column leaks which rows are likely to hold equal values, and with them how often each

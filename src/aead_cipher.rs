@@ -5,10 +5,11 @@ use secret_vault_value::SecretValue;
 
 use crate::backend::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
+use crate::formats::{tink_output_prefix, Randomized, TinkKeyId, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey, Encrypted,
+    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 /// Randomized authenticated encryption with associated data (AEAD) under a data encryption key
@@ -96,39 +97,8 @@ impl<B: AeadBackend> AeadCipher<B> {
         plain_text: &SecretValue,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
-        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
-        let plain_text = plain_text.ref_sensitive_value();
-
-        let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
-        B::fill_random(&mut nonce).map_err(|_| {
-            KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate a random nonce")
-        })?;
-
-        // Allocated once at its final size, since growing it would leave a copy of the plaintext
-        // in freed memory, and zeroized if sealing fails.
-        let mut buffer = SecretValue::new(Vec::with_capacity(
-            AeadAlgorithm::NONCE_LEN + plain_text.len() + AeadAlgorithm::TAG_LEN,
-        ));
-        let value = buffer.ref_sensitive_value_mut();
-        value.extend_from_slice(&nonce);
-        value.extend_from_slice(plain_text);
-        let tag = B::seal_in_place(
-            self.algorithm,
-            key,
-            &nonce,
-            aad,
-            &mut value[AeadAlgorithm::NONCE_LEN..],
-        )
-        .map_err(|failure| match failure {
-            Failure::Key => {
-                KmsAeadEncryptionError::create("ENCRYPT_KEY", "Unable to create a sealing key")
-            }
-            Failure::Operation => {
-                KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data")
-            }
-        })?;
-        value.extend_from_slice(&tag);
-        Ok(CipherText(std::mem::take(value)))
+        self.seal(&[], aad, plain_text.ref_sensitive_value(), key)
+            .map(CipherText)
     }
 
     /// Opens a value [`encrypt_value`](Self::encrypt_value) sealed with the same key and AAD,
@@ -147,17 +117,123 @@ impl<B: AeadBackend> AeadCipher<B> {
         cipher_text: &CipherText,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
+        self.open(aad, cipher_text.value(), 0, key)
+    }
+
+    /// `value`, as [`Plaintext`] encodes it, sealed under `key` with a fresh random nonce, in
+    /// Tink's layout of a key with the output prefix TINK and the id `key_id`:
+    ///
+    /// ```text
+    /// [0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]
+    /// ```
+    ///
+    /// Tink's AEAD opens it with a keyset that holds `key` as the key `key_id` of the cipher's
+    /// algorithm, and so does BigQuery's `AEAD.DECRYPT_STRING` or `AEAD.DECRYPT_BYTES` under
+    /// AES-256-GCM. `key_id` is not authenticated.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`encrypt_value`](Self::encrypt_value), and `INVALID_PLAINTEXT` when
+    /// `value` does not encode.
+    pub fn encrypt_field<T: Plaintext>(
+        &self,
+        key_id: TinkKeyId,
+        aad: &[u8],
+        value: &T,
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<Encrypted<T, Randomized>> {
+        let plain_text = value.to_plaintext()?;
+        let sealed = self.seal(
+            &tink_output_prefix(key_id),
+            aad,
+            plain_text.ref_sensitive_value(),
+            key,
+        )?;
+        Encrypted::try_from(sealed)
+    }
+
+    /// Opens `value`, sealed under `key` and `aad` by [`encrypt_field`](Self::encrypt_field) or
+    /// by Tink, and decodes the plaintext as a `T`. The caller picks `key` by
+    /// [`value.key_id()`](Encrypted::key_id).
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`decrypt_value`](Self::decrypt_value), and `INVALID_PLAINTEXT` when the
+    /// plaintext is not an encoding of `T`.
+    pub fn decrypt_field<T: Plaintext>(
+        &self,
+        aad: &[u8],
+        value: &Encrypted<T, Randomized>,
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<T> {
+        T::from_plaintext(self.open(aad, value.value(), TINK_OUTPUT_PREFIX_LEN, key)?)
+    }
+
+    /// `prefix`, then `plain_text` sealed with `key` and a fresh random nonce:
+    /// `[prefix][nonce][ciphertext][tag]`.
+    fn seal(
+        &self,
+        prefix: &[u8],
+        aad: &[u8],
+        plain_text: &[u8],
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<Vec<u8>> {
         let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
-        let (nonce, sealed) = cipher_text
-            .value()
-            .split_first_chunk::<{ AeadAlgorithm::NONCE_LEN }>()
+
+        let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
+        B::fill_random(&mut nonce).map_err(|_| {
+            KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate a random nonce")
+        })?;
+
+        // Allocated once at its final size, since growing it would leave a copy of the plaintext
+        // in freed memory, and zeroized if sealing fails.
+        let mut buffer = SecretValue::new(Vec::with_capacity(
+            prefix.len() + AeadAlgorithm::NONCE_LEN + plain_text.len() + AeadAlgorithm::TAG_LEN,
+        ));
+        let value = buffer.ref_sensitive_value_mut();
+        value.extend_from_slice(prefix);
+        value.extend_from_slice(&nonce);
+        value.extend_from_slice(plain_text);
+        let tag = B::seal_in_place(
+            self.algorithm,
+            key,
+            &nonce,
+            aad,
+            &mut value[prefix.len() + AeadAlgorithm::NONCE_LEN..],
+        )
+        .map_err(|failure| match failure {
+            Failure::Key => {
+                KmsAeadEncryptionError::create("ENCRYPT_KEY", "Unable to create a sealing key")
+            }
+            Failure::Operation => {
+                KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data")
+            }
+        })?;
+        value.extend_from_slice(&tag);
+        Ok(std::mem::take(value))
+    }
+
+    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value`.
+    fn open(
+        &self,
+        aad: &[u8],
+        value: &[u8],
+        prefix_len: usize,
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<SecretValue> {
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
+        let (nonce, sealed) = value
+            .get(prefix_len..)
+            .and_then(|after_prefix| {
+                after_prefix.split_first_chunk::<{ AeadAlgorithm::NONCE_LEN }>()
+            })
             .filter(|(_, sealed)| sealed.len() >= AeadAlgorithm::TAG_LEN)
             .ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(
                         "A cipher text of {} bytes is too short to hold a nonce and a tag",
-                        cipher_text.value().len()
+                        value.len()
                     ),
                 )
             })?;
@@ -182,5 +258,77 @@ impl<B: AeadBackend> AeadCipher<B> {
             .ref_sensitive_value_mut()
             .truncate(plain_text_len);
         Ok(plain_text)
+    }
+}
+
+#[cfg(all(
+    test,
+    any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")
+))]
+mod tests {
+    use super::*;
+    use crate::errors::KmsAeadError;
+    use crate::test_provider::TestBackend;
+
+    const ALICE: &str = "alice@example.com";
+    const EMAIL_AAD: &[u8] = b"user/42/email";
+    const KEY_ID: TinkKeyId = TinkKeyId::new(7);
+
+    /// `alice@example.com` sealed by Tink 1.16.1 for Python with a keyset of one AES-256-GCM key
+    /// with the TINK prefix: key id 7, the bytes 0 to 31 as the key, `user/42/email` as the
+    /// associated data.
+    const TINK_VALUE: [u8; 50] = [
+        0x01, 0x00, 0x00, 0x00, 0x07, 0x11, 0x0a, 0xc1, 0x1b, 0x7b, 0x32, 0x08, 0x0d, 0xe3, 0x83,
+        0xa3, 0xb8, 0xbc, 0x9e, 0x0d, 0xac, 0xcf, 0x01, 0x2a, 0xc0, 0x0b, 0xb3, 0x76, 0xb1, 0x4c,
+        0xcd, 0xb7, 0xeb, 0x05, 0x00, 0xc7, 0x7a, 0xea, 0x67, 0xeb, 0x9b, 0x37, 0x35, 0xaa, 0xd6,
+        0x0e, 0x53, 0x4b, 0x10, 0xbe,
+    ];
+
+    #[test]
+    fn a_field_is_the_key_id_prefix_and_the_aead_cipher_output() -> KmsAeadResult<()> {
+        let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
+        let key = cipher.generate_key()?;
+
+        let field = cipher.encrypt_field(KEY_ID, EMAIL_AAD, &ALICE.to_string(), &key)?;
+
+        let bytes = field.value();
+        assert_eq!(bytes[..5], [0x01, 0x00, 0x00, 0x00, 0x07]);
+        assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
+        assert_eq!(field.key_id(), KEY_ID);
+        assert_eq!(
+            cipher.decrypt_value(EMAIL_AAD, &CipherText(bytes[5..].to_vec()), &key)?,
+            SecretValue::from(ALICE)
+        );
+        assert_eq!(cipher.decrypt_field(EMAIL_AAD, &field, &key)?, ALICE);
+        Ok(())
+    }
+
+    #[test]
+    fn a_value_sealed_by_tink_decrypts() -> KmsAeadResult<()> {
+        let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
+        let key = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
+
+        let value = Encrypted::<String, Randomized>::try_from(TINK_VALUE.to_vec())?;
+
+        assert_eq!(value.key_id(), KEY_ID);
+        assert_eq!(cipher.decrypt_field(EMAIL_AAD, &value, &key)?, ALICE);
+        Ok(())
+    }
+
+    #[test]
+    fn a_plaintext_that_is_no_encoding_of_the_type_is_refused() -> KmsAeadResult<()> {
+        let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
+        let key = cipher.generate_key()?;
+        let field = cipher.encrypt_field(KEY_ID, EMAIL_AAD, &vec![0xFF_u8], &key)?;
+
+        let as_string = Encrypted::<String, Randomized>::try_from(field.into_value())?;
+        let result = cipher.decrypt_field(EMAIL_AAD, &as_string, &key);
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "INVALID_PLAINTEXT"),
+            "{result:?}"
+        );
+        Ok(())
     }
 }

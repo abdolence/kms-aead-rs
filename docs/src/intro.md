@@ -64,10 +64,15 @@ stored value holds:
   `Encrypted<T, Envelope>`. It carries its wrapped DEK like any envelope value, and serde,
   tokio-postgres and sqlx store it as bytes. Use it for columns of secrets that need no central
   key rotation. See [Typed fields](./envelope-encryption.md#typed-fields);
+- **One fixed key**, `encrypt_field` of `AeadCipher` or `DeterministicCipher` with one key that
+  the KMS wraps once and the DEK cache unwraps: values carry a 4-byte key id in Tink's wire
+  format instead of a wrapped DEK, and BigQuery and Tink read them with a keyset of that key. Use
+  it for a column that BigQuery reads, with no key rotation. See
+  [One fixed key](./envelope-encryption.md#one-fixed-key);
 - **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the wrapped key
   versions, and values carry a 4-byte key id in Tink's wire format instead of a wrapped DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery
-  and Tink read too. See [Keyring and field encryption](./keyring.md).
+  and Tink read across rotations. See [Keyring and field encryption](./keyring.md).
 
 | | Per-call envelope | Store-less DEK reuse | Keyring |
 |---|---|---|---|

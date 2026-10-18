@@ -1,5 +1,5 @@
-//! Every byte layout of kms-aead, and the Tink layouts a keyring of Tink keys writes beside it.
-//! The formats chapter of the book describes each of them.
+//! Every byte layout of kms-aead, Tink's among them. The formats chapter of the book describes
+//! each of them.
 //!
 //! kms-aead writes one envelope format for every provider, Tink's KMS envelope,
 //! [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey). Every data encryption key it
@@ -15,10 +15,10 @@
 //! local: [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
 //! ```
 //!
-//! The public items here are what a keyring of Tink keys needs on top of that:
-//! [`TinkOutputPrefix`], the prefix of its values, and [`TinkKeyset`], the keyset BigQuery reads,
-//! and the [`Format`] of an [`Encrypted`](crate::Encrypted) value: [`Envelope`], [`Randomized`]
-//! or [`Deterministic`].
+//! The public items here are the [`Format`] of an [`Encrypted`](crate::Encrypted) value,
+//! [`Envelope`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the last two
+//! are sealed under: [`TinkKeyId`], the key id their prefix names, [`TinkKeyType`], and
+//! [`TinkKeyset`], the keyset Tink and BigQuery read them with.
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
@@ -32,8 +32,10 @@ mod field;
 pub use field::{Deterministic, Envelope, Format, Randomized};
 
 mod tink;
-pub(crate) use tink::serialize_tink_key;
-pub use tink::{TinkKeyType, TinkKeyset, TinkOutputPrefix};
+pub(crate) use tink::{
+    serialize_tink_key, split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN,
+};
+pub use tink::{TinkKeyId, TinkKeyType, TinkKeyset};
 
 pub(crate) mod local_kms;
 

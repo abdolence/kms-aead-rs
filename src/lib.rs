@@ -78,6 +78,10 @@
 //! [`Format`](formats::Format). The `serde` feature reads and writes it, and the `postgres` and
 //! `sqlx` features store it in a PostgreSQL `BYTEA` column.
 //!
+//! [`AeadCipher::encrypt_field`] and `DeterministicCipher::encrypt_field` seal a field under a key
+//! the caller holds, in Tink's layout of a key named by a [`TinkKeyId`](formats::TinkKeyId), so
+//! that Tink and BigQuery read it with a keyset of that key.
+//!
 //! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
 //! the column: a truncated HMAC-SHA256 of the value under a beacon key, which
 //! [`KmsAeadEnvelope::beacon`] computes with the key unwrapped through the envelope's cache, and

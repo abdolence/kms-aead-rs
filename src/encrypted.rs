@@ -6,7 +6,7 @@ use rvstruct::ValueStruct;
 use subtle::ConstantTimeEq;
 
 use crate::errors::KmsAeadError;
-use crate::formats::{Deterministic, Format};
+use crate::formats::{Deterministic, Format, Randomized, TinkKeyId};
 use crate::KmsAeadResult;
 
 #[cfg(feature = "postgres")]
@@ -25,9 +25,11 @@ mod sqlx;
 /// are decrypted.
 ///
 /// [`KmsAeadEnvelope::encrypt_field`](crate::KmsAeadEnvelope::encrypt_field) writes an
-/// `Encrypted<T, Envelope>`, and kms-aead-keyring writes `Encrypted<T, Randomized>` and
-/// `Encrypted<T, Deterministic>`. `T` is any type that implements `Plaintext`, such as an
-/// application newtype, so a field names what it holds: `Encrypted<Email, Envelope>`.
+/// `Encrypted<T, Envelope>`, [`AeadCipher::encrypt_field`](crate::AeadCipher::encrypt_field) an
+/// `Encrypted<T, Randomized>` and `DeterministicCipher::encrypt_field` an
+/// `Encrypted<T, Deterministic>`, the layouts Tink and BigQuery read. `T` is any type that
+/// implements `Plaintext`, such as an application newtype, so a field names what it holds:
+/// `Encrypted<Email, Envelope>`.
 ///
 /// Only `Encrypted<T, Deterministic>` implements `PartialEq`, `Eq` and `Hash`: values sealed
 /// under one deterministic key are equal exactly when their plaintexts and AADs are, which is
@@ -38,8 +40,9 @@ mod sqlx;
 /// `Debug` shows the length only. The `serde` feature serializes it as bytes, and deserializes it
 /// through `TryFrom<Vec<u8>>`. The `postgres` and `sqlx` features store it as `BYTEA` and read it
 /// through `TryFrom<Vec<u8>>` too.
-pub struct Encrypted<T, F> {
+pub struct Encrypted<T, F: Format> {
     bytes: Vec<u8>,
+    key_id: F::KeyId,
     plaintext: PhantomData<fn() -> (T, F)>,
 }
 
@@ -57,16 +60,17 @@ impl<T, F: Format> TryFrom<Vec<u8>> for Encrypted<T, F> {
     type Error = KmsAeadError;
 
     fn try_from(bytes: Vec<u8>) -> KmsAeadResult<Self> {
-        F::check(&bytes)?;
+        let key_id = F::check(&bytes)?;
         Ok(Self {
             bytes,
+            key_id,
             plaintext: PhantomData,
         })
     }
 }
 
 /// The bytes to store.
-impl<T, F> ValueStruct for Encrypted<T, F> {
+impl<T, F: Format> ValueStruct for Encrypted<T, F> {
     type ValueType = Vec<u8>;
 
     fn value(&self) -> &Vec<u8> {
@@ -78,21 +82,38 @@ impl<T, F> ValueStruct for Encrypted<T, F> {
     }
 }
 
-impl<T, F> Clone for Encrypted<T, F> {
+impl<T, F: Format> Clone for Encrypted<T, F> {
     fn clone(&self) -> Self {
         Self {
             bytes: self.bytes.clone(),
+            key_id: self.key_id,
             plaintext: PhantomData,
         }
     }
 }
 
 /// The length only.
-impl<T, F> Debug for Encrypted<T, F> {
+impl<T, F: Format> Debug for Encrypted<T, F> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Encrypted")
             .field("len", &self.bytes.len())
             .finish()
+    }
+}
+
+impl<T> Encrypted<T, Randomized> {
+    /// The id of the key this value was sealed under, which its prefix names: the key to open it
+    /// with.
+    pub fn key_id(&self) -> TinkKeyId {
+        self.key_id
+    }
+}
+
+impl<T> Encrypted<T, Deterministic> {
+    /// The id of the key this value was sealed under, which its prefix names: the key to open it
+    /// with.
+    pub fn key_id(&self) -> TinkKeyId {
+        self.key_id
     }
 }
 
@@ -115,14 +136,12 @@ impl<T> Hash for Encrypted<T, Deterministic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::{Envelope, Randomized, TinkOutputPrefix};
+    use crate::formats::Envelope;
     use crate::test_provider::renderings;
 
-    const KEY_ID: u32 = 0x4455_6677;
-
-    /// `[0x01][KEY_ID]` followed by `body`.
+    /// Tink's output prefix of the key 0x44556677 followed by `body`.
     fn prefixed(body: &[u8]) -> Vec<u8> {
-        [&TinkOutputPrefix::new(KEY_ID).to_bytes()[..], body].concat()
+        [&[0x01, 0x44, 0x55, 0x66, 0x77][..], body].concat()
     }
 
     /// A Tink envelope of a 7-byte wrapped DEK and `cipher_text`.

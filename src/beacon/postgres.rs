@@ -37,6 +37,7 @@ impl<'a, T> FromSql<'a> for Beacon<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::TinkKeyId;
 
     #[test]
     fn bytea_is_read_through_the_layout_check() -> Result<(), Box<dyn Error + Sync + Send>> {
@@ -45,7 +46,7 @@ mod tests {
         let beacon = Beacon::<String>::from_sql(&Type::BYTEA, &stored)?;
         let malformed = Beacon::<String>::from_sql(&Type::BYTEA, &stored[..5]);
 
-        assert_eq!(beacon.key_id(), 7);
+        assert_eq!(beacon.key_id(), TinkKeyId::new(7));
         assert!(malformed.is_err(), "{malformed:?}");
         Ok(())
     }

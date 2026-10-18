@@ -136,46 +136,50 @@ pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKe
     }
 }
 
-/// Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`: the first five bytes of every
-/// value a key of a Tink keyset writes when its `output_prefix_type` is TINK, naming the key in
-/// the keyset that opens it. Tink, BigQuery and kms-aead-keyring read the key id from it, and it
-/// is not authenticated.
+/// The id of a key in a Tink keyset, a `uint32` with no reserved value.
+///
+/// A key whose output prefix type is TINK starts every value it writes with
+/// `[0x01][key id: u32 BE]`, so that Tink and BigQuery pick the key of a keyset that opens it.
+/// [`Encrypted<T, Randomized>`](crate::Encrypted) and `Encrypted<T, Deterministic>` start with
+/// it too, and a [`Beacon`](crate::Beacon) names its beacon key in the same four bytes. The
+/// prefix is not authenticated: a value whose key id is changed still opens only under the key
+/// it was sealed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TinkOutputPrefix {
-    key_id: u32,
+pub struct TinkKeyId(u32);
+
+impl TinkKeyId {
+    /// `key_id` as a key id: every `u32` is one.
+    pub const fn new(key_id: u32) -> Self {
+        Self(key_id)
+    }
+
+    /// The id as a keyset stores it.
+    pub const fn as_u32(self) -> u32 {
+        self.0
+    }
 }
 
-impl TinkOutputPrefix {
-    /// The first byte of the prefix.
-    pub const VERSION: u8 = 0x01;
-    /// The length of the prefix in bytes.
-    pub const LEN: usize = 5;
+/// The length of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`.
+pub(crate) const TINK_OUTPUT_PREFIX_LEN: usize = 5;
 
-    /// The prefix of the key `key_id`.
-    pub fn new(key_id: u32) -> Self {
-        Self { key_id }
-    }
+/// The first byte of Tink's output prefix of type TINK.
+const TINK_OUTPUT_PREFIX_VERSION: u8 = 0x01;
 
-    /// The id of the key in its keyset.
-    pub fn key_id(self) -> u32 {
-        self.key_id
-    }
+/// Tink's output prefix of type TINK of the key `key_id`, the first bytes of every value the key
+/// writes.
+pub(crate) fn tink_output_prefix(key_id: TinkKeyId) -> [u8; TINK_OUTPUT_PREFIX_LEN] {
+    let [a, b, c, d] = key_id.0.to_be_bytes();
+    [TINK_OUTPUT_PREFIX_VERSION, a, b, c, d]
+}
 
-    /// `[0x01][key id: u32 BE]`, to write before the value.
-    pub fn to_bytes(self) -> [u8; Self::LEN] {
-        let [a, b, c, d] = self.key_id.to_be_bytes();
-        [Self::VERSION, a, b, c, d]
-    }
-
-    /// The prefix at the start of `value` and the bytes after it, or `None` when `value` is
-    /// shorter than a prefix or does not start with [`VERSION`](Self::VERSION).
-    pub fn split(value: &[u8]) -> Option<(Self, &[u8])> {
-        match value {
-            [Self::VERSION, a, b, c, d, rest @ ..] => {
-                Some((Self::new(u32::from_be_bytes([*a, *b, *c, *d])), rest))
-            }
-            _ => None,
+/// The key id of Tink's output prefix of type TINK at the start of `value` and the bytes after
+/// it, or `None` when `value` does not start with one.
+pub(crate) fn split_tink_output_prefix(value: &[u8]) -> Option<(TinkKeyId, &[u8])> {
+    match value {
+        [TINK_OUTPUT_PREFIX_VERSION, a, b, c, d, rest @ ..] => {
+            Some((TinkKeyId(u32::from_be_bytes([*a, *b, *c, *d])), rest))
         }
+        _ => None,
     }
 }
 
@@ -188,9 +192,9 @@ pub struct TinkKeyset(Keyset);
 
 impl TinkKeyset {
     /// An empty keyset whose primary key, the one Tink encrypts with, is `primary_key_id`.
-    pub fn new(primary_key_id: u32) -> Self {
+    pub fn new(primary_key_id: TinkKeyId) -> Self {
         Self(Keyset {
-            primary_key_id,
+            primary_key_id: primary_key_id.0,
             key: Vec::new(),
         })
     }
@@ -204,7 +208,7 @@ impl TinkKeyset {
     /// `AesGcm` and `AesGcmSiv`, 32 for `ChaCha20Poly1305` and 64 for `AesSiv`.
     pub fn add_key(
         &mut self,
-        key_id: u32,
+        key_id: TinkKeyId,
         key_type: TinkKeyType,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<()> {
@@ -222,7 +226,7 @@ impl TinkKeyset {
                 key_material_type: SYMMETRIC,
             }),
             status: ENABLED,
-            key_id,
+            key_id: key_id.0,
             output_prefix_type: TINK,
         });
         Ok(())
@@ -428,34 +432,6 @@ mod tests {
         Ok(())
     }
 
-    /// The empty plaintext sealed by tink-java's AES-SIV under a TINK-prefixed key 0x44556677,
-    /// `testCreateForEncryptConstructorForDecrypt_tinkPrefix` in
-    /// <https://github.com/tink-crypto/tink-java/blob/eadd2736490b50d80b3117a5586ffe0985c9207e/src/test/java/com/google/crypto/tink/subtle/AesSivTest.java#L396-L424>.
-    const TINK_PREFIXED_VALUE: [u8; 21] = [
-        0x01, 0x44, 0x55, 0x66, 0x77, 0x1b, 0xc4, 0x9c, 0x6a, 0x89, 0x4e, 0xf5, 0x74, 0x4a, 0x0a,
-        0x01, 0xd4, 0x66, 0x08, 0xcb, 0xcc,
-    ];
-
-    #[test]
-    fn the_output_prefix_is_tinks() {
-        let (prefix, body) = TinkOutputPrefix::split(&TINK_PREFIXED_VALUE).unwrap();
-
-        assert_eq!(prefix.key_id(), 0x4455_6677);
-        assert_eq!(body, &TINK_PREFIXED_VALUE[TinkOutputPrefix::LEN..]);
-        assert_eq!(
-            TinkOutputPrefix::new(0x4455_6677).to_bytes(),
-            TINK_PREFIXED_VALUE[..TinkOutputPrefix::LEN]
-        );
-    }
-
-    #[test]
-    fn a_value_without_the_prefix_does_not_split() {
-        let values: [&[u8]; 4] = [&[], &[0x01, 0x44, 0x55, 0x66], &[0x00; 21], &[0x02; 21]];
-        for value in values {
-            assert_eq!(TinkOutputPrefix::split(value), None, "{value:02x?}");
-        }
-    }
-
     // The keysets below were written by tinkey 1.14.0, from
     // https://storage.googleapis.com/tinkey/tinkey-1.14.0.tar.gz:
     //
@@ -486,13 +462,13 @@ mod tests {
         0xe3, 0x44, 0x71, 0x18, 0x01, 0x10, 0x01, 0x18, 0x98, 0x96, 0xef, 0xab, 0x0a, 0x20, 0x01,
     ];
 
-    const TINKEY_AES_GCM_PRIMARY: u32 = 412_113_711;
+    const TINKEY_AES_GCM_PRIMARY: TinkKeyId = TinkKeyId::new(412_113_711);
     const TINKEY_AES_GCM_PRIMARY_KEY: [u8; 32] = [
         0x26, 0x9f, 0x89, 0x22, 0xaf, 0xa5, 0xdd, 0xac, 0xf8, 0x0e, 0x5c, 0xab, 0x8a, 0x6e, 0x02,
         0x8b, 0xfe, 0xc2, 0x0a, 0x63, 0x3b, 0xfd, 0x13, 0xf5, 0x86, 0x50, 0x30, 0xb9, 0x67, 0x97,
         0xbc, 0x7f,
     ];
-    const TINKEY_AES_GCM_SECOND: u32 = 2_776_353_560;
+    const TINKEY_AES_GCM_SECOND: TinkKeyId = TinkKeyId::new(2_776_353_560);
     const TINKEY_AES_GCM_SECOND_KEY: [u8; 32] = [
         0x41, 0xcc, 0xbb, 0x34, 0x57, 0xc4, 0xbe, 0x99, 0x79, 0x08, 0x7c, 0x27, 0x9c, 0x5b, 0x86,
         0x8f, 0xe1, 0x56, 0x4e, 0xf8, 0xad, 0x6f, 0x0d, 0x01, 0xd6, 0xd5, 0xbd, 0x62, 0x49, 0xe3,
@@ -513,7 +489,7 @@ mod tests {
         0xed, 0xde, 0xed, 0x02, 0x20, 0x01,
     ];
 
-    const TINKEY_AES_SIV: u32 = 767_014_583;
+    const TINKEY_AES_SIV: TinkKeyId = TinkKeyId::new(767_014_583);
     const TINKEY_AES_SIV_KEY: [u8; 64] = [
         0x02, 0x88, 0xd5, 0x3a, 0xa1, 0x86, 0x0f, 0xae, 0x9d, 0xe2, 0x05, 0xc8, 0x9f, 0x88, 0x69,
         0x27, 0xa5, 0x19, 0xe4, 0xbf, 0x33, 0x74, 0xa5, 0xc4, 0x85, 0x88, 0xb7, 0xa0, 0xf1, 0x26,

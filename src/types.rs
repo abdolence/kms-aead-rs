@@ -69,10 +69,12 @@ pub(crate) fn checked_key_bytes(
     if key.len() == key_len {
         Ok(key)
     } else {
-        Err(KmsAeadEncryptionError::invalid_key_length(
-            key.len(),
-            algorithm,
-            key_len,
+        Err(KmsAeadEncryptionError::create(
+            "INVALID_KEY_LENGTH",
+            &format!(
+                "A key of {} bytes does not fit {algorithm}, which takes {key_len} bytes",
+                key.len()
+            ),
         ))
     }
 }
