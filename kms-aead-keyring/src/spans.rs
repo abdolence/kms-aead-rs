@@ -93,12 +93,12 @@ pub(crate) fn decrypt(keyring: &KeyringId, purpose: Purpose, key_id: KeyId) -> S
 
 /// `Keyring load`, around one store read. `reason` is `open`, `ttl`, `watch`,
 /// `unknown_key_id`, `forced`, `export` or `admin`.
-pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) -> Span {
+pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: LoadReason) -> Span {
     debug_span!(
         "Keyring load",
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_STORE } = %store,
-        { FIELD_REASON } = reason,
+        { FIELD_REASON } = reason.as_str(),
         { FIELD_CHANGED } = field::Empty,
         { FIELD_REVISION } = field::Empty,
         { FIELD_RESPONSE_TIME } = field::Empty,
@@ -234,8 +234,8 @@ pub(crate) fn record_unknown_version() {
 
 /// Records on the current span what an unknown key id caused: `none`, `reloaded` or
 /// `rate_limited`.
-pub(crate) fn record_reload(reload: &'static str) {
-    Span::current().record(FIELD_RELOAD, reload);
+pub(crate) fn record_reload(reload: Reload) {
+    Span::current().record(FIELD_RELOAD, reload.as_str());
 }
 
 /// Records on the current span where the key of the call came from.
@@ -270,9 +270,9 @@ pub(crate) fn record_versions(versions: usize) {
 /// Records on the current `Keyring load` span what the read did and the revision it read:
 /// `changed` is `true` for a new record taken, `false`, or `regressed` for one refused because
 /// it moves backwards.
-pub(crate) fn record_load(changed: &'static str, revision: Option<&impl Display>) {
+pub(crate) fn record_load(changed: LoadChanged, revision: Option<&impl Display>) {
     let span = Span::current();
-    span.record(FIELD_CHANGED, changed);
+    span.record(FIELD_CHANGED, changed.as_str());
     if let Some(revision) = revision {
         span.record(FIELD_REVISION, field::display(revision));
     }
@@ -468,4 +468,66 @@ pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &Keyring
         { FIELD_ERROR_CODE } = error.code(),
         "The sweep could not re-seal a record"
     );
+}
+
+/// Why the record was read from the store: the `reason` field of `Keyring load`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoadReason {
+    Open,
+    Ttl,
+    Watch,
+    UnknownKeyId,
+    Forced,
+    Export,
+    Admin,
+}
+
+impl LoadReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            LoadReason::Open => "open",
+            LoadReason::Ttl => "ttl",
+            LoadReason::Watch => "watch",
+            LoadReason::UnknownKeyId => "unknown_key_id",
+            LoadReason::Forced => "forced",
+            LoadReason::Export => "export",
+            LoadReason::Admin => "admin",
+        }
+    }
+}
+
+/// What a read did to the cached record: the `changed` field of `Keyring load`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum LoadChanged {
+    Taken,
+    Unchanged,
+    Regressed,
+}
+
+impl LoadChanged {
+    fn as_str(self) -> &'static str {
+        match self {
+            LoadChanged::Taken => "true",
+            LoadChanged::Unchanged => "false",
+            LoadChanged::Regressed => "regressed",
+        }
+    }
+}
+
+/// What an unknown key id caused: the `reload` field of `Keyring decrypt`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Reload {
+    NotNeeded,
+    Reloaded,
+    RateLimited,
+}
+
+impl Reload {
+    fn as_str(self) -> &'static str {
+        match self {
+            Reload::NotNeeded => "none",
+            Reload::Reloaded => "reloaded",
+            Reload::RateLimited => "rate_limited",
+        }
+    }
 }

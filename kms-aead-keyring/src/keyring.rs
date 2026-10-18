@@ -23,7 +23,7 @@ use crate::errors::{
 use crate::purpose::unreserved;
 use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
-use crate::spans;
+use crate::spans::{self, LoadReason};
 use crate::store::{KeyringStore, Stored, Swap};
 use crate::{
     Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
@@ -173,7 +173,7 @@ where
     /// record moves a version backwards from the cached one. The cached record stays in use in
     /// every case.
     pub async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
-        self.cache.reload("forced").await
+        self.cache.reload(LoadReason::Forced).await
     }
 
     /// Seals `value` with `aad` under the active randomised version.

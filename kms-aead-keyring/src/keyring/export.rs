@@ -16,7 +16,7 @@ use kms_aead::{
 use crate::encodings::{BigQuery, KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
 use crate::purpose::unreserved;
-use crate::spans;
+use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
 use crate::{Interop, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
 
@@ -203,7 +203,7 @@ where
             })?;
             // The store's record rather than the cached one, so that a version another process
             // flagged compromised since this process last refreshed is never exported.
-            let record = self.cache.reload("export").await?;
+            let record = self.cache.reload(LoadReason::Export).await?;
             let (primary, versions) = self.exported_versions(&record, selection, interop)?;
             let mut keyset = TinkKeyset::new(primary);
             for (key_id, key_type, encrypted_dek) in &versions {

@@ -22,7 +22,7 @@ use tokio::time::Instant;
 
 use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::record::{check_successor, withdrawn_deks, RecordEdit};
-use crate::spans;
+use crate::spans::{self, LoadChanged, LoadReason, Reload};
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, Swap, WatchEvent};
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
 
@@ -105,7 +105,7 @@ impl<S: KeyringStore> RecordCache<S> {
             if let Ok(refresh) = self.refresh.try_lock() {
                 // Another call may have revalidated between the check and the lock.
                 if self.revalidation_due() {
-                    self.revalidate(&refresh, "ttl").await;
+                    self.revalidate(&refresh, LoadReason::Ttl).await;
                 }
             }
         }
@@ -115,35 +115,36 @@ impl<S: KeyringStore> RecordCache<S> {
     /// The cached record, reloaded first when it has no version `key_id`: once for all the
     /// calls that miss it together, and at most once per reload interval. Returns the record,
     /// which may still lack the version, and what the miss caused, the `reload` span value.
-    pub(crate) async fn find(&self, key_id: KeyId) -> (Arc<KeyringRecord>, &'static str) {
+    pub(crate) async fn find(&self, key_id: KeyId) -> (Arc<KeyringRecord>, Reload) {
         let record = self.current().await;
         if record.version(key_id).is_some() {
-            return (record, "none");
+            return (record, Reload::NotNeeded);
         }
         let reloads = self.unknown_id_reloads.load(Ordering::SeqCst);
         let mut last_reload = self.refresh.lock().await;
         let record = self.record();
         if record.version(key_id).is_some() {
-            return (record, "none");
+            return (record, Reload::NotNeeded);
         }
         if self.unknown_id_reloads.load(Ordering::SeqCst) != reloads {
-            return (record, "reloaded");
+            return (record, Reload::Reloaded);
         }
         let now = Instant::now();
         if last_reload.is_some_and(|last| now < after(last, self.reload_min_interval)) {
             spans::reload_rate_limited(&self.id, key_id);
-            return (record, "rate_limited");
+            return (record, Reload::RateLimited);
         }
         *last_reload = Some(now);
-        self.revalidate(&last_reload, "unknown_key_id").await;
+        self.revalidate(&last_reload, LoadReason::UnknownKeyId)
+            .await;
         self.unknown_id_reloads.fetch_add(1, Ordering::SeqCst);
-        (self.record(), "reloaded")
+        (self.record(), Reload::Reloaded)
     }
 
     /// Reads the record from the store, past the TTL and the rate limit, and takes it unless it
     /// moves backwards. The cached record stays when the read fails. `reason` is the `reason`
     /// span value.
-    pub(crate) async fn reload(&self, reason: &'static str) -> KeyringResult<Arc<KeyringRecord>> {
+    pub(crate) async fn reload(&self, reason: LoadReason) -> KeyringResult<Arc<KeyringRecord>> {
         let refresh = self.refresh.lock().await;
         let span = spans::load(&self.id, S::KIND, reason);
         spans::in_span(span, async {
@@ -153,11 +154,11 @@ impl<S: KeyringStore> RecordCache<S> {
             let revision = stored.revision.clone();
             match self.accept(&refresh, stored) {
                 Ok(()) => {
-                    spans::record_load("true", Some(&revision));
+                    spans::record_load(LoadChanged::Taken, Some(&revision));
                     Ok(self.record())
                 }
                 Err(rule) => {
-                    spans::record_load("regressed", Some(&revision));
+                    spans::record_load(LoadChanged::Regressed, Some(&revision));
                     Err(self.regressed(rule))
                 }
             }
@@ -204,11 +205,11 @@ impl<S: KeyringStore> RecordCache<S> {
         store: &S,
         id: &KeyringId,
     ) -> KeyringResult<Option<Stored<S::Revision>>> {
-        let span = spans::load(id, S::KIND, "open");
+        let span = spans::load(id, S::KIND, LoadReason::Open);
         spans::in_span(span, async {
             let stored = spans::timed(store.load(id)).await?;
             if let Some(stored) = &stored {
-                spans::record_load("true", Some(&stored.revision));
+                spans::record_load(LoadChanged::Taken, Some(&stored.revision));
             }
             Ok(stored)
         })
@@ -218,18 +219,18 @@ impl<S: KeyringStore> RecordCache<S> {
     /// The store's record, refused when it moves backwards from the cached one, for a write to
     /// build on.
     async fn read_for_write(&self) -> KeyringResult<Stored<S::Revision>> {
-        let span = spans::load(&self.id, S::KIND, "admin");
+        let span = spans::load(&self.id, S::KIND, LoadReason::Admin);
         spans::in_span(span, async {
             let stored = spans::timed(self.store.load(&self.id))
                 .await?
                 .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
             match check_successor(&self.record(), &stored.record) {
                 Ok(()) => {
-                    spans::record_load("false", Some(&stored.revision));
+                    spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));
                     Ok(stored)
                 }
                 Err(rule) => {
-                    spans::record_load("regressed", Some(&stored.revision));
+                    spans::record_load(LoadChanged::Regressed, Some(&stored.revision));
                     Err(self.regressed(rule))
                 }
             }
@@ -240,25 +241,27 @@ impl<S: KeyringStore> RecordCache<S> {
     /// Revalidates the cached record now, whatever its age, and takes what the store returns
     /// when it moves forward. A failure keeps the cached record, and the next TTL revalidation
     /// comes after the reload interval.
-    async fn revalidate(&self, refresh: &RefreshGuard<'_>, reason: &'static str) {
+    async fn revalidate(&self, refresh: &RefreshGuard<'_>, reason: LoadReason) {
         let revision = self.lock().revision.clone();
         let span = spans::load(&self.id, S::KIND, reason);
         let result = spans::in_span(span, async {
             match spans::timed(self.store.revalidate(&self.id, &revision)).await? {
-                Revalidation::Unchanged => spans::record_load("false", None::<&S::Revision>),
+                Revalidation::Unchanged => {
+                    spans::record_load(LoadChanged::Unchanged, None::<&S::Revision>)
+                }
                 Revalidation::Changed(stored) => {
                     let revision = stored.revision.clone();
                     match self.accept(refresh, stored) {
-                        Ok(()) => spans::record_load("true", Some(&revision)),
+                        Ok(()) => spans::record_load(LoadChanged::Taken, Some(&revision)),
                         Err(rule) => {
                             spans::record_regressed(&self.id, rule);
-                            spans::record_load("regressed", Some(&revision));
+                            spans::record_load(LoadChanged::Regressed, Some(&revision));
                         }
                     }
                 }
                 Revalidation::Missing => {
                     spans::record_missing_kept(&self.id);
-                    spans::record_load("false", None::<&S::Revision>);
+                    spans::record_load(LoadChanged::Unchanged, None::<&S::Revision>);
                 }
             }
             Ok(())
@@ -365,7 +368,7 @@ impl<S: KeyringStore> RecordCache<S> {
             };
             last = Some(Instant::now());
             let refresh = cache.refresh.lock().await;
-            cache.revalidate(&refresh, "watch").await;
+            cache.revalidate(&refresh, LoadReason::Watch).await;
         }
     }
 }

@@ -110,8 +110,8 @@ slice of values as a `BYTEA[]` for `= ANY($1)`:
 ```rust,no_run
 use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
-use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring};
 use tokio_postgres::{Client, NoTls};
 # use kms_aead::KmsAeadResult;
