@@ -271,30 +271,25 @@ where
 
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
     /// current span where the key came from, whether `use_key` succeeds or not. A failed unwrap
-    /// records a miss, or `disabled` without a cache.
+    /// records a miss. Without a cache nothing is recorded: the span records `disabled` when it
+    /// opens, and a field recorded twice is exported twice.
     async fn with_dek<T>(
         &self,
         encrypted: &EncryptedDataEncryptionKey,
         use_key: impl FnOnce(&DataEncryptionKey) -> KmsAeadResult<T>,
     ) -> KmsAeadResult<T> {
-        match self
+        let result = self
             .dek_cache
             .with_key(&self.provider, encrypted, use_key)
-            .await
-        {
-            Ok((used, outcome)) => {
-                spans::record_dek_cache(outcome);
-                used
-            }
-            Err(error) => {
-                spans::record_dek_cache(if self.dek_cache.is_enabled() {
-                    DekCacheOutcome::Miss
-                } else {
-                    DekCacheOutcome::Disabled
-                });
-                Err(error)
-            }
+            .await;
+        if self.dek_cache.is_enabled() {
+            spans::record_dek_cache(match &result {
+                Ok((_, outcome)) => *outcome,
+                Err(_) => DekCacheOutcome::Miss,
+            });
         }
+        let (used, _) = result?;
+        used
     }
 
     /// The `mode` span field of `encrypt_value` and `decrypt_value`.
