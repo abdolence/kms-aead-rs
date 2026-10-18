@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::cache::{DekCache, DekCacheOptions, InsertDek};
+use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome, InsertDek};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::spans;
 use crate::*;
@@ -279,18 +279,31 @@ where
     }
 
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
-    /// current span where the key came from, whether `use_key` succeeds or not.
+    /// current span where the key came from, whether `use_key` succeeds or not. A failed unwrap
+    /// records a miss, or `disabled` without a cache.
     async fn with_dek<T>(
         &self,
         encrypted: &EncryptedDataEncryptionKey,
         use_key: impl FnOnce(&DataEncryptionKey) -> KmsAeadResult<T>,
     ) -> KmsAeadResult<T> {
-        let (used, outcome) = self
+        match self
             .dek_cache
             .with_key(&self.provider, encrypted, use_key)
-            .await?;
-        spans::record_dek_cache(outcome);
-        used
+            .await
+        {
+            Ok((used, outcome)) => {
+                spans::record_dek_cache(outcome);
+                used
+            }
+            Err(error) => {
+                spans::record_dek_cache(if self.dek_cache.is_enabled() {
+                    DekCacheOutcome::Miss
+                } else {
+                    DekCacheOutcome::Disabled
+                });
+                Err(error)
+            }
+        }
     }
 
     /// The `mode` span field of `encrypt_value` and `decrypt_value`.
