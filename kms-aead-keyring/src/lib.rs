@@ -77,7 +77,7 @@
 //! |---|---|---|
 //! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
 //! | Firestore, with a listener for push | `store::FirestoreKeyringStore` | `firestore` |
-//! | PostgreSQL, through sqlx, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
+//! | PostgreSQL, through tokio-postgres, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
 //! | Cloud Storage, with generation preconditions and no push | `store::GcsKeyringStore` | `gcs` |
 //! | Amazon S3 and S3-compatible servers, with ETag preconditions and no push | `store::S3KeyringStore` | `s3` |
 //!
@@ -90,8 +90,7 @@
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
-//! | `postgres` | `store::PostgresKeyringStore`, and sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] as `BYTEA` |
-//! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |
+//! | `postgres` | `store::PostgresKeyringStore` on tokio-postgres, with the TLS connector the application passes, and kms-aead's `postgres` |
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |

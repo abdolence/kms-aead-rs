@@ -336,49 +336,87 @@ mod firestore_store {
 }
 
 /// The PostgreSQL store, against the database at `KMS_AEAD_KEYRING_POSTGRES_URL`. Each test
-/// creates tables of its own, so that tests share neither rows nor `NOTIFY` channels.
+/// creates tables of its own, so that tests share neither rows nor `NOTIFY` channels, and names
+/// its store's sessions, so that it finds them in `pg_stat_activity`.
 #[cfg(feature = "postgres")]
 mod postgres {
+    use std::error::Error;
     use std::time::{Duration, Instant};
 
     use kms_aead_keyring::store::{
         KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresTable, WatchEvent,
     };
-    use kms_aead_keyring::{Encrypted, KeyringError, KeyringResult};
-    use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
-    use sqlx::AssertSqlSafe;
+    use kms_aead_keyring::KeyringError;
+    use tokio_postgres::{Client, Config, NoTls};
 
     use super::{conformance, record, unique_keyring_id, written, TestResult};
 
-    fn connect_options() -> Result<PgConnectOptions, Box<dyn std::error::Error>> {
+    fn config() -> Result<Config, Box<dyn Error>> {
         Ok(std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?)
     }
 
-    async fn connect() -> Result<PgPool, Box<dyn std::error::Error>> {
-        Ok(PgPool::connect_with(connect_options()?).await?)
+    /// A session of the test's own, outside every store.
+    async fn connect() -> Result<Client, Box<dyn Error>> {
+        let (client, connection) = config()?.connect(NoTls).await?;
+        tokio::spawn(connection);
+        Ok(client)
+    }
+
+    /// A store on `table` whose sessions carry the application name `application`.
+    fn named_store(
+        application: &str,
+        table: &PostgresTable,
+    ) -> Result<PostgresKeyringStore<NoTls>, Box<dyn Error>> {
+        let mut config = config()?;
+        config.application_name(application);
+        Ok(PostgresKeyringStore::new(config, NoTls).with_table(table.clone()))
+    }
+
+    fn unique_application() -> String {
+        format!("keyring-{}", uuid::Uuid::now_v7().simple())
+    }
+
+    /// The open sessions named `application`.
+    async fn sessions(admin: &Client, application: &str) -> Result<i64, Box<dyn Error>> {
+        let row = admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+                &[&application],
+            )
+            .await?;
+        Ok(row.try_get(0)?)
+    }
+
+    async fn terminate_sessions(admin: &Client, application: &str) -> TestResult {
+        admin
+            .execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                WHERE application_name = $1",
+                &[&application],
+            )
+            .await?;
+        Ok(())
     }
 
     /// A new table with the documented DDL.
-    async fn create_table(pool: &PgPool) -> Result<PostgresTable, Box<dyn std::error::Error>> {
+    async fn create_table(admin: &Client) -> Result<PostgresTable, Box<dyn Error>> {
         let table =
             PostgresTable::try_from(format!("kms_keyrings_{}", uuid::Uuid::now_v7().simple()))?;
-        sqlx::query(AssertSqlSafe(format!(
-            "CREATE TABLE {table} (
-                id         TEXT PRIMARY KEY,
-                record     JSONB NOT NULL,
-                revision   BIGINT NOT NULL,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            )"
-        )))
-        .execute(pool)
-        .await?;
+        admin
+            .batch_execute(&format!(
+                "CREATE TABLE {table} (
+                    id         TEXT PRIMARY KEY,
+                    record     JSONB NOT NULL,
+                    revision   BIGINT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )"
+            ))
+            .await?;
         Ok(table)
     }
 
-    async fn drop_table(pool: &PgPool, table: &PostgresTable) -> TestResult {
-        sqlx::query(AssertSqlSafe(format!("DROP TABLE {table}")))
-            .execute(pool)
-            .await?;
+    async fn drop_table(admin: &Client, table: &PostgresTable) -> TestResult {
+        admin.batch_execute(&format!("DROP TABLE {table}")).await?;
         Ok(())
     }
 
@@ -391,10 +429,11 @@ mod postgres {
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn the_postgres_store_conforms() -> TestResult {
-        let pool = connect().await?;
-        let table = create_table(&pool).await?;
-        conformance(|| PostgresKeyringStore::new(pool.clone()).with_table(table.clone())).await?;
-        drop_table(&pool, &table).await
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let store = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
+        conformance(|| store.clone()).await?;
+        drop_table(&admin, &table).await
     }
 
     /// A server error may quote the row: a check violation's detail quotes its first bytes, and a
@@ -402,91 +441,36 @@ mod postgres {
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let pool = connect().await?;
-        let table = create_table(&pool).await?;
-        sqlx::raw_sql(AssertSqlSafe(format!(
-            "CREATE FUNCTION {table}_refuse() RETURNS trigger LANGUAGE plpgsql AS $$
-            BEGIN
-                RAISE EXCEPTION 'refused' USING DETAIL = NEW.record::text, HINT = NEW.record::text;
-            END $$;
-            CREATE TRIGGER refuse BEFORE INSERT ON {table}
-                FOR EACH ROW EXECUTE FUNCTION {table}_refuse();"
-        )))
-        .execute(&pool)
-        .await?;
-        let failing = PostgresKeyringStore::new(pool.clone()).with_table(table.clone());
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        admin
+            .batch_execute(&format!(
+                "CREATE FUNCTION {table}_refuse() RETURNS trigger LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'refused' USING DETAIL = NEW.record::text, HINT = NEW.record::text;
+                END $$;
+                CREATE TRIGGER refuse BEFORE INSERT ON {table}
+                    FOR EACH ROW EXECUTE FUNCTION {table}_refuse();"
+            ))
+            .await?;
+        let failing = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
         super::a_store_error_carries_no_record_bytes(failing, None).await?;
-        drop_table(&pool, &table).await?;
-        sqlx::query(AssertSqlSafe(format!("DROP FUNCTION {table}_refuse")))
-            .execute(&pool)
+        drop_table(&admin, &table).await?;
+        admin
+            .batch_execute(&format!("DROP FUNCTION {table}_refuse"))
             .await?;
         Ok(())
     }
 
-    #[tokio::test]
-    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
-    async fn equality_probes_match_with_any() -> TestResult {
-        let pool = connect().await?;
-        let table = format!("encrypted_{}", uuid::Uuid::now_v7().simple());
-        sqlx::query(AssertSqlSafe(format!(
-            "CREATE TABLE {table} (id INT PRIMARY KEY, email BYTEA NOT NULL)"
-        )))
-        .execute(&pool)
-        .await?;
-        let values = (1..=4u8)
-            .map(|row| {
-                let mut bytes = vec![0x01, 0, 0, 0, 1];
-                bytes.extend_from_slice(&[row; 12 + 16]);
-                Encrypted::<String>::try_from(bytes)
-            })
-            .collect::<KeyringResult<Vec<_>>>()?;
-        for (id, value) in (1..).zip(&values) {
-            sqlx::query(AssertSqlSafe(format!(
-                "INSERT INTO {table} VALUES ($1, $2)"
-            )))
-            .bind(id)
-            .bind(value)
-            .execute(&pool)
-            .await?;
-        }
-        let probes = [values[3].clone(), values[1].clone()];
-        let matched: Vec<(i32, Encrypted<String>)> = sqlx::query_as(AssertSqlSafe(format!(
-            "SELECT id, email FROM {table} WHERE email = ANY($1) ORDER BY id"
-        )))
-        .bind(&probes[..])
-        .fetch_all(&pool)
-        .await?;
-        assert_eq!(matched, [(2, values[1].clone()), (4, values[3].clone())]);
-        sqlx::query(AssertSqlSafe(format!("DROP TABLE {table}")))
-            .execute(&pool)
-            .await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
-    async fn a_stored_value_that_is_no_keyring_value_fails_to_decode() -> TestResult {
-        let pool = connect().await?;
-        let decoded = sqlx::query_scalar::<_, Encrypted<String>>("SELECT '\\x00'::bytea")
-            .fetch_one(&pool)
-            .await;
-        assert!(matches!(decoded, Err(sqlx::Error::ColumnDecode { .. })));
-        Ok(())
-    }
-
-    /// A store and its clones share one listener connection, so a watch per keyring costs no
-    /// connection beyond the first.
+    /// The watches of a store and its clones share one listener connection, so a watch per
+    /// keyring costs no connection beyond the store's two.
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn many_watches_share_one_connection() -> TestResult {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
-        let pool = PgPoolOptions::new()
-            .max_connections(2)
-            .acquire_timeout(Duration::from_millis(500))
-            .connect_with(connect_options()?)
-            .await?;
-        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
+        let application = unique_application();
+        let store = named_store(&application, &table)?;
         let mut watches = Vec::new();
         for _ in 0..5 {
             let tenant = store.clone();
@@ -498,6 +482,7 @@ mod postgres {
             );
         }
         assert!(store.load(&unique_keyring_id()?).await?.is_none());
+        assert_eq!(sessions(&admin, &application).await?, 2);
         drop(watches);
         drop_table(&admin, &table).await
     }
@@ -507,7 +492,7 @@ mod postgres {
     async fn a_change_signals_only_its_keyrings_watches() -> TestResult {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
-        let store = PostgresKeyringStore::new(connect().await?).with_table(table.clone());
+        let store = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
         let changed = unique_keyring_id()?;
         let mut changed_watches = [
             store
@@ -544,9 +529,8 @@ mod postgres {
     async fn a_lost_connection_reaches_every_watch() -> TestResult {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
-        let application = format!("listener-{}", uuid::Uuid::now_v7().simple());
-        let pool = PgPool::connect_with(connect_options()?.application_name(&application)).await?;
-        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
+        let application = unique_application();
+        let store = named_store(&application, &table)?;
         let id = unique_keyring_id()?;
         let mut watches = [
             store.watch(&id).await?.ok_or("the store has no push")?,
@@ -555,12 +539,7 @@ mod postgres {
                 .await?
                 .ok_or("the store has no push")?,
         ];
-        sqlx::query(
-            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1",
-        )
-        .bind(&application)
-        .execute(&admin)
-        .await?;
+        terminate_sessions(&admin, &application).await?;
         for watch in &mut watches {
             assert_eq!(next_event(watch).await?, Some(WatchEvent::Disconnected));
             assert_eq!(next_event(watch).await?, Some(WatchEvent::Reconnected));
@@ -573,30 +552,53 @@ mod postgres {
         drop_table(&admin, &table).await
     }
 
-    /// The shared listener holds its connection while any watch runs, and returns it once the
-    /// last one is dropped.
+    /// The call that finds the query connection lost may fail with it; the next one opens a new
+    /// connection.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn a_lost_query_connection_reconnects_on_the_next_call() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let application = unique_application();
+        let store = named_store(&application, &table)?;
+        let id = unique_keyring_id()?;
+        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        terminate_sessions(&admin, &application).await?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while sessions(&admin, &application).await? > 0 {
+            assert!(
+                Instant::now() < deadline,
+                "the session outlived its termination"
+            );
+        }
+        let first = store.load(&id).await;
+        assert!(matches!(first, Ok(Some(_)) | Err(KeyringError::Store(_))));
+        assert!(store.load(&id).await?.is_some());
+        drop_table(&admin, &table).await
+    }
+
+    /// The listener connection stays open while any watch runs, and closes once the last one
+    /// is dropped.
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn dropping_the_watch_returns_its_connection() -> TestResult {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(Duration::from_millis(500))
-            .connect_with(connect_options()?)
-            .await?;
-        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
-        let id = unique_keyring_id()?;
-        let first = store.watch(&id).await?.ok_or("the store has no push")?;
+        let application = unique_application();
+        let store = named_store(&application, &table)?;
+        let first = store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?;
         let last = store
             .watch(&unique_keyring_id()?)
             .await?
             .ok_or("the store has no push")?;
         drop(first);
-        assert!(matches!(store.load(&id).await, Err(KeyringError::Store(_))));
+        assert_eq!(sessions(&admin, &application).await?, 1);
         drop(last);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while store.load(&id).await.is_err() {
+        while sessions(&admin, &application).await? > 0 {
             assert!(Instant::now() < deadline, "the watch kept its connection");
         }
         drop_table(&admin, &table).await
@@ -619,19 +621,21 @@ mod postgres {
             Keyring, KeyringId, KeyringOptions, KeyringPolicy, KeyringRecord, KeyringResult,
         };
 
-        use super::{connect, create_table, drop_table};
+        use tokio_postgres::NoTls;
+
+        use super::{config, connect, create_table, drop_table};
         use crate::{unique_keyring_id, TestResult};
 
         /// A store that counts the revalidations a keyring asks of it.
         struct CountingStore {
-            inner: PostgresKeyringStore,
+            inner: PostgresKeyringStore<NoTls>,
             revalidations: Arc<AtomicUsize>,
         }
 
         impl KeyringStore for CountingStore {
             type Revision = PostgresRevision;
 
-            const KIND: StoreKind = PostgresKeyringStore::KIND;
+            const KIND: StoreKind = PostgresKeyringStore::<NoTls>::KIND;
 
             async fn load(
                 &self,
@@ -667,11 +671,11 @@ mod postgres {
         #[tokio::test]
         #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
         async fn notify_from_another_session_is_rate_limited() -> TestResult {
-            let pool = connect().await?;
-            let table = create_table(&pool).await?;
+            let admin = connect().await?;
+            let table = create_table(&admin).await?;
             let revalidations = Arc::new(AtomicUsize::new(0));
             let store = CountingStore {
-                inner: PostgresKeyringStore::new(pool.clone()).with_table(table.clone()),
+                inner: PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone()),
                 revalidations: revalidations.clone(),
             };
             let interval = Duration::from_millis(500);
@@ -701,10 +705,11 @@ mod postgres {
             let started = Instant::now();
             // One transaction each: PostgreSQL folds equal notifications of one transaction.
             for _ in 0..100 {
-                sqlx::query("SELECT pg_notify($1, $2)")
-                    .bind(table.to_string())
-                    .bind(id.as_str())
-                    .execute(&pool)
+                admin
+                    .execute(
+                        "SELECT pg_notify($1, $2)",
+                        &[&table.to_string(), &id.as_str()],
+                    )
                     .await?;
             }
             tokio::time::sleep(3 * interval).await;
@@ -716,7 +721,7 @@ mod postgres {
                 "{caused} revalidations in {intervals} intervals"
             );
             drop(keyring);
-            drop_table(&pool, &table).await
+            drop_table(&admin, &table).await
         }
     }
 }

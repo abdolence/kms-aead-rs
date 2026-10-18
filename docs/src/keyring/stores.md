@@ -84,47 +84,65 @@ CREATE TABLE kms_keyrings (
 - The serving principal needs `SELECT` on it, and the administrative one also `INSERT` and
   `UPDATE`;
 - the table name is unqualified, so the connection's `search_path` selects the schema;
-- every write sends `NOTIFY <table>, '<keyring id>'` when it commits. The keyrings of a store
-  share one listener on that channel, which holds one connection of the pool while any of them
-  watches;
+- every write sends `NOTIFY <table>, '<keyring id>'` when it commits;
 - PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
   `reload_min_interval` however many signals arrive, so a stray `NOTIFY` costs one read.
 
+The store connects through tokio-postgres, with a `tokio_postgres::Config` and a TLS connector the
+application chooses. `NoTls` for a local database:
+
 ```rust,no_run
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
 use kms_aead_keyring::store::{PostgresKeyringStore, PostgresTable};
-use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions};
-use sqlx::postgres::PgPool;
+use tokio_postgres::{Config, NoTls};
 
-# #[tokio::main]
-# async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-let pool = PgPool::connect("postgres://app@db/app").await?;
-let store = PostgresKeyringStore::new(pool)
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let config: Config = "postgres://app@localhost/app".parse()?;
+let store: PostgresKeyringStore<NoTls> = PostgresKeyringStore::new(config, NoTls)
     .with_table(PostgresTable::try_from("tenant_keyrings".to_string())?);
-
-let keyring = Keyring::open(
-    store,
-    provider,
-    AeadBackend::Ring,
-    KeyringId::try_from("tenant-42".to_string())?,
-    KeyringOptions::new(),
-)
-.await?;
-# let _ = keyring;
+# let _ = store;
 # Ok(())
 # }
 ```
 
-The `PgPool` is sqlx's: the application owns the pool, its connection options and its TLS stack.
-The TLS features, one of which a TLS connection needs:
+tokio-postgres-rustls's `MakeRustlsConnect` for production, here with the platform's root
+certificates:
 
-- `postgres-tls-rustls`: rustls with aws-lc-rs;
-- `postgres-tls-rustls-ring`: rustls with ring;
-- `postgres-tls-native`: the platform TLS library.
+```rust,no_run
+use kms_aead_keyring::store::PostgresKeyringStore;
+use rustls::{ClientConfig, RootCertStore};
+use tokio_postgres::Config;
+use tokio_postgres_rustls::MakeRustlsConnect;
 
-The same feature gives `Encrypted` sqlx's `Type`, `Encode` and `Decode` as `BYTEA`, see
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
+let mut roots = RootCertStore::empty();
+roots.add_parsable_certificates(rustls_native_certs::load_native_certs().certs);
+let tls = MakeRustlsConnect::new(
+    ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth(),
+);
+let config: Config = "postgres://app@db.internal/app?sslmode=require".parse()?;
+let store: PostgresKeyringStore<MakeRustlsConnect> = PostgresKeyringStore::new(config, tls);
+# let _ = store;
+# Ok(())
+# }
+```
+
+`postgres-native-tls`'s `MakeTlsConnector` works the same way for the platform TLS library.
+
+The store opens at most two connections, whatever the number of keyrings on it:
+
+- the query connection, on the first read or write. When it is lost, the call that finds it lost
+  fails, and the next call connects again. Concurrent calls wait for one attempt;
+- the listener connection, on the first watch, shared by every keyring that watches. It closes when
+  the last watch is dropped. When it is lost, every keyring hears of it, the store reconnects
+  after a delay that doubles from 0.5 to 30 seconds, and the keyrings revalidate.
+
+Clones of the store share both connections. Set `connect_timeout` on the `Config` to bound each
+attempt: calls wait for the attempt in progress.
+
+The `postgres` feature also enables kms-aead's `postgres` feature, which gives `Encrypted`
+tokio-postgres's `ToSql` and `FromSql` as `BYTEA`, see
 [Encrypted fields](./fields.md#postgresql).
 
 ## Cloud Storage

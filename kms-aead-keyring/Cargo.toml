@@ -34,7 +34,7 @@ subtle = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing = { workspace = true }
 firestore = { version = "0.58", optional = true }
-sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
+tokio-postgres = { version = "0.7", optional = true, default-features = false, features = ["runtime"] }
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
 tokio-stream = { version = "0.1", optional = true, default-features = false }
@@ -49,6 +49,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 uuid = { version = "1", features = ["v7"] }
 # The S3 client of the S3 store's examples.
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
+# The TLS connector of the PostgreSQL store's examples, with the platform's root certificates.
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-native-certs = "0.8"
 
 [features]
 default = []
@@ -65,13 +69,10 @@ serde = ["kms-aead/serde"]
 serde-json = ["serde", "kms-aead/serde-json"]
 # `FirestoreKeyringStore`, on firestore-rs with its default TLS roots and crypto provider.
 firestore = ["dep:firestore"]
-# `PostgresKeyringStore`, and `Type`, `Encode` and `Decode` for `Encrypted` as `BYTEA`. The
-# store's listener task waits on its notifications and on the watch with `tokio::select!`.
-postgres = ["dep:sqlx", "tokio/macros"]
-# sqlx's TLS stacks for the store's connections, one of which a TLS connection needs.
-postgres-tls-rustls = ["postgres", "sqlx/tls-rustls-aws-lc-rs"]
-postgres-tls-rustls-ring = ["postgres", "sqlx/tls-rustls-ring"]
-postgres-tls-native = ["postgres", "sqlx/tls-native-tls"]
+# `PostgresKeyringStore` on tokio-postgres, and kms-aead's `ToSql` and `FromSql` for `Encrypted`
+# as `BYTEA`. The store's listener task waits on its notifications and on the watch with
+# `tokio::select!`.
+postgres = ["dep:tokio-postgres", "kms-aead/postgres", "tokio/macros"]
 # `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
 # feature from the application, or one of the two below, to build.
 gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
@@ -101,7 +102,7 @@ features = [
     "deterministic",
     "serde-json",
     "firestore",
-    "postgres-tls-rustls",
+    "postgres",
     "gcs-tls-roots",
     "s3",
     "bigquery-export",
