@@ -41,7 +41,8 @@ impl PartialEq for CipherText {
 ///
 /// The ciphers take the key's own bytes. A provider's
 /// [`encrypt_data_encryption_key`](crate::KmsAeadEncryptionProvider::encrypt_data_encryption_key)
-/// receives the key as Tink serializes it, which is what the KMS wraps.
+/// receives the key as Tink serializes it, which is what the KMS wraps, and the Azure provider the
+/// raw key.
 #[derive(Debug, Clone)]
 pub struct DataEncryptionKey(SecretValue);
 
@@ -127,7 +128,7 @@ impl Display for KmsKeyVersion {
 
 /// A data encryption key wrapped by a KMS: the bytes the provider returned, which are also the
 /// bytes to store and the bytes the provider unwraps. They are the KMS ciphertext of the key as
-/// Tink serializes it, and they name the KMS key version that wrapped it where the KMS needs one
+/// Tink serializes it, or of the raw key for Azure, and they name the KMS key version that wrapped it where the KMS needs one
 /// to unwrap; the formats chapter of the book lists each provider's bytes.
 ///
 /// Equality compares in constant time. `Debug` shows the length only.

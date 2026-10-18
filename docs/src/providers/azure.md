@@ -56,7 +56,9 @@ and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 Key Vault unwraps only with the key version that wrapped, so the provider's wrapped DEK carries
 it before Key Vault's wrapped key, in the library's own layout, see
 [Formats](../formats.md#wrapped-deks). No Tink client exists for Azure, so Tink does not read the
-values of this provider. Store the wrapped DEK as it is, see
+values of this provider, and the plaintext Key Vault wraps is the raw DEK of 16, 32 or 64 bytes, as
+in 0.29, rather than the DEK as Tink serializes it. Every wrap algorithm takes it, `A256Kw` too,
+which takes only multiples of 8 bytes. Store the wrapped DEK as it is, see
 [Envelope encryption](../envelope-encryption.md#storing-wrapped-deks).
 
 ## Errors

@@ -3,14 +3,15 @@
 //!
 //! kms-aead writes one envelope format for every provider, Tink's KMS envelope,
 //! [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey). Every data encryption key it
-//! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serializes it.
+//! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serializes it,
+//! except under an Azure KEK: Azure has no Tink client, so its wrapped key is the raw key.
 //!
 //! The public items here are what a keyring of Tink keys needs on top of that:
 //! [`TinkOutputPrefix`], the prefix of its values, and [`TinkKeyset`], the keyset BigQuery reads,
 //! and the [`Format`] of an [`Encrypted`](crate::Encrypted) value: [`Envelope`], [`Randomized`]
 //! or [`Deterministic`].
 
-use crate::errors::KmsAeadLegacyFormat;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
     KmsAeadResult, ValueStruct,
@@ -38,7 +39,9 @@ pub(crate) mod legacy;
 const LEGACY_ENCRYPTED_KEY_V1: [u8; 2] = [0xFF, 0x01];
 
 /// `key` wrapped by `provider` as Tink wraps a data encryption key: the KMS ciphertext of the key
-/// serialized as a key of `key_type`, with no associated data.
+/// serialized as a key of `key_type`, with no associated data. An Azure KEK wraps the raw key
+/// instead: Key Vault's AES key wrap takes only multiples of 8 bytes, which no serialized Tink
+/// key is, and no Tink client exists for Azure.
 ///
 /// # Errors
 ///
@@ -51,8 +54,13 @@ pub(crate) async fn wrap_key<P>(
 where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
-    let serialized = DataEncryptionKey::from(serialize_tink_key(key_type, key));
-    provider.encrypt_data_encryption_key(&serialized).await
+    match provider.kek().provider() {
+        KekProvider::Azure => provider.encrypt_data_encryption_key(key).await,
+        _ => {
+            let serialized = DataEncryptionKey::from(serialize_tink_key(key_type, key));
+            provider.encrypt_data_encryption_key(&serialized).await
+        }
+    }
 }
 
 /// The data encryption key `encrypted` wraps, unwrapped by `provider`, and the layout written by
@@ -64,7 +72,8 @@ where
 /// # Errors
 ///
 /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized Tink
-/// key, and without `legacy-formats` `LEGACY_FORMAT` for a layout of 0.29 or earlier.
+/// key, or under an Azure KEK not a raw key, and without `legacy-formats` `LEGACY_FORMAT` for a
+/// layout of 0.29 or earlier.
 pub(crate) async fn unwrap_key<P>(
     encrypted: &EncryptedDataEncryptionKey,
     provider: &P,
@@ -78,7 +87,7 @@ where
             let encrypted =
                 legacy::encrypted_key_from_layout_v1(after_header, provider.kek().provider())?;
             let unwrapped = provider.decrypt_data_encryption_key(&encrypted).await?;
-            let (key, _) = key_from_unwrapped(unwrapped)?;
+            let (key, _) = key_from_unwrapped(unwrapped, provider.kek().provider())?;
             legacy::warn_once(KmsAeadLegacyFormat::EncryptedKeyV1);
             return Ok((key, Some(KmsAeadLegacyFormat::EncryptedKeyV1)));
         }
@@ -90,23 +99,30 @@ where
         }
     }
     let unwrapped = provider.decrypt_data_encryption_key(encrypted).await?;
-    key_from_unwrapped(unwrapped)
+    key_from_unwrapped(unwrapped, provider.kek().provider())
 }
 
-/// The key in `unwrapped`, what a provider unwrapped: a serialized Tink key, or with
-/// `legacy-formats` the raw key of 16 or 32 bytes that 0.29 and earlier wrapped. No serialized
-/// Tink key has either length.
+/// The key in `unwrapped`, what the provider of `kek` unwrapped: under an Azure KEK the raw key of
+/// 16, 32 or 64 bytes, and under any other a serialized Tink key, or with `legacy-formats` the raw
+/// key of 16 or 32 bytes that 0.29 and earlier wrapped. No serialized Tink key has any of those
+/// lengths.
 fn key_from_unwrapped(
     unwrapped: DataEncryptionKey,
+    kek: &KekProvider,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)> {
-    match unwrapped.value().ref_sensitive_value().len() {
+    match (kek, unwrapped.value().ref_sensitive_value().len()) {
+        (KekProvider::Azure, 16 | 32 | 64) => Ok((unwrapped, None)),
+        (KekProvider::Azure, len) => Err(KmsAeadEncryptionError::create(
+            "INVALID_KEY_FORMAT",
+            &format!("The unwrapped key of {len} bytes is not a raw key of 16, 32 or 64 bytes"),
+        )),
         #[cfg(feature = "legacy-formats")]
-        16 | 32 => {
+        (_, 16 | 32) => {
             legacy::warn_once(KmsAeadLegacyFormat::RawWrappedKey);
             Ok((unwrapped, Some(KmsAeadLegacyFormat::RawWrappedKey)))
         }
         #[cfg(not(feature = "legacy-formats"))]
-        16 | 32 => Err(crate::errors::KmsAeadLegacyFormatError::create(
+        (_, 16 | 32) => Err(crate::errors::KmsAeadLegacyFormatError::create(
             KmsAeadLegacyFormat::RawWrappedKey,
         )),
         _ => Ok((
@@ -136,6 +152,7 @@ mod tests {
     const KEY: [u8; 32] = [0x42; 32];
     /// A Cloud KMS key, whose provider's own bytes never start with `0xFF 0x01`.
     const CLOUD_KMS_KEY: &str = "projects/p/locations/l/keyRings/r/cryptoKeys/k";
+    const AZURE_KEY: &str = "https://orders.vault.azure.net/keys/orders";
     /// `KEY` in the encrypted key layout of 0.29, with the key version `18`.
     const ENCRYPTED_KEY_OF_0_29: &str =
         "ff010231384242424242424242424242424242424242424242424242424242424242424242";
@@ -155,6 +172,29 @@ mod tests {
 
         assert_eq!(key, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
         assert_eq!(legacy, None);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_azure_kek_wraps_and_unwraps_the_raw_key() -> KmsAeadResult<()> {
+        let provider = CountingKmsProvider::with_kek(
+            TestKmsProvider::Working,
+            KekRef::new(KekProvider::Azure, AZURE_KEY),
+        );
+        for (key_type, len) in [
+            (TinkKeyType::AesGcm, 16),
+            (TinkKeyType::AesGcm, 32),
+            (TinkKeyType::AesSiv, 64),
+        ] {
+            let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; len]));
+
+            let encrypted = wrap_key(&key, key_type, &provider).await?;
+            let (unwrapped, legacy) = unwrap_key(&encrypted, &provider).await?;
+
+            assert_eq!(encrypted.value(), key.value().ref_sensitive_value());
+            assert_eq!(unwrapped, key);
+            assert_eq!(legacy, None);
+        }
         Ok(())
     }
 

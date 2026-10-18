@@ -59,7 +59,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
     /// generator when the provider is configured to use one, and from the backend's CSPRNG
     /// otherwise. It is wrapped as Tink wraps a data encryption key, serialized as the Tink key
-    /// of the algorithm, so it can go into a
+    /// of the algorithm, or raw under an Azure KEK, so it can go into a
     /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey).
     ///
     /// # Errors

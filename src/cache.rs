@@ -426,7 +426,7 @@ impl DekCache {
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         // A wrapped value of the same KEK that is no data encryption key, such as an exported
-        // keyset, unwraps too, and the decoding of a serialized Tink key keeps it out.
+        // keyset, unwraps too, and the decoding of the unwrapped key keeps it out.
         let unwrap_key = || async {
             crate::formats::unwrap_key(encrypted, provider)
                 .await

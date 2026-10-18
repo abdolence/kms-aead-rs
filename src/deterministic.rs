@@ -178,7 +178,7 @@ mod aes_siv_cipher {
         /// A new key and the same key wrapped by `provider`, to store. The key comes from the
         /// KMS generator when the provider is configured to use one, and from the backend's
         /// CSPRNG otherwise. It is wrapped as Tink wraps a key, serialized as Tink's
-        /// `AesSivKey`.
+        /// `AesSivKey`, or raw under an Azure KEK.
         ///
         /// # Errors
         ///
