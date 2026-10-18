@@ -194,3 +194,8 @@ required-features = ["azure-kms-encryption-base"]
 name = "only_aead"
 path = "examples/only_aead.rs"
 required-features = ["ring"]
+
+[[example]]
+name = "tracing"
+path = "examples/tracing.rs"
+required-features = ["ring"]
