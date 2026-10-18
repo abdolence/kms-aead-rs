@@ -499,8 +499,9 @@ mod tests {
         0x01, 0xd4, 0x66, 0x08, 0xcb, 0xcc,
     ];
 
-    /// Tink's key id has bit 31 clear, which is a randomized id here, so the value is read under
-    /// the deterministic version 2^31 + 1 holding Tink's key: the rest of the bytes are Tink's.
+    /// Tink's key id has bit 31 clear, so it is no deterministic id here, and the value is read
+    /// under the deterministic version 2^31 + 1 holding Tink's key: the rest of the bytes are
+    /// Tink's.
     #[tokio::test]
     async fn a_deterministic_value_sealed_by_tink_decrypts() -> TestResult {
         let tink_value =

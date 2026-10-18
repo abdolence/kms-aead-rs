@@ -125,7 +125,7 @@ impl KeyId {
 ///
 /// # Errors
 ///
-/// [`KeyringError::ValueLayout`] when the key id is 0 or 2^31, and
+/// [`KeyringError::ValueLayout`] when the key id is reserved, and
 /// [`KeyringError::KeyPurposeMismatch`] when it is not a randomized key id.
 impl<T> TryFrom<&Encrypted<T, Randomized>> for KeyId {
     type Error = KeyringError;

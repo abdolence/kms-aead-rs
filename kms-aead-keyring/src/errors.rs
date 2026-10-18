@@ -25,8 +25,9 @@ pub type KeyringResult<T> = Result<T, KeyringError>;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KeyringError {
-    /// A KMS or AEAD operation of kms-aead failed: an unwrap, a wrap, or a value that is not
-    /// authentic under its key and AAD (code `DECRYPT`).
+    /// An operation of kms-aead failed: an unwrap, a wrap, a value that is not authentic under
+    /// its key and AAD (code `DECRYPT`), or a plaintext that does not encode or decode as its
+    /// type (code `INVALID_PLAINTEXT`).
     Kms(KmsAeadError),
     /// The keyring store failed.
     Store(KeyringStoreError),
@@ -64,7 +65,7 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
-    /// A value whose key id belongs to the other purpose.
+    /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
     InvalidTransition(InvalidTransitionError),
