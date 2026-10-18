@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 
-/// A randomized AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a 12-byte random
+/// A randomised AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a 12-byte random
 /// nonce from the backend's CSPRNG and a 16-byte tag, and do not depend on which backend sealed
 /// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

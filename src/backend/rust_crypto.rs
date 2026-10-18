@@ -12,7 +12,7 @@ use crate::AeadAlgorithm;
 /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the `rustcrypto`
 /// feature: every [`AeadAlgorithm`], with `getrandom` as the CSPRNG. Needs no C compiler. The
 /// feature turns on the crates' `zeroize` features, so their key objects, and the Poly1305 and
-/// POLYVAL keys each call derives, are zeroized when dropped.
+/// POLYVAL keys each call derives, are zeroised when dropped.
 #[derive(Debug, Clone, Copy)]
 pub struct RustCrypto;
 

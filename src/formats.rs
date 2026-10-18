@@ -3,7 +3,7 @@
 //!
 //! kms-aead writes one envelope format for every provider, Tink's KMS envelope,
 //! [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey). Every data encryption key it
-//! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serializes it,
+//! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serialises it,
 //! except under an Azure KEK: Azure has no Tink client, so its wrapped key is the raw key.
 //!
 //! The wrapped keys of two built-in providers are kms-aead's own layouts, crate-private and
@@ -50,8 +50,8 @@ pub(crate) mod legacy;
 const LEGACY_ENCRYPTED_KEY_V1: [u8; 2] = [0xFF, 0x01];
 
 /// `key` wrapped by `provider` as Tink wraps a data encryption key: the KMS ciphertext of the key
-/// serialized as a key of `key_type`, with no associated data. An Azure KEK wraps the raw key
-/// instead: Key Vault's AES key wrap takes only multiples of 8 bytes, which no serialized Tink
+/// serialised as a key of `key_type`, with no associated data. An Azure KEK wraps the raw key
+/// instead: Key Vault's AES key wrap takes only multiples of 8 bytes, which no serialised Tink
 /// key is, and no Tink client exists for Azure.
 ///
 /// # Errors
@@ -111,12 +111,12 @@ where
 /// The data encryption key `encrypted` wraps, unwrapped by `provider`, and the layout written by
 /// 0.29 or earlier that it was read from, if any. Only `legacy-formats` reads those layouts: the
 /// bytes of 0.29's encrypted key layout given to a built-in provider, and a wrapped key that holds
-/// the raw key rather than a serialized Tink key. The bytes of an application's own provider are
+/// the raw key rather than a serialised Tink key. The bytes of an application's own provider are
 /// never inspected.
 ///
 /// # Errors
 ///
-/// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized Tink
+/// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialised Tink
 /// key, or under an Azure KEK not a raw key, and without `legacy-formats` `LEGACY_FORMAT` for a
 /// layout of 0.29 or earlier.
 pub(crate) async fn unwrap_key<P>(
@@ -148,8 +148,8 @@ where
 }
 
 /// The key in `unwrapped`, what the provider of `kek` unwrapped: under an Azure KEK the raw key of
-/// 16, 32 or 64 bytes, and under any other a serialized Tink key, or with `legacy-formats` the raw
-/// key of 16 or 32 bytes that 0.29 and earlier wrapped. No serialized Tink key has any of those
+/// 16, 32 or 64 bytes, and under any other a serialised Tink key, or with `legacy-formats` the raw
+/// key of 16 or 32 bytes that 0.29 and earlier wrapped. No serialised Tink key has any of those
 /// lengths.
 fn key_from_unwrapped(
     unwrapped: DataEncryptionKey,

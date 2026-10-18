@@ -75,7 +75,7 @@ impl Display for LocalKekVersion {
     }
 }
 
-/// One version of a local key encryption key: 32 bytes for AES-256-GCM, zeroized on drop.
+/// One version of a local key encryption key: 32 bytes for AES-256-GCM, zeroised on drop.
 /// `Debug` shows the version and where the key came from, never the key.
 pub struct LocalKek {
     version: LocalKekVersion,
@@ -195,7 +195,7 @@ impl LocalKek {
     }
 
     /// Decodes standard base64 with trailing whitespace allowed. Every copy of the text is
-    /// zeroized: `encoded` on drop, and the trimmed copy by `from_base64_str`.
+    /// zeroised: `encoded` on drop, and the trimmed copy by `from_base64_str`.
     fn decode(encoded: SecretValue, origin: &str) -> KmsAeadResult<SecretValue> {
         let invalid = || {
             KmsAeadSystemError::create(

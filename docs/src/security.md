@@ -51,24 +51,24 @@ values sealed with it are equal, and does not break integrity.
 
 Deterministic encryption with AES-SIV takes no random nonce.
 
-## Key lifetime and zeroization
+## Key lifetime and zeroisation
 
-`DataEncryptionKey`, `LocalKek` and the Vault token are zeroized on drop and shown as `***` by
-`Debug`. The DEK cache zeroizes a key when its entry leaves the cache and no `with_key` closure
+`DataEncryptionKey`, `LocalKek` and the Vault token are zeroised on drop and shown as `***` by
+`Debug`. The DEK cache zeroises a key when its entry leaves the cache and no `with_key` closure
 holds it.
 
 Some copies are out of the library's reach:
 
 - the KMS SDKs and HTTP clients the providers use keep copies of each plaintext DEK in request and
-  response buffers, which kms-aead cannot zeroize. The same holds for the Vault token in the HTTP
+  response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
   stack;
-- ring does not zeroize its expanded key schedules, so they stay in freed memory after each call;
+- ring does not zeroise its expanded key schedules, so they stay in freed memory after each call;
 - aws-lc-rs clears its key context through AWS-LC's allocator, as long as the application leaves
   that allocator in place. The record keys AES-256-GCM-SIV derives for each call stay on the stack;
-- the RustCrypto backend zeroizes its key objects and the per-call Poly1305 and POLYVAL keys;
+- the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;
 - an expired DEK stays in the cache's memory until the next call on the cache or
   `purge_expired`;
-- a plaintext value returned to the application is a `SecretValue`, zeroized on drop, and what the
+- a plaintext value returned to the application is a `SecretValue`, zeroised on drop, and what the
   application does with it afterwards is its own.
 
 ## What rotation does not protect

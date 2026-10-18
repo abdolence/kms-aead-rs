@@ -10,7 +10,7 @@ use super::{AeadBackend, AeadBackendOps, Failure, HmacSha256, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 /// The [ring](https://crates.io/crates/ring) library, with the `ring` feature: ChaCha20-Poly1305,
-/// AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. It does not zeroize its expanded key
+/// AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. It does not zeroise its expanded key
 /// schedules, so they stay in freed memory after each call.
 #[derive(Debug, Clone, Copy)]
 pub struct Ring;

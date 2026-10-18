@@ -43,7 +43,7 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// A Vault token: non-empty visible ASCII, zeroized on drop, shown as `***` by `Debug`.
+/// A Vault token: non-empty visible ASCII, zeroised on drop, shown as `***` by `Debug`.
 #[derive(Debug, Clone)]
 pub struct HcVaultTransitToken(SecretValue);
 
@@ -64,7 +64,7 @@ impl TryFrom<SecretValue> for HcVaultTransitToken {
 }
 
 impl HcVaultTransitToken {
-    /// The HTTP stack copies the value into buffers this crate cannot zeroize. Marking it
+    /// The HTTP stack copies the value into buffers this crate cannot zeroise. Marking it
     /// sensitive keeps it out of the `Debug` output of the request headers.
     fn header_value(&self) -> KmsAeadResult<HeaderValue> {
         let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value()).map_err(|_| {
@@ -317,7 +317,7 @@ impl HcVaultTransitProvider {
                 .await
                 .map_err(KmsAeadError::from_vault_http_error)?;
             let status = response.status();
-            // The body buffer belongs to the HTTP stack and is freed without being zeroized.
+            // The body buffer belongs to the HTTP stack and is freed without being zeroised.
             let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
                 .collect()
                 .await
@@ -380,7 +380,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
-            // The request buffer belongs to the HTTP stack and is freed without being zeroized.
+            // The request buffer belongs to the HTTP stack and is freed without being zeroised.
             let request = serde_json::to_vec(&EncryptRequest {
                 plaintext: &plaintext,
             })

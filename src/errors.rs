@@ -414,7 +414,7 @@ impl KmsAeadLegacyFormatError {
             }
             KmsAeadLegacyFormat::RawWrappedKey => {
                 "The wrapped key holds the raw key, as kms-aead 0.29 and earlier wrapped every \
-                 key, not a serialized Tink key. Only the deprecated legacy-formats feature reads \
+                 key, not a serialised Tink key. Only the deprecated legacy-formats feature reads \
                  it"
             }
         };
@@ -452,7 +452,7 @@ pub enum KmsAeadLegacyFormat {
     /// with `0xFF 0x01`.
     EncryptedKeyV1,
     /// A wrapped key that unwraps to the raw key, as 0.29 and earlier wrapped every key, rather
-    /// than to a serialized Tink key. The values of 32-bit targets before 0.24.0, whose framing
+    /// than to a serialised Tink key. The values of 32-bit targets before 0.24.0, whose framing
     /// is Tink's, fail with it too.
     RawWrappedKey,
 }

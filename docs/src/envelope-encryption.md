@@ -382,7 +382,7 @@ A [deterministic field](./deterministic.md) also finds rows by equality, by its 
 
 | | Beacon | Deterministic field |
 |---|---|---|
-| Stored value | Randomized, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
+| Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
 | Match | The truncated HMAC, with deliberate collisions | Always the exact value |
 | Key | A beacon key, rotated separately from the data keys | The field's own key |
 | Cost | An extra column, and a decrypt and filter of the candidates on every lookup | Nothing beyond the field |

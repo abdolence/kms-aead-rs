@@ -44,7 +44,7 @@ pub(crate) trait FormatLayout {
 /// layouts written by 0.29 and earlier are not values of this format.
 pub enum Envelope {}
 
-/// A randomized value with Tink's output prefix of type TINK:
+/// A randomised value with Tink's output prefix of type TINK:
 ///
 /// ```text
 /// [0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]

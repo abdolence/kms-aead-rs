@@ -28,7 +28,7 @@ mod tests {
     use crate::formats::{Deterministic, Envelope, Randomized};
     use crate::ValueStruct;
 
-    /// The shortest randomized value of the key `7`: a prefix, a nonce and a tag around an empty
+    /// The shortest randomised value of the key `7`: a prefix, a nonce and a tag around an empty
     /// plaintext.
     fn randomized_bytes() -> Vec<u8> {
         [&[0x01, 0, 0, 0, 7][..], &[0xAB; 12 + 16]].concat()

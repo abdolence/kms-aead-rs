@@ -11,7 +11,7 @@ value Tink encrypts opens with `decrypt_value`.
 | Tink KMS envelope | `CipherTextWithEncryptedKey`, `Encrypted<T, Envelope>` | `[w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
 | AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink (RAW output) | every release |
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
-| Serialized DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
+| Serialised DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialised DEKs](#serialised-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
 | TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
@@ -48,7 +48,7 @@ assert_eq!(CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?, encr
 
 - `w` is 1 to 4,096 bytes, the limit of every Tink implementation, on write and on read;
 - the wrapped DEK is the provider's [`EncryptedDataEncryptionKey`](#wrapped-deks), the KMS
-  ciphertext of the [serialized DEK](#serialized-deks), or of the raw DEK for Azure;
+  ciphertext of the [serialised DEK](#serialised-deks), or of the raw DEK for Azure;
 - the AAD goes to the DEK's AEAD only. The KMS wrap has no AAD, as in Tink, so Tink's AWS client
   sends no encryption context and its GCP client no additional authenticated data;
 - the rest is the `CipherText`, Tink's RAW output.
@@ -100,8 +100,8 @@ wrapped the DEK where the KMS needs one to unwrap:
 
 The Azure layout is the library's own: Key Vault unwraps only with the key version that wrapped,
 and no Tink client exists for Azure. For the same reason, the Key Vault wrapped key is the KMS
-ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialized DEK: AES key
-wrap, `A128KW` to `A256KW`, takes only multiples of 8 bytes, which no serialized DEK is. The local KMS seals the DEK with AES-256-GCM under the KEK
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialised DEK: AES key
+wrap, `A128KW` to `A256KW`, takes only multiples of 8 bytes, which no serialised DEK is. The local KMS seals the DEK with AES-256-GCM under the KEK
 version, with its header up to the version as the AAD, so neither the id nor the version can be
 changed without the unwrap failing.
 
@@ -109,9 +109,9 @@ Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncr
 or `try_from_hex_string`, see
 [Storing wrapped DEKs](./envelope-encryption.md#storing-wrapped-deks).
 
-## Serialized DEKs
+## Serialised DEKs
 
-The plaintext a provider wraps is the DEK serialized as Tink serializes a key, the message of its
+The plaintext a provider wraps is the DEK serialised as Tink serialises a key, the message of its
 Tink key type with `version` 0, which protobuf leaves out. The Azure provider wraps the raw DEK
 instead, see [Wrapped DEKs](#wrapped-deks):
 
@@ -123,7 +123,7 @@ instead, see [Wrapped DEKs](#wrapped-deks):
 | AES-256-GCM-SIV | `AesGcmSivKey` | `[0x1a][0x20][key: 32]` |
 | AES-256-SIV, deterministic | `AesSivKey` | `[0x12][0x40][key: 64]` |
 
-A beacon key of HMAC-SHA256 is serialized as `[0x1a][0x20][key: 32]`, its 32 bytes in
+A beacon key of HMAC-SHA256 is serialised as `[0x1a][0x20][key: 32]`, its 32 bytes in
 `key_value`, field 3, as in Tink's `HmacPrfKey` without its parameters: the bytes of a 32-byte
 `AesGcmKey`. It is wrapped as a DEK is, raw under an Azure key.
 
@@ -132,7 +132,7 @@ ciphers and of `BeaconMac` wrap their keys the same way. The message does not na
 AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides
 how the key is used, as in Tink.
 
-An unwrapped DEK that is no serialized Tink key, or under an Azure key no raw DEK, fails with
+An unwrapped DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
 `INVALID_KEY_FORMAT`. A wrapped Tink
 keyset unwraps under the same KEK too, and this is what keeps it out of the DEK cache.
 
@@ -143,7 +143,7 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 - `TinkKeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`, the
   start of every `Randomized` and `Deterministic` value. Tink and BigQuery pick the key of a
   keyset by it. It is not authenticated;
-- `TinkKeyset`: a serialized `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
+- `TinkKeyset`: a serialised `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
   keys, the bytes `tinkey` writes for the same keys. Wrapped by a Cloud KMS key, it is the keyset
   of BigQuery's `KEYS.KEYSET_CHAIN`: an application writes it for its one key, see
   [One fixed key](./envelope-encryption.md#one-fixed-key), and a keyring exports it for its
@@ -151,7 +151,7 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 
 `TinkKeyset::into_encrypted_bytes` writes the keyset encrypted by a KMS key, as Tink writes an
 encrypted keyset: a `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset`, field 2, is the
-KMS ciphertext of the serialized keyset, wrapped with no associated data. Tink's binary keyset
+KMS ciphertext of the serialised keyset, wrapped with no associated data. Tink's binary keyset
 writers leave out `keyset_info`, field 3, and so does the library. Tink's `KeysetHandle.read`
 reads it with the KMS client of `KekRef::tink_key_uri`, which Tink has for GCP and AWS keys, and
 Tink for Go for Vault Transit keys too.
@@ -213,7 +213,7 @@ The first bytes of a stored value:
 | `FF 01` | encrypted key layout v1 of 0.29 |
 
 Only the unwrapped DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
-16 or 32 bytes against a serialized Tink key, whose lengths differ. A wrapped DEK of AWS, Azure or
+16 or 32 bytes against a serialised Tink key, whose lengths differ. A wrapped DEK of AWS, Azure or
 the local KMS also starts with `0x01`, and Tink's LEGACY and CRUNCHY output prefixes with `0x00`.
 
 A column that holds two layouts:
@@ -260,7 +260,7 @@ and return `None` when it already is in it, so a sweep writes only the rows that
 - `upgrade_legacy_encrypted_key`, for wrapped DEKs stored apart, such as the bytes of 0.29's
   `to_bytes`.
 
-Each unwraps the DEK with the provider, without the DEK cache, and wraps it again as a serialized
+Each unwraps the DEK with the provider, without the DEK cache, and wraps it again as a serialised
 Tink key when it was in an older layout: one KMS call for a current value, two for an old one. A
 value in Tink's framing needs the unwrap to be told from the 32-bit layout before 0.24.0. The AEAD
 bytes stay as they are.

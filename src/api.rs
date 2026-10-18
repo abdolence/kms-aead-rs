@@ -15,7 +15,7 @@ use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 /// An implementation's errors carry no key material in any form, plaintext or wrapped, in
 /// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
 /// HTTP client, which keeps copies of it in request and response buffers that kms-aead cannot
-/// zeroize.
+/// zeroise.
 #[async_trait]
 pub trait KmsAeadEncryptionProvider {
     /// The KEK this provider wraps with and names to the KMS on every unwrap, so that a key

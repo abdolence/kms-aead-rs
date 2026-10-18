@@ -1,4 +1,4 @@
-//! Deterministic encryption with AES-SIV (RFC 5297), beside the randomized path.
+//! Deterministic encryption with AES-SIV (RFC 5297), beside the randomised path.
 
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -180,7 +180,7 @@ mod aes_siv_cipher {
 
         /// A new key and the same key wrapped by `provider`, to store. The key comes from the
         /// KMS generator when the provider is configured to use one, and from the backend's
-        /// CSPRNG otherwise. It is wrapped as Tink wraps a key, serialized as Tink's
+        /// CSPRNG otherwise. It is wrapped as Tink wraps a key, serialised as Tink's
         /// `AesSivKey`, or raw under an Azure KEK.
         ///
         /// # Errors
@@ -296,7 +296,7 @@ mod aes_siv_cipher {
             let mut siv = self.siv(key)?;
             let cipher_text_start = prefix.len() + DeterministicAlgorithm::SYNTHETIC_IV_LEN;
             // Allocated once at its final size, since growing it would leave a copy of the
-            // plaintext in freed memory, and zeroized if sealing fails.
+            // plaintext in freed memory, and zeroised if sealing fails.
             let mut buffer =
                 SecretValue::new(Vec::with_capacity(cipher_text_start + plain_text.len()));
             let value = buffer.ref_sensitive_value_mut();
@@ -379,7 +379,7 @@ mod aes_siv_cipher {
         ///
         /// # Errors
         ///
-        /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized
+        /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialised
         /// Tink key, and `INVALID_KEY_LENGTH` when it does not fit `algorithm`.
         pub async fn decrypt_deterministic_dek(
             &self,
