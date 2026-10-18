@@ -66,6 +66,11 @@ pub struct AwsKmsProviderOptions {
 /// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
 /// message is the one AWS KMS returned. Its root cause is the SDK error.
+///
+/// A [`DekBinding`] is sent as the encryption context `{"kms-aead": <binding>}` of Encrypt and
+/// Decrypt. An unwrap that names another binding, or none, fails with
+/// `InvalidCiphertextException`. CloudTrail logs the encryption context in plain text, and a key
+/// policy can match it with the `kms:EncryptionContext:kms-aead` condition key.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,

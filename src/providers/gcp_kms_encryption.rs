@@ -126,6 +126,10 @@ pub struct GcpKmsProviderOptions {
 ///
 /// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
 /// is the gRPC status code, such as `PermissionDenied` or `NotFound`.
+///
+/// A [`DekBinding`] is sent as the additional authenticated data of Encrypt and Decrypt, which
+/// Cloud KMS does not write to its audit logs. An unwrap that names another binding, or none,
+/// fails with `InvalidArgument`.
 #[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
