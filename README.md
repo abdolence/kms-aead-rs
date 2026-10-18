@@ -1,8 +1,7 @@
 [![Cargo](https://img.shields.io/crates/v/kms-aead.svg)](https://crates.io/crates/kms-aead)
 ![tests and formatting](https://github.com/abdolence/kms-aead-rs/workflows/tests%20&amp;%20formatting/badge.svg)
-![security audit](https://github.com/abdolence/kms-aead-rs/workflows/security%20audit/badge.svg)
 ![unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
-![license](https://img.shields.io/github/license/abdolence/secret-vault-rs)
+![license](https://img.shields.io/github/license/abdolence/kms-aead-rs)
 
 # KMS envelope encryption for Rust
 
