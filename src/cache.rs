@@ -369,7 +369,7 @@ impl DekCache {
     }
 
     /// Runs `use_key` with the key `encrypted` wraps under `provider.kek()`, unwrapped by
-    /// `provider` on a miss, and returns what it returned with where the key came from.
+    /// `provider` on a miss, and returns its result with where the key came from.
     ///
     /// `use_key` runs once, synchronously, after the lookup, and the key stays intact while it
     /// runs. It must not keep the key: a copy taken out of the closure outlives the cache's

@@ -29,11 +29,11 @@ const MAX_USES: u64 = 1 << 32;
 ///
 /// - per call, the default: a new DEK per value, one KMS wrap per value;
 /// - store-less, with a [`DekReusePolicy`] in the options: one DEK for many values, renewed by
-///   the policy, one KMS wrap per renewal.
+///   the policy, one KMS wrap per renewal and one KMS unwrap per TTL of the envelope's cache.
 ///
-/// `decrypt_value` and the `*_with_encrypted_dek` calls unwrap through the envelope's
-/// [`DekCache`], which is disabled in a per-call envelope unless the options give it one; see
-/// [`KmsAeadEnvelopeOptions`].
+/// `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap
+/// through the envelope's [`DekCache`], which is disabled in a per-call envelope unless the
+/// options give it one; see [`KmsAeadEnvelopeOptions`].
 ///
 /// Every call opens one `DEBUG` span, with the KMS call as a child span when it makes one.
 pub struct KmsAeadEnvelope<P> {
@@ -69,9 +69,10 @@ pub struct KmsAeadEnvelopeOptions {
 /// each value carries its wrapped DEK.
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
-/// so it is zeroized at the cache's TTL, whatever `max_age`, and the first encryption after that
-/// unwraps it again with one KMS call. The values sealed while the cache holds the DEK are
-/// readable by whoever reads the process's memory in that window.
+/// which zeroizes it at most its TTL plus its reaper period after it was cached, whatever
+/// `max_age`, and the first encryption after that unwraps it again with one KMS call. The values
+/// sealed while the cache holds the DEK are readable by whoever reads the process's memory in
+/// that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
