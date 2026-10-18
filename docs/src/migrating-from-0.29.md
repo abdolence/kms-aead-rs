@@ -115,6 +115,12 @@ The `From` conversions of SDK errors into `KmsAeadError` are gone: `gcloud_sdk::
 `gcloud_sdk::tonic::Status`, the AWS `SdkError`, the hyper client error, `azure_core::Error` and
 `SystemTimeError`. Map an SDK error in the application.
 
+The variant of a Google Cloud KMS or AWS KMS error follows its code. In 0.29 every gRPC status was
+a `NetworkError` and every AWS error an `EncryptionError`. A `PermissionDenied` or `NotFound` from
+Google Cloud KMS is an `EncryptionError` now, and a timeout, a connection failure or a
+`ThrottlingException` from AWS KMS a `NetworkError`. The codes stay the same. See
+[Retries](./errors.md#retries).
+
 `ConstantTimeEq` is no longer implemented on the public types. `==` still compares in constant
 time. The `Debug` of `Encrypted` prints only the length, and `==` is gone from randomised values:
 only an `Encrypted<T, Deterministic>` has it.

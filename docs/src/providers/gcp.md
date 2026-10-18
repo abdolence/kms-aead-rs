@@ -65,5 +65,7 @@ on the location when the KMS generator is on.
 
 ## Errors
 
-A failed KMS call is a `NetworkError` whose code is the gRPC status code, such as
-`PermissionDenied` or `NotFound`.
+The code of a failed KMS call is the gRPC status code. `Unavailable`, `DeadlineExceeded`,
+`ResourceExhausted`, `Aborted`, `Internal`, `Unknown` and `Cancelled` are a `NetworkError`, any
+other code, such as `PermissionDenied` or `NotFound`, an `EncryptionError`. See
+[Error handling](../errors.md#retries).

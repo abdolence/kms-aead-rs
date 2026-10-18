@@ -18,7 +18,8 @@ In short:
 - the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods; the AAD is
   any `&(impl AsRef<[u8]> + ?Sized)`, and every cipher text is an `Encrypted<T, F>`;
 - `KmsAeadError` is `#[non_exhaustive]`, the SDK error conversions are gone, and a few error
-  codes changed;
+  codes changed. A Google Cloud KMS or AWS KMS error is a `NetworkError` or an `EncryptionError`
+  by its code, so a `PermissionDenied` from Google Cloud KMS is no longer a `NetworkError`;
 - the default algorithm of `KmsAeadEnvelope` is AES-256-GCM; the default of 0.29 was
   ChaCha20-Poly1305. A value does not record its algorithm, so values sealed under the default of
   0.29 open only with `KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305)`,

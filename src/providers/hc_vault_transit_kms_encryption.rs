@@ -877,6 +877,26 @@ mod tests {
         assert_no_secrets(&error);
     }
 
+    #[tokio::test]
+    async fn server_errors_and_throttling_are_network_errors() {
+        for (status, code) in [(503, "VAULT_STATUS_503"), (429, "VAULT_STATUS_429")] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let provider = local_provider(&listener);
+            answer_with(
+                listener,
+                status,
+                r#"{"errors":["Vault is sealed"]}"#.to_string(),
+            );
+
+            let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+                panic!("a {status} is not an encrypted key");
+            };
+
+            assert!(matches!(error, KmsAeadError::NetworkError(_)), "{error:?}");
+            assert_eq!(error.code(), code);
+        }
+    }
+
     #[test]
     fn token_is_not_shown_by_debug() {
         let token = HcVaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();

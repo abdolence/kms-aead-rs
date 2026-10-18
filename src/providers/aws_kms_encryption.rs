@@ -65,9 +65,14 @@ impl AwsKmsProviderOptions {
 
 /// Encrypts and decrypts data encryption keys with an AWS KMS key.
 ///
-/// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
-/// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
-/// message is the one AWS KMS returned. Its root cause is the SDK error.
+/// An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyException` or
+/// `NotFoundException`, and the message AWS KMS returned. `ThrottlingException`,
+/// `KMSInternalException`, `DependencyTimeoutException`, `KeyUnavailableException` and any 5xx or
+/// 429 status are a [`NetworkError`](crate::errors::KmsAeadError::NetworkError), and so are a
+/// timeout, a connection failure and a response the SDK could not read. Any other error, such as
+/// `AccessDeniedException` or a request that could not be built or signed, is an
+/// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose root cause is the SDK
+/// error.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
@@ -235,7 +240,7 @@ mod tests {
     use aws_sdk_kms::config::http::HttpResponse;
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};
-    use aws_sdk_kms::error::{ErrorMetadata, SdkError};
+    use aws_sdk_kms::error::{ConnectorError, ErrorMetadata, SdkError};
     use aws_sdk_kms::operation::decrypt::DecryptError;
     use aws_sdk_kms::types::error::IncorrectKeyException;
     use tokio::net::TcpListener;
@@ -418,16 +423,69 @@ mod tests {
             .is_some_and(DecryptError::is_incorrect_key_exception));
     }
 
-    #[test]
-    fn a_timeout_keeps_the_sdk_error() {
-        let error = KmsAeadError::from_aws_sdk_error(
-            SdkError::<DecryptError, HttpResponse>::timeout_error("connect timed out"),
-        );
+    #[tokio::test]
+    async fn throttling_and_unavailable_service_errors_are_network_errors() {
+        let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
+        for (status, code) in [
+            (400, "ThrottlingException"),
+            (400, "KMSInternalException"),
+            (400, "DependencyTimeoutException"),
+            (400, "KeyUnavailableException"),
+            (503, "ServiceUnavailableException"),
+        ] {
+            let provider = provider_answered_with(
+                status,
+                &format!(r#"{{"__type":"{code}","message":"try again later"}}"#),
+            )
+            .await;
 
-        assert!(
-            matches!(&error, KmsAeadError::EncryptionError(error) if error.root_cause.is_some()),
-            "{error:?}"
-        );
+            let error = provider
+                .encrypt_data_encryption_key(&dek)
+                .await
+                .unwrap_err();
+
+            assert!(
+                matches!(&error, KmsAeadError::NetworkError(_)),
+                "{code}: {error:?}"
+            );
+            assert_eq!(error.code(), code);
+        }
+    }
+
+    #[test]
+    fn transport_failures_are_network_errors() {
+        let errors = [
+            SdkError::<DecryptError, HttpResponse>::timeout_error("connect timed out"),
+            SdkError::dispatch_failure(ConnectorError::io("connection reset".into())),
+            SdkError::response_error("the body ended early", response_with_body(200, "{")),
+        ];
+
+        for sdk_error in errors {
+            let code = sdk_error.to_string();
+            let error = KmsAeadError::from_aws_sdk_error(sdk_error);
+
+            assert!(matches!(&error, KmsAeadError::NetworkError(_)), "{error:?}");
+            assert_eq!(error.code(), code);
+        }
+    }
+
+    #[test]
+    fn requests_that_cannot_be_built_or_sent_are_encryption_errors() {
+        let errors = [
+            SdkError::<DecryptError, HttpResponse>::construction_failure("no key id"),
+            SdkError::dispatch_failure(ConnectorError::user("invalid endpoint".into())),
+        ];
+
+        for sdk_error in errors {
+            let code = sdk_error.to_string();
+            let error = KmsAeadError::from_aws_sdk_error(sdk_error);
+
+            assert!(
+                matches!(&error, KmsAeadError::EncryptionError(error) if error.root_cause.is_some()),
+                "{error:?}"
+            );
+            assert_eq!(error.code(), code);
+        }
     }
 
     #[test]
