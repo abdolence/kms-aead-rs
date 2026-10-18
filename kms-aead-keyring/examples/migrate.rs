@@ -20,7 +20,7 @@ use kms_aead::{
 use kms_aead_keyring::sweep::{self, Outcome};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring, KeyringId,
     KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Randomized, SealFormat, SealMarker,
 };
 use secret_vault_value::SecretValue;
@@ -143,7 +143,7 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
         .encrypt(&aad, &Email::from_plaintext(email)?)
         .await?;
     let row = UserRow {
-        seal: SealMarker::keyring([KeyId::try_from(&resealed)?]),
+        seal: SealMarker::keyring([KeyVersionId::try_from(&resealed)?]),
         email: resealed.into_value(),
     };
     table

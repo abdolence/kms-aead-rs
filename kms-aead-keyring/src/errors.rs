@@ -14,7 +14,8 @@ use rsb_derive::Builder;
 
 use crate::store::{StoreKind, StoreOperation};
 use crate::{
-    Compromise, Interop, KeyAlgorithm, KeyId, KeyVersionState, KeyringId, Purpose, Transition,
+    Compromise, Interop, KeyAlgorithm, KeyVersionId, KeyVersionState, KeyringId, Purpose,
+    Transition,
 };
 
 /// The result of every fallible operation of the crate.
@@ -136,7 +137,7 @@ impl KeyringError {
         })
     }
 
-    pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyId) -> Self {
+    pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyVersionId) -> Self {
         KeyringError::KeyVersionUnknown(KeyVersionError {
             keyring: keyring.clone(),
             key_id,
@@ -335,8 +336,8 @@ pub struct InvalidIdentifierError {
 pub enum Identifier {
     /// [`KeyringId`].
     KeyringId,
-    /// [`KeyId`].
-    KeyId,
+    /// [`KeyVersionId`].
+    KeyVersionId,
     /// [`EntityKind`](crate::EntityKind).
     EntityKind,
     /// [`EntityId`](crate::EntityId).
@@ -355,7 +356,7 @@ impl Display for Identifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Identifier::KeyringId => "keyring id",
-            Identifier::KeyId => "key id",
+            Identifier::KeyVersionId => "key id",
             Identifier::EntityKind => "entity kind",
             Identifier::EntityId => "entity id",
             Identifier::FieldName => "field name",
@@ -421,31 +422,31 @@ pub enum RecordInvalidReason {
     IdMismatch,
     /// An algorithm name this release does not know: of the version with this key id, or of
     /// the record's algorithms for new versions when there is none.
-    UnknownAlgorithm(Option<KeyId>),
+    UnknownAlgorithm(Option<KeyVersionId>),
     /// A state name this release does not know, on the version with this key id.
-    UnknownState(KeyId),
+    UnknownState(KeyVersionId),
     /// A key id whose ordinal is zero or that sets both purpose bits, which names no version.
     ReservedKeyId,
     /// Two versions with one key id.
-    DuplicateKeyId(KeyId),
+    DuplicateKeyId(KeyVersionId),
     /// The key id's purpose is not its algorithm's.
-    PurposeMismatch(KeyId),
+    PurposeMismatch(KeyVersionId),
     /// Two active versions of one purpose.
     TwoActiveVersions(Purpose),
     /// Two pending versions of one purpose.
     TwoPendingVersions(Purpose),
     /// An active version flagged compromised.
-    CompromisedActive(KeyId),
+    CompromisedActive(KeyVersionId),
     /// A pending version flagged compromised.
-    CompromisedPending(KeyId),
+    CompromisedPending(KeyVersionId),
     /// A destroyed version that still holds a wrapped key.
-    DestroyedWithMaterial(KeyId),
+    DestroyedWithMaterial(KeyVersionId),
     /// A version that is not destroyed and holds no wrapped key.
-    MissingMaterial(KeyId),
+    MissingMaterial(KeyVersionId),
     /// A version whose ordinal is not above every earlier version of its purpose.
-    OrdinalOrder(KeyId),
+    OrdinalOrder(KeyVersionId),
     /// A wrapped key that is not standard base64 of one byte or more.
-    MalformedWrappedDek(KeyId),
+    MalformedWrappedDek(KeyVersionId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
 }
@@ -548,16 +549,16 @@ pub struct RecordRegressedError {
 #[non_exhaustive]
 pub enum RegressionRule {
     /// The version is gone.
-    VersionMissing(KeyId),
+    VersionMissing(KeyVersionId),
     /// The version's algorithm or creation time changed.
-    VersionAltered(KeyId),
+    VersionAltered(KeyVersionId),
     /// The version's compromised flag was cleared.
-    CompromiseCleared(KeyId),
+    CompromiseCleared(KeyVersionId),
     /// The time the version was flagged compromised changed.
-    CompromiseAltered(KeyId),
+    CompromiseAltered(KeyVersionId),
     /// The version's state moved against the lifecycle, back to `Active` or out of
     /// `Destroyed`.
-    StateReverted(KeyId),
+    StateReverted(KeyVersionId),
 }
 
 impl Display for RegressionRule {
@@ -626,7 +627,7 @@ pub struct KeyVersionError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The value's key id.
-    pub key_id: KeyId,
+    pub key_id: KeyVersionId,
 }
 
 /// See [`KeyringError::KeyVersionCompromised`].
@@ -636,7 +637,7 @@ pub struct KeyVersionCompromisedError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The value's key id.
-    pub key_id: KeyId,
+    pub key_id: KeyVersionId,
     /// When the version was flagged, and the operator's note.
     pub compromise: Compromise,
 }
@@ -648,7 +649,7 @@ pub struct KeyPurposeMismatchError {
     /// The purpose of the value's type.
     pub expected: Purpose,
     /// The key id the value carries.
-    pub key_id: KeyId,
+    pub key_id: KeyVersionId,
 }
 
 /// See [`KeyringError::InvalidTransition`].
@@ -658,7 +659,7 @@ pub struct InvalidTransitionError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The version the operation named.
-    pub key_id: KeyId,
+    pub key_id: KeyVersionId,
     /// The version's state.
     pub from: KeyVersionState,
     /// The operation.

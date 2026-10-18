@@ -32,7 +32,7 @@ version of another, and the purpose of a value is known from its bytes, see
 [Keyring key ids](../formats.md#keyring-key-ids). Ids are never reused: a destroyed version keeps
 its id in the record.
 
-`KeyId::try_from(&value)` reads the key id of a stored value.
+`KeyVersionId::try_from(&value)` reads the key id of a stored value.
 
 ## States
 
@@ -118,7 +118,8 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose, Rotation,
+    KeyVersionId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,
+    Rotation,
 };
 
 # #[tokio::main]
@@ -135,7 +136,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
 .await?;
 
 // The administrative job stages the version
-let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
+let staged: KeyVersionId = keyring.rotate(Purpose::Randomized).await?;
 let record = keyring.record();
 let pending = record
     .pending(Purpose::Randomized)
@@ -145,7 +146,7 @@ assert_eq!(pending.state(), KeyVersionState::Pending);
 // Once the wait from `pending.staged_at()` is over, the job promotes it
 let rotation: Rotation = keyring.promote(staged).await?;
 assert_eq!(rotation.current, staged);
-assert_eq!(rotation.previous, Some(KeyId::try_from(1)?));
+assert_eq!(rotation.previous, Some(KeyVersionId::try_from(1)?));
 # Ok(())
 # }
 ```
@@ -180,6 +181,6 @@ version:
   that id meanwhile.
 
 `decrypt_with_status` opens the value whatever the policy, and returns a `Decrypted` with the
-value, the key id that opened it and its `KeyTrust`, `Trusted` or `Compromised`. It is the call
-for a [sweep](../operations.md#sweeps). A compromised version's DEK is unwrapped by the provider
-for that call only and never returns to the DEK cache.
+value, the `KeyVersionId` of the version that opened it and its `KeyTrust`, `Trusted` or
+`Compromised`. It is the call for a [sweep](../operations.md#sweeps). A compromised version's DEK
+is unwrapped by the provider for that call only and never returns to the DEK cache.

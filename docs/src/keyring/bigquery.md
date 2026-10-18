@@ -193,7 +193,7 @@ the reader of its bytes. The `WrappedKeyset<encodings::BigQuery>` this export re
   `WrappedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`;
-- `key_ids()`: the versions inside, in ascending order.
+- `key_version_ids()`: the versions inside, in ascending order.
 
 The export selects its versions from the record in the store, read at the time of the call, not
 from the record the process has cached. A version another process flagged compromised is

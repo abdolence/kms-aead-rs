@@ -17,7 +17,7 @@ use crate::encodings::{BigQuery, Encoding, KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
+use crate::{KeyVersionId, KeyVersionState, Keyring, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub enum KeysetSelection {
     /// The one version, as the primary, also when it is compromised, and never a pending one:
     /// the keyset of `DETERMINISTIC_ENCRYPT` for the probe of one version, since BigQuery
     /// encrypts under the primary, and of a read through a compromised version.
-    Single(KeyId),
+    Single(KeyVersionId),
 }
 
 impl KeysetSelection {
@@ -54,7 +54,7 @@ impl KeysetSelection {
 pub struct WrappedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
-    key_ids: Vec<KeyId>,
+    key_version_ids: Vec<KeyVersionId>,
     encoding: PhantomData<E>,
 }
 
@@ -65,8 +65,8 @@ impl<E: KeysetEncoding> WrappedKeyset<E> {
     }
 
     /// The versions in the keyset, in ascending order.
-    pub fn key_ids(&self) -> &[KeyId] {
-        &self.key_ids
+    pub fn key_version_ids(&self) -> &[KeyVersionId] {
+        &self.key_version_ids
     }
 
     /// Tink's key URI of the KMS key that wraps the keyset, such as
@@ -97,7 +97,7 @@ impl<E: KeysetEncoding> Clone for WrappedKeyset<E> {
         WrappedKeyset {
             bytes: self.bytes.clone(),
             key_uri: self.key_uri.clone(),
-            key_ids: self.key_ids.clone(),
+            key_version_ids: self.key_version_ids.clone(),
             encoding: PhantomData,
         }
     }
@@ -108,7 +108,7 @@ impl<E: KeysetEncoding> Debug for WrappedKeyset<E> {
         f.debug_struct("WrappedKeyset")
             .field("encoding", &E::ENCODING)
             .field("key_uri", &self.key_uri)
-            .field("key_ids", &self.key_ids)
+            .field("key_version_ids", &self.key_version_ids)
             .finish_non_exhaustive()
     }
 }
@@ -229,7 +229,7 @@ where
             Ok(WrappedKeyset {
                 bytes,
                 key_uri,
-                key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
+                key_version_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
                 encoding: PhantomData,
             })
         })
@@ -243,8 +243,8 @@ where
         record: &'r KeyringRecord,
         selection: KeysetSelection,
         encoding: Encoding,
-    ) -> KeyringResult<(KeyId, Vec<ExportedVersion<'r>>)> {
-        let (primary, versions): (KeyId, Vec<_>) = match selection {
+    ) -> KeyringResult<(KeyVersionId, Vec<ExportedVersion<'r>>)> {
+        let (primary, versions): (KeyVersionId, Vec<_>) = match selection {
             KeysetSelection::Readable(purpose) => {
                 let primary = record
                     .active(purpose)
@@ -252,13 +252,13 @@ where
                 let versions = record
                     .versions()
                     .iter()
-                    .filter(|version| version.key_id().purpose() == purpose)
+                    .filter(|version| version.id().purpose() == purpose)
                     .filter_map(|version| match version.readable_dek() {
                         Some((dek, None)) => Some((version, dek)),
                         _ => None,
                     })
                     .collect();
-                (primary.key_id(), versions)
+                (primary.id(), versions)
             }
             KeysetSelection::Single(key_id) => {
                 let version = record
@@ -282,10 +282,10 @@ where
                 let key_type = encoding.key_type(version.algorithm()).ok_or_else(|| {
                     KeyringError::ExportAlgorithmUnsupported(KeyVersionError {
                         keyring: self.id().clone(),
-                        key_id: version.key_id(),
+                        key_id: version.id(),
                     })
                 })?;
-                Ok((version.key_id(), key_type, dek))
+                Ok((version.id(), key_type, dek))
             })
             .collect::<KeyringResult<_>>()?;
         Ok((primary, versions))
@@ -293,7 +293,7 @@ where
 }
 
 /// A selected version: its key id, its Tink key type and its wrapped key.
-type ExportedVersion<'r> = (KeyId, TinkKeyType, &'r EncryptedDataEncryptionKey);
+type ExportedVersion<'r> = (KeyVersionId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 
 #[cfg(all(
     test,
@@ -338,9 +338,9 @@ mod tests {
         key_ids: &[u32],
     ) -> Result<SecretValue, Box<dyn std::error::Error>> {
         let record = keyring.record();
-        let mut keyset = TinkKeyset::new(KeyId::try_from(primary)?.into());
+        let mut keyset = TinkKeyset::new(KeyVersionId::try_from(primary)?.into());
         for key_id in key_ids {
-            let key_id = KeyId::try_from(*key_id)?;
+            let key_id = KeyVersionId::try_from(*key_id)?;
             let dek = record
                 .version(key_id)
                 .and_then(KeyVersion::wrapped_dek)
@@ -367,15 +367,15 @@ mod tests {
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await;
         let first = keyring
-            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyId::try_from(1)?))
+            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyVersionId::try_from(1)?))
             .await?;
 
         assert!(matches!(
             readable,
             Err(KeyringError::ExportAlgorithmUnsupported(KeyVersionError { key_id, .. }))
-                if key_id == KeyId::try_from(2)?
+                if key_id == KeyVersionId::try_from(2)?
         ));
-        assert_eq!(first.key_ids(), [KeyId::try_from(1)?]);
+        assert_eq!(first.key_version_ids(), [KeyVersionId::try_from(1)?]);
         assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 1);
         Ok(())
     }
@@ -388,7 +388,9 @@ mod tests {
                 .promote(keyring.rotate(Purpose::Randomized).await?)
                 .await?;
         }
-        keyring.mark_compromised(KeyId::try_from(2)?, None).await?;
+        keyring
+            .mark_compromised(KeyVersionId::try_from(2)?, None)
+            .await?;
 
         let wrapped = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
@@ -400,8 +402,8 @@ mod tests {
             .await?;
 
         assert_eq!(
-            wrapped.key_ids(),
-            [KeyId::try_from(1)?, KeyId::try_from(3)?]
+            wrapped.key_version_ids(),
+            [KeyVersionId::try_from(1)?, KeyVersionId::try_from(3)?]
         );
         assert_eq!(
             *keyset.value(),
@@ -416,7 +418,7 @@ mod tests {
         let keyset = WrappedKeyset::<Tink> {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
-            key_ids: vec![KeyId::try_from(1)?],
+            key_version_ids: vec![KeyVersionId::try_from(1)?],
             encoding: PhantomData,
         };
 
@@ -437,7 +439,7 @@ mod tests {
             KeyringOptions::new().with_watch(false),
         )
         .await?;
-        let leaked = KeyId::try_from(1)?;
+        let leaked = KeyVersionId::try_from(1)?;
         administrator.mark_compromised(leaked, None).await?;
 
         let wrapped = exporter
@@ -449,7 +451,7 @@ mod tests {
             ))
             .await?;
 
-        assert_eq!(wrapped.key_ids(), [KeyId::try_from(2)?]);
+        assert_eq!(wrapped.key_version_ids(), [KeyVersionId::try_from(2)?]);
         assert_eq!(
             *keyset.value(),
             keyset_of(&exporter, &provider, 2, &[2]).await?
@@ -518,7 +520,10 @@ mod tests {
                 wrapped.as_bytes().to_vec(),
             ))
             .await?;
-        assert_eq!(wrapped.key_ids(), [KeyId::try_from(1)?, staged]);
+        assert_eq!(
+            wrapped.key_version_ids(),
+            [KeyVersionId::try_from(1)?, staged]
+        );
         assert_eq!(
             *keyset.value(),
             keyset_of(&keyring, &provider, 1, &[1, staged.as_u32()]).await?
@@ -551,7 +556,7 @@ mod tests {
     #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
         let (keyring, _) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
-        let first = KeyId::try_from(1)?;
+        let first = KeyVersionId::try_from(1)?;
         keyring
             .promote(keyring.rotate(Purpose::Randomized).await?)
             .await?;
@@ -602,13 +607,17 @@ mod tests {
                 .promote(keyring.rotate(Purpose::Randomized).await?)
                 .await?;
         }
-        let compromised = KeyId::try_from(2)?;
+        let compromised = KeyVersionId::try_from(2)?;
         keyring.mark_compromised(compromised, None).await?;
         let pending = keyring.rotate(Purpose::Randomized).await?;
         let cases = [
             (
                 KeysetSelection::Readable(Purpose::Randomized),
-                Ok(vec![KeyId::try_from(1)?, KeyId::try_from(3)?, pending]),
+                Ok(vec![
+                    KeyVersionId::try_from(1)?,
+                    KeyVersionId::try_from(3)?,
+                    pending,
+                ]),
             ),
             (KeysetSelection::Single(compromised), Ok(vec![compromised])),
             (KeysetSelection::Single(pending), Err("KEY_VERSION_PENDING")),
@@ -621,16 +630,16 @@ mod tests {
         for (selection, expected) in cases {
             let bigquery = keyring.export_keyset::<BigQuery>(selection).await;
             let tink = keyring.export_keyset::<Tink>(selection).await;
-            for key_ids in [
+            for key_version_ids in [
                 bigquery
                     .as_ref()
-                    .map(|keyset| keyset.key_ids().to_vec())
+                    .map(|keyset| keyset.key_version_ids().to_vec())
                     .map_err(KeyringError::code),
                 tink.as_ref()
-                    .map(|keyset| keyset.key_ids().to_vec())
+                    .map(|keyset| keyset.key_version_ids().to_vec())
                     .map_err(KeyringError::code),
             ] {
-                assert_eq!(key_ids, expected, "{selection:?}");
+                assert_eq!(key_version_ids, expected, "{selection:?}");
             }
         }
         Ok(())

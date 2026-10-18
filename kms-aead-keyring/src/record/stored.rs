@@ -15,7 +15,7 @@ use super::{
     RetainedDek, VersionState,
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
-use crate::{KeyId, Purpose};
+use crate::{KeyVersionId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
 /// version, so this holds a few thousand versions.
@@ -234,8 +234,8 @@ impl TryFrom<StoredVersion> for KeyVersion {
 
     /// Checks one version on its own; the checks across versions are the record's.
     fn try_from(stored: StoredVersion) -> Result<Self, RecordInvalidReason> {
-        let key_id =
-            KeyId::try_from(stored.key_id).map_err(|_| RecordInvalidReason::ReservedKeyId)?;
+        let key_id = KeyVersionId::try_from(stored.key_id)
+            .map_err(|_| RecordInvalidReason::ReservedKeyId)?;
         let algorithm: KeyAlgorithm = stored
             .algorithm
             .parse()

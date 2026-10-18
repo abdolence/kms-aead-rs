@@ -186,8 +186,8 @@ pub mod encodings;
 pub mod errors;
 pub use errors::{KeyringError, KeyringResult};
 
-mod key_id;
-pub use key_id::*;
+mod key_version_id;
+pub use key_version_id::*;
 
 mod keyring;
 pub use keyring::*;

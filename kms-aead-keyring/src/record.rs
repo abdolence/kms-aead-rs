@@ -14,7 +14,7 @@ use crate::errors::{
     Identifier, IdentifierRule, InvalidTransitionError, KeyringError, KeyringResult,
     RecordInvalidReason, RegressionRule,
 };
-use crate::{KeyId, Purpose, Rotation};
+use crate::{KeyVersionId, Purpose, Rotation};
 
 pub(crate) mod stored;
 
@@ -347,7 +347,7 @@ impl Compromise {
 ///
 /// `Debug` shows the id, the algorithm, the state and the times, never the wrapped key.
 pub struct KeyVersion {
-    key_id: KeyId,
+    key_id: KeyVersionId,
     algorithm: KeyAlgorithm,
     created_at: Timestamp,
     state_changed_at: Timestamp,
@@ -356,7 +356,7 @@ pub struct KeyVersion {
 
 impl KeyVersion {
     /// The id every value under this version carries.
-    pub fn key_id(&self) -> KeyId {
+    pub fn id(&self) -> KeyVersionId {
         self.key_id
     }
 
@@ -483,7 +483,7 @@ impl RetainedDek {
 /// A version about to be created: its key id, the algorithm its key was made for, and the
 /// wrapped key.
 pub(crate) struct NewVersion {
-    pub(crate) key_id: KeyId,
+    pub(crate) key_id: KeyVersionId,
     pub(crate) algorithm: KeyAlgorithm,
     pub(crate) dek: EncryptedDataEncryptionKey,
 }
@@ -546,7 +546,7 @@ impl KeyringRecord {
     }
 
     /// The version with `key_id`.
-    pub fn version(&self, key_id: KeyId) -> Option<&KeyVersion> {
+    pub fn version(&self, key_id: KeyVersionId) -> Option<&KeyVersion> {
         self.versions
             .iter()
             .find(|version| version.key_id == key_id)
@@ -595,15 +595,15 @@ impl KeyringRecord {
     ///
     /// [`KeyringError::RecordInvalid`] with `KeyIdsExhausted` once the purpose's ordinals run
     /// out.
-    pub(crate) fn next_key_id(&self, purpose: Purpose) -> KeyringResult<KeyId> {
+    pub(crate) fn next_key_id(&self, purpose: Purpose) -> KeyringResult<KeyVersionId> {
         match self
             .versions
             .iter()
-            .map(KeyVersion::key_id)
+            .map(KeyVersion::id)
             .filter(|key_id| key_id.purpose() == purpose)
             .max()
         {
-            None => Ok(KeyId::first(purpose)),
+            None => Ok(KeyVersionId::first(purpose)),
             Some(last) => last.next().ok_or_else(|| {
                 KeyringError::record_invalid(
                     &self.id,
@@ -614,7 +614,7 @@ impl KeyringRecord {
     }
 
     /// The wrapped key of every version that holds one, by key id.
-    pub(crate) fn wrapped_deks(&self) -> Vec<(KeyId, EncryptedDataEncryptionKey)> {
+    pub(crate) fn wrapped_deks(&self) -> Vec<(KeyVersionId, EncryptedDataEncryptionKey)> {
         self.versions
             .iter()
             .filter_map(|version| Some((version.key_id, version.wrapped_dek()?.clone())))
@@ -650,7 +650,7 @@ impl RecordEdit {
     ///
     /// `InvalidTransition` with [`Transition::Rotate`], naming the pending version, when the
     /// purpose has one already.
-    pub(crate) fn stage(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
+    pub(crate) fn stage(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyVersionId> {
         if let Some(pending) = self.0.pending(new.algorithm.purpose()) {
             return Err(KeyringError::InvalidTransition(InvalidTransitionError {
                 keyring: self.0.id.clone(),
@@ -666,9 +666,13 @@ impl RecordEdit {
 
     /// Makes the pending version `key_id` the active version of its purpose; the active version
     /// it replaces decrypts only.
-    pub(crate) fn promote(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<Rotation> {
+    pub(crate) fn promote(
+        &mut self,
+        key_id: KeyVersionId,
+        now: Timestamp,
+    ) -> KeyringResult<Rotation> {
         let purpose = key_id.purpose();
-        let previous = self.0.active(purpose).map(KeyVersion::key_id);
+        let previous = self.0.active(purpose).map(KeyVersion::id);
         self.change_state(key_id, Transition::Promote, now, |state| match state {
             VersionState::Pending(dek) => Some(VersionState::Active(dek.clone())),
             _ => None,
@@ -694,7 +698,7 @@ impl RecordEdit {
     /// change; without one the purpose has no active version.
     pub(crate) fn mark_compromised(
         &mut self,
-        key_id: KeyId,
+        key_id: KeyVersionId,
         compromise: Compromise,
         replacement: Option<NewVersion>,
         now: Timestamp,
@@ -735,21 +739,21 @@ impl RecordEdit {
         }
     }
 
-    pub(crate) fn retire(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<()> {
+    pub(crate) fn retire(&mut self, key_id: KeyVersionId, now: Timestamp) -> KeyringResult<()> {
         self.change_state(key_id, Transition::Retire, now, |state| match state {
             VersionState::DecryptOnly(kept) => Some(VersionState::Retired(kept.clone())),
             _ => None,
         })
     }
 
-    pub(crate) fn reinstate(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<()> {
+    pub(crate) fn reinstate(&mut self, key_id: KeyVersionId, now: Timestamp) -> KeyringResult<()> {
         self.change_state(key_id, Transition::Reinstate, now, |state| match state {
             VersionState::Retired(kept) => Some(VersionState::DecryptOnly(kept.clone())),
             _ => None,
         })
     }
 
-    pub(crate) fn destroy(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<()> {
+    pub(crate) fn destroy(&mut self, key_id: KeyVersionId, now: Timestamp) -> KeyringResult<()> {
         self.change_state(key_id, Transition::Destroy, now, |state| match state {
             VersionState::Pending(_) => Some(VersionState::Destroyed(None)),
             VersionState::Retired(kept) => Some(VersionState::Destroyed(kept.compromised.clone())),
@@ -761,7 +765,7 @@ impl RecordEdit {
     /// state the version is.
     pub(crate) fn replace_dek(
         &mut self,
-        key_id: KeyId,
+        key_id: KeyVersionId,
         dek: EncryptedDataEncryptionKey,
         now: Timestamp,
     ) -> KeyringResult<()> {
@@ -813,7 +817,7 @@ impl RecordEdit {
     /// `InvalidTransition` when it returns `None`.
     fn change_state(
         &mut self,
-        key_id: KeyId,
+        key_id: KeyVersionId,
         transition: Transition,
         now: Timestamp,
         next: impl FnOnce(&VersionState) -> Option<VersionState>,
@@ -835,7 +839,7 @@ impl RecordEdit {
     }
 
     /// The version `key_id`, or `KeyVersionUnknown`.
-    fn version_mut(&mut self, key_id: KeyId) -> KeyringResult<&mut KeyVersion> {
+    fn version_mut(&mut self, key_id: KeyVersionId) -> KeyringResult<&mut KeyVersion> {
         let KeyringRecord { id, versions, .. } = &mut self.0;
         versions
             .iter_mut()
@@ -881,7 +885,7 @@ pub(crate) fn check_successor(
 pub(crate) fn withdrawn_deks<'a>(
     held: &'a KeyringRecord,
     next: &'a KeyringRecord,
-) -> impl Iterator<Item = (KeyId, &'a EncryptedDataEncryptionKey)> + 'a {
+) -> impl Iterator<Item = (KeyVersionId, &'a EncryptedDataEncryptionKey)> + 'a {
     held.versions.iter().filter_map(move |held| {
         let (dek, compromise) = held.readable_dek()?;
         let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {

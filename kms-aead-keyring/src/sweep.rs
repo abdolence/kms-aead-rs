@@ -53,7 +53,7 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
 use crate::errors::KeyringResult;
-use crate::{spans, KeyId, KeyTrust, KeyringId, Purpose};
+use crate::{spans, KeyTrust, KeyVersionId, KeyringId, Purpose};
 
 /// Which layout a record's encrypted fields are in, and the oldest key version of each purpose
 /// among them, stored beside those fields as plain fields an index covers: in Firestore the
@@ -67,11 +67,11 @@ pub struct SealMarker {
     /// The layout of the record's encrypted fields.
     pub format: SealFormat,
     /// The oldest randomised key version among the record's fields, if any.
-    pub randomized: Option<KeyId>,
+    pub randomized: Option<KeyVersionId>,
     /// The oldest deterministic key version among the record's fields, if any.
-    pub deterministic: Option<KeyId>,
+    pub deterministic: Option<KeyVersionId>,
     /// The oldest beacon key version among the record's beacons, if any.
-    pub beacon: Option<KeyId>,
+    pub beacon: Option<KeyVersionId>,
 }
 
 /// The layout of a record's encrypted fields, serialised as `"envelope"` or `"keyring"`.
@@ -95,7 +95,7 @@ impl SealMarker {
     };
 
     /// The marker of a record whose fields are keyring values and beacons under `key_ids`.
-    pub fn keyring(key_ids: impl IntoIterator<Item = KeyId>) -> Self {
+    pub fn keyring(key_ids: impl IntoIterator<Item = KeyVersionId>) -> Self {
         let mut marker = Self {
             format: SealFormat::Keyring,
             randomized: None,
@@ -245,23 +245,23 @@ mod tests {
             4,
         ]
         .into_iter()
-        .map(KeyId::try_from)
+        .map(KeyVersionId::try_from)
         .collect::<KeyringResult<Vec<_>>>()?;
 
         assert_eq!(
             SealMarker::keyring(key_ids),
             SealMarker {
                 format: SealFormat::Keyring,
-                randomized: Some(KeyId::try_from(1)?),
-                deterministic: Some(KeyId::try_from(DETERMINISTIC | 2)?),
-                beacon: Some(KeyId::try_from(BEACON | 2)?),
+                randomized: Some(KeyVersionId::try_from(1)?),
+                deterministic: Some(KeyVersionId::try_from(DETERMINISTIC | 2)?),
+                beacon: Some(KeyVersionId::try_from(BEACON | 2)?),
             }
         );
         assert_eq!(
-            SealMarker::keyring([KeyId::try_from(7)?]),
+            SealMarker::keyring([KeyVersionId::try_from(7)?]),
             SealMarker {
                 format: SealFormat::Keyring,
-                randomized: Some(KeyId::try_from(7)?),
+                randomized: Some(KeyVersionId::try_from(7)?),
                 deterministic: None,
                 beacon: None,
             }
@@ -272,9 +272,9 @@ mod tests {
     #[test]
     fn a_marker_is_stored_as_plain_fields() -> TestResult {
         let marker = SealMarker::keyring([
-            KeyId::try_from(2)?,
-            KeyId::try_from(DETERMINISTIC | 1)?,
-            KeyId::try_from(BEACON | 1)?,
+            KeyVersionId::try_from(2)?,
+            KeyVersionId::try_from(DETERMINISTIC | 1)?,
+            KeyVersionId::try_from(BEACON | 1)?,
         ]);
         let stored = json!({
             "format": "keyring",
@@ -397,7 +397,7 @@ mod tests {
             let phone_aad = PHONE.aad(&EntityId::try_from("42")?);
             let email = keyring.encrypt(&email_aad, &ALICE.to_string()).await?;
             keyring
-                .mark_compromised(KeyId::try_from(&email)?, None)
+                .mark_compromised(KeyVersionId::try_from(&email)?, None)
                 .await?;
             let phone = keyring
                 .encrypt(&phone_aad, &ALICE_PHONE.to_string())

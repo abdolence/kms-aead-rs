@@ -9,7 +9,7 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId, KeyringOptions,
+    EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring, KeyringId, KeyringOptions,
     KeyringPolicy, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     for value in [before, after] {
         let Email(email) = keyring.decrypt(&aad, &value).await?;
-        println!("value under {}: {email}", KeyId::try_from(&value)?);
+        println!("value under {}: {email}", KeyVersionId::try_from(&value)?);
     }
     Ok(())
 }
