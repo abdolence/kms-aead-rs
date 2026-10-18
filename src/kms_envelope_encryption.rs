@@ -312,14 +312,14 @@ where
                     let renew = || async {
                         let (dek, encrypted) =
                             self.cipher.generate_wrapped_key(&self.provider).await?;
-                        if let Some(shared) = &self.dek_cache.0 {
-                            shared.insert(self.provider.kek(), &encrypted, dek);
+                        if let Some(enabled) = &self.dek_cache.0 {
+                            enabled.insert(self.provider.kek(), &encrypted, dek);
                         }
                         Ok(encrypted)
                     };
                     let dek = dek_reuse.claim_or_renew(renew).await?;
-                    let sealed = self.dek_cache.0.as_ref().and_then(|shared| {
-                        shared.with_cached_key(self.provider.kek(), &dek.encrypted, |key| {
+                    let sealed = self.dek_cache.0.as_ref().and_then(|enabled| {
+                        enabled.with_cached_key(self.provider.kek(), &dek.encrypted, |key| {
                             self.cipher.encrypt_value(aad, plain_text, key)
                         })
                     });

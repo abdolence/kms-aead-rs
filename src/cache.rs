@@ -15,8 +15,7 @@ use tokio::sync::OnceCell;
 
 use crate::errors::KmsAeadSystemError;
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult, ValueStruct,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// The settings of an enabled [`DekCache`].
@@ -123,21 +122,20 @@ impl Display for DekCacheOutcome {
 /// has no cache unless it is given one; the store-less envelope and the keyring use
 /// `DekCache::new(DekCacheOptions::new())` unless they are given another.
 #[derive(Clone)]
-pub struct DekCache(pub(crate) Option<Arc<Shared>>);
+pub struct DekCache(pub(crate) Option<Arc<EnabledCache>>);
 
 /// What every clone of an enabled cache shares. A change publishes a new snapshot of the entries
 /// under the write lock, and a lookup holds the read lock only to clone the current one.
-pub(crate) struct Shared {
+pub(crate) struct EnabledCache {
     options: DekCacheOptions,
     entries: RwLock<Arc<Snapshot>>,
 }
 
 /// The entries at one moment, never changed once the cache holds it. They are keyed by the
-/// wrapped key's bytes alone, which a lookup borrows. Wrapped keys are not secret, so they hash
-/// and compare in variable time.
+/// wrapped key alone, which a lookup borrows.
 #[derive(Default)]
 struct Snapshot {
-    slots: HashMap<Arc<[u8]>, Arc<Slot>>,
+    slots: HashMap<EncryptedDataEncryptionKey, Arc<Slot>>,
     /// The slot created first: every slot lives for the same TTL, so it is the next to expire,
     /// and the one evicted when the table is full.
     oldest: Option<Arc<Slot>>,
@@ -151,7 +149,7 @@ struct Slot {
     created_at: Instant,
 }
 
-impl Shared {
+impl EnabledCache {
     /// The current snapshot.
     ///
     /// A snapshot is replaced only once its successor is built, so a panic under the lock leaves
@@ -170,14 +168,14 @@ impl Shared {
         }
     }
 
-    /// Runs `use_key` with the key cached for `wrapped` under `kek`, or with the key
+    /// Runs `use_key` with the key cached for `encrypted` under `kek`, or with the key
     /// `unwrap_key` returns on a miss, which stays cached unless its slot left the table
-    /// meanwhile. A live slot for `wrapped` under another KEK is neither used nor replaced: the
+    /// meanwhile. A live slot for `encrypted` under another KEK is neither used nor replaced: the
     /// call unwraps without caching.
     async fn with_key<T, Fut>(
         &self,
         kek: &KekRef,
-        wrapped: &[u8],
+        encrypted: &EncryptedDataEncryptionKey,
         unwrap_key: impl FnOnce() -> Fut,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
@@ -187,7 +185,7 @@ impl Shared {
         let now = Instant::now();
         self.purge_expired(now);
         let (ttl, max_entries) = (self.options.ttl, self.options.max_entries);
-        let cached = self.snapshot().live(wrapped, ttl, now).map(Arc::clone);
+        let cached = self.snapshot().live(encrypted, ttl, now).map(Arc::clone);
         let slot = cached.unwrap_or_else(|| {
             let created = Arc::new(Slot {
                 kek: kek.clone(),
@@ -196,12 +194,12 @@ impl Shared {
             });
             // Of concurrent misses, the slot published first wins, and they all wait on it.
             let mut slot = Arc::clone(&created);
-            self.publish(|snapshot| match snapshot.live(wrapped, ttl, now) {
+            self.publish(|snapshot| match snapshot.live(encrypted, ttl, now) {
                 Some(published) => {
                     slot = Arc::clone(published);
                     None
                 }
-                None => Some(snapshot.with(Arc::from(wrapped), created, max_entries)),
+                None => Some(snapshot.with(encrypted.clone(), created, max_entries)),
             });
             slot
         });
@@ -231,9 +229,9 @@ impl Shared {
                 // already left the table, so that no failure is served from the cache.
                 if unwrapped_here {
                     self.publish(|snapshot| {
-                        let failed = snapshot.slots.get(wrapped);
+                        let failed = snapshot.slots.get(encrypted);
                         let failed = failed.filter(|failed| Arc::ptr_eq(failed, &slot));
-                        failed.and_then(|_| snapshot.without(wrapped))
+                        failed.and_then(|_| snapshot.without(encrypted))
                     });
                 }
                 Err(error)
@@ -260,7 +258,7 @@ impl Shared {
         self.purge_expired(now);
         let snapshot = self.snapshot();
         let slot = snapshot
-            .live(encrypted.value(), self.options.ttl, now)
+            .live(encrypted, self.options.ttl, now)
             .filter(|slot| slot.serves(kek))?;
         let dek = slot.dek.get()?.as_ref().ok()?;
         Some(use_key(dek))
@@ -279,23 +277,27 @@ impl Shared {
         let now = Instant::now();
         self.purge_expired(now);
         let (ttl, max_entries) = (self.options.ttl, self.options.max_entries);
-        let wrapped = encrypted.value().as_slice();
         let slot = Arc::new(Slot {
             kek: kek.clone(),
             dek: OnceCell::from(Ok(Arc::new(key))),
             created_at: now,
         });
-        self.publish(|snapshot| match snapshot.live(wrapped, ttl, now) {
+        self.publish(|snapshot| match snapshot.live(encrypted, ttl, now) {
             Some(live) if !live.serves(kek) => None,
-            _ => Some(snapshot.with(Arc::from(wrapped), slot, max_entries)),
+            _ => Some(snapshot.with(encrypted.clone(), slot, max_entries)),
         });
     }
 }
 
 impl Snapshot {
-    fn live(&self, wrapped: &[u8], ttl: Duration, now: Instant) -> Option<&Arc<Slot>> {
+    fn live(
+        &self,
+        encrypted: &EncryptedDataEncryptionKey,
+        ttl: Duration,
+        now: Instant,
+    ) -> Option<&Arc<Slot>> {
         self.slots
-            .get(wrapped)
+            .get(encrypted)
             .filter(|slot| !slot.is_expired(ttl, now))
     }
 
@@ -305,35 +307,40 @@ impl Snapshot {
             .is_some_and(|oldest| oldest.is_expired(ttl, now))
     }
 
-    /// This snapshot with `slot` for `wrapped`, which evicts the oldest slot of a snapshot that
+    /// This snapshot with `slot` for `encrypted`, which evicts the oldest slot of a snapshot that
     /// already holds `max_entries`.
-    fn with(&self, wrapped: Arc<[u8]>, slot: Arc<Slot>, max_entries: NonZeroUsize) -> Self {
+    fn with(
+        &self,
+        encrypted: EncryptedDataEncryptionKey,
+        slot: Arc<Slot>,
+        max_entries: NonZeroUsize,
+    ) -> Self {
         let mut slots = self.slots.clone();
-        slots.remove(&*wrapped);
+        slots.remove(&encrypted);
         if let Some(oldest) = self.oldest.as_ref() {
             if slots.len() >= max_entries.get() {
                 slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
             }
         }
-        slots.insert(wrapped, slot);
+        slots.insert(encrypted, slot);
         slots.into()
     }
 
-    /// This snapshot without the slot of `wrapped`, or `None` when it holds none.
-    fn without(&self, wrapped: &[u8]) -> Option<Self> {
-        self.slots.contains_key(wrapped).then(|| {
+    /// This snapshot without the slot of `encrypted`, or `None` when it holds none.
+    fn without(&self, encrypted: &EncryptedDataEncryptionKey) -> Option<Self> {
+        self.slots.contains_key(encrypted).then(|| {
             let mut slots = self.slots.clone();
-            slots.remove(wrapped);
+            slots.remove(encrypted);
             slots.into()
         })
     }
 
-    /// This snapshot without the slot of `wrapped` under `kek`, or `None` when it holds none.
-    fn without_entry(&self, wrapped: &[u8], kek: &KekRef) -> Option<Self> {
+    /// This snapshot without the slot of `encrypted` under `kek`, or `None` when it holds none.
+    fn without_entry(&self, encrypted: &EncryptedDataEncryptionKey, kek: &KekRef) -> Option<Self> {
         self.slots
-            .get(wrapped)
+            .get(encrypted)
             .filter(|slot| slot.serves(kek))
-            .and_then(|_| self.without(wrapped))
+            .and_then(|_| self.without(encrypted))
     }
 
     /// This snapshot without the slots older than `ttl` at `now`, or `None` when it holds none.
@@ -346,8 +353,8 @@ impl Snapshot {
     }
 }
 
-impl From<HashMap<Arc<[u8]>, Arc<Slot>>> for Snapshot {
-    fn from(slots: HashMap<Arc<[u8]>, Arc<Slot>>) -> Self {
+impl From<HashMap<EncryptedDataEncryptionKey, Arc<Slot>>> for Snapshot {
+    fn from(slots: HashMap<EncryptedDataEncryptionKey, Arc<Slot>>) -> Self {
         let oldest = slots.values().min_by_key(|slot| slot.created_at).cloned();
         Self { slots, oldest }
     }
@@ -377,7 +384,7 @@ impl DekCache {
                 "A DEK cache TTL of zero caches nothing: use DekCache::disabled",
             ));
         }
-        Ok(Self(Some(Arc::new(Shared {
+        Ok(Self(Some(Arc::new(EnabledCache {
             options,
             entries: RwLock::default(),
         }))))
@@ -422,9 +429,9 @@ impl DekCache {
         // keyset, unwraps too, and the decoding of a serialized Tink key keeps it out.
         let unwrap_key = || async { encrypted.unwrap_with(provider).await.map(|(key, _)| key) };
         match &self.0 {
-            Some(shared) => {
-                shared
-                    .with_key(provider.kek(), encrypted.value(), unwrap_key, use_key)
+            Some(enabled) => {
+                enabled
+                    .with_key(provider.kek(), encrypted, unwrap_key, use_key)
                     .await
             }
             None => Ok((use_key(&unwrap_key().await?), DekCacheOutcome::Disabled)),
@@ -435,9 +442,9 @@ impl DekCache {
     /// another KEK stays. The next [`with_key`](Self::with_key) of the key calls the provider,
     /// and an unwrap of it under way returns its key to its callers without caching it.
     pub fn invalidate(&self, kek: &KekRef, encrypted: &EncryptedDataEncryptionKey) {
-        if let Some(shared) = &self.0 {
-            shared.purge_expired(Instant::now());
-            shared.publish(|snapshot| snapshot.without_entry(encrypted.value(), kek));
+        if let Some(enabled) = &self.0 {
+            enabled.purge_expired(Instant::now());
+            enabled.publish(|snapshot| snapshot.without_entry(encrypted, kek));
         }
     }
 
@@ -446,8 +453,8 @@ impl DekCache {
     /// sit idle while the cache holds keys calls it from a timer of its own, on whatever runtime
     /// it uses, to drop them at the TTL; see "Key lifetime" on [`DekCache`].
     pub fn purge_expired(&self) {
-        if let Some(shared) = &self.0 {
-            shared.purge_expired(Instant::now());
+        if let Some(enabled) = &self.0 {
+            enabled.purge_expired(Instant::now());
         }
     }
 
@@ -455,8 +462,8 @@ impl DekCache {
     /// caching them. A store-less renewal under way may still cache its new DEK after `clear`
     /// returns, since the renewal started before the clear.
     pub fn clear(&self) {
-        if let Some(shared) = &self.0 {
-            shared.publish(|_| Some(Snapshot::default()));
+        if let Some(enabled) = &self.0 {
+            enabled.publish(|_| Some(Snapshot::default()));
         }
     }
 }
@@ -465,7 +472,7 @@ impl DekCache {
 impl Debug for DekCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("DekCache")
-            .field(&self.0.as_ref().map(|shared| &shared.options))
+            .field(&self.0.as_ref().map(|enabled| &enabled.options))
             .finish()
     }
 }
@@ -482,7 +489,7 @@ impl DekCache {
         let snapshot = self.0.as_ref()?.snapshot();
         let slot = snapshot
             .slots
-            .get(encrypted.value().as_slice())
+            .get(encrypted)
             .filter(|slot| slot.serves(kek))?;
         slot.dek.get()?.as_ref().ok().map(Arc::downgrade)
     }
@@ -502,6 +509,7 @@ mod tests {
         let_spawned_tasks_wait, wrapped_by_test_provider, CountingKmsProvider, TestKmsProvider,
         CONCURRENT_CALLS,
     };
+    use crate::ValueStruct;
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
