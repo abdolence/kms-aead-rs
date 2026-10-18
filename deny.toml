@@ -1,0 +1,33 @@
+# Every feature at once, so that every crate any feature set can pull in is checked. The TLS
+# alternatives the crate refuses to combine are resolved together here, which `cargo deny`
+# allows since it builds nothing.
+[graph]
+all-features = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# Two versions of one crypto crate in a build mean two copies of the code to audit and patch, and
+# a fix that reaches only one of them.
+[bans]
+multiple-versions = "allow"
+deny = [
+    { crate = "aes", deny-multiple-versions = true },
+    { crate = "aes-gcm", deny-multiple-versions = true },
+    { crate = "ring", deny-multiple-versions = true },
+    { crate = "aws-lc-rs", deny-multiple-versions = true },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    # The Mozilla root certificates in webpki-roots and webpki-root-certs.
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    # The OpenSSL-derived code in the AWS-LC FIPS module, aws-lc-fips-sys.
+    "OpenSSL",
+    "Unicode-3.0",
+]
