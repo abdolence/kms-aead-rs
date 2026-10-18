@@ -77,8 +77,9 @@ impl KeyId {
         }
     }
 
-    /// The id as the record's JSON stores it.
-    pub(crate) fn as_u32(self) -> u32 {
+    /// The id as a number, as the record's JSON stores it and a query binds it, such as the key
+    /// id of a [`SealMarker`](crate::SealMarker) compared against a `BIGINT` column.
+    pub fn as_u32(self) -> u32 {
         self.0
     }
 
