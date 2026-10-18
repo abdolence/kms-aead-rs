@@ -186,6 +186,16 @@ pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyId) -> Span {
     )
 }
 
+/// `Keyring destroy all versions`.
+pub(crate) fn destroy_all_versions(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring destroy all versions",
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    )
+}
+
 /// `Keyring re-encrypt DEKs`, which decrypts through the provider and never through the DEK cache.
 pub(crate) fn reencrypt_deks(keyring: &KeyringId) -> Span {
     debug_span!(

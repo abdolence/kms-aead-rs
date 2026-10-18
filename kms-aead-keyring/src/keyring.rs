@@ -50,9 +50,10 @@ pub use export::{EncryptedKeyset, KeysetSelection};
 /// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
 /// The administrative calls, `create`, `rotate`, `promote`, `mark_compromised`, `retire`,
-/// `reinstate`, `destroy`, `reencrypt_deks` and `change_algorithm`, write the record, and `create`,
-/// `rotate`, `mark_compromised`, `reencrypt_deks` and `change_algorithm` also encrypt DEKs, so they
-/// need the KMS's encrypt right. They run under an administrative principal, in a job, while the
+/// `reinstate`, `destroy`, `dangerously_destroy_all_versions`, `reencrypt_deks` and
+/// `change_algorithm`, write the record, and `create`, `rotate`, `mark_compromised`,
+/// `reencrypt_deks` and `change_algorithm` also encrypt DEKs, so they need the KMS's encrypt
+/// right. They run under an administrative principal, in a job, while the
 /// serving processes only decrypt keys and read the store.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the record's change
@@ -502,6 +503,31 @@ where
             self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.destroy(key_id, Timestamp::now())
+                })
+                .await
+        })
+        .await
+    }
+
+    /// Destroys every version of every purpose in one write, whatever its state: their encrypted
+    /// DEKs leave the record, and from then on the keyring encrypts nothing and decrypts nothing.
+    /// It cannot be undone from this record, and it is the shredding of one keyring's values
+    /// under a KEK that other keyrings share.
+    ///
+    /// A backup of the record still holds the encrypted DEKs, which the KMS decrypts for as long
+    /// as the KEK version that encrypted them exists. So the record's backups are deleted too, or
+    /// the KEK is rotated, every other keyring under it runs
+    /// [`reencrypt_deks`](Self::reencrypt_deks), and the previous KEK version is destroyed.
+    ///
+    /// # Errors
+    ///
+    /// The store's errors, and the errors of a write as for [`rotate`](Self::rotate).
+    pub async fn dangerously_destroy_all_versions(&self) -> KeyringResult<()> {
+        spans::in_span(spans::destroy_all_versions(self.id()), async {
+            self.cache
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.destroy_all(Timestamp::now());
+                    Ok(())
                 })
                 .await
         })

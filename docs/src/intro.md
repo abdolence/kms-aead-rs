@@ -81,7 +81,7 @@ stored value holds:
 | Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
 | Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |
 | BigQuery and Tink readers | no | no | yes: BigQuery with a Cloud KMS KEK, Tink with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit |
-| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or destroying a keyring's versions |
+| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
 
 Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
 [Migrating from envelope values](./operations.md#migrating-from-envelope-values).

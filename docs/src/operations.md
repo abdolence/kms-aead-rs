@@ -349,11 +349,13 @@ To make a scope's values unrecoverable:
 
 - with a KEK per scope: destroy the KEK's versions in the KMS. Every encrypted DEK of the scope is
   then unrecoverable, backups included;
-- with a shared KEK: `retire` and `destroy` every version of the keyring. A backup of the record
-  still holds the encrypted DEKs, which the KMS opens as long as the KEK version that encrypted them
-  exists. On GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks`, then destroy
-  the previous KEK version. On AWS rotated key material is never destroyed, so only the deletion of
-  the KMS key itself shreds.
+- with a shared KEK: `dangerously_destroy_all_versions`, which destroys every version of the
+  keyring in one write, so that it encrypts and decrypts nothing from then on. A backup of the
+  record still holds the encrypted DEKs, which the KMS opens as long as the KEK version that
+  encrypted them exists, so then either delete the record and every backup of it, or destroy that
+  KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks` every
+  other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
+  never destroyed, so only the deletion of the KMS key itself shreds.
 
 A deployment that needs shredding guarantees uses a KEK per scope.
 

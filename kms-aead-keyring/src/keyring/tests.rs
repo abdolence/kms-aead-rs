@@ -752,6 +752,36 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
 }
 
 #[tokio::test]
+async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_with() -> TestResult
+{
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let keyring = &fixture.keyring;
+    let aad = email_of("42")?;
+    let sealed = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let promoted = keyring.rotate(Purpose::Randomized).await?;
+    keyring.promote(promoted).await?;
+    keyring.rotate(Purpose::Randomized).await?;
+
+    keyring.dangerously_destroy_all_versions().await?;
+
+    for record in [keyring.record(), fixture.other_process().await?.record()] {
+        assert!(record
+            .versions()
+            .iter()
+            .all(|version| version.state() == KeyVersionState::Destroyed));
+    }
+    assert!(matches!(
+        keyring.encrypt(&aad, &ALICE.to_string()).await,
+        Err(KeyringError::NoActiveVersion(_))
+    ));
+    assert!(matches!(
+        keyring.decrypt(&aad, &sealed).await,
+        Err(KeyringError::KeyVersionDestroyed(_))
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let created = TestKeyring::create(

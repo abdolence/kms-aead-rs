@@ -169,6 +169,7 @@ in the filter beside `kms_aead=debug`.
 | `Keyring promote` | `promote` | `keyring`, `key_id`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
+| `Keyring destroy all versions` | `dangerously_destroy_all_versions` | `keyring`, `cas_retries`, `error_code` |
 | `Keyring re-encrypt DEKs` | `reencrypt_deks` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
 | `Keyring export` | `export_bigquery_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
 | `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |

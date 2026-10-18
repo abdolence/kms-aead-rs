@@ -769,6 +769,18 @@ impl RecordEdit {
         })
     }
 
+    /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag.
+    pub(crate) fn destroy_all(&mut self, now: Timestamp) {
+        let record = &mut self.0;
+        for version in &mut record.versions {
+            if !matches!(version.state, VersionState::Destroyed(_)) {
+                version.state = VersionState::Destroyed(version.state.compromised().cloned());
+                version.state_changed_at = now;
+            }
+        }
+        record.updated_at = now;
+    }
+
     /// Puts `encrypted_dek`, the same key encrypted again, in place of `key_id`'s encrypted DEK, in
     /// whatever state the version is.
     pub(crate) fn replace_dek(

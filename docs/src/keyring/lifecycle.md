@@ -77,6 +77,7 @@ The calls:
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
+| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on |
 | `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes |
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
@@ -169,8 +170,9 @@ the encrypt right, the flag is written alone, a `WARN` is logged, and the call r
 the purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version
 is promoted. A compromised flag is never held back by the KMS.
 
-`destroy` removes the encrypted DEK from this record only. A backup of the record still holds it,
-and the KMS still decrypts it as long as the KEK version that encrypted it exists, see
+`destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
+backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
+that encrypted them exists, see
 [Crypto-shredding](../operations.md#crypto-shredding).
 
 ## Reading a compromised version
