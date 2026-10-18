@@ -29,7 +29,7 @@ const VAULT_TOKEN_HEADER: &str = "x-vault-token";
 const VAULT_NAMESPACE_HEADER: &str = "x-vault-namespace";
 /// Vault Agent and Vault Proxy refuse requests without it when `require_request_header` is set.
 const VAULT_REQUEST_HEADER: &str = "x-vault-request";
-/// A Transit response carries one wrapped or unwrapped data key, so a response this large is not
+/// A Transit response carries one encrypted or decrypted data key, so a response this large is not
 /// one and is not buffered.
 const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
 /// The longest Vault error text quoted into an error. A misbehaving proxy may echo the request
@@ -160,7 +160,7 @@ impl HcVaultTransitProviderOptions {
     }
 }
 
-/// Wraps and unwraps data encryption keys with a key of the HashiCorp Vault Transit secrets
+/// Encrypts and decrypts data encryption keys with a key of the HashiCorp Vault Transit secrets
 /// engine. It needs one TLS root store feature and one crypto provider feature.
 ///
 /// A response with an error status is `VAULT_STATUS_<status>`: a
@@ -378,7 +378,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap_span(&self.kek), async {
+        spans::in_span(kms::encrypt_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroised.
             let request = serde_json::to_vec(&EncryptRequest {
@@ -404,7 +404,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        spans::in_span(kms::unwrap_span(&self.kek), async {
+        spans::in_span(kms::decrypt_span(&self.kek), async {
             let ciphertext = std::str::from_utf8(encrypted_key.value()).map_err(|_| {
                 KmsAeadEncryptionError::create(
                     "VAULT_CIPHERTEXT",
@@ -479,7 +479,7 @@ impl VaultErrorResponse {
     }
 }
 
-/// serde_json quotes the offending value in its messages, and in a decrypt response that value
+/// serde_json quotes the offending value in its messages, and in a decryption response that value
 /// can be the data key itself, so only the category and position are kept.
 fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     serde_json::from_slice(body).map_err(|e| {
@@ -672,7 +672,7 @@ mod tests {
     const TOKEN: &str = "hvs.token-marker-value";
     const DATA_KEY: &str = "data-key-marker-value-of-32bytes";
     const TEST_KEY: &str = "orders";
-    const WRAPPED_KEY: &str = "vault:v1:wrapped";
+    const ENCRYPTED_DEK: &str = "vault:v1:encrypted-dek";
 
     /// Ends a test whose request would otherwise hang, so a missing timeout fails the test.
     const TEST_GUARD: Duration = Duration::from_secs(5);
@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unwrap_names_the_configured_kek() {
+    async fn decrypt_names_the_configured_kek() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let provider = local_provider(&listener);
@@ -717,7 +717,7 @@ mod tests {
 
         provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+                b"vault:v1:encrypted-dek".into(),
             ))
             .await
             .unwrap();
@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrap_sends_only_the_key_and_unwrap_only_the_ciphertext() -> KmsAeadResult<()> {
+    async fn encrypt_sends_only_the_key_and_decrypt_only_the_ciphertext() -> KmsAeadResult<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = local_provider(&listener);
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
@@ -746,13 +746,13 @@ mod tests {
             listener,
             200,
             format!(
-                r#"{{"data":{{"ciphertext":"{WRAPPED_KEY}","plaintext":"{}"}}}}"#,
+                r#"{{"data":{{"ciphertext":"{ENCRYPTED_DEK}","plaintext":"{}"}}}}"#,
                 data_key_base64.as_str()
             ),
         );
 
-        let wrapped = provider.encrypt_data_encryption_key(&data_key()).await?;
-        provider.decrypt_data_encryption_key(&wrapped).await?;
+        let encrypted_dek = provider.encrypt_data_encryption_key(&data_key()).await?;
+        provider.decrypt_data_encryption_key(&encrypted_dek).await?;
 
         let bodies: Vec<serde_json::Value> = requests
             .lock()
@@ -764,7 +764,7 @@ mod tests {
             bodies,
             [
                 serde_json::json!({ "plaintext": data_key_base64.as_str() }),
-                serde_json::json!({ "ciphertext": WRAPPED_KEY }),
+                serde_json::json!({ "ciphertext": ENCRYPTED_DEK }),
             ]
         );
         Ok(())
@@ -932,7 +932,7 @@ mod tests {
 
         let Err(error) = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+                b"vault:v1:encrypted-dek".into(),
             ))
             .await
         else {

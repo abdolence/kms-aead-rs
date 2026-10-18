@@ -20,7 +20,7 @@ const DEK_CACHE: &str = "/kms_aead/dek_cache";
 const PURPOSE: &str = "/kms_aead/purpose";
 const ERROR_CODE: &str = "/kms_aead/error_code";
 
-/// The `dek_cache` value of a call that unwraps through the provider although the envelope has
+/// The `dek_cache` value of a call that decrypts through the provider although the envelope has
 /// a cache.
 #[cfg(feature = "deterministic")]
 const DEK_CACHE_BYPASSED: &str = "bypassed";
@@ -43,10 +43,10 @@ pub(crate) mod kms {
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
     const LEN: &str = "/kms_aead/len";
 
-    /// `KMS wrap`, around a provider's `encrypt_data_encryption_key`.
-    pub(crate) fn wrap_span(kek: &KekRef) -> Span {
+    /// `KMS encrypt DEK`, around a provider's `encrypt_data_encryption_key`.
+    pub(crate) fn encrypt_span(kek: &KekRef) -> Span {
         debug_span!(
-            "KMS wrap",
+            "KMS encrypt DEK",
             { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
@@ -55,10 +55,10 @@ pub(crate) mod kms {
         )
     }
 
-    /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`.
-    pub(crate) fn unwrap_span(kek: &KekRef) -> Span {
+    /// `KMS decrypt DEK`, around a provider's `decrypt_data_encryption_key`.
+    pub(crate) fn decrypt_span(kek: &KekRef) -> Span {
         debug_span!(
-            "KMS unwrap",
+            "KMS decrypt DEK",
             { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
@@ -95,12 +95,12 @@ pub(crate) mod kms {
         tracing::info!(
             { KEY } = %key,
             { KEY_VERSIONS } = versions,
-            "A local KEK wraps and unwraps data encryption keys"
+            "A local KEK encrypts and decrypts data encryption keys"
         );
     }
 
-    /// Records on the current KMS span the version of the KMS key that wraps or wrapped the key:
-    /// from the KMS response on wrap, from the wrapped key on unwrap.
+    /// Records on the current KMS span the version of the KMS key that encrypts or encrypted the
+    /// key: from the KMS response on encryption, from the encrypted DEK on decryption.
     pub(crate) fn record_key_version(key_version: &str) {
         Span::current().record(KEY_VERSION, key_version);
     }
@@ -192,7 +192,7 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str
     )
 }
 
-/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a deterministic key the caller
+/// `KMS AEAD decrypt DEK`, around the envelope's decryption of a deterministic key the caller
 /// stored, which never goes through the cache.
 #[cfg(feature = "deterministic")]
 pub(crate) fn decrypt_dek(algorithm: impl Display, dek_cache: &DekCache) -> Span {

@@ -25,7 +25,7 @@ use crate::{
 const MAX_USES: u64 = 1 << 32;
 
 /// Envelope encryption: AEAD under data encryption keys (DEKs) on the backend `B`, and the DEKs
-/// wrapped by a key encryption key (KEK) through the provider `P`.
+/// encrypted by a key encryption key (KEK) through the provider `P`.
 ///
 /// Every call returns the errors of [`AeadCipher`] for the AEAD step and the errors of the
 /// provider for the KMS step, with the codes the provider reports. A call that makes no KMS call
@@ -35,14 +35,14 @@ const MAX_USES: u64 = 1 << 32;
 /// envelope format, [`CipherTextWithEncryptedKey`], which Tink's `KmsEnvelopeAead` reads with the
 /// same KMS key and algorithm:
 ///
-/// - per call, the default: a new DEK per value, one KMS wrap per value;
+/// - per call, the default: a new DEK per value, one KMS encryption per value;
 /// - store-less, with a [`DekReusePolicy`] in the options: one DEK for many values, renewed by
-///   the policy and whenever the DEK leaves the envelope's cache, one KMS wrap per renewal.
+///   the policy and whenever the DEK leaves the envelope's cache, one KMS encryption per renewal.
 ///
 /// [`encrypt_field`](Self::encrypt_field) and [`decrypt_field`](Self::decrypt_field) do the same
 /// for a value of a [`Plaintext`] type, held as an [`Encrypted<T, Envelope>`](Encrypted).
 ///
-/// `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap
+/// `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` decrypt
 /// through the envelope's [`DekCache`], which is disabled in a per-call envelope unless the
 /// options give it one; see [`KmsAeadEnvelopeOptions`].
 ///
@@ -68,7 +68,7 @@ pub struct KmsAeadEnvelopeOptions {
     /// Store-less mode: `encrypt_value` reuses one DEK until the policy renews it. `None`, the
     /// default, encrypts every value under a new DEK.
     pub dek_reuse: Option<DekReusePolicy>,
-    /// The cache the envelope unwraps DEKs through. `None`, the default, is
+    /// The cache the envelope decrypts DEKs through. `None`, the default, is
     /// [`DekCache::disabled`] per call and `DekCache::new(DekCacheOptions::new())` in store-less
     /// mode, which needs an enabled cache. A cache passed here may be shared with other
     /// envelopes.
@@ -85,10 +85,10 @@ impl KmsAeadEnvelopeOptions {
 /// When a store-less envelope renews the data encryption key (DEK) it encrypts under: at the
 /// first encryption past `max_age` or past `max_uses`, whichever comes first.
 ///
-/// A renewal makes one KMS wrap call, and the values under the previous DEK stay readable, since
-/// each value carries its wrapped DEK.
+/// A renewal makes one KMS encryption call, and the values under the previous DEK stay readable,
+/// since each value carries its encrypted DEK.
 ///
-/// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
+/// The envelope keeps only the encrypted DEK. Its plaintext lives in the envelope's [`DekCache`],
 /// and the first encryption after it has left the cache renews it: past the cache's TTL,
 /// whatever `max_age`, after the cache evicts it for capacity, or after [`DekCache::invalidate`]
 /// with `envelope.provider().kek()` or [`DekCache::clear`]. In a cache shared with readers, size
@@ -138,7 +138,7 @@ struct DekReuse {
     ended_renewals: AtomicU64,
 }
 
-/// The DEK in use: the wrapped form every value under it carries, and what the policy counts.
+/// The DEK in use: the encrypted form every value under it carries, and what the policy counts.
 struct CurrentDek {
     encrypted: EncryptedDataEncryptionKey,
     created_at: Instant,
@@ -172,7 +172,7 @@ impl DekReuse {
         })
     }
 
-    /// The DEK to encrypt one value under, wrapped by `renew` when the policy renews the current
+    /// The DEK to encrypt one value under, encrypted by `renew` when the policy renews the current
     /// one. A writer that waited while an attempt failed returns that attempt's error rather than
     /// calling the KMS again; a writer arriving after it retries.
     async fn claim_or_renew<F, Fut>(&self, renew: F) -> KmsAeadResult<Arc<CurrentDek>>
@@ -282,12 +282,12 @@ where
         self.cipher.algorithm()
     }
 
-    /// The provider this envelope wraps and unwraps DEKs with.
+    /// The provider this envelope encrypts and decrypts DEKs with.
     pub fn provider(&self) -> &P {
         &self.provider
     }
 
-    /// The cache this envelope unwraps DEKs through, for [`DekCache::invalidate`] and
+    /// The cache this envelope decrypts DEKs through, for [`DekCache::invalidate`] and
     /// [`DekCache::clear`]. Pass `envelope.provider().kek()` to `invalidate`: a
     /// [`KekRef`](crate::KekRef) built by hand that differs from it matches no entry.
     pub fn dek_cache(&self) -> &DekCache {
@@ -295,14 +295,14 @@ where
     }
 
     /// Encrypts `plain_text` under a new DEK, or under the reused DEK of a store-less envelope,
-    /// and returns it with the wrapped DEK in one [`CipherTextWithEncryptedKey`]. A new DEK
-    /// costs one KMS call to wrap it, and one more for the key material when the provider uses
+    /// and returns it with the encrypted DEK in one [`CipherTextWithEncryptedKey`]. A new DEK
+    /// costs one KMS call to encrypt it, and one more for the key material when the provider uses
     /// the KMS generator.
     ///
     /// # Errors
     ///
     /// Besides the AEAD and KMS errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
-    /// material of the wrong length, and `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is
+    /// material of the wrong length, and `INVALID_CIPHER_TEXT_FORMAT` when the encrypted DEK is
     /// longer than the 4,096 bytes Tink reads.
     pub async fn encrypt_value(
         &self,
@@ -312,7 +312,7 @@ where
         spans::in_span(self.encrypt_span(self.mode()), self.seal(aad, plain_text)).await
     }
 
-    /// Unwraps the DEK stored in `cipher_text`, through the envelope's [`DekCache`], and opens
+    /// Decrypts the DEK stored in `cipher_text`, through the envelope's [`DekCache`], and opens
     /// the value with it. With the deprecated `legacy-formats` feature it also reads the layouts
     /// written by 0.29 and earlier, and logs one `WARN` event the first time the process reads
     /// each of them.
@@ -320,8 +320,8 @@ where
     /// # Errors
     ///
     /// Besides the AEAD and KMS errors, the errors of [`CipherTextWithEncryptedKey::separate`]
-    /// when `cipher_text` cannot be read, and of [`DekCache::with_key`] when its wrapped key
-    /// does not unwrap to a key. With `legacy-formats`, `INVALID_CIPHER_TEXT_FORMAT` and
+    /// when `cipher_text` cannot be read, and of [`DekCache::with_key`] when its encrypted DEK
+    /// does not decrypt to a key. With `legacy-formats`, `INVALID_CIPHER_TEXT_FORMAT` and
     /// `INVALID_KEY_VERSION` on a legacy value that cannot be read take the place of
     /// `LEGACY_FORMAT`.
     pub async fn decrypt_value(
@@ -354,7 +354,7 @@ where
         .await
     }
 
-    /// Opens `field` as [`decrypt_value`](Self::decrypt_value) opens a value, unwrapping its DEK
+    /// Opens `field` as [`decrypt_value`](Self::decrypt_value) opens a value, decrypting its DEK
     /// through the envelope's [`DekCache`], and decodes the plaintext as a `T`.
     ///
     /// # Errors
@@ -373,7 +373,7 @@ where
     }
 
     /// Encrypts `plain_text` under a plaintext DEK the caller holds, such as one from
-    /// [`generate_new_dek`](Self::generate_new_dek), without calling the KMS.
+    /// [`generate_dek`](Self::generate_dek), without calling the KMS.
     ///
     /// # Errors
     ///
@@ -389,12 +389,12 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and encrypts `plain_text` under it.
-    /// The caller stores the wrapped DEK beside the returned cipher text.
+    /// Decrypts `dek`, through the envelope's [`DekCache`], and encrypts `plain_text` under it.
+    /// The caller stores the encrypted DEK beside the returned cipher text.
     ///
     /// # Errors
     ///
-    /// The errors of the provider's unwrap and of [`AeadCipher::encrypt_value`].
+    /// The errors of the provider's decryption and of [`AeadCipher::encrypt_value`].
     pub async fn encrypt_value_with_encrypted_dek(
         &self,
         aad: &[u8],
@@ -424,11 +424,11 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and opens `cipher_text` with it.
+    /// Decrypts `dek`, through the envelope's [`DekCache`], and opens `cipher_text` with it.
     ///
     /// # Errors
     ///
-    /// The errors of the provider's unwrap and of [`AeadCipher::decrypt_value`].
+    /// The errors of the provider's decryption and of [`AeadCipher::decrypt_value`].
     pub async fn decrypt_value_with_encrypted_dek(
         &self,
         aad: &[u8],
@@ -442,10 +442,10 @@ where
         .await
     }
 
-    /// The beacon of `value` under the HMAC-SHA256 beacon key `wrapped_key`, whose id is
+    /// The beacon of `value` under the HMAC-SHA256 beacon key `encrypted_dek`, whose id is
     /// `key_id`, for the field `context`, keeping `bits` bits: [`BeaconMac::compute`] with the key
-    /// unwrapped through the envelope's [`DekCache`]. A beacon key comes from
-    /// [`BeaconMac::generate_wrapped_key`] with this envelope's [`provider`](Self::provider).
+    /// decrypted through the envelope's [`DekCache`]. A beacon key comes from
+    /// [`BeaconMac::generate_dek`] with this envelope's [`provider`](Self::provider).
     ///
     /// `context` names the field and never a row. Rotating a beacon key is the application's:
     /// it keeps both keys while it re-indexes, writes beacons under the new one, and queries with
@@ -453,12 +453,12 @@ where
     ///
     /// # Errors
     ///
-    /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialised
+    /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised
     /// Tink key, and the errors of [`BeaconMac::compute`].
     pub async fn beacon<T: Plaintext>(
         &self,
         key_id: KeyId,
-        wrapped_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         context: &[u8],
         bits: BeaconBits,
         value: &T,
@@ -467,7 +467,7 @@ where
         let span = spans::beacon(mac.algorithm(), B::NAME, &self.dek_cache);
         spans::in_span(
             span,
-            self.with_dek(wrapped_key, |key| {
+            self.with_dek(encrypted_dek, |key| {
                 mac.compute(key_id, context, bits, value, key)
             }),
         )
@@ -475,17 +475,17 @@ where
     }
 
     /// Generates a new DEK, from the KMS generator when the provider uses one and from the
-    /// backend's CSPRNG otherwise, and wraps it with the KMS as Tink does, so that
+    /// backend's CSPRNG otherwise, and encrypts it with the KMS as Tink does, so that
     /// [`CipherTextWithEncryptedKey::join`] can store it with values sealed under it.
     ///
     /// # Errors
     ///
-    /// The errors of [`AeadCipher::generate_wrapped_key`].
-    pub async fn generate_new_dek(
+    /// The errors of [`AeadCipher::generate_dek`].
+    pub async fn generate_dek(
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
         let span = spans::generate_dek("randomized", self.cipher.algorithm(), B::NAME);
-        spans::in_span(span, self.cipher.generate_wrapped_key(&self.provider)).await
+        spans::in_span(span, self.cipher.generate_dek(&self.provider)).await
     }
 
     /// Encrypts `plain_text` as `encrypt_value` does, in the span of the caller.
@@ -498,9 +498,9 @@ where
             Some(dek_reuse) => {
                 // The cache holds the only plaintext copy of the DEK, so a renewal caches it.
                 // Once it has left the cache, expired, invalidated or cleared, the writer renews
-                // instead of unwrapping it again, so that `invalidate` and `clear` end its use.
+                // instead of decrypting it again, so that `invalidate` and `clear` end its use.
                 let renew = || async {
-                    let (dek, encrypted) = self.cipher.generate_wrapped_key(&self.provider).await?;
+                    let (dek, encrypted) = self.cipher.generate_dek(&self.provider).await?;
                     if let Some(enabled) = &self.dek_cache.0 {
                         enabled.insert(self.provider.kek(), &encrypted, dek);
                     }
@@ -531,7 +531,7 @@ where
                 CipherTextWithEncryptedKey::join(&cipher_text, &dek.encrypted)
             }
             None => {
-                let (dek, encrypted_dek) = self.cipher.generate_wrapped_key(&self.provider).await?;
+                let (dek, encrypted_dek) = self.cipher.generate_dek(&self.provider).await?;
                 let cipher_text = self.cipher.encrypt_value(aad, plain_text, &dek)?;
                 CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)
             }
@@ -551,8 +551,8 @@ where
         .await
     }
 
-    /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
-    /// current span where the key came from, whether `use_key` succeeds or not. A failed unwrap
+    /// Runs `use_key` with the DEK that `encrypted` holds, through the cache, and records on the
+    /// current span where the key came from, whether `use_key` succeeds or not. A failed decryption
     /// records a miss. Without a cache nothing is recorded: the span records `disabled` when it
     /// opens, and a field recorded twice is exported twice.
     async fn with_dek<T>(
@@ -604,7 +604,7 @@ mod tests {
     use crate::errors::KmsAeadLegacyFormat;
     use crate::formats::TinkKeyType;
     use crate::test_provider::{
-        let_spawned_tasks_wait, wrapped_by_test_provider, CountingKmsProvider, TestBackend,
+        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
         TestKmsProvider, CONCURRENT_CALLS,
     };
 
@@ -632,7 +632,7 @@ mod tests {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
         let plaintext = SecretValue::from("secret message");
 
-        let (dek, encrypted_dek) = encryption.generate_new_dek().await?;
+        let (dek, encrypted_dek) = encryption.generate_dek().await?;
         let ciphertext = encryption.encrypt_value_with_dek(AAD, &plaintext, &dek)?;
 
         assert_eq!(
@@ -649,14 +649,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_new_dek_is_wrapped_as_its_tink_key() -> KmsAeadResult<()> {
+    async fn a_new_dek_is_encrypted_as_its_tink_key() -> KmsAeadResult<()> {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
 
-        let (dek, encrypted_dek) = encryption.generate_new_dek().await?;
+        let (dek, encrypted_dek) = encryption.generate_dek().await?;
 
         assert_eq!(
             encrypted_dek,
-            wrapped_by_test_provider(TinkKeyType::AesGcm, dek.value().ref_sensitive_value())
+            encrypted_by_test_provider(TinkKeyType::AesGcm, dek.value().ref_sensitive_value())
         );
         Ok(())
     }
@@ -666,7 +666,7 @@ mod tests {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
         let plaintext = SecretValue::from("secret message");
 
-        let (_dek, encrypted_dek) = encryption.generate_new_dek().await?;
+        let (_dek, encrypted_dek) = encryption.generate_dek().await?;
         let ciphertext = encryption
             .encrypt_value_with_encrypted_dek(AAD, &plaintext, &encrypted_dek)
             .await?;
@@ -680,14 +680,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_provider_encrypt_failure() -> KmsAeadResult<()> {
-        let encryption = Envelope::new(TestKmsProvider::FailingToWrap)?;
+        let encryption = Envelope::new(TestKmsProvider::FailingToEncrypt)?;
 
         let result = encryption
             .encrypt_value(AAD, &SecretValue::from("secret"))
             .await;
 
         assert!(
-            matches!(&result, Err(e) if e.code() == "TEST_WRAP"),
+            matches!(&result, Err(e) if e.code() == "TEST_ENCRYPT"),
             "{result:?}"
         );
         Ok(())
@@ -699,12 +699,12 @@ mod tests {
         let ciphertext = encryption
             .encrypt_value(AAD, &SecretValue::from("secret"))
             .await?;
-        let failing_encryption = Envelope::new(TestKmsProvider::FailingToUnwrap)?;
+        let failing_encryption = Envelope::new(TestKmsProvider::FailingToDecrypt)?;
 
         let result = failing_encryption.decrypt_value(AAD, &ciphertext).await;
 
         assert!(
-            matches!(&result, Err(e) if e.code() == "TEST_UNWRAP"),
+            matches!(&result, Err(e) if e.code() == "TEST_DECRYPT"),
             "{result:?}"
         );
         Ok(())
@@ -776,7 +776,7 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
         )?;
 
-        let (dek, _) = encryption.generate_new_dek().await?;
+        let (dek, _) = encryption.generate_dek().await?;
 
         assert_eq!(dek.value(), &material);
         Ok(())
@@ -789,8 +789,8 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes128Gcm),
         )?;
 
-        let (first, _) = encryption.generate_new_dek().await?;
-        let (second, _) = encryption.generate_new_dek().await?;
+        let (first, _) = encryption.generate_dek().await?;
+        let (second, _) = encryption.generate_dek().await?;
 
         assert_eq!(first.value().ref_sensitive_value().len(), 16);
         assert_ne!(first, second);
@@ -802,7 +802,7 @@ mod tests {
         let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
         let provider = TestKmsProvider::Generating(SecretValue::new(vec![0x42; 64]));
 
-        let result = cipher.generate_wrapped_key(&provider).await;
+        let result = cipher.generate_dek(&provider).await;
 
         assert!(
             matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
@@ -813,7 +813,7 @@ mod tests {
     }
 
     // The same secret under the AAD `fixture-aad`, with the test provider's raw key as the
-    // wrapped key, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0, sealed
+    // encrypted DEK, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0, sealed
     // with ChaCha20-Poly1305, the default of those releases.
     const FIXTURE_AAD: &[u8] = b"fixture-aad";
     #[cfg(feature = "legacy-formats")]
@@ -856,7 +856,7 @@ mod tests {
             (ENVELOPE_FROM_0_29, KmsAeadLegacyFormat::EnvelopeV1),
             (
                 ENVELOPE_FROM_0_23_0_ON_32_BIT,
-                KmsAeadLegacyFormat::RawWrappedKey,
+                KmsAeadLegacyFormat::RawEncryptedDek,
             ),
         ] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
@@ -907,7 +907,7 @@ mod tests {
                 None
             );
         }
-        assert_eq!(encryption.provider.wraps(), 3);
+        assert_eq!(encryption.provider.encryptions(), 3);
         Ok(())
     }
 
@@ -938,8 +938,8 @@ mod tests {
             matches!(&under_another_aad, Err(e) if e.code() == "DECRYPT"),
             "{under_another_aad:?}"
         );
-        assert_eq!(aes_256_gcm.provider.wraps(), 0);
-        assert_eq!(chacha20_poly1305.provider.wraps(), 0);
+        assert_eq!(aes_256_gcm.provider.encryptions(), 0);
+        assert_eq!(chacha20_poly1305.provider.encryptions(), 0);
         Ok(())
     }
 
@@ -956,7 +956,7 @@ mod tests {
             assert_eq!(decrypted, SecretValue::from(PLAIN_TEXT));
         }
 
-        assert_eq!(envelope.provider.unwraps(), 2);
+        assert_eq!(envelope.provider.decryptions(), 2);
         assert!(!envelope.dek_cache().is_enabled());
         Ok(())
     }
@@ -975,7 +975,7 @@ mod tests {
             envelope.decrypt_value(AAD, &value).await?;
         }
 
-        assert_eq!(envelope.provider.unwraps(), 1);
+        assert_eq!(envelope.provider.decryptions(), 1);
         Ok(())
     }
 
@@ -1025,13 +1025,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn encrypted_dek_calls_unwrap_through_the_cache() -> KmsAeadResult<()> {
+    async fn encrypted_dek_decrypts_through_the_cache() -> KmsAeadResult<()> {
         let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )?;
 
-        let (_, encrypted_dek) = envelope.generate_new_dek().await?;
+        let (_, encrypted_dek) = envelope.generate_dek().await?;
         let value = envelope
             .encrypt_value_with_encrypted_dek(AAD, &SecretValue::from(PLAIN_TEXT), &encrypted_dek)
             .await?;
@@ -1040,7 +1040,7 @@ mod tests {
             .await?;
 
         assert_eq!(decrypted, SecretValue::from(PLAIN_TEXT));
-        assert_eq!(envelope.provider.unwraps(), 1);
+        assert_eq!(envelope.provider.decryptions(), 1);
         Ok(())
     }
 
@@ -1052,20 +1052,20 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_dek_reuse(policy),
         )?;
 
-        let mut wrapped_deks = Vec::new();
+        let mut encrypted_deks = Vec::new();
         for _ in 0..7 {
             let value = envelope
                 .encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT))
                 .await?;
-            wrapped_deks.push(value.separate()?.1);
+            encrypted_deks.push(value.separate()?.1);
         }
 
-        let renewals: Vec<_> = wrapped_deks
+        let renewals: Vec<_> = encrypted_deks
             .windows(2)
             .map(|pair| pair[0] != pair[1])
             .collect();
         assert_eq!(renewals, [false, false, true, false, false, true]);
-        assert_eq!(envelope.provider.wraps(), 3);
+        assert_eq!(envelope.provider.encryptions(), 3);
         Ok(())
     }
 
@@ -1078,21 +1078,21 @@ mod tests {
                 .with_dek_reuse(DekReusePolicy::new().with_max_age(max_age)),
         )?;
 
-        let mut wrapped_deks = Vec::new();
+        let mut encrypted_deks = Vec::new();
         for pause in [Duration::ZERO, max_age, Duration::ZERO] {
             let value = envelope
                 .encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT))
                 .await?;
-            wrapped_deks.push(value.separate()?.1);
+            encrypted_deks.push(value.separate()?.1);
             tokio::time::sleep(pause).await;
         }
 
-        let renewals: Vec<_> = wrapped_deks
+        let renewals: Vec<_> = encrypted_deks
             .windows(2)
             .map(|pair| pair[0] != pair[1])
             .collect();
         assert_eq!(renewals, [false, true]);
-        assert_eq!(envelope.provider.wraps(), 2);
+        assert_eq!(envelope.provider.encryptions(), 2);
         Ok(())
     }
 
@@ -1114,15 +1114,15 @@ mod tests {
             })
             .collect();
         let_spawned_tasks_wait().await;
-        assert_eq!(envelope.provider.wraps(), 1);
+        assert_eq!(envelope.provider.encryptions(), 1);
         envelope.provider.open_gate();
 
-        let mut wrapped_deks = Vec::new();
+        let mut encrypted_deks = Vec::new();
         for encryption in encryptions {
-            wrapped_deks.push(encryption.await.unwrap()?.separate()?.1);
+            encrypted_deks.push(encryption.await.unwrap()?.separate()?.1);
         }
-        assert!(wrapped_deks.iter().all(|dek| *dek == wrapped_deks[0]));
-        assert_eq!(envelope.provider.wraps(), 1);
+        assert!(encrypted_deks.iter().all(|dek| *dek == encrypted_deks[0]));
+        assert_eq!(envelope.provider.encryptions(), 1);
         Ok(())
     }
 
@@ -1145,8 +1145,8 @@ mod tests {
             }
         }
 
-        assert_eq!(envelope.provider.wraps(), 3);
-        assert_eq!(envelope.provider.unwraps(), 0);
+        assert_eq!(envelope.provider.encryptions(), 3);
+        assert_eq!(envelope.provider.decryptions(), 0);
         Ok(())
     }
 
@@ -1176,8 +1176,8 @@ mod tests {
 
         assert!(zeroized);
         assert_ne!(after_ttl.separate()?.1, writer_dek);
-        assert_eq!(envelope.provider.wraps(), 2);
-        assert_eq!(envelope.provider.unwraps(), 0);
+        assert_eq!(envelope.provider.encryptions(), 2);
+        assert_eq!(envelope.provider.decryptions(), 0);
         Ok(())
     }
 
@@ -1211,15 +1211,15 @@ mod tests {
 
         assert_ne!(after_invalidate, first);
         assert_ne!(after_clear, after_invalidate);
-        assert_eq!(envelope.provider.wraps(), 3);
-        assert_eq!(envelope.provider.unwraps(), 0);
+        assert_eq!(envelope.provider.encryptions(), 3);
+        assert_eq!(envelope.provider.decryptions(), 0);
         Ok(())
     }
 
     #[tokio::test]
     async fn renewal_failure_is_shared_with_queued_writers() -> KmsAeadResult<()> {
         let envelope = Arc::new(CountingEnvelope::with_options(
-            CountingKmsProvider::gated(TestKmsProvider::FailingToWrap, ORDERS_KEK),
+            CountingKmsProvider::gated(TestKmsProvider::FailingToEncrypt, ORDERS_KEK),
             KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
         )?);
 
@@ -1239,7 +1239,7 @@ mod tests {
         for encryption in encryptions {
             results.push(encryption.await.unwrap());
         }
-        let wraps_of_one_attempt = envelope.provider.wraps();
+        let encryptions_of_one_attempt = envelope.provider.encryptions();
         results.push(
             envelope
                 .encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT))
@@ -1249,13 +1249,13 @@ mod tests {
         for result in &results {
             assert!(
                 matches!(result, Err(KmsAeadError::EncryptionError(error))
-                    if error.public.code == "TEST_WRAP"),
+                    if error.public.code == "TEST_ENCRYPT"),
                 "{:?}",
                 result.as_ref().err()
             );
         }
-        assert_eq!(wraps_of_one_attempt, 1);
-        assert_eq!(envelope.provider.wraps(), 2);
+        assert_eq!(encryptions_of_one_attempt, 1);
+        assert_eq!(envelope.provider.encryptions(), 2);
         Ok(())
     }
 
@@ -1323,24 +1323,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_beacon_unwraps_its_key_through_the_cache() -> KmsAeadResult<()> {
+    async fn a_beacon_decrypts_its_key_through_the_cache() -> KmsAeadResult<()> {
         let encryption = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
-        let (key, wrapped) = mac.generate_wrapped_key(encryption.provider()).await?;
+        let (key, encrypted_dek) = mac.generate_dek(encryption.provider()).await?;
         let key_id = KeyId::new(7);
         let email = "alice@example.com".to_string();
 
         let beacon = encryption
-            .beacon(key_id, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .beacon(
+                key_id,
+                &encrypted_dek,
+                b"user/email",
+                BeaconBits::DEFAULT,
+                &email,
+            )
             .await?;
         let again = encryption
-            .beacon(key_id, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .beacon(
+                key_id,
+                &encrypted_dek,
+                b"user/email",
+                BeaconBits::DEFAULT,
+                &email,
+            )
             .await?;
         let other_field = encryption
-            .beacon(key_id, &wrapped, b"user/name", BeaconBits::DEFAULT, &email)
+            .beacon(
+                key_id,
+                &encrypted_dek,
+                b"user/name",
+                BeaconBits::DEFAULT,
+                &email,
+            )
             .await?;
 
         assert_eq!(beacon, again);
@@ -1349,7 +1367,7 @@ mod tests {
             mac.compute(key_id, b"user/email", BeaconBits::DEFAULT, &email, &key)?
         );
         assert_ne!(beacon, other_field);
-        assert_eq!(encryption.provider().unwraps(), 1);
+        assert_eq!(encryption.provider().decryptions(), 1);
         Ok(())
     }
 
@@ -1366,8 +1384,8 @@ mod tests {
 
         assert_eq!(envelope.decrypt_field(AAD, &first).await?, card);
         assert_eq!(envelope.decrypt_field(AAD, &second).await?, card);
-        assert_eq!(envelope.provider.wraps(), 1);
-        assert_eq!(envelope.provider.unwraps(), 0);
+        assert_eq!(envelope.provider.encryptions(), 1);
+        assert_eq!(envelope.provider.decryptions(), 0);
         Ok(())
     }
 

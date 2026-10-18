@@ -247,16 +247,16 @@ impl<B: AeadBackend> BeaconMac<B> {
         generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
-    /// A new beacon key and the same key wrapped by `provider`, to store. The key comes from the
+    /// A new beacon key and the same key encrypted by `provider`, to store. The key comes from the
     /// KMS generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is wrapped as a serialised Tink key with the key in `key_value`, so that
-    /// [`DekCache::with_key`](crate::cache::DekCache::with_key) unwraps it.
+    /// otherwise. It is encrypted as a serialised Tink key with the key in `key_value`, so that
+    /// [`DekCache::with_key`](crate::cache::DekCache::with_key) decrypts it.
     ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
     /// of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub async fn generate_wrapped_key<P>(
+    pub async fn generate_dek<P>(
         &self,
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
@@ -265,7 +265,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     {
         // Tink's `HmacPrfKey` and `AesGcmKey` both hold their key in field 3, `key_value`, so a
         // 32-byte beacon key serialises to the bytes of a 32-byte `AesGcmKey`.
-        crate::formats::generate_wrapped_key::<B, P>(
+        crate::formats::generate_dek::<B, P>(
             TinkKeyType::AesGcm,
             self.algorithm.key_len(),
             provider,

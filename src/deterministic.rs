@@ -178,23 +178,23 @@ mod aes_siv_cipher {
             generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
         }
 
-        /// A new key and the same key wrapped by `provider`, to store. The key comes from the
+        /// A new key and the same key encrypted by `provider`, to store. The key comes from the
         /// KMS generator when the provider is configured to use one, and from the backend's
-        /// CSPRNG otherwise. It is wrapped as Tink wraps a key, serialised as Tink's
+        /// CSPRNG otherwise. It is encrypted as Tink encrypts a key, serialised as Tink's
         /// `AesSivKey`, or raw under an Azure KEK.
         ///
         /// # Errors
         ///
         /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
         /// material of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-        pub async fn generate_wrapped_key<P>(
+        pub async fn generate_dek<P>(
             &self,
             provider: &P,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
-            crate::formats::generate_wrapped_key::<B, P>(
+            crate::formats::generate_dek::<B, P>(
                 self.algorithm.into(),
                 self.algorithm.key_len(),
                 provider,
@@ -351,13 +351,13 @@ mod aes_siv_cipher {
         }
     }
 
-    /// Deterministic keys, wrapped and unwrapped by the envelope's provider.
+    /// Deterministic keys, encrypted and decrypted by the envelope's provider.
     impl<P, B> KmsAeadEnvelope<P, B>
     where
         P: KmsAeadEncryptionProvider + Send + Sync,
         B: AeadBackend,
     {
-        /// A new deterministic key and the same key wrapped by the provider, to store. The key
+        /// A new deterministic key and the same key encrypted by the provider, to store. The key
         /// comes from the KMS generator when the provider is configured to use one, and from the
         /// CSPRNG of the envelope's backend otherwise.
         ///
@@ -371,15 +371,15 @@ mod aes_siv_cipher {
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
             let cipher = DeterministicCipher::<B>::new(algorithm)?;
             let span = spans::generate_dek("deterministic", algorithm, B::NAME);
-            spans::in_span(span, cipher.generate_wrapped_key(&self.provider)).await
+            spans::in_span(span, cipher.generate_dek(&self.provider)).await
         }
 
-        /// Unwraps a key [`generate_new_deterministic_dek`](Self::generate_new_deterministic_dek)
-        /// wrapped.
+        /// Decrypts a key [`generate_new_deterministic_dek`](Self::generate_new_deterministic_dek)
+        /// encrypted.
         ///
         /// # Errors
         ///
-        /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialised
+        /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised
         /// Tink key, and `INVALID_KEY_LENGTH` when it does not fit `algorithm`.
         pub async fn decrypt_deterministic_dek(
             &self,
@@ -388,7 +388,7 @@ mod aes_siv_cipher {
         ) -> KmsAeadResult<DataEncryptionKey> {
             let span = spans::decrypt_dek(algorithm, self.dek_cache());
             spans::in_span(span, async {
-                let (key, _) = crate::formats::unwrap_key(encrypted_key, &self.provider).await?;
+                let (key, _) = crate::formats::decrypt_dek(encrypted_key, &self.provider).await?;
                 checked_key_bytes(&key, algorithm, algorithm.key_len())?;
                 Ok(key)
             })
@@ -558,7 +558,7 @@ mod aes_siv_cipher {
 
         mod envelope {
             use super::*;
-            use crate::test_provider::{wrapped_by_test_provider, TestKmsProvider};
+            use crate::test_provider::{encrypted_by_test_provider, TestKmsProvider};
 
             type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
 
@@ -572,28 +572,28 @@ mod aes_siv_cipher {
                 let (key, encrypted_key) =
                     envelope.generate_new_deterministic_dek(algorithm).await?;
                 let (other_key, _) = envelope.generate_new_deterministic_dek(algorithm).await?;
-                let unwrapped = envelope
+                let decrypted = envelope
                     .decrypt_deterministic_dek(algorithm, &encrypted_key)
                     .await?;
 
                 assert_eq!(
                     encrypted_key,
-                    wrapped_by_test_provider(algorithm, key.value().ref_sensitive_value())
+                    encrypted_by_test_provider(algorithm, key.value().ref_sensitive_value())
                 );
-                assert_eq!(unwrapped.value(), key.value());
+                assert_eq!(decrypted.value(), key.value());
                 assert_ne!(key.value(), other_key.value());
                 assert_eq!(
-                    cipher.encrypt_value(AAD, &plain_text, &unwrapped)?,
+                    cipher.encrypt_value(AAD, &plain_text, &decrypted)?,
                     cipher.encrypt_value(AAD, &plain_text, &key)?
                 );
                 Ok(())
             }
 
             #[tokio::test]
-            async fn an_unwrapped_key_of_another_length_is_refused() -> KmsAeadResult<()> {
+            async fn a_decrypted_key_of_another_length_is_refused() -> KmsAeadResult<()> {
                 let envelope = Envelope::new(TestKmsProvider::Working)?;
                 let encrypted_key =
-                    wrapped_by_test_provider(crate::AeadAlgorithm::Aes256Gcm, &[0x42; 32]);
+                    encrypted_by_test_provider(crate::AeadAlgorithm::Aes256Gcm, &[0x42; 32]);
 
                 let result = envelope
                     .decrypt_deterministic_dek(DeterministicAlgorithm::Aes256Siv, &encrypted_key)

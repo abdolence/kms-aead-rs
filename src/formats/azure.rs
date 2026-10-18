@@ -3,12 +3,12 @@ use crate::providers::kms_key_version::read_key_version;
 use crate::providers::KmsKeyVersion;
 use crate::KmsAeadResult;
 
-/// The bytes the Azure provider returns from a wrap and takes to unwrap, kms-aead's own layout,
-/// since Key Vault unwraps only with the key version that wrapped and no Tink client exists for
-/// Azure:
+/// The bytes the Azure provider returns from an encryption and takes to decrypt, kms-aead's own
+/// layout, since Key Vault decrypts only with the key version that encrypted and no Tink client
+/// exists for Azure:
 ///
 /// ```text
-/// [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault wrapped key]
+/// [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault encrypted DEK]
 /// ```
 #[derive(Debug, PartialEq)]
 pub(crate) struct AzureWrappedKey<'w> {
@@ -48,7 +48,7 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
 
     /// # Errors
     ///
-    /// `AZURE_WRAPPED_KEY_FORMAT` when `bytes` are not in the layout, and `INVALID_KEY_VERSION`
+    /// `AZURE_ENCRYPTED_DEK_FORMAT` when `bytes` are not in the layout, and `INVALID_KEY_VERSION`
     /// when the key version is not ASCII alphanumeric.
     fn try_from(bytes: &'w [u8]) -> KmsAeadResult<Self> {
         let [Self::LAYOUT, rest @ ..] = bytes else {
@@ -67,7 +67,7 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
 impl AzureWrappedKey<'_> {
     fn malformed() -> KmsAeadError {
         KmsAeadEncryptionError::create(
-            "AZURE_WRAPPED_KEY_FORMAT",
+            "AZURE_ENCRYPTED_DEK_FORMAT",
             "The encrypted data encryption key is not in the layout of the Azure provider",
         )
     }
@@ -81,18 +81,18 @@ mod tests {
 
     #[test]
     fn the_layout_is_pinned() -> KmsAeadResult<()> {
-        let wrapped_key = AzureWrappedKey {
+        let encrypted_dek = AzureWrappedKey {
             key_version: KmsKeyVersion::try_from(KEY_VERSION.to_string())?,
             wrapped: b"wrapped",
         };
 
-        let bytes = wrapped_key.to_bytes()?;
+        let bytes = encrypted_dek.to_bytes()?;
 
         assert_eq!(
             hex::encode(&bytes),
             format!("0120{}77726170706564", hex::encode(KEY_VERSION))
         );
-        assert_eq!(AzureWrappedKey::try_from(bytes.as_slice())?, wrapped_key);
+        assert_eq!(AzureWrappedKey::try_from(bytes.as_slice())?, encrypted_dek);
         Ok(())
     }
 
@@ -109,7 +109,7 @@ mod tests {
             let result = AzureWrappedKey::try_from(bytes);
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
-                    if error.public.code == "AZURE_WRAPPED_KEY_FORMAT"),
+                    if error.public.code == "AZURE_ENCRYPTED_DEK_FORMAT"),
                 "{bytes:02x?}: {result:?}"
             );
         }

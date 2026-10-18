@@ -10,7 +10,7 @@ use aws_sdk_kms::primitives::Blob;
 
 use secret_vault_value::SecretValue;
 
-/// An AWS KMS key that wraps data encryption keys.
+/// An AWS KMS key that encrypts data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct AwsKmsKeyRef {
     /// The AWS account that owns the key, used to build its ARN.
@@ -18,8 +18,8 @@ pub struct AwsKmsKeyRef {
     /// The key as AWS KMS accepts it: a key id, a key ARN, an alias name such as
     /// `alias/orders`, or an alias ARN.
     ///
-    /// An unwrap names the configured key. Configure the key ARN rather than an alias: a key
-    /// wrapped under an alias that later moves to another key fails to unwrap with
+    /// A decryption names the configured key. Configure the key ARN rather than an alias: a key
+    /// encrypted under an alias that later moves to another key fails to decrypt with
     /// `IncorrectKeyException`. Outside the `aws` partition, such as in GovCloud or China, give
     /// the full ARN, since a key id or an alias name becomes an `arn:aws:` ARN.
     pub key_id: String,
@@ -63,7 +63,7 @@ impl AwsKmsProviderOptions {
     pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
-/// Wraps and unwraps data encryption keys with an AWS KMS key.
+/// Encrypts and decrypts data encryption keys with an AWS KMS key.
 ///
 /// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
@@ -79,7 +79,7 @@ impl AwsKmsProvider {
     /// configuration from the environment.
     ///
     /// It sends no request, so missing credentials or an unreachable endpoint fail the first
-    /// wrap or unwrap.
+    /// encryption or decryption.
     ///
     /// # Errors
     ///
@@ -126,7 +126,7 @@ impl AwsKmsProvider {
         }
     }
 
-    /// Wraps under the configured key.
+    /// Encrypts under the configured key.
     fn encrypt_request(&self, encryption_key: &DataEncryptionKey) -> EncryptFluentBuilder {
         self.client
             .encrypt()
@@ -136,7 +136,7 @@ impl AwsKmsProvider {
             ))
     }
 
-    /// Names the configured key: without it AWS KMS unwraps under whichever key the blob names,
+    /// Names the configured key: without it AWS KMS decrypts under whichever key the blob names,
     /// for any key the principal may decrypt with.
     fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
         self.client
@@ -156,7 +156,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap_span(&self.kek), async {
+        spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_response = kms::timed(self.encrypt_request(encryption_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
@@ -178,7 +178,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        spans::in_span(kms::unwrap_span(&self.kek), async {
+        spans::in_span(kms::decrypt_span(&self.kek), async {
             let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
@@ -272,7 +272,7 @@ mod tests {
 
     fn decrypt_key_id(configured_key_id: &str) -> Option<String> {
         provider_for(configured_key_id, aws_sdk_kms::Config::builder())
-            .decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()))
+            .decrypt_request(&EncryptedDataEncryptionKey::new(b"encrypted-dek".to_vec()))
             .get_key_id()
             .clone()
     }
@@ -315,16 +315,16 @@ mod tests {
     }
 
     #[test]
-    fn unwrap_names_the_configured_kek() {
+    fn decrypt_names_the_configured_kek() {
         let provider = offline_provider();
 
         let request =
-            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()));
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"encrypted-dek".to_vec()));
 
         assert_eq!(request.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
             request.get_ciphertext_blob().as_ref().map(Blob::as_ref),
-            Some(b"wrapped".as_slice())
+            Some(b"encrypted-dek".as_slice())
         );
         assert_eq!(*provider.kek(), KekRef::new(KekProvider::Aws, KEY_ARN));
     }
@@ -336,7 +336,7 @@ mod tests {
 
         let encrypt = provider.encrypt_request(&dek);
         let decrypt =
-            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()));
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"encrypted-dek".to_vec()));
 
         assert_eq!(encrypt.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
@@ -373,7 +373,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_wrap_refused_by_kms_keeps_the_service_code_and_message() {
+    async fn an_encryption_refused_by_kms_keeps_the_service_code_and_message() {
         let provider = provider_answered_with(
             400,
             r#"{"__type":"NotFoundException","message":"Key 'orders' does not exist"}"#,
@@ -435,7 +435,7 @@ mod tests {
     fn provider_errors_carry_no_key_material() {
         let body = format!(r#"{{"KeyId":"{KEY_ARN}","Plaintext":"{PLAINTEXT_MARKER}"}}"#);
         let errors = [
-            // A successful unwrap whose body failed to parse.
+            // A successful decryption whose body failed to parse.
             KmsAeadError::from_aws_sdk_error(
                 SdkError::<DecryptError, HttpResponse>::response_error(
                     "failed to parse the response",
@@ -557,7 +557,7 @@ mod tests {
     /// may encrypt and decrypt with; passes without running when the variable is unset.
     #[tokio::test]
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    async fn live_unwrap_of_a_key_wrapped_under_another_kek_fails() -> KmsAeadResult<()> {
+    async fn live_decryption_of_a_dek_encrypted_under_another_kek_fails() -> KmsAeadResult<()> {
         let Ok(second_key_id) = std::env::var("KMS_SECOND_KEY_ID") else {
             return Ok(());
         };
@@ -568,14 +568,14 @@ mod tests {
         );
         let other = AwsKmsKeyRef::new(account_id, second_key_id);
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
-        let wrapped_under_other = AwsKmsProvider::new(&other)
+        let encrypted_under_other = AwsKmsProvider::new(&other)
             .await?
             .encrypt_data_encryption_key(&dek)
             .await?;
 
         let result = AwsKmsProvider::new(&configured)
             .await?
-            .decrypt_data_encryption_key(&wrapped_under_other)
+            .decrypt_data_encryption_key(&encrypted_under_other)
             .await;
 
         assert!(

@@ -4,15 +4,15 @@ use crate::errors::KmsAeadSystemError;
 use crate::providers::LocalKekVersion;
 use crate::KmsAeadResult;
 
-/// A wrapped key of the local KMS:
+/// An encrypted DEK of the local KMS:
 ///
 /// ```text
 /// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed key][tag: 16]
 /// ```
 ///
 /// The header, up to the version, is the associated data of the AES-256-GCM seal, so neither
-/// the id nor the version can be changed without the unwrap failing.
-pub(crate) struct LocalWrappedKey<'w> {
+/// the id nor the version can be changed without the decryption failing.
+pub(crate) struct LocalEncryptedDek<'w> {
     /// `[0x01][i][KEK id][KEK version]`, the associated data.
     pub(crate) header: &'w [u8],
     pub(crate) kek_id: &'w [u8],
@@ -21,11 +21,11 @@ pub(crate) struct LocalWrappedKey<'w> {
     pub(crate) sealed: &'w [u8],
 }
 
-impl<'w> LocalWrappedKey<'w> {
+impl<'w> LocalEncryptedDek<'w> {
     /// The version of the layout, its first byte.
     const LAYOUT: u8 = 0x01;
 
-    /// The header of a key wrapped under `kek_id` at `kek_version`.
+    /// The header of a key encrypted under `kek_id` at `kek_version`.
     ///
     /// # Errors
     ///
@@ -47,15 +47,15 @@ impl<'w> LocalWrappedKey<'w> {
         Ok(header)
     }
 
-    /// The parts of `wrapped`, or `None` when it is not in the layout.
-    pub(crate) fn split(wrapped: &'w [u8]) -> Option<Self> {
-        let [Self::LAYOUT, id_len, rest @ ..] = wrapped else {
+    /// The parts of `encrypted`, or `None` when it is not in the layout.
+    pub(crate) fn split(encrypted: &'w [u8]) -> Option<Self> {
+        let [Self::LAYOUT, id_len, rest @ ..] = encrypted else {
             return None;
         };
         let (kek_id, rest) = rest.split_at_checked(usize::from(*id_len))?;
         let (kek_version, sealed) = rest.split_first_chunk::<4>()?;
         Some(Self {
-            header: &wrapped[..wrapped.len() - sealed.len()],
+            header: &encrypted[..encrypted.len() - sealed.len()],
             kek_id,
             kek_version: LocalKekVersion::from(NonZeroU32::new(u32::from_be_bytes(*kek_version))?),
             sealed,

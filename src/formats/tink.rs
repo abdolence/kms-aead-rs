@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// A Tink key type: the `google.crypto.tink` message a key of an algorithm is serialised as, with
-/// `version` 0 and the key in `key_value`, as Tink writes it into a keyset and wraps it in a KMS
+/// `version` 0 and the key in `key_value`, as Tink writes it into a keyset and encrypts it in a KMS
 /// envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -106,7 +106,7 @@ pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKe
         KmsAeadEncryptionError::create(
             "INVALID_KEY_FORMAT",
             &format!(
-                "The unwrapped key of {} bytes is not a serialised Tink AES-GCM, AES-GCM-SIV, \
+                "The decrypted key of {} bytes is not a serialised Tink AES-GCM, AES-GCM-SIV, \
                  ChaCha20-Poly1305 or AES-SIV key",
                 serialized.len()
             ),
@@ -165,7 +165,7 @@ pub(crate) fn split_tink_output_prefix(value: &[u8]) -> Option<(KeyId, &[u8])> {
 
 /// A Tink keyset, the serialised `google.crypto.tink.Keyset` of keys that are all enabled,
 /// symmetric and TINK-prefixed, as `tinkey` writes one. It is the plaintext of the keyset that
-/// BigQuery's `KEYS.KEYSET_CHAIN` unwraps.
+/// BigQuery's `KEYS.KEYSET_CHAIN` decrypts.
 ///
 /// It holds the key bytes, zeroised when it is dropped. `Debug` shows the key ids only.
 pub struct TinkKeyset(Keyset);
@@ -219,14 +219,14 @@ impl TinkKeyset {
 
     /// The keyset encrypted by `provider`, serialised as Tink serialises an encrypted keyset: a
     /// `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset` is the KMS ciphertext of
-    /// [`to_bytes`](Self::to_bytes), wrapped with no associated data, and with no
+    /// [`to_bytes`](Self::to_bytes), encrypted with no associated data, and with no
     /// `keyset_info`.
     ///
     /// Tink reads it with the KMS AEAD of the KEK's
     /// [`tink_key_uri`](crate::KekRef::tink_key_uri): `KeysetHandle.read` or
     /// `TinkProtoKeysetFormat.parseEncryptedKeyset` in Java, `keyset.Read` in Go and
-    /// `tink.read_keyset_handle` in Python. A KEK without a Tink key URI wraps it as well, but no
-    /// Tink KMS client reads it.
+    /// `tink.read_keyset_handle` in Python. A KEK without a Tink key URI encrypts it as well, but
+    /// no Tink KMS client reads it.
     ///
     /// It takes the keyset so that its keys are zeroised before the KMS call, leaving the
     /// serialised keyset as their one copy while the call is in flight.

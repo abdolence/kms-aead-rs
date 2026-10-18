@@ -4,8 +4,8 @@ Feature `azure-kms-encryption`, or one of the TLS variants in
 [Getting started](../getting-started.md#features).
 
 `AzureKmsKeyRef` names the key by the vault URL and the key name. Without a key version, the
-latest version wraps new DEKs. Each wrapped DEK records the version that wrapped it, and the
-unwrap uses that version, so DEKs wrapped before a rotation still unwrap afterwards.
+latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the
+decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards.
 
 The provider takes any Azure credential, for example one from `azure_identity`:
 
@@ -35,10 +35,11 @@ let cipher_text = envelope
 # }
 ```
 
-Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs).
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs).
 
-The provider sends no request until the first wrap or unwrap. The principal needs the wrapKey
-and unwrapKey key operations, as in the "Key Vault Crypto User" role.
+The provider sends no request until the first encryption or decryption. The principal needs the
+wrapKey and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 
 ## Options
 
@@ -46,24 +47,24 @@ and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 
 - `algorithm`: the wrap algorithm, `RsaOaep256` by default for RSA keys, `A256Kw` for Managed
   HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and unknown
-  algorithms are refused. Wrapped DEKs do not record the algorithm, so it stays fixed for the
+  algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
   life of the key;
 - `client_options`: settings passed to the Azure SDK, such as a custom HTTP transport or retry
   policy.
 
-## Wrapped DEKs
+## Encrypted DEKs
 
-Key Vault unwraps only with the key version that wrapped, so the provider's wrapped DEK carries
-it before Key Vault's wrapped key, in the library's own layout, see
-[Formats](../formats.md#wrapped-deks). No Tink client exists for Azure, so Tink does not read the
-values of this provider, and the plaintext Key Vault wraps is the raw DEK of 16, 32 or 64 bytes, as
-in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, `A256Kw` too,
-which takes only multiples of 8 bytes. Store the wrapped DEK as it is, see
-[Envelope encryption](../envelope-encryption.md#storing-wrapped-deks).
+Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
+it before Key Vault's encrypted DEK, in the library's own layout, see
+[Formats](../formats.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
+values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
+as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, `A256Kw` too,
+which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+[Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
 
 ## Errors
 
 A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
 `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
-`NetworkError`, any other status an `EncryptionError`. An unwrap of a wrapped DEK in another
-layout fails with `AZURE_WRAPPED_KEY_FORMAT`, before any request.
+`NetworkError`, any other status an `EncryptionError`. A decryption of an encrypted DEK in another
+layout fails with `AZURE_ENCRYPTED_DEK_FORMAT`, before any request.

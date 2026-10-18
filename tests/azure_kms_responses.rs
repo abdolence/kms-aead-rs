@@ -15,7 +15,7 @@ mod common;
 use common::{Backend, FixedTokenCredential};
 
 const VAULT_URL: &str = "https://test-vault.vault.azure.net";
-const KEY_NAME: &str = "dek-wrapping-key";
+const KEY_NAME: &str = "dek-encrypting-key";
 const KEY_VERSION: &str = "4387e9f3d6e14c459867679a90fd0f79";
 const LEAK_MARKER: &str = "body-marker-that-must-not-leak";
 
@@ -102,7 +102,7 @@ fn provider_over(status: StatusCode, body: String) -> KmsAeadResult<AzureKmsProv
 }
 
 /// `wrapped` in the layout of the provider's encrypted keys, after the key version `KEY_VERSION`:
-/// `[0x01][k: u8][key version: k][wrapped key]`.
+/// `[0x01][k: u8][key version: k][encrypted DEK]`.
 fn encrypted_key(wrapped: &[u8]) -> EncryptedDataEncryptionKey {
     let key_version = KEY_VERSION.as_bytes();
     let header = [
@@ -117,7 +117,7 @@ fn data_encryption_key() -> DataEncryptionKey {
 }
 
 #[tokio::test]
-async fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
+async fn decrypt_names_the_configured_kek() -> KmsAeadResult<()> {
     let http_client = Arc::new(CannedHttpClient::new(
         StatusCode::Ok,
         format!(
@@ -155,7 +155,7 @@ async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
     let key_marker = azure_core::base64::encode_url_safe(LEAK_MARKER);
     let encrypted_key = encrypted_key(b"wrapped");
     let responses = [
-        // A successful unwrap whose body is not the expected model.
+        // A successful decryption whose body is not the expected model.
         (StatusCode::Ok, format!(r#"{{"value": ["{key_marker}"]}}"#)),
         (StatusCode::Ok, format!(r#"{{"value": "{key_marker}""#)),
         (
@@ -178,7 +178,8 @@ async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
 }
 
 #[tokio::test]
-async fn wrap_with_the_latest_key_version_carries_the_version_from_kid() -> KmsAeadResult<()> {
+async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -> KmsAeadResult<()>
+{
     let wrapped = b"wrapped-data-encryption-key".to_vec();
     let body = format!(
         r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "{}"}}"#,
@@ -194,7 +195,7 @@ async fn wrap_with_the_latest_key_version_carries_the_version_from_kid() -> KmsA
 }
 
 #[tokio::test]
-async fn key_vault_wraps_the_raw_key() -> Result<(), Box<dyn std::error::Error>> {
+async fn key_vault_encrypts_the_raw_key() -> Result<(), Box<dyn std::error::Error>> {
     for algorithm in [AeadAlgorithm::Aes128Gcm, AeadAlgorithm::Aes256Gcm] {
         let http_client = Arc::new(CannedHttpClient::new(
             StatusCode::Ok,
@@ -212,7 +213,7 @@ async fn key_vault_wraps_the_raw_key() -> Result<(), Box<dyn std::error::Error>>
             KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
         )?;
 
-        let (key, _) = envelope.generate_new_dek().await?;
+        let (key, _) = envelope.generate_dek().await?;
 
         let request_bodies = http_client.request_bodies.lock().unwrap();
         let [request_body] = request_bodies.as_slice() else {
@@ -222,7 +223,7 @@ async fn key_vault_wraps_the_raw_key() -> Result<(), Box<dyn std::error::Error>>
         let wrapped = azure_core::base64::decode_url_safe(
             parameters["value"]
                 .as_str()
-                .ok_or("no value in the wrap request")?,
+                .ok_or("no value in the encryption request")?,
         )?;
         assert_eq!(wrapped.len(), algorithm.key_len(), "{algorithm}");
         assert_eq!(wrapped, *key.value().ref_sensitive_value(), "{algorithm}");
@@ -232,7 +233,7 @@ async fn key_vault_wraps_the_raw_key() -> Result<(), Box<dyn std::error::Error>>
 
 #[tokio::test]
 async fn encrypted_key_outside_the_layout_is_rejected_before_any_request() -> KmsAeadResult<()> {
-    // A request would be answered with 200 and an unwrapped key, so an error here can only
+    // A request would be answered with 200 and a decrypted key, so an error here can only
     // come from the encrypted key.
     let provider = provider_over(
         StatusCode::Ok,
@@ -245,7 +246,7 @@ async fn encrypted_key_outside_the_layout_is_rejected_before_any_request() -> Km
         .unwrap_err();
 
     assert!(
-        matches!(&err, KmsAeadError::EncryptionError(e) if e.public.code == "AZURE_WRAPPED_KEY_FORMAT"),
+        matches!(&err, KmsAeadError::EncryptionError(e) if e.public.code == "AZURE_ENCRYPTED_DEK_FORMAT"),
         "{err:?}"
     );
     Ok(())

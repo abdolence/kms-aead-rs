@@ -52,7 +52,7 @@ pub struct Encrypted<T, F: Format> {
 ///
 /// For [`Envelope`](crate::formats::Envelope), the errors of
 /// [`CipherTextWithEncryptedKey::separate`](crate::CipherTextWithEncryptedKey::separate), and
-/// `INVALID_CIPHER_TEXT_FORMAT` when the cipher text after the wrapped DEK is shorter than a
+/// `INVALID_CIPHER_TEXT_FORMAT` when the cipher text after the encrypted DEK is shorter than a
 /// nonce and a tag. For [`Randomized`](crate::formats::Randomized) and [`Deterministic`],
 /// `INVALID_CIPHER_TEXT_FORMAT` when the bytes do not start with Tink's output prefix or are
 /// shorter than the prefix and an empty value. The messages never quote the bytes.
@@ -144,7 +144,7 @@ mod tests {
         [&[0x01, 0x44, 0x55, 0x66, 0x77][..], body].concat()
     }
 
-    /// A Tink envelope of a 7-byte wrapped DEK and `cipher_text`.
+    /// A Tink envelope of a 7-byte encrypted DEK and `cipher_text`.
     fn envelope(cipher_text: &[u8]) -> Vec<u8> {
         [&[0x00, 0x00, 0x00, 0x07][..], b"wrapped", cipher_text].concat()
     }
@@ -161,7 +161,7 @@ mod tests {
     fn bytes_outside_the_layout_of_the_format_are_refused() {
         let refused = [
             (
-                "envelope, a wrapped DEK past the end",
+                "envelope, an encrypted DEK past the end",
                 Encrypted::<String, Envelope>::try_from(vec![0x00, 0x00, 0x00, 0x07, 0xAB]).err(),
                 "INVALID_CIPHER_TEXT_FORMAT",
             ),

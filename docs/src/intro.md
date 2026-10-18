@@ -15,7 +15,7 @@ encryption without a KMS:
   and the library reads Tink's, see [Formats](./formats.md);
 - Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
   crates. A value sealed by one backend opens with any other;
-- Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
+- Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
   keys;
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
 - Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
@@ -29,11 +29,12 @@ To start using the library, see [Getting started](./getting-started.md).
 ## Envelope encryption
 
 A value is sealed with an AEAD algorithm under a data encryption key (DEK). The DEK is then
-wrapped (encrypted) by a key encryption key (KEK) that never leaves the KMS, and the wrapped DEK
-is stored next to the cipher text. To read the value, the KMS unwraps the DEK, and the DEK opens
-the value locally.
+encrypted by a key encryption key (KEK) that never leaves the KMS, and the encrypted DEK is stored
+next to the cipher text. KMS documentation, and Azure Key Vault's `wrapKey` and `unwrapKey`
+operations, call this wrapping the DEK. To read the value, the KMS decrypts the DEK, and the DEK
+opens the value locally.
 
-So the KMS sees only DEKs, never the data, and a KMS call is needed only to wrap or unwrap a
+So the KMS sees only DEKs, never the data, and a KMS call is needed only to encrypt or decrypt a
 DEK. Access to the data is controlled by access to the KEK: revoke the KMS permission, or
 destroy the key, and the stored values cannot be opened.
 
@@ -46,28 +47,28 @@ and a row id, so that a value copied to another row fails to open.
 The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
 stored value holds:
 
-- **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, wrapped
-  with one KMS call, and stored in the value itself. Every decryption unwraps its DEK with one
+- **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, encrypted
+  with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
   more KMS call, unless the envelope has a DEK cache. Use it when values are written rarely,
   such as secrets and configuration, or when one DEK per value is a requirement. See
   [Envelope encryption](./envelope-encryption.md);
 - **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK seals many
   values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
-  still carry their wrapped DEK, so nothing is stored apart from them, and reads unwrap through
+  still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
   the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
   [DEK caching and reuse](./dek-caching.md);
 - **Typed fields without a store**, `encrypt_field` and `decrypt_field` of either envelope above:
   a value of a Rust type, such as an application newtype, sealed into an
-  `Encrypted<T, Envelope>`. It carries its wrapped DEK like any envelope value, and serde,
+  `Encrypted<T, Envelope>`. It carries its encrypted DEK like any envelope value, and serde,
   tokio-postgres and sqlx store it as bytes. Use it for columns of secrets that need no central
   key rotation. See [Typed fields](./envelope-encryption.md#typed-fields);
 - **One fixed key**, `encrypt_field` of `AeadCipher` or `DeterministicCipher` with one key that
-  the KMS wraps once and the DEK cache unwraps: values carry a 4-byte key id in Tink's wire
-  format instead of a wrapped DEK, and BigQuery and Tink read them with a keyset of that key. Use
+  the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink's wire
+  format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
   it for a column that BigQuery reads, with no key rotation. See
   [One fixed key](./envelope-encryption.md#one-fixed-key);
-- **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the wrapped key
-  versions, and values carry a 4-byte key id in Tink's wire format instead of a wrapped DEK. The
+- **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the encrypted DEK
+  versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery
   and Tink read across rotations. See [kms-aead-keyring](https://crates.io/crates/kms-aead-keyring).
 

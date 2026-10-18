@@ -102,8 +102,8 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs).
 
-`generate_wrapped_key` makes a key and wraps it with a provider in one call, for an application
-that stores the wrapped key itself. `AeadCipher` makes no KMS call and opens no span.
+`generate_dek` makes a key and encrypts it with a provider in one call, for an application
+that stores the encrypted DEK itself. `AeadCipher` makes no KMS call and opens no span.
 
 ## Cross-backend compatibility
 

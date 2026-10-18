@@ -148,13 +148,13 @@ where
 }
 
 /// A keyset of a new key, encrypted by `provider` for Tink, with a value of the key and the key
-/// wrapped by `provider`, from which `decrypt` opens the value Tink seals with the keyset.
+/// encrypted by `provider`, from which `decrypt` opens the value Tink seals with the keyset.
 async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
     let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
-    let (key, wrapped_key) = cipher.generate_wrapped_key(&provider).await?;
+    let (key, encrypted_dek) = cipher.generate_dek(&provider).await?;
     let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
     keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &key)?;
     let aad = format!("orders/{kms}/{algorithm}");
@@ -167,7 +167,7 @@ where
             "algorithm": algorithm.to_string(),
             "key_uri": provider.kek().tink_key_uri(),
             "keyset": hex::encode(keyset.into_encrypted_bytes(&provider).await?),
-            "wrapped_key": wrapped_key.to_hex_string(),
+            "encrypted_dek": encrypted_dek.to_hex_string(),
             "aad": hex::encode(aad),
             "plain_text": hex::encode(&message.0),
             "value": hex::encode(value.value()),
@@ -176,7 +176,7 @@ where
     Ok(())
 }
 
-/// The value of `case`: a Tink envelope, or with `wrapped_key` a value of that key.
+/// The value of `case`: a Tink envelope, or with `encrypted_dek` a value of that key.
 async fn decrypt<P>(provider: P, case: &Value) -> KmsAeadResult<Message>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
@@ -187,7 +187,7 @@ where
         .parse()?;
     let aad = hex_field(case, "aad");
     let value = hex_field(case, "value");
-    match case["wrapped_key"].as_str() {
+    match case["encrypted_dek"].as_str() {
         None => {
             KmsAeadEnvelope::<P, AwsLc>::with_options(
                 provider,
@@ -196,12 +196,12 @@ where
             .decrypt_field(&aad, &Encrypted::<Message, Envelope>::try_from(value)?)
             .await
         }
-        Some(wrapped_key) => {
+        Some(encrypted_dek) => {
             let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
             let value = Encrypted::<Message, Randomized>::try_from(value)?;
-            let wrapped_key = EncryptedDataEncryptionKey::try_from_hex_string(wrapped_key)?;
+            let encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(encrypted_dek)?;
             let (decrypted, _) = DekCache::disabled()
-                .with_key(&provider, &wrapped_key, |key| {
+                .with_key(&provider, &encrypted_dek, |key| {
                     cipher.decrypt_field(&aad, &value, key)
                 })
                 .await?;

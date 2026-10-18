@@ -3,7 +3,7 @@
 Feature `hashicorp-vault-transit-kms-encryption`, or one root store and one crypto provider
 variant, see [Getting started](../getting-started.md#features).
 
-The provider wraps DEKs with a key of the Vault Transit secrets engine. `HcVaultTransitKeyRef`
+The provider encrypts DEKs with a key of the Vault Transit secrets engine. `HcVaultTransitKeyRef`
 names the key, and the mount is `transit` unless set with `with_mount`.
 
 ```rust,no_run
@@ -27,7 +27,8 @@ let cipher_text = envelope
 # }
 ```
 
-Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/hc_vault_transit_kms.rs).
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/hc_vault_transit_kms.rs).
 
 ## Options
 
@@ -76,18 +77,18 @@ The options are:
   response, 60 seconds by default.
 
 The provider sends no request when it is created, so a wrong token or an unreachable server
-fail the first wrap or unwrap. An `http` address to a host other than `localhost` or a loopback
-address logs a `WARN` event at creation, since the token and the DEKs then cross the network
-unencrypted.
+fail the first encryption or decryption. An `http` address to a host other than `localhost` or a
+loopback address logs a `WARN` event at creation, since the token and the DEKs then cross the
+network unencrypted.
 
 The token needs `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`.
 
 ## Key versions and rotation
 
-The wrapped DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
-it still unwraps after the key is rotated. The KMS spans record that version as `key_version`.
+The encrypted DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
+it still decrypts after the key is rotated. The KMS spans record that version as `key_version`.
 
-The unwrap names the configured key in its URL, so Vault refuses a ciphertext of another key.
+The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.
 
 ## Errors
 
@@ -95,5 +96,5 @@ A response with an error status is `VAULT_STATUS_<status>`: a `NetworkError` for
 or a rate limit, an `EncryptionError` otherwise. `VAULT_HTTP` and `VAULT_TIMEOUT` are network
 errors for a request that got no complete response, and `VAULT_RESPONSE`,
 `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` are encryption errors for a response or a
-wrapped DEK that cannot be read. Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
+encrypted DEK that cannot be read. Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
 or `VAULT_TLS` when the TLS configuration cannot be built.

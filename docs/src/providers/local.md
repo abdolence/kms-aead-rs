@@ -1,6 +1,6 @@
 # Local KMS
 
-`LocalKmsProvider` wraps DEKs with a key encryption key the process holds, with AES-256-GCM on
+`LocalKmsProvider` encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
 the backend it is built with. It is in every build, with no feature, for:
 
 - development and tests without a cloud KMS;
@@ -13,13 +13,13 @@ each version came from (`ephemeral`, `file`, `env` or `secret`), never the key.
 ## KEK ids and versions
 
 A `LocalKekId` names the KEK: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and `.`. Every
-wrapped DEK records it, and an unwrap refuses a DEK wrapped under another id. The id is also the
-key of the [DEK cache](../dek-caching.md), so one id must name one set of KEK material: two
+encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
+the key of the [DEK cache](../dek-caching.md), so one id must name one set of KEK material: two
 providers with the same id and different keys share cache entries.
 
-A provider holds one or more `LocalKek` versions of 32 bytes each. The highest version wraps new
-DEKs, and every version it holds unwraps. Each wrapped DEK records its version, so adding a new
-version keeps the DEKs wrapped under older ones readable.
+A provider holds one or more `LocalKek` versions of 32 bytes each. The highest version encrypts new
+DEKs, and every version it holds decrypts. Each encrypted DEK records its version, so adding a new
+version keeps the DEKs encrypted under older ones readable.
 
 A KEK comes from one of:
 
@@ -37,7 +37,7 @@ Errors name the file or the variable, never its content.
 ## Tests and development
 
 An ephemeral provider has one random version-1 KEK that lives as long as the provider, so the
-DEKs it wraps cannot be unwrapped once the process exits. It suits tests:
+DEKs it encrypts cannot be decrypted once the process exits. It suits tests:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -118,26 +118,27 @@ let provider = LocalKmsProvider::<AwsLc>::new(
 # }
 ```
 
-To rotate, add `kek-v2` the same way and list both versions. Version 2 wraps new DEKs, and the
-DEKs wrapped under version 1 still unwrap. Version 1 can be dropped once nothing wrapped under it
-is left.
+To rotate, add `kek-v2` the same way and list both versions. Version 2 encrypts new DEKs, and the
+DEKs encrypted under version 1 still decrypt. Version 1 can be dropped once nothing encrypted under
+it is left.
 
 ## Limits
 
 - No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
   operator's job;
-- Every wrap is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is safe
-  for about 2^32 wraps. With the per-call envelope every value costs one wrap: a host sealing
-  1,000 values per second spends 2^32 wraps in 50 days. Use [DEK reuse](../dek-caching.md) so a
-  wrap happens once per DEK, and add a new KEK version before the budget is spent;
+- Every DEK encryption is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is
+  safe for about 2^32 encryptions. With the per-call envelope every value costs one encryption: a
+  host sealing 1,000 values per second spends 2^32 encryptions in 50 days. Use [DEK
+  reuse](../dek-caching.md) so that one encryption serves many values, and add a new KEK version
+  before the budget is spent;
 - Crypto-shredding means destroying every copy of the KEK, backups included;
-- DEKs wrapped by a local KEK cannot be exported to BigQuery, which unwraps with Cloud KMS.
+- DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS.
 
 ## Errors
 
-A wrap fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. An unwrap fails with
-`LOCAL_WRAPPED_KEY_FORMAT` when the wrapped DEK is not in the local layout,
-`LOCAL_KEK_ID_MISMATCH` when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION`
+An encryption fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. A decryption fails with
+`LOCAL_ENCRYPTED_DEK_FORMAT` when the encrypted DEK is not in the local layout,
+`LOCAL_KEK_ID_MISMATCH` when it was encrypted under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION`
 when the provider does not hold its version, and `DECRYPT` when it is not authentic under that
 version.
 

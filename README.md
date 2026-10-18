@@ -15,7 +15,7 @@ encryption without a KMS:
   and the library reads Tink's;
 - Crypto backends ring, aws-lc-rs (including its FIPS module) and RustCrypto, with values
   readable across all of them;
-- Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
+- Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
   keys;
 - Deterministic encryption with AES-SIV;
 - Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");
 
-    // The cipher text with its wrapped data encryption key, to store
+    // The cipher text with its encrypted data encryption key, to store
     let encrypted = envelope.encrypt_value(aad, &secret).await?;
 
     let decrypted = envelope.decrypt_value(aad, &encrypted).await?;

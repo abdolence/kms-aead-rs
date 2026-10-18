@@ -43,7 +43,7 @@ Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/mast
 `AwsKmsProvider::new` loads the AWS configuration from the environment, as the AWS SDK does:
 environment variables, the shared config and credentials files, the instance or container
 role, etc. It sends no request, so missing credentials or an unreachable endpoint fail the first
-wrap or unwrap.
+encryption or decryption.
 
 Without `aws_region` in the key reference, the provider takes the region of the AWS
 configuration it loads. Set one with `AwsKmsKeyRef::new(..).with_aws_region(region)`.
@@ -53,11 +53,11 @@ the KMS generator is on.
 
 ## Key ARN and aliases
 
-An unwrap names the configured key to AWS KMS, so a DEK wrapped under another key fails with
+A decryption names the configured key to AWS KMS, so a DEK encrypted under another key fails with
 `IncorrectKeyException`, even when the principal may decrypt with that key.
 
-Configure the key ARN rather than an alias: a DEK wrapped under an alias that later moves to
-another key fails to unwrap with `IncorrectKeyException`.
+Configure the key ARN rather than an alias: a DEK encrypted under an alias that later moves to
+another key fails to decrypt with `IncorrectKeyException`.
 
 The provider turns the key id into an ARN with the region and the account: an alias name into
 an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN always starts with

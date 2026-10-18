@@ -77,7 +77,7 @@ mod contract;
 /// sealed by one backend opens with any other that implements its algorithm.
 ///
 /// A build without a backend feature has no type that implements it, so nothing that seals or
-/// wraps can be constructed.
+/// encrypts can be constructed.
 pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {
     /// The backend's name in spans and logs, the value of the `/kms_aead/backend` span field:
     /// `ring`, `aws-lc` or `rustcrypto`. `aws-lc-fips` runs the `aws-lc` backend.

@@ -69,9 +69,9 @@ which values are equal. Its value is equal to a Tink AES-SIV value after Tink's 
 `encrypt_field` writes a typed field with that prefix, an `Encrypted<T, Deterministic>`, see
 [One fixed key](./envelope-encryption.md#one-fixed-key).
 
-## Keys wrapped by a KMS
+## Keys encrypted by a KMS
 
-The envelope generates and unwraps deterministic keys with its provider:
+The envelope generates and decrypts deterministic keys with its provider:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -84,15 +84,15 @@ use secret_vault_value::SecretValue;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
-// A new key, and the same key wrapped, to store
+// A new key, and the same key encrypted, to store
 let (key, encrypted_key) = envelope.generate_new_deterministic_dek(algorithm).await?;
 
-// Later: unwrap the stored key
-let unwrapped = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
+// Later: decrypt the stored key
+let decrypted = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
 
 let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
 let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &key)?;
-assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from("value"));
+assert_eq!(cipher.decrypt_value(b"aad", &sealed, &decrypted)?, SecretValue::from("value"));
 # Ok(())
 # }
 ```
@@ -101,4 +101,4 @@ assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from
 DEK cache. To cache deterministic keys, use `DekCache::with_key`, which holds the keys of both
 kinds of algorithm.
 
-`DeterministicCipher::generate_wrapped_key` does the same with any provider.
+`DeterministicCipher::generate_dek` does the same with any provider.

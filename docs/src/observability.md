@@ -11,13 +11,13 @@ The spans are:
   and `encrypt_value_with_encrypted_dek`;
 - `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_field`, `decrypt_value_with_dek`
   and `decrypt_value_with_encrypted_dek`;
-- `KMS AEAD generate DEK`: `generate_new_dek` and `generate_new_deterministic_dek`;
+- `KMS AEAD generate DEK`: `generate_dek` and `generate_new_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
-- `KMS wrap`: each provider's wrap of a DEK;
-- `KMS unwrap`: each provider's unwrap of a DEK;
+- `KMS encrypt DEK`: each provider's encryption of a DEK;
+- `KMS decrypt DEK`: each provider's decryption of a DEK;
 - `KMS random`: a call to the GCP or AWS KMS generator, when the provider uses it.
 
-The KMS spans nest inside the envelope span, so a DEK the envelope had to unwrap shows its KMS call
+The KMS spans nest inside the envelope span, so a DEK the envelope had to decrypt shows its KMS call
 as a child, and a DEK served by the cache shows none. `AeadCipher` and `DeterministicCipher` open
 no spans: they run once per value inside the caller's span.
 
@@ -54,7 +54,7 @@ let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
 The decrypt prints, without timestamps:
 
 ```text
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS unwrap{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
 DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 ```
 
@@ -100,7 +100,7 @@ left unrecorded, never recorded as `0` or an empty string.
 | `mode` | `per_call` for `encrypt_value` and `decrypt_value`, `store_less` for both on a store-less envelope, `caller_dek` for the `*_with_dek` and `*_with_encrypted_dek` calls |
 | `algorithm` | `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm` or `aes-256-gcm-siv` |
 | `backend` | `ring`, `aws-lc` or `rustcrypto` |
-| `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` for a call that unwraps through an enabled cache, a failed unwrap recording `miss`; unrecorded for a call that looks nothing up |
+| `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` for a call that decrypts through an enabled cache, a failed decryption recording `miss`; unrecorded for a call that looks nothing up |
 | `error_code` | the code of the error the call returned |
 
 ### KMS AEAD generate DEK and KMS AEAD decrypt DEK
@@ -113,13 +113,13 @@ left unrecorded, never recorded as `0` or an empty string.
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
 | `error_code` | the code of the error the call returned |
 
-### KMS wrap, KMS unwrap and KMS random
+### KMS encrypt DEK, KMS decrypt DEK and KMS random
 
 | Field | Value |
 |---|---|
 | `provider` | `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of an application's own provider |
 | `key` | the KEK, see below; for `KMS random` the GCP location, and unrecorded on AWS |
-| `key_version` | wrap and unwrap: from the KMS response on wrap, from the wrapped DEK's bytes on unwrap for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP unwrap |
+| `key_version` | `KMS encrypt DEK` and `KMS decrypt DEK`: from the KMS response on encryption, from the encrypted DEK's bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption |
 | `len` | random only: the bytes requested from the KMS generator |
 | `response_time` | milliseconds the KMS call took |
 | `error_code` | the code of the error the call returned |
@@ -151,7 +151,7 @@ The library retries nothing itself, so there is no retry field.
 
 No span field or event carries:
 
-- plaintext, DEKs in any form, plaintext or wrapped, or KEK material;
+- plaintext, DEKs in any form, plaintext or encrypted, or KEK material;
 - AAD content, which can hold entity ids and so personal data;
 - cipher text bytes;
 - the length of a value or of its AAD. For AES-256-GCM the plaintext length is the value's length

@@ -1,7 +1,7 @@
 # Envelope encryption
 
 `KmsAeadEnvelope` seals values under data encryption keys (DEKs) on the crypto backend it is built
-with, and wraps the DEKs with the KEK of its provider. A call that makes no KMS call is not
+with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
 `async`, and every call opens one `DEBUG` span, see [Observability](./observability.md).
 
 ```rust
@@ -35,8 +35,8 @@ sealed under their default open only with ChaCha20-Poly1305 configured, see
 
 ## Encrypting values
 
-`encrypt_value` seals a value under a new DEK, wraps the DEK with one KMS call, and returns both
-in one `CipherTextWithEncryptedKey`. `decrypt_value` unwraps the DEK with one KMS call and opens
+`encrypt_value` seals a value under a new DEK, encrypts the DEK with one KMS call, and returns both
+in one `CipherTextWithEncryptedKey`. `decrypt_value` decrypts the DEK with one KMS call and opens
 the value:
 
 ```rust
@@ -122,7 +122,7 @@ assert_eq!(envelope.decrypt_field(aad, &read_back).await?, email);
 - `Plaintext` is implemented for `String`, `Vec<u8>`, `SecretValue`, `bool`, `i32`, `i64`, `u32`
   and `u64`, and with the `serde-json` feature for `Json<T>`, any serde type stored as its compact
   JSON. An application type maps to one of them, as `Email` does;
-- the calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and unwrap
+- the calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and decrypt
   through the envelope's DEK cache, as `encrypt_value` and `decrypt_value` do;
 - `Encrypted::try_from` checks the stored bytes against Tink's KMS envelope layout, so a
   truncated or foreign value fails when it is read, before any KMS call, with
@@ -218,30 +218,30 @@ let provider = GcpKmsProvider::new(&key_ref).await?;
 let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 let cache = DekCache::new(DekCacheOptions::new())?;
 
-// Once, by an administrative job: the key wrapped by Cloud KMS, stored in the settings
-let (_, wrapped_key): (DataEncryptionKey, EncryptedDataEncryptionKey) =
-    cipher.generate_wrapped_key(&provider).await?;
+// Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
+let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+    cipher.generate_dek(&provider).await?;
 
-// On every write and read: the key unwrapped through the cache, no KMS call while it is cached
+// On every write and read: the key decrypted through the cache, no KMS call while it is cached
 let email = Email("alice@example.com".to_string());
 let (encrypted, _) = cache
-    .with_key(&provider, &wrapped_key, |key| {
+    .with_key(&provider, &encrypted_dek, |key| {
         cipher.encrypt_field(EMAIL_KEY, b"users/1042/email", &email, key)
     })
     .await?;
 let encrypted: Encrypted<Email, Randomized> = encrypted?;
 
 let (decrypted, _) = cache
-    .with_key(&provider, &wrapped_key, |key| {
+    .with_key(&provider, &encrypted_dek, |key| {
         cipher.decrypt_field(b"users/1042/email", &encrypted, key)
     })
     .await?;
 assert_eq!(decrypted?, email);
 
-// Once, for BigQuery: the keyset of the one key, wrapped by the same Cloud KMS key
+// Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
 let mut keyset = TinkKeyset::new(EMAIL_KEY);
 let (added, _) = cache
-    .with_key(&provider, &wrapped_key, |key| {
+    .with_key(&provider, &encrypted_dek, |key| {
         keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), key)
     })
     .await?;
@@ -254,7 +254,7 @@ let first_level_keyset: EncryptedDataEncryptionKey = provider
 # }
 ```
 
-BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the wrapped keyset, passed as a `BYTES`
+BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the encrypted keyset, passed as a `BYTES`
 query parameter:
 
 ```sql
@@ -269,7 +269,7 @@ FROM users u;
 
 - BigQuery reads AES-256-GCM values with `AEAD.DECRYPT_STRING` and `AEAD.DECRYPT_BYTES`, and
   the AES-SIV values of `DeterministicCipher` with `DETERMINISTIC_DECRYPT_STRING` and
-  `DETERMINISTIC_DECRYPT_BYTES`. `KEYS.KEYSET_CHAIN` unwraps with Cloud KMS only;
+  `DETERMINISTIC_DECRYPT_BYTES`. `KEYS.KEYSET_CHAIN` decrypts with Cloud KMS only;
 - `decrypt_field` reads the values Tink and BigQuery write under the same key and id. The
   caller picks the key by `key_id()`, which the prefix names without authenticating it;
 - a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
@@ -280,7 +280,7 @@ FROM users u;
 A beacon, or blind index, finds rows by a field's value without decrypting the column: an
 HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
 query computes the beacon of the value it looks for and matches it by equality. `Beacon<T>` holds
-the bytes to store, and the beacon key is a 32-byte key wrapped by the KMS, as a DEK is:
+the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:
 
 ```rust
 use kms_aead::formats::Envelope;
@@ -320,8 +320,8 @@ impl Plaintext for Email {
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, wrapped_key) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
-    .generate_wrapped_key(envelope.provider())
+let (_, encrypted_dek) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
+    .generate_dek(envelope.provider())
     .await?;
 
 // On every write: the field and its beacon
@@ -329,14 +329,14 @@ let email = Email::new("Alice@Example.com");
 let encrypted: Encrypted<Email, Envelope> =
     envelope.encrypt_field(b"users/1042/email", &email).await?;
 let beacon: Beacon<Email> = envelope
-    .beacon(EMAIL_BEACON_KEY, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &email)
+    .beacon(EMAIL_BEACON_KEY, &encrypted_dek, b"users/email", BeaconBits::DEFAULT, &email)
     .await?;
 
-// A lookup: the beacon of the value looked for, then a decrypt of each matching row
+// A lookup: the beacon of the value looked for, then a decryption of each matching row
 let probe: Beacon<Email> = envelope
     .beacon(
         EMAIL_BEACON_KEY,
-        &wrapped_key,
+        &encrypted_dek,
         b"users/email",
         BeaconBits::DEFAULT,
         &Email::new("alice@example.com"),
@@ -359,13 +359,13 @@ assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email
   `Email::new` does;
 - the key id, a `KeyId`, is the application's number for the beacon key, written into every
   beacon so that a column can hold beacons of two keys at once;
-- the beacon key is unwrapped through the envelope's DEK cache, as a DEK is.
+- the beacon key is decrypted through the envelope's DEK cache, as a DEK is.
 
 A beacon column leaks which rows are likely to hold equal values, and with them how often each
 value occurs, to anyone who reads the column. A leaked beacon key lets its holder test guesses
 against the whole column offline. Beacons fit fields that are looked up and have many distinct
 values, such as emails and external ids, and never low-cardinality fields such as a status or a
-country. BigQuery's SQL has no HMAC-SHA256 with a KMS-wrapped key, so a query in BigQuery
+country. BigQuery's SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery
 cannot compute a beacon; it matches beacons the application computed.
 
 Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
@@ -385,7 +385,7 @@ A [deterministic field](./deterministic.md) also finds rows by equality, by its 
 | Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
 | Match | The truncated HMAC, with deliberate collisions | Always the exact value |
 | Key | A beacon key, rotated separately from the data keys | The field's own key |
-| Cost | An extra column, and a decrypt and filter of the candidates on every lookup | Nothing beyond the field |
+| Cost | An extra column, and a decryption and filter of the candidates on every lookup | Nothing beyond the field |
 | BigQuery | SQL cannot compute a beacon; it matches beacons the application computed | SQL decrypts the field and searches it by equality |
 
 With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
@@ -404,8 +404,8 @@ logged or put in an error, but it is not secret either: keep secrets in the valu
 ## Working with DEKs yourself
 
 The `*_with_dek` and `*_with_encrypted_dek` calls let the application keep one DEK for many
-values and store the wrapped DEK apart from them, such as one DEK per tenant or per file. The
-cipher texts are `CipherText` values without a wrapped key.
+values and store the encrypted DEK apart from them, such as one DEK per tenant or per file. The
+cipher texts are `CipherText` values without an encrypted DEK.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -417,8 +417,8 @@ use secret_vault_value::SecretValue;
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
-// One KMS call: a new DEK and the same DEK wrapped
-let (dek, encrypted_dek) = envelope.generate_new_dek().await?;
+// One KMS call: a new DEK and the same DEK encrypted
+let (dek, encrypted_dek) = envelope.generate_dek().await?;
 
 // No KMS call: seal and open with the plaintext DEK
 let first = envelope.encrypt_value_with_dek(b"files/1/chunk/0", &SecretValue::from("first"), &dek)?;
@@ -428,7 +428,7 @@ assert_eq!(
     SecretValue::from("first")
 );
 
-// Later, with only the wrapped DEK: the envelope unwraps it with the KMS
+// Later, with only the encrypted DEK: the envelope decrypts it with the KMS
 let decrypted = envelope
     .decrypt_value_with_encrypted_dek(b"files/1/chunk/1", &second, &encrypted_dek)
     .await?;
@@ -439,18 +439,18 @@ assert_eq!(decrypted, SecretValue::from("second"));
 
 The calls are:
 
-- `generate_new_dek`: a new DEK and the same DEK wrapped, one KMS call;
+- `generate_dek`: a new DEK and the same DEK encrypted, one KMS call;
 - `encrypt_value_with_dek` and `decrypt_value_with_dek`: with a plaintext DEK, no KMS call;
-- `encrypt_value_with_encrypted_dek` and `decrypt_value_with_encrypted_dek`: with a wrapped DEK,
-  unwrapped through the envelope's DEK cache, so one KMS call per call without a cache.
+- `encrypt_value_with_encrypted_dek` and `decrypt_value_with_encrypted_dek`: with an encrypted DEK,
+  decrypted through the envelope's DEK cache, so one KMS call per call without a cache.
 
 Be aware not to seal more than about 2^32 values under one DEK: every value takes a random 96-bit
 nonce, see [Security considerations](./security.md#nonces).
 
-## Storing wrapped DEKs
+## Storing encrypted DEKs
 
 `EncryptedDataEncryptionKey` holds the bytes the provider returned, which also name the KMS key
-version where the KMS needs one to unwrap after a rotation. Store `value()` or `to_hex_string()`,
+version where the KMS needs one to decrypt after a rotation. Store `value()` or `to_hex_string()`,
 and read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string()`:
 
 ```rust
@@ -461,7 +461,7 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
+let (_dek, encrypted_dek) = envelope.generate_dek().await?;
 
 let stored: Vec<u8> = encrypted_dek.value().clone();
 let read_back = EncryptedDataEncryptionKey::from(stored);
@@ -474,6 +474,6 @@ assert_eq!(read_back, read_back_hex);
 # }
 ```
 
-The wrapped DEK is the one Tink stores in its KMS envelope, so `CipherTextWithEncryptedKey::join`
-of a value and its wrapped DEK is a value Tink reads. See [Formats](./formats.md#wrapped-deks) for
-each provider's bytes.
+The encrypted DEK is the one Tink stores in its KMS envelope, so `CipherTextWithEncryptedKey::join`
+of a value and its encrypted DEK is a value Tink reads. See [Formats](./formats.md#encrypted-deks)
+for each provider's bytes.

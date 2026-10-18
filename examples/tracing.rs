@@ -1,4 +1,4 @@
-//! Prints the spans kms-aead opens, with their fields, for an encrypt and a decrypt on the
+//! Prints the spans kms-aead opens, with their fields, for an encryption and a decryption on the
 //! local KMS. It needs no KMS and no credentials.
 //!
 //! Run with `cargo run --example tracing --features ring`.
@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .finish();
     tracing::subscriber::set_global_default(subscriber)?;
 
-    // An ephemeral KEK lives as long as the process, so nothing it wraps outlives this run.
+    // An ephemeral KEK lives as long as the process, so nothing it encrypts outlives this run.
     let provider =
         LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
     let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;

@@ -7,25 +7,25 @@ use secret_vault_value::SecretValue;
 
 use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 
-/// Wraps and unwraps data encryption keys with a key encryption key (KEK) held by a KMS.
+/// Encrypts and decrypts data encryption keys with a key encryption key (KEK) held by a KMS.
 ///
 /// Applications may implement it, for a KMS of their own or as a wrapper around another
 /// provider, such as a cache. A wrapper returns the inner provider's [`kek`](Self::kek).
 ///
-/// An implementation's errors carry no key material in any form, plaintext or wrapped, in
+/// An implementation's errors carry no key material in any form, plaintext or encrypted, in
 /// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
 /// HTTP client, which keeps copies of it in request and response buffers that kms-aead cannot
 /// zeroise.
 #[async_trait]
 pub trait KmsAeadEncryptionProvider {
-    /// The KEK this provider wraps with and names to the KMS on every unwrap, so that a key
-    /// wrapped under another KEK fails at the KMS and never yields a data encryption key.
+    /// The KEK this provider encrypts with and names to the KMS on every decryption, so that a key
+    /// encrypted under another KEK fails at the KMS and never yields a data encryption key.
     ///
     /// Two providers return equal values only when they address the same key of the same KMS:
-    /// a cache of unwrapped keys may be keyed by it.
+    /// a cache of decrypted keys may be keyed by it.
     fn kek(&self) -> &KekRef;
 
-    /// Wraps `encryption_key` with the KEK, recording the KEK version that wrapped it when the
+    /// Encrypts `encryption_key` with the KEK, recording the KEK version that encrypted it when the
     /// KMS reports one.
     ///
     /// # Errors
@@ -37,8 +37,8 @@ pub trait KmsAeadEncryptionProvider {
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
 
-    /// Unwraps `encrypted_key` with the KEK. The request names the configured KEK, so a key
-    /// wrapped under another KEK is refused by the KMS.
+    /// Decrypts `encrypted_key` with the KEK. The request names the configured KEK, so a key
+    /// encrypted under another KEK is refused by the KMS.
     ///
     /// # Errors
     ///

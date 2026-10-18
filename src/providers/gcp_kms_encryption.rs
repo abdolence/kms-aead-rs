@@ -13,7 +13,7 @@ use tracing::*;
 use secret_vault_value::SecretValue;
 use tonic::metadata::MetadataValue;
 
-/// A Google Cloud KMS CryptoKey that wraps data encryption keys.
+/// A Google Cloud KMS CryptoKey that encrypts data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct GcpKmsKeyRef {
     /// The project that holds the key ring.
@@ -66,7 +66,7 @@ fn crypto_key_version<'n>(key: &str, name: &'n str) -> Option<&'n str> {
     name.strip_prefix(key)?.strip_prefix("/cryptoKeyVersions/")
 }
 
-/// Wraps under the primary version of the CryptoKey `key`.
+/// Encrypts under the primary version of the CryptoKey `key`.
 fn encrypt_request(
     key: &str,
     encryption_key: &DataEncryptionKey,
@@ -82,7 +82,7 @@ fn encrypt_request(
     )
 }
 
-/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one.
+/// Names the CryptoKey `key`, so that Cloud KMS refuses a key encrypted under another one.
 fn decrypt_request(
     key: &str,
     encrypted_key: &EncryptedDataEncryptionKey,
@@ -115,7 +115,7 @@ impl GcpKmsProviderOptions {
     pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
-/// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey.
+/// Encrypts and decrypts data encryption keys with a Google Cloud KMS CryptoKey.
 ///
 /// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
 /// is the gRPC status code, such as `PermissionDenied` or `NotFound`.
@@ -184,7 +184,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        spans::in_span(kms::wrap_span(&self.kek), async {
+        spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_request = encrypt_request(self.kek.key(), encryption_key)?;
 
             let encrypt_response = kms::timed(self.client.get().encrypt(encrypt_request))
@@ -207,7 +207,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        spans::in_span(kms::unwrap_span(&self.kek), async {
+        spans::in_span(kms::decrypt_span(&self.kek), async {
             let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
                 .await
@@ -265,7 +265,7 @@ mod tests {
     const KEY_MARKER: &str = "data-key-marker-value-of-32bytes";
 
     #[test]
-    fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
+    fn decrypt_names_the_configured_kek() -> KmsAeadResult<()> {
         let key_ref = GcpKmsKeyRef::new(
             "my-project".into(),
             "global".into(),
@@ -275,11 +275,11 @@ mod tests {
 
         let request = decrypt_request(
             &key_ref.to_google_ref(),
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec()),
+            &EncryptedDataEncryptionKey::new(b"encrypted-dek".to_vec()),
         )?;
 
         assert_eq!(request.get_ref().name, KEY_NAME);
-        assert_eq!(request.get_ref().ciphertext, b"wrapped");
+        assert_eq!(request.get_ref().ciphertext, b"encrypted-dek");
         assert_eq!(
             request.metadata().get("x-goog-request-params").unwrap(),
             format!("name={KEY_NAME}").as_str()
@@ -294,7 +294,7 @@ mod tests {
         let encrypt = encrypt_request(KEY_NAME, &dek)?;
         let decrypt = decrypt_request(
             KEY_NAME,
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec()),
+            &EncryptedDataEncryptionKey::new(b"encrypted-dek".to_vec()),
         )?;
 
         assert_eq!(
