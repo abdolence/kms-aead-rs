@@ -78,8 +78,15 @@ fn provider_over(status: StatusCode, body: String) -> KmsAeadResult<AzureKmsProv
     )
 }
 
-fn key_version() -> KmsAeadResult<KmsKeyVersion> {
-    KmsKeyVersion::try_from(KEY_VERSION.to_string())
+/// `wrapped` in the layout of the provider's encrypted keys, after the key version `KEY_VERSION`:
+/// `[0x01][k: u8][key version: k][wrapped key]`.
+fn encrypted_key(wrapped: &[u8]) -> EncryptedDataEncryptionKey {
+    let key_version = KEY_VERSION.as_bytes();
+    let header = [
+        0x01,
+        u8::try_from(key_version.len()).expect("KEY_VERSION is 32 characters"),
+    ];
+    EncryptedDataEncryptionKey::new([&header[..], key_version, wrapped].concat())
 }
 
 fn data_encryption_key() -> DataEncryptionKey {
@@ -102,10 +109,7 @@ async fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
     )?;
 
     provider
-        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-            b"wrapped".to_vec(),
-            Some(key_version()?),
-        ))
+        .decrypt_data_encryption_key(&encrypted_key(b"wrapped"))
         .await?;
 
     let urls = http_client.urls.lock().unwrap();
@@ -126,7 +130,7 @@ async fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
 #[tokio::test]
 async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
     let key_marker = azure_core::base64::encode_url_safe(LEAK_MARKER);
-    let encrypted_key = EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()?));
+    let encrypted_key = encrypted_key(b"wrapped");
     let responses = [
         // A successful unwrap whose body is not the expected model.
         (StatusCode::Ok, format!(r#"{{"value": ["{key_marker}"]}}"#)),
@@ -151,7 +155,7 @@ async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
 }
 
 #[tokio::test]
-async fn wrap_with_the_latest_key_version_records_the_version_from_kid() -> KmsAeadResult<()> {
+async fn wrap_with_the_latest_key_version_carries_the_version_from_kid() -> KmsAeadResult<()> {
     let wrapped = b"wrapped-data-encryption-key".to_vec();
     let body = format!(
         r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "{}"}}"#,
@@ -162,33 +166,12 @@ async fn wrap_with_the_latest_key_version_records_the_version_from_kid() -> KmsA
         .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
-    assert_eq!(
-        encrypted_key,
-        EncryptedDataEncryptionKey::new(wrapped, Some(key_version()?))
-    );
+    assert_eq!(encrypted_key, self::encrypted_key(&wrapped));
     Ok(())
 }
 
 #[tokio::test]
-async fn wrapped_key_read_back_from_hex_keeps_its_key_version() -> KmsAeadResult<()> {
-    let body = format!(
-        r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "{}"}}"#,
-        azure_core::base64::encode_url_safe(b"wrapped-data-encryption-key")
-    );
-    let encrypted_key = provider_over(StatusCode::Ok, body)?
-        .encrypt_data_encryption_key(&data_encryption_key())
-        .await?;
-
-    let read_back =
-        EncryptedDataEncryptionKey::try_from_hex_string(&encrypted_key.to_hex_string()?)?;
-
-    assert_eq!(read_back.key_version(), Some(&key_version()?));
-    assert_eq!(read_back, encrypted_key);
-    Ok(())
-}
-
-#[tokio::test]
-async fn encrypted_key_without_a_key_version_is_rejected_before_any_request() -> KmsAeadResult<()> {
+async fn encrypted_key_outside_the_layout_is_rejected_before_any_request() -> KmsAeadResult<()> {
     // A request would be answered with 200 and an unwrapped key, so an error here can only
     // come from the encrypted key.
     let provider = provider_over(
@@ -197,12 +180,12 @@ async fn encrypted_key_without_a_key_version_is_rejected_before_any_request() ->
     )?;
 
     let err = provider
-        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None))
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()))
         .await
         .unwrap_err();
 
     assert!(
-        matches!(&err, KmsAeadError::EncryptionError(e) if e.public.code == "AZURE_KEY_VERSION_MISSING"),
+        matches!(&err, KmsAeadError::EncryptionError(e) if e.public.code == "AZURE_WRAPPED_KEY_FORMAT"),
         "{err:?}"
     );
     Ok(())
@@ -213,10 +196,7 @@ async fn error_response_body_is_absent_from_errors() -> KmsAeadResult<()> {
     // A body that is not an Azure error envelope is copied into the SDK error.
     let body = format!(r#"{{"value": "{LEAK_MARKER}"}}"#);
     let err = provider_over(StatusCode::Forbidden, body)?
-        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-            b"wrapped".to_vec(),
-            Some(key_version()?),
-        ))
+        .decrypt_data_encryption_key(&encrypted_key(b"wrapped"))
         .await
         .unwrap_err();
 

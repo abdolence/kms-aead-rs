@@ -28,8 +28,9 @@ const MAX_USES: u64 = 1 << 32;
 /// provider for the KMS step, with the codes the provider reports. A call that makes no KMS call
 /// is not `async`.
 ///
-/// [`encrypt_value`](Self::encrypt_value) runs in one of two modes, both writing envelope layout
-/// v1:
+/// [`encrypt_value`](Self::encrypt_value) runs in one of two modes, both writing Tink's KMS
+/// envelope format, [`CipherTextWithEncryptedKey`], which Tink's `KmsEnvelopeAead` reads with the
+/// same KMS key and algorithm:
 ///
 /// - per call, the default: a new DEK per value, one KMS wrap per value;
 /// - store-less, with a [`DekReusePolicy`] in the options: one DEK for many values, renewed by
@@ -52,8 +53,10 @@ pub struct KmsAeadEnvelope<P, B> {
 #[non_exhaustive]
 pub struct KmsAeadEnvelopeOptions {
     /// The AEAD algorithm, [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default. The
-    /// envelope layout does not record the algorithm, so the writer and the reader of a value
-    /// must be configured with the same one.
+    /// envelope format does not record the algorithm, so the writer and the reader of a value
+    /// must be configured with the same one. Every Tink implementation reads AES-128-GCM,
+    /// AES-256-GCM and AES-256-GCM-SIV envelopes; Tink for Java and Go also read
+    /// ChaCha20-Poly1305, and Tink for C++ and Python do not.
     #[default = "Self::DEFAULT_ALGORITHM"]
     pub algorithm: AeadAlgorithm,
     /// Store-less mode: `encrypt_value` reuses one DEK until the policy renews it. `None`, the
@@ -293,7 +296,7 @@ where
     ///
     /// Besides the AEAD and KMS errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
     /// material of the wrong length, and `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is
-    /// longer than 65,535 bytes.
+    /// longer than the 4,096 bytes Tink reads.
     pub async fn encrypt_value(
         &self,
         aad: &[u8],
@@ -350,19 +353,27 @@ where
     }
 
     /// Unwraps the DEK stored in `cipher_text`, through the envelope's [`DekCache`], and opens
-    /// the value with it.
+    /// the value with it. With the deprecated `legacy-formats` feature it also reads the layouts
+    /// written by 0.29 and earlier, and logs one `WARN` event the first time the process reads
+    /// each of them.
     ///
     /// # Errors
     ///
-    /// Besides the AEAD and KMS errors, `UNKNOWN_CIPHER_TEXT_LAYOUT`,
-    /// `INVALID_CIPHER_TEXT_FORMAT` or `INVALID_KEY_VERSION` when `cipher_text` cannot be read
-    /// (see [`CipherTextWithEncryptedKey::separate`]).
+    /// Besides the AEAD and KMS errors, the errors of [`CipherTextWithEncryptedKey::separate`]
+    /// when `cipher_text` cannot be read, and of [`DekCache::with_key`] when its wrapped key
+    /// does not unwrap to a key. With `legacy-formats`, `INVALID_CIPHER_TEXT_FORMAT` and
+    /// `INVALID_KEY_VERSION` on a legacy value that cannot be read take the place of
+    /// `LEGACY_FORMAT`.
     pub async fn decrypt_value(
         &self,
         aad: &[u8],
         cipher_text: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<SecretValue> {
         spans::in_span(self.decrypt_span(self.mode()), async {
+            #[cfg(feature = "legacy-formats")]
+            let (cipher_text, encrypted_dek) =
+                cipher_text.separate_any_layout(self.provider.kek().provider())?;
+            #[cfg(not(feature = "legacy-formats"))]
             let (cipher_text, encrypted_dek) = cipher_text.separate()?;
             self.with_dek(&encrypted_dek, |key| {
                 self.cipher.decrypt_value(aad, &cipher_text, key)
@@ -443,7 +454,8 @@ where
     }
 
     /// Generates a new DEK, from the KMS generator when the provider uses one and from the
-    /// backend's CSPRNG otherwise, and wraps it with the KMS.
+    /// backend's CSPRNG otherwise, and wraps it with the KMS as Tink does, so that
+    /// [`CipherTextWithEncryptedKey::join`] can store it with values sealed under it.
     ///
     /// # Errors
     ///
@@ -506,8 +518,10 @@ mod tests {
     use super::*;
     #[cfg(not(feature = "legacy-formats"))]
     use crate::errors::KmsAeadLegacyFormat;
+    use crate::formats::TinkKeyType;
     use crate::test_provider::{
-        let_spawned_tasks_wait, CountingKmsProvider, TestBackend, TestKmsProvider, CONCURRENT_CALLS,
+        let_spawned_tasks_wait, wrapped_by_test_provider, CountingKmsProvider, TestBackend,
+        TestKmsProvider, CONCURRENT_CALLS,
     };
 
     type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
@@ -546,6 +560,22 @@ mod tests {
                 .decrypt_value_with_encrypted_dek(AAD, &ciphertext, &encrypted_dek)
                 .await?,
             plaintext
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_new_dek_is_wrapped_as_its_tink_key() -> KmsAeadResult<()> {
+        let encryption = Envelope::new(TestKmsProvider::Working)?;
+
+        let (dek, encrypted_dek) = encryption.generate_new_dek().await?;
+
+        assert_eq!(
+            encrypted_dek,
+            wrapped_by_test_provider(
+                TinkKeyType::ChaCha20Poly1305,
+                dek.value().ref_sensitive_value()
+            )
         );
         Ok(())
     }
@@ -701,18 +731,24 @@ mod tests {
         Ok(())
     }
 
+    // The same secret under the AAD `fixture-aad`, with the test provider's raw key as the
+    // wrapped key, in the layouts of 0.28.1, of 0.29 and of 32-bit targets before 0.24.0.
     const FIXTURE_AAD: &[u8] = b"fixture-aad";
     #[cfg(feature = "legacy-formats")]
     const FIXTURE_SECRET: &str = "fixture-secret";
     const ENVELOPE_FROM_0_28_1: &str = "000000000000002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e";
-    /// 32-bit targets wrote a 4-byte length prefix before 0.24.0.
+    const ENVELOPE_FROM_0_29: &str = "0100002089548688c2a8d0d11b8547aa1e9a1c79fbaddcb5a4866e56af813d65b041d60672aba785e3857369ab75d33b8672d013a8e721a538876b0d59090f06c6c3a698acf2113a29e1f90ed89e";
     const ENVELOPE_FROM_0_23_0_ON_32_BIT: &str = "00000020e8efcd9417d41f8dee5dc6b8cfde7b209951fb80e60e0b8240a9fa688f815e1501a12b36821b4aa097fbe86573df02d8fe8d34235bdb9b3731107e946d0021d7d2ea089f87d4bea034a2";
 
     #[cfg(feature = "legacy-formats")]
     #[tokio::test]
-    async fn envelopes_from_0_28_1_and_earlier_decrypt() -> KmsAeadResult<()> {
+    async fn envelopes_from_0_29_and_earlier_decrypt() -> KmsAeadResult<()> {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
-        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+        for envelope_hex in [
+            ENVELOPE_FROM_0_28_1,
+            ENVELOPE_FROM_0_29,
+            ENVELOPE_FROM_0_23_0_ON_32_BIT,
+        ] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
             let secret = encryption.decrypt_value(FIXTURE_AAD, &envelope).await?;
             assert_eq!(secret, SecretValue::from(FIXTURE_SECRET));
@@ -722,15 +758,24 @@ mod tests {
 
     #[cfg(not(feature = "legacy-formats"))]
     #[tokio::test]
-    async fn envelopes_from_0_28_1_and_earlier_need_legacy_formats() -> KmsAeadResult<()> {
+    async fn envelopes_from_0_29_and_earlier_need_legacy_formats() -> KmsAeadResult<()> {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
-        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+        for (envelope_hex, format) in [
+            (
+                ENVELOPE_FROM_0_28_1,
+                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
+            ),
+            (ENVELOPE_FROM_0_29, KmsAeadLegacyFormat::EnvelopeV1),
+            (
+                ENVELOPE_FROM_0_23_0_ON_32_BIT,
+                KmsAeadLegacyFormat::RawWrappedKey,
+            ),
+        ] {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
             let result = encryption.decrypt_value(FIXTURE_AAD, &envelope).await;
             assert!(
-                matches!(&result, Err(KmsAeadError::LegacyFormat(error))
-                    if error.format == KmsAeadLegacyFormat::LengthPrefixedEnvelope),
-                "{result:?}"
+                matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
+                "{format:?}: {result:?}"
             );
         }
         Ok(())
@@ -739,21 +784,37 @@ mod tests {
     #[cfg(feature = "legacy-formats")]
     #[tokio::test]
     #[expect(deprecated, reason = "tests the deprecated upgrade")]
-    async fn envelopes_from_0_28_1_and_earlier_upgrade_to_layout_v1() -> KmsAeadResult<()> {
-        let encryption = Envelope::new(TestKmsProvider::Working)?;
-        for envelope_hex in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_23_0_ON_32_BIT] {
+    async fn envelopes_from_0_29_and_earlier_upgrade_to_tink() -> KmsAeadResult<()> {
+        let encryption = CountingEnvelope::new(CountingKmsProvider::new(
+            TestKmsProvider::Working,
+            ORDERS_KEK,
+        ))?;
+        for envelope_hex in [
+            ENVELOPE_FROM_0_28_1,
+            ENVELOPE_FROM_0_29,
+            ENVELOPE_FROM_0_23_0_ON_32_BIT,
+        ] {
             let legacy = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
-            let (cipher_text, encrypted_dek) = legacy.separate()?;
-            let current = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?;
 
-            assert_eq!(encrypted_dek.key_version(), None);
-            assert_eq!(legacy.upgrade_legacy_layout()?, Some(current.clone()));
-            assert_eq!(current.upgrade_legacy_layout()?, None);
+            let upgraded = encryption
+                .upgrade_legacy_value(&legacy)
+                .await?
+                .expect("a legacy value is upgraded");
+
+            let (cipher_text, encrypted_dek) = upgraded.separate()?;
+            let sealed_len = 12 + FIXTURE_SECRET.len() + 16;
+            assert_eq!(encrypted_dek.value()[..2], [0x12, 0x20]);
             assert_eq!(
-                encryption.decrypt_value(FIXTURE_AAD, &current).await?,
+                cipher_text.value()[..],
+                legacy.value()[legacy.value().len() - sealed_len..]
+            );
+            assert_eq!(
+                encryption.decrypt_value(FIXTURE_AAD, &upgraded).await?,
                 SecretValue::from(FIXTURE_SECRET)
             );
+            assert_eq!(encryption.upgrade_legacy_value(&upgraded).await?, None);
         }
+        assert_eq!(encryption.provider.wraps(), 3);
         Ok(())
     }
 

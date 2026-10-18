@@ -64,6 +64,10 @@ gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = "2.6.1"
+# Tink's key and keyset messages. The version gcloud-sdk depends on, so that one copy is in the tree.
+prost = "0.14"
+# Zeroizes the serialized keys inside Tink's keyset messages.
+zeroize = "1"
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
 tokio = { version = "1", default-features = false, features = ["sync"] }
@@ -132,8 +136,8 @@ deterministic = [
     "dep:cmac",
     "cmac/zeroize",
 ]
-# Deprecated: reads the layouts written up to 0.28.1. Reading them will be removed in a later
-# breaking release.
+# Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
+# later breaking release.
 legacy-formats = []
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
@@ -203,6 +207,11 @@ required-features = ["azure-kms-encryption-base"]
 name = "azure_kms_responses"
 path = "tests/azure_kms_responses.rs"
 required-features = ["azure-kms-encryption-base"]
+
+[[example]]
+name = "tink_interop"
+path = "examples/tink_interop.rs"
+required-features = ["gcp-kms-encryption", "aws-kms-encryption", "aws-lc"]
 
 [[example]]
 name = "only_aead"

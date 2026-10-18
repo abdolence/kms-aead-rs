@@ -161,9 +161,7 @@ impl HcVaultTransitProviderOptions {
 /// errors for a response or an encrypted key that cannot be read.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
-/// the key version, so it still decrypts after the key is rotated. That version is also recorded
-/// as the [`KmsKeyVersion`], for audit only: decrypt sends the ciphertext and never the recorded
-/// version.
+/// the key version, so it still decrypts after the key is rotated.
 #[derive(Clone)]
 pub struct HcVaultTransitProvider {
     http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
@@ -381,11 +379,11 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
             let response: TransitResponse<EncryptData> = parse_response(&body)?;
             let ciphertext = response.data.ciphertext;
-            let key_version = transit_key_version(&ciphertext);
-            let encrypted_key =
-                EncryptedDataEncryptionKey::new(ciphertext.into_bytes(), key_version);
-            kms::record_wrap(&encrypted_key);
-            Ok(encrypted_key)
+            match transit_key_version(&ciphertext) {
+                Some(key_version) => kms::record_key_version(key_version),
+                None => warn!("No key version in the Vault Transit ciphertext"),
+            }
+            Ok(EncryptedDataEncryptionKey::new(ciphertext.into_bytes()))
         })
         .await
     }
@@ -396,14 +394,16 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
-        spans::in_span(span, async {
-            let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
+        spans::in_span(kms::unwrap_span(&self.kek), async {
+            let ciphertext = std::str::from_utf8(encrypted_key.value()).map_err(|_| {
                 KmsAeadEncryptionError::create(
                     "VAULT_CIPHERTEXT",
                     "The encrypted data encryption key is not a Vault Transit ciphertext",
                 )
             })?;
+            if let Some(key_version) = transit_key_version(ciphertext) {
+                kms::record_key_version(key_version);
+            }
             let request = serde_json::to_vec(&DecryptRequest { ciphertext })
                 .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
@@ -485,20 +485,11 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     })
 }
 
-/// The `N` of the `vault:vN:` prefix of a Transit ciphertext. It is recorded for audit only:
-/// Vault reads the version from its own ciphertext at decrypt.
-fn transit_key_version(ciphertext: &str) -> Option<KmsKeyVersion> {
-    match ciphertext
-        .strip_prefix("vault:v")
-        .and_then(|rest| rest.split_once(':'))
-        .map(|(version, _)| KmsKeyVersion::try_from(version.to_string()))
-    {
-        Some(Ok(version)) => Some(version),
-        _ => {
-            warn!("No key version in the Vault Transit ciphertext");
-            None
-        }
-    }
+/// The `N` of the `vault:vN:` prefix of a Transit ciphertext, for the span only: Vault reads
+/// the version from its own ciphertext at decrypt.
+fn transit_key_version(ciphertext: &str) -> Option<&str> {
+    let (version, _) = ciphertext.strip_prefix("vault:v")?.split_once(':')?;
+    (!version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())).then_some(version)
 }
 
 /// Whether requests to `address` carry the token and the data keys in plain text off this host:
@@ -690,7 +681,6 @@ mod tests {
         provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
                 b"vault:v1:wrapped".into(),
-                None,
             ))
             .await
             .unwrap();
@@ -873,7 +863,6 @@ mod tests {
         let Err(error) = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
                 b"vault:v1:wrapped".into(),
-                None,
             ))
             .await
         else {
@@ -905,10 +894,7 @@ mod tests {
 
     #[test]
     fn key_version_is_read_from_the_transit_ciphertext() {
-        assert_eq!(
-            transit_key_version("vault:v3:AbCd+/ef=="),
-            Some(KmsKeyVersion::try_from("3".to_string()).unwrap())
-        );
+        assert_eq!(transit_key_version("vault:v3:AbCd+/ef=="), Some("3"));
         for malformed in [
             "vault:3:AbCd",
             "vault:v:AbCd",
@@ -966,7 +952,8 @@ mod tests {
 
         let key_version = |cipher_text: &CipherTextWithEncryptedKey| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
-            encrypted_dek.key_version().map(KmsKeyVersion::to_string)
+            let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
+            transit_key_version(&ciphertext).map(str::to_string)
         };
 
         let before_rotation = encryption

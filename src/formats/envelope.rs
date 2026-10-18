@@ -1,0 +1,342 @@
+use std::fmt::{Debug, Formatter};
+
+use rvstruct::ValueStruct;
+use subtle::ConstantTimeEq;
+
+use crate::errors::{
+    KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
+};
+use crate::{CipherText, EncryptedDataEncryptionKey, KmsAeadResult};
+
+/// A value sealed under a data encryption key (DEK), with the DEK wrapped by a KMS, in Tink's
+/// KMS envelope format, as Tink's `KmsEnvelopeAead` writes and reads it:
+///
+/// ```text
+/// [w: u32 BE][wrapped DEK: w bytes][nonce: 12][ciphertext][tag: 16]
+/// ```
+///
+/// The wrapped DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
+/// DEK as Tink serializes it, 1 to 4,096 bytes, the sizes every Tink implementation reads. The
+/// rest is the [`CipherText`] of the DEK. The layout records neither the algorithm nor the KMS
+/// key version, so the writer and the reader of a value are configured with the same algorithm.
+///
+/// [`separate`](Self::separate) reads only this layout. The layouts written by 0.29 and earlier
+/// fail there with [`KmsAeadError::LegacyFormat`], and only
+/// [`KmsAeadEnvelope::decrypt_value`](crate::KmsAeadEnvelope::decrypt_value) reads them, with the
+/// deprecated `legacy-formats` feature. The formats chapter of the book tells the layouts apart.
+#[derive(Clone, ValueStruct)]
+pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
+
+/// The layout of a stored [`CipherTextWithEncryptedKey`], by its first bytes, whether or not
+/// this build reads it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EnvelopeLayout {
+    /// `[w: u32 BE]` with `w` from 1, so the first byte is `0x00` and the first four are not
+    /// all zero. The 4-byte length prefix of 32-bit targets before 0.24.0 has the same framing;
+    /// only the unwrapped key tells it apart.
+    Tink,
+    /// The envelope layout v1 of 0.29: `[0x01][k: u8][key version: k][w: u16 BE][wrapped key]`.
+    V1,
+    /// The 8-byte length prefix written up to 0.28.1. No wrapped key reaches 2^32 bytes, so its
+    /// first four bytes are zero.
+    LengthPrefixed,
+}
+
+impl TryFrom<&CipherTextWithEncryptedKey> for EnvelopeLayout {
+    type Error = KmsAeadError;
+
+    fn try_from(value: &CipherTextWithEncryptedKey) -> KmsAeadResult<Self> {
+        match value.0.as_slice() {
+            [0x00, 0x00, 0x00, 0x00, ..] => Ok(EnvelopeLayout::LengthPrefixed),
+            [0x00, ..] => Ok(EnvelopeLayout::Tink),
+            [0x01, ..] => Ok(EnvelopeLayout::V1),
+            [_, ..] => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "The cipher text starts with a byte that starts no layout",
+            )),
+            [] => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "Empty cipher text has no layout",
+            )),
+        }
+    }
+}
+
+impl CipherTextWithEncryptedKey {
+    /// The most bytes of a wrapped DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
+    const MAX_ENCRYPTED_KEY_LEN: u32 = 4096;
+
+    /// `cipher_text` and the wrapped DEK that opens it in Tink's KMS envelope format, which
+    /// [`separate`](Self::separate) reads back.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is empty or longer than 4,096 bytes,
+    /// which Tink does not read.
+    pub fn join(
+        cipher_text: &CipherText,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<Self> {
+        let wrapped = encrypted_dek.value();
+        let wrapped_len = u32::try_from(wrapped.len())
+            .ok()
+            .filter(|len| (1..=Self::MAX_ENCRYPTED_KEY_LEN).contains(len))
+            .ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "INVALID_CIPHER_TEXT_FORMAT",
+                    &format!(
+                        "A wrapped key of {} bytes is not 1 to {} bytes long, the sizes Tink reads",
+                        wrapped.len(),
+                        Self::MAX_ENCRYPTED_KEY_LEN
+                    ),
+                )
+            })?;
+        let mut value = Vec::with_capacity(4 + wrapped.len() + cipher_text.value().len());
+        value.extend_from_slice(&wrapped_len.to_be_bytes());
+        value.extend_from_slice(wrapped);
+        value.extend_from_slice(cipher_text.value());
+        Ok(Self(value))
+    }
+
+    /// The cipher text and the wrapped DEK of a value in Tink's KMS envelope format.
+    ///
+    /// # Errors
+    ///
+    /// - `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or a first byte that starts no layout;
+    /// - `INVALID_CIPHER_TEXT_FORMAT` on a wrapped key length outside 1 to 4,096 bytes or past
+    ///   the end of the value;
+    /// - [`KmsAeadError::LegacyFormat`] with [`KmsAeadLegacyFormat::EnvelopeV1`] on a value
+    ///   starting with `0x01`, and with [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on one
+    ///   starting with four zero bytes, with or without `legacy-formats`.
+    pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
+        match EnvelopeLayout::try_from(self)? {
+            EnvelopeLayout::Tink => {}
+            EnvelopeLayout::V1 => {
+                return Err(KmsAeadLegacyFormatError::create(
+                    KmsAeadLegacyFormat::EnvelopeV1,
+                ))
+            }
+            EnvelopeLayout::LengthPrefixed => {
+                return Err(KmsAeadLegacyFormatError::create(
+                    KmsAeadLegacyFormat::LengthPrefixedEnvelope,
+                ))
+            }
+        }
+        let invalid = || {
+            KmsAeadEncryptionError::create(
+                "INVALID_CIPHER_TEXT_FORMAT",
+                &format!(
+                    "The wrapped key length of a cipher text of {} bytes is not 1 to {} bytes \
+                     within it",
+                    self.0.len(),
+                    Self::MAX_ENCRYPTED_KEY_LEN
+                ),
+            )
+        };
+        let (wrapped_len, rest) = self.0.split_first_chunk::<4>().ok_or_else(invalid)?;
+        let wrapped_len = u32::from_be_bytes(*wrapped_len);
+        if wrapped_len > Self::MAX_ENCRYPTED_KEY_LEN {
+            return Err(invalid());
+        }
+        let wrapped_len = usize::try_from(wrapped_len).map_err(|_| invalid())?;
+        let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len).ok_or_else(invalid)?;
+        Ok((
+            CipherText(cipher_text.to_vec()),
+            EncryptedDataEncryptionKey::new(wrapped.to_vec()),
+        ))
+    }
+
+    /// The lowercase hex of the value.
+    pub fn to_hex_string(&self) -> String {
+        hex::encode(self.value())
+    }
+}
+
+/// The length only: the value holds the wrapped data encryption key.
+impl Debug for CipherTextWithEncryptedKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CipherTextWithEncryptedKey")
+            .field("len", &self.0.len())
+            .finish()
+    }
+}
+
+impl PartialEq for CipherTextWithEncryptedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.value().ct_eq(other.value()).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::test_provider::renderings;
+
+    const SEALED: &[u8] = b"sealed";
+    const WRAPPED: &[u8] = b"wrapped";
+
+    /// Tink 1.16.1 for Python, `KmsEnvelopeAead(AES256_GCM, …)` on a Cloud KMS key: a 116-byte
+    /// wrapped key and the 21 bytes of `sealed by Tink 1.16.1` with a nonce and a tag.
+    const TINK_ENVELOPE: &str = "000000740a25006b8d8e5ab00c118c3b606a67e34d0f7137963ae14dae0cc70cfbb9fe97e86871e0166ff8124b00eaf42f6318880810c8a2cdb5f89e59b5f6d45b8ca2dc3533159eee2360b087938fdea20aa6971e65f4d94d5879fc9b793564402be5a1918a28adde7568d1a26d797f62c33458ac7839e2fba14afad173bcffd7fbf750cd2ab4d3cddfdc2e8d3051677d0aa452474215f065eb815d35760a533c66f96460b129fd28";
+
+    #[test]
+    fn tink_envelope_is_pinned() -> KmsAeadResult<()> {
+        let cipher_text = CipherText(SEALED.to_vec());
+        let encrypted_dek = EncryptedDataEncryptionKey::new(WRAPPED.to_vec());
+
+        let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?;
+
+        assert_eq!(
+            envelope.to_hex_string(),
+            "00000007777261707065647365616c6564"
+        );
+        assert_eq!(envelope.separate()?, (cipher_text, encrypted_dek));
+        Ok(())
+    }
+
+    #[test]
+    fn a_tink_envelope_separates_into_the_wrapped_key_and_the_payload() -> KmsAeadResult<()> {
+        let envelope = CipherTextWithEncryptedKey::from(hex::decode(TINK_ENVELOPE).unwrap());
+
+        let (cipher_text, encrypted_dek) = envelope.separate()?;
+
+        assert_eq!(encrypted_dek.value().len(), 116);
+        assert_eq!(&encrypted_dek.value()[..4], [0x0a, 0x25, 0x00, 0x6b]);
+        assert_eq!(cipher_text.value().len(), 12 + 21 + 16);
+        Ok(())
+    }
+
+    proptest! {
+        #[test]
+        fn join_and_separate_round_trip(
+            cipher_text in prop::collection::vec(any::<u8>(), 0..256),
+            wrapped in prop::collection::vec(any::<u8>(), 1..=4096),
+        ) {
+            let cipher_text = CipherText(cipher_text);
+            let encrypted_dek = EncryptedDataEncryptionKey::new(wrapped);
+
+            let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).unwrap();
+
+            prop_assert_eq!(envelope.separate().unwrap(), (cipher_text, encrypted_dek));
+        }
+
+        #[test]
+        fn separate_returns_on_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
+            let _ = CipherTextWithEncryptedKey::from(bytes).separate();
+        }
+    }
+
+    #[test]
+    fn a_wrapped_key_tink_does_not_read_is_refused_on_write() {
+        let cipher_text = CipherText(SEALED.to_vec());
+        for (len, accepted) in [(0, false), (1, true), (4096, true), (4097, false)] {
+            let result = CipherTextWithEncryptedKey::join(
+                &cipher_text,
+                &EncryptedDataEncryptionKey::new(vec![0xAA; len]),
+            );
+            assert_eq!(result.is_ok(), accepted, "{len} bytes: {result:?}");
+            if !accepted {
+                assert!(
+                    matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                        if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
+                    "{result:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_wrapped_key_length_tink_does_not_read_is_refused() {
+        let envelopes: [&[u8]; 4] = [
+            &[0x00],
+            &[0x00, 0x00, 0x05],
+            &[0x00, 0x00, 0x00, 0x05, 0xAA],
+            &[0x00, 0x00, 0x10, 0x01, 0xAA],
+        ];
+        for envelope in envelopes {
+            let result = CipherTextWithEncryptedKey::from(envelope.to_vec()).separate();
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
+                "{envelope:02x?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_first_byte_that_starts_no_layout_is_refused() {
+        let empty = CipherTextWithEncryptedKey::from(Vec::new()).separate();
+        assert!(
+            matches!(&empty, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "UNKNOWN_CIPHER_TEXT_LAYOUT"),
+            "{empty:?}"
+        );
+        for first in 0x02..=0xFF {
+            let result = CipherTextWithEncryptedKey::from(vec![first; 64]).separate();
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "UNKNOWN_CIPHER_TEXT_LAYOUT"),
+                "{first:#04x}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn separate_refuses_the_layouts_of_0_29_and_earlier() {
+        let envelopes = [
+            (
+                hex::decode("010231380007777261707065647365616c6564").unwrap(),
+                KmsAeadLegacyFormat::EnvelopeV1,
+            ),
+            (
+                [&[0x00; 7][..], &[0x07], WRAPPED, SEALED].concat(),
+                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
+            ),
+        ];
+        for (envelope, format) in envelopes {
+            let result = CipherTextWithEncryptedKey::from(envelope).separate();
+            assert!(
+                matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
+                "{format:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn debug_shows_no_wrapped_key_bytes() -> KmsAeadResult<()> {
+        let envelope = CipherTextWithEncryptedKey::join(
+            &CipherText(SEALED.to_vec()),
+            &EncryptedDataEncryptionKey::new(WRAPPED.to_vec()),
+        )?;
+
+        let debug = format!("{envelope:?}");
+
+        for rendering in renderings(WRAPPED) {
+            assert!(!debug.contains(&rendering), "{debug}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn read_errors_echo_no_stored_bytes() {
+        /// The first byte of a value stored in plain text, which a read error must not echo:
+        /// for a one-character value such as `y` or `n`, it is the whole value.
+        const PLAIN_TEXT_BYTE: u8 = b'~';
+
+        let errors = [
+            vec![PLAIN_TEXT_BYTE, 0x00],
+            [&[0x00, 0x00, 0x00, 0x7E][..], SEALED].concat(),
+        ]
+        .map(|stored| CipherTextWithEncryptedKey::from(stored).separate());
+        for error in errors {
+            let text = format!("{error:?}");
+            for stored in [&[PLAIN_TEXT_BYTE][..], SEALED] {
+                for rendering in renderings(stored) {
+                    assert!(!text.contains(&rendering), "{rendering:?} in {text}");
+                }
+            }
+        }
+    }
+}

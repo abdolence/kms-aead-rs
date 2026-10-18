@@ -13,10 +13,10 @@ use std::time::{Duration, Instant};
 use rsb_derive::Builder;
 use tokio::sync::OnceCell;
 
-use crate::errors::{KmsAeadEncryptionError, KmsAeadSystemError};
+use crate::errors::KmsAeadSystemError;
 use crate::{
-    AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider,
+    KmsAeadResult, ValueStruct,
 };
 
 /// The settings of an enabled [`DekCache`].
@@ -82,8 +82,8 @@ impl Display for DekCacheOutcome {
 /// id share their entries.
 ///
 /// Keys of randomized and deterministic algorithms share the entries: the same wrapped bytes
-/// unwrap to the same key whatever the caller seals with it. The cipher a key is used with
-/// checks its length.
+/// unwrap to the same key whatever the caller seals with it. An entry holds the key a serialized
+/// Tink key carries, and the cipher a key is used with checks its length.
 ///
 /// - A key reaches a caller only inside the closure of [`with_key`](Self::with_key), and stays
 ///   intact until the closure returns, whatever leaves the cache meanwhile.
@@ -260,7 +260,7 @@ impl Shared {
         self.purge_expired(now);
         let snapshot = self.snapshot();
         let slot = snapshot
-            .live(encrypted.wrapped(), self.options.ttl, now)
+            .live(encrypted.value(), self.options.ttl, now)
             .filter(|slot| slot.serves(kek))?;
         let dek = slot.dek.get()?.as_ref().ok()?;
         Some(use_key(dek))
@@ -279,7 +279,7 @@ impl Shared {
         let now = Instant::now();
         self.purge_expired(now);
         let (ttl, max_entries) = (self.options.ttl, self.options.max_entries);
-        let wrapped = encrypted.wrapped();
+        let wrapped = encrypted.value().as_slice();
         let slot = Arc::new(Slot {
             kek: kek.clone(),
             dek: OnceCell::from(Ok(Arc::new(key))),
@@ -404,10 +404,11 @@ impl DekCache {
     ///
     /// # Errors
     ///
-    /// The provider's error, and `INVALID_KEY_LENGTH` when the unwrapped key has the length of no
-    /// [`AeadAlgorithm`]'s and no [`DeterministicAlgorithm`]'s key, which every caller waiting on
-    /// the same unwrap receives. Such a key is not cached. The errors of `use_key` come back in
-    /// its own return value.
+    /// The provider's error, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized Tink
+    /// key, and without the `legacy-formats` feature
+    /// [`KmsAeadError::LegacyFormat`](crate::errors::KmsAeadError::LegacyFormat) for a key
+    /// wrapped by 0.29 or earlier. Every caller waiting on the same unwrap receives the error,
+    /// and nothing is cached. The errors of `use_key` come back in its own return value.
     pub async fn with_key<P, T>(
         &self,
         provider: &P,
@@ -418,27 +419,12 @@ impl DekCache {
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         // A wrapped value of the same KEK that is no data encryption key, such as an exported
-        // keyset, unwraps too: its plaintext must not reach the cache.
-        let unwrap_key = || async {
-            let key = provider.decrypt_data_encryption_key(encrypted).await?;
-            let len = key.value().ref_sensitive_value().len();
-            let key_lens = AeadAlgorithm::ALL.map(AeadAlgorithm::key_len).into_iter();
-            if key_lens
-                .chain(DeterministicAlgorithm::ALL.map(DeterministicAlgorithm::key_len))
-                .any(|key_len| key_len == len)
-            {
-                Ok(key)
-            } else {
-                Err(KmsAeadEncryptionError::create(
-                    "INVALID_KEY_LENGTH",
-                    &format!("A key of {len} bytes fits no AEAD or deterministic algorithm"),
-                ))
-            }
-        };
+        // keyset, unwraps too, and the decoding of a serialized Tink key keeps it out.
+        let unwrap_key = || async { encrypted.unwrap_with(provider).await.map(|(key, _)| key) };
         match &self.0 {
             Some(shared) => {
                 shared
-                    .with_key(provider.kek(), encrypted.wrapped(), unwrap_key, use_key)
+                    .with_key(provider.kek(), encrypted.value(), unwrap_key, use_key)
                     .await
             }
             None => Ok((use_key(&unwrap_key().await?), DekCacheOutcome::Disabled)),
@@ -451,7 +437,7 @@ impl DekCache {
     pub fn invalidate(&self, kek: &KekRef, encrypted: &EncryptedDataEncryptionKey) {
         if let Some(shared) = &self.0 {
             shared.purge_expired(Instant::now());
-            shared.publish(|snapshot| snapshot.without_entry(encrypted.wrapped(), kek));
+            shared.publish(|snapshot| snapshot.without_entry(encrypted.value(), kek));
         }
     }
 
@@ -496,7 +482,7 @@ impl DekCache {
         let snapshot = self.0.as_ref()?.snapshot();
         let slot = snapshot
             .slots
-            .get(encrypted.wrapped())
+            .get(encrypted.value().as_slice())
             .filter(|slot| slot.serves(kek))?;
         slot.dek.get()?.as_ref().ok().map(Arc::downgrade)
     }
@@ -511,13 +497,14 @@ mod tests {
 
     use super::*;
     use crate::errors::KmsAeadError;
+    use crate::formats::TinkKeyType;
     use crate::test_provider::{
-        let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
+        let_spawned_tasks_wait, wrapped_by_test_provider, CountingKmsProvider, TestKmsProvider,
+        CONCURRENT_CALLS,
     };
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
-    /// The test provider's wrapped key is the key itself, of a randomized algorithm's length.
     const ORDERS_DEK: [u8; 32] = [0x42; 32];
     const BILLING_DEK: [u8; 32] = [0x24; 32];
     const ORDERS_DETERMINISTIC_DEK: [u8; 64] = [0x42; 64];
@@ -525,7 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn n_concurrent_misses_make_one_unwrap() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = Arc::new(CountingKmsProvider::gated(
             TestKmsProvider::Working,
@@ -555,7 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn waiters_share_the_leaders_error() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = Arc::new(CountingKmsProvider::gated(
             TestKmsProvider::FailingToUnwrap,
@@ -588,7 +575,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_unwrap_is_not_cached() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let failing = CountingKmsProvider::new(TestKmsProvider::FailingToUnwrap, ORDERS_KEK);
         let working = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
@@ -612,15 +599,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_key_no_algorithm_uses_is_refused_and_not_cached() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(vec![0x42; 100], None);
+    async fn an_unwrapped_key_that_is_no_tink_key_is_refused_and_not_cached() -> KmsAeadResult<()> {
+        let encrypted = EncryptedDataEncryptionKey::new(vec![0x42; 100]);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
         for _ in 0..2 {
             let result = cache.with_key(&provider, &encrypted, |_| ()).await;
             assert!(
-                matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
+                matches!(&result, Err(e) if e.code() == "INVALID_KEY_FORMAT"),
                 "{:?}",
                 result.as_ref().err()
             );
@@ -632,7 +619,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_deterministic_key_is_cached() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DETERMINISTIC_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesSiv, &ORDERS_DETERMINISTIC_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
@@ -649,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_entry_expires_after_ttl() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
@@ -678,7 +665,7 @@ mod tests {
 
         let mut cached = Vec::new();
         for byte in 1..=3 {
-            let encrypted = EncryptedDataEncryptionKey::new(vec![byte; 32], None);
+            let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &[byte; 32]);
             cache.with_key(&provider, &encrypted, |_| ()).await?;
             cached.push(cache.cached_dek(provider.kek(), &encrypted).unwrap());
         }
@@ -691,7 +678,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalidate_forces_the_next_unwrap() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
@@ -717,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn cache_is_namespaced_by_kek() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let orders = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
         let billing = CountingKmsProvider::new(TestKmsProvider::Working, BILLING_KEK);
@@ -745,7 +732,7 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
         let encrypted: Vec<_> = (1..=3)
-            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 32], None))
+            .map(|byte| wrapped_by_test_provider(TinkKeyType::AesGcm, &[byte; 32]))
             .collect();
 
         let mut cached = Vec::new();
@@ -761,7 +748,7 @@ mod tests {
 
     #[test]
     fn purge_expired_zeroizes_an_expired_key_without_a_runtime() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
@@ -778,7 +765,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unwrap_in_flight_does_not_reinsert_after_invalidate() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
 
         let mut outcomes = Vec::new();
@@ -812,7 +799,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_waiter_unwraps_when_the_unwrapping_caller_is_cancelled() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = Arc::new(CountingKmsProvider::gated(
             TestKmsProvider::Working,
@@ -852,7 +839,7 @@ mod tests {
         )?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
         let keys = [ORDERS_DEK, BILLING_DEK]
-            .map(|dek| (EncryptedDataEncryptionKey::new(dek.to_vec(), None), dek));
+            .map(|dek| (wrapped_by_test_provider(TinkKeyType::AesGcm, &dek), dek));
         let using = AtomicBool::new(true);
 
         let failures = thread::scope(|scope| {
@@ -898,9 +885,9 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(ttl))?;
         let started = Instant::now();
         let provider = CountingKmsProvider::new(TestKmsProvider::Stamping(started), ORDERS_KEK);
-        // With the 8-byte stamp, a 32-byte key.
+        // The start of a serialized 32-byte AesGcmKey, whose last 8 bytes are the stamp.
         let keys: Vec<_> = (1..=3)
-            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 24], None))
+            .map(|byte| EncryptedDataEncryptionKey::new([&[0x1a, 0x20][..], &[byte; 24]].concat()))
             .collect();
         let looking_up = AtomicBool::new(true);
 
@@ -936,7 +923,7 @@ mod tests {
                                                 Duration::from_nanos(u64::from_le_bytes(*nanos));
                                             let age = looked_up_at
                                                 .saturating_duration_since(started + since);
-                                            wrapped == encrypted.wrapped() && age < ttl
+                                            wrapped == &encrypted.value()[2..] && age < ttl
                                         })
                                     }));
                                 !matches!(served, Ok((true, _)))
@@ -961,7 +948,7 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_cache_unwraps_every_time() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let encrypted = wrapped_by_test_provider(TinkKeyType::AesGcm, &ORDERS_DEK);
         let cache = DekCache::disabled();
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 

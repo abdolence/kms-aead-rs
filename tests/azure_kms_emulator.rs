@@ -134,7 +134,11 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
         .encrypt_value(aad, &SecretValue::from("test-secret"))
         .await?;
     let (_, encrypted_key) = cipher_text.separate()?;
-    assert_eq!(encrypted_key.key_version(), Some(&first_version));
+    let key_version = first_version.as_str().as_bytes();
+    assert_eq!(
+        encrypted_key.value()[2..2 + key_version.len()],
+        *key_version
+    );
 
     let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
     let decrypted = emulator

@@ -2,7 +2,9 @@
 //!
 //! A value is sealed under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
 //! wrapped by the KEK. [`KmsAeadEnvelope`] does both and stores the wrapped DEK with the cipher
-//! text. [`AeadCipher`] seals with a DEK the caller holds, without a KMS.
+//! text, in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads the
+//! values with the same KMS key and algorithm. [`AeadCipher`] seals with a DEK the caller holds,
+//! without a KMS. [`formats`] has every byte layout.
 //!
 //! # Providers
 //!
@@ -72,7 +74,7 @@
 //! # Other features
 //!
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].
-//! - `legacy-formats`: reads the layouts written up to 0.28.1. Deprecated.
+//! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated.
 //! - `serde`: `Serialize` and `Deserialize` for [`errors::KmsAeadErrorPublicGenericDetails`] and
 //!   for `SecretValue`.
 //!
@@ -233,6 +235,9 @@ pub use deterministic::*;
 
 pub mod errors;
 
+pub mod formats;
+pub use formats::envelope::CipherTextWithEncryptedKey;
+
 mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;
 
@@ -242,7 +247,7 @@ mod types;
 pub use types::*;
 
 /// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
-/// [`CipherTextWithEncryptedKey`] and [`DeterministicCipherText`].
+/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`] and [`DeterministicCipherText`].
 pub use rvstruct::ValueStruct;
 
 pub mod providers;

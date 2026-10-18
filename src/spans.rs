@@ -33,7 +33,7 @@ pub(crate) mod kms {
     use tracing::{debug_span, field, Span};
 
     use super::ERROR_CODE;
-    use crate::{EncryptedDataEncryptionKey, KekRef, KmsKeyVersion};
+    use crate::KekRef;
 
     const PROVIDER: &str = "/kms_aead/provider";
     const KEY: &str = "/kms_aead/key";
@@ -55,21 +55,16 @@ pub(crate) mod kms {
         )
     }
 
-    /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`, with the key version the
-    /// encrypted key records.
-    pub(crate) fn unwrap_span(kek: &KekRef, key_version: Option<&KmsKeyVersion>) -> Span {
-        let span = debug_span!(
+    /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`.
+    pub(crate) fn unwrap_span(kek: &KekRef) -> Span {
+        debug_span!(
             "KMS unwrap",
             { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
             { RESPONSE_TIME } = field::Empty,
             { ERROR_CODE } = field::Empty,
-        );
-        if let Some(key_version) = key_version {
-            span.record(KEY_VERSION, key_version.as_str());
-        }
-        span
+        )
     }
 
     /// `KMS random`, around a call to a KMS generator. `key` is what the request names, if
@@ -104,12 +99,10 @@ pub(crate) mod kms {
         );
     }
 
-    /// Records on the current KMS span the key version that wrapped `encrypted_key`, when the
-    /// KMS reported one.
-    pub(crate) fn record_wrap(encrypted_key: &EncryptedDataEncryptionKey) {
-        if let Some(key_version) = encrypted_key.key_version() {
-            Span::current().record(KEY_VERSION, key_version.as_str());
-        }
+    /// Records on the current KMS span the version of the KMS key that wraps or wrapped the key:
+    /// from the KMS response on wrap, from the wrapped key on unwrap.
+    pub(crate) fn record_key_version(key_version: &str) {
+        Span::current().record(KEY_VERSION, key_version);
     }
 
     /// Sends a KMS request and records on the current span how long it took, in milliseconds.

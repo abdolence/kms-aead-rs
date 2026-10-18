@@ -58,7 +58,9 @@ impl<B: AeadBackend> AeadCipher<B> {
 
     /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
     /// generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise.
+    /// otherwise. It is wrapped as Tink wraps a data encryption key, serialized as the Tink key
+    /// of the algorithm, so it can go into a
+    /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey).
     ///
     /// # Errors
     ///
@@ -75,7 +77,7 @@ impl<B: AeadBackend> AeadCipher<B> {
             Some(material) => DataEncryptionKey::from(material),
             None => self.generate_key()?,
         };
-        let encrypted_key = provider.encrypt_data_encryption_key(&key).await?;
+        let encrypted_key = key.wrap_with(self.algorithm.into(), provider).await?;
         Ok((key, encrypted_key))
     }
 

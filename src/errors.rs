@@ -31,7 +31,8 @@ pub enum KmsAeadError {
     EncryptionError(KmsAeadEncryptionError),
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
-    /// A stored value in a layout that only the `legacy-formats` feature reads.
+    /// A stored value in a layout written by 0.29 or earlier, which only the `legacy-formats`
+    /// feature reads.
     LegacyFormat(KmsAeadLegacyFormatError),
 }
 
@@ -383,18 +384,26 @@ pub struct KmsAeadLegacyFormatError {
 
 impl KmsAeadLegacyFormatError {
     /// The message names the layout and the feature, never the bytes read.
-    #[cfg(not(feature = "legacy-formats"))]
     pub(crate) fn create(format: KmsAeadLegacyFormat) -> KmsAeadError {
         let message = match format {
+            KmsAeadLegacyFormat::EnvelopeV1 => {
+                "The cipher text is in the envelope layout v1 of kms-aead 0.29. KmsAeadEnvelope \
+                 decrypts it only with the deprecated legacy-formats feature, and \
+                 CipherTextWithEncryptedKey::separate never reads it"
+            }
             KmsAeadLegacyFormat::LengthPrefixedEnvelope => {
                 "The cipher text is in the length-prefixed layout written by kms-aead 0.28.1 and \
-                 earlier, which only the deprecated legacy-formats feature reads"
+                 earlier. KmsAeadEnvelope decrypts it only with the deprecated legacy-formats \
+                 feature, and CipherTextWithEncryptedKey::separate never reads it"
             }
-            KmsAeadLegacyFormat::BareEncryptedKey => {
-                "The encrypted key is a bare wrapped key as kms-aead 0.28.1 and earlier stored it, \
-                 which only the deprecated legacy-formats feature reads. It may also be a value of \
-                 another layout handed to the wrong reader, such as a CipherTextWithEncryptedKey \
-                 or a keyring value"
+            KmsAeadLegacyFormat::EncryptedKeyV1 => {
+                "The encrypted key is in the encrypted key layout of kms-aead 0.29, which only the \
+                 deprecated legacy-formats feature reads"
+            }
+            KmsAeadLegacyFormat::RawWrappedKey => {
+                "The wrapped key holds the raw key, as kms-aead 0.29 and earlier wrapped every \
+                 key, not a serialized Tink key. Only the deprecated legacy-formats feature reads \
+                 it"
             }
         };
         KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError::new(
@@ -417,14 +426,23 @@ impl Display for KmsAeadLegacyFormatError {
 
 impl std::error::Error for KmsAeadLegacyFormatError {}
 
-/// A layout written by kms-aead 0.28.1 and earlier.
+/// A layout written by kms-aead 0.29 or earlier. The formats chapter of the book shows the bytes
+/// of each.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KmsAeadLegacyFormat {
-    /// `CipherTextWithEncryptedKey` written up to 0.28.1.
+    /// A `CipherTextWithEncryptedKey` in the envelope layout v1 of 0.29, starting with `0x01`.
+    EnvelopeV1,
+    /// A `CipherTextWithEncryptedKey` with the length prefix written up to 0.28.1, starting with
+    /// four zero bytes.
     LengthPrefixedEnvelope,
-    /// `EncryptedDataEncryptionKey` stored as the bare wrapped key, up to 0.28.1.
-    BareEncryptedKey,
+    /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted key layout of 0.29, starting
+    /// with `0xFF 0x01`.
+    EncryptedKeyV1,
+    /// A wrapped key that unwraps to the raw key, as 0.29 and earlier wrapped every key, rather
+    /// than to a serialized Tink key. The values of 32-bit targets before 0.24.0, whose framing
+    /// is Tink's, fail with it too.
+    RawWrappedKey,
 }
 
 #[cfg(test)]
