@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "../searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f8bc823.js"></script>
+        <script src="../toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -231,9 +231,10 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 Generate one with:</p>
 <pre><code class="language-bash">openssl rand -base64 32
 </code></pre>
-<pre><code class="language-rust no_run">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+<pre><code class="language-rust no_run">use std::num::NonZeroU32;
+
 use kms_aead::backends::Ring;
-use std::num::NonZeroU32;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 
 <span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
 </span>let version = LocalKekVersion::from(NonZeroU32::MIN);
@@ -253,10 +254,11 @@ bound to the host’s TPM where it has one, and let systemd pass it to the servi
 LoadCredentialEncrypted=kek-v1:/etc/credstore.encrypted/kek-v1
 </code></pre>
 <p>systemd decrypts it into <code>$CREDENTIALS_DIRECTORY</code>, readable only by the service:</p>
-<pre><code class="language-rust no_run">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::backends::AwsLc;
-use std::num::NonZeroU32;
+<pre><code class="language-rust no_run">use std::num::NonZeroU32;
 use std::path::PathBuf;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 
 <span class="boring">fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
 </span>let credentials = PathBuf::from(std::env::var("CREDENTIALS_DIRECTORY")?);

@@ -1,0 +1,1208 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Operations - KMS envelope encryption for Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-13ad1cdb.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="operations"><a class="header" href="#operations">Operations</a></h1>
+<p>Running a keyring in production: how often to rotate, how sweeps move values to the active
+versions, the migration from envelope values, and what to do when a key leaks.</p>
+<h2 id="rotation-cadence"><a class="header" href="#rotation-cadence">Rotation cadence</a></h2>
+<p>A rotation is staged: <code>rotate(purpose)</code> adds a pending version, which every process decrypts under
+once its record refreshes, and <code>promote(key_id)</code> makes it active once every process has had time
+to see it, see <a href="./keyring/lifecycle.html#staged-rotation">Staged rotation</a>. The previous version keeps
+decrypting. Nothing is lost while the change propagates: processes on the old record seal under
+the previous version until their record refreshes, and those values decrypt.</p>
+<p>The administrative job runs a rotation in steps, on its <code>KeyringAdmin</code>, see
+<a href="./keyring.html#applications-and-administration">Applications and administration</a>:</p>
+<ol>
+<li><code>rotate(purpose)</code>;</li>
+<li>export the <code>Readable</code> BigQuery keysets again, which then hold the pending version;</li>
+<li>wait the longest time any process may run without a successful refresh of its record, counted
+from <code>staged_at()</code>, and check that no process logged “The keyring record could not be
+revalidated” meanwhile;</li>
+<li><code>promote(key_id)</code>.</li>
+</ol>
+<p>How often:</p>
+<ul>
+<li>A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
+<a href="./security.html#nonces">Nonces</a>. The library cannot count the values a fleet seals, so estimate
+them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
+sooner at higher rates. AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all take a 12-byte
+nonce, so the same cadence applies to each;</li>
+<li>AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
+for an AE advantage of about 2^-57. The keyring does not count bytes, since its DEKs are shared
+across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
+default <a href="./dek-caching.html#volume-limit"><code>max_bytes</code></a> of a store-less envelope. AES-256-GCM-SIV
+and ChaCha20-Poly1305 need no volume bound beyond the count of values;</li>
+<li>a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
+deterministic rotation adds a probe to each equality query until a full sweep re-seals every
+row, see <a href="./keyring/deterministic.html#queries-across-rotations">Queries across rotations</a>, so
+rotate deterministic versions rarely;</li>
+<li>a beacon version likewise, since every beacon rotation adds a probe to each lookup until a
+re-index, see <a href="./keyring/beacons.html#rotating-beacon-versions">Rotating beacon versions</a>.</li>
+</ul>
+<p>After a promotion, export the <code>Single</code> BigQuery keysets of the new deterministic version, since
+a pending version has none.</p>
+<p>Rotation does not touch values already written. To stop reading them under the old version, run a
+<a href="#sweeps">sweep</a>, then <code>retire</code> the version.</p>
+<h2 id="rotating-the-kek"><a class="header" href="#rotating-the-kek">Rotating the KEK</a></h2>
+<p>The KEK rotates in the KMS on its own schedule. After a rotation, <code>reencrypt_deks()</code> decrypts every
+DEK in the record and encrypts it again under the KEK’s current version. No value changes. A keyring
+that is not re-encrypted keeps working as long as the old KEK versions stay enabled in the KMS.</p>
+<p><code>reencrypt_deks</code> is a <code>KeyringAdmin</code> call and runs in the administrative job, like every call that
+encrypts a DEK.</p>
+<h2 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h2>
+<p>A sweep re-seals stored values under the active versions: after a rotation, to retire the old
+version, after a compromise, and to migrate envelope values. It is a job the application runs, a
+CLI or a Kubernetes Job, never a task inside the library: only the application knows its tables,
+its pages and its write rules.</p>
+<h3 id="the-seal-marker"><a class="header" href="#the-seal-marker">The seal marker</a></h3>
+<p>Each record of the application keeps a <code>SealMarker</code> beside its encrypted fields, as plain fields
+an index covers:</p>
+<pre><code class="language-json">{"format": "keyring", "randomized": 3, "deterministic": null, "beacon": 1073741825}
+</code></pre>
+<ul>
+<li><code>format</code> is <code>keyring</code> or <code>envelope</code>, the layout of the record’s encrypted fields;</li>
+<li><code>randomized</code>, <code>deterministic</code> and <code>beacon</code> are the oldest key version of each purpose among its
+values and beacons.</li>
+</ul>
+<p>A write that touches any encrypted field of a record re-seals all of them under the active
+versions, computes its beacons again, and writes <code>SealMarker::keyring</code> of their key ids, which
+<code>value.key_id()</code> reads. Then one query finds every record a sweep still has to
+visit: after the promotion of randomised key id <code>n</code>, the records whose <code>seal.randomized &lt; n</code>, and
+likewise for deterministic and beacon versions. A key id goes up to 2^32 - 1, so a SQL column
+holding one is a <code>BIGINT</code>.</p>
+<h3 id="finding-records-behind"><a class="header" href="#finding-records-behind">Finding records behind</a></h3>
+<p><code>Keyring::seal_thresholds()</code> returns the active version of each purpose as a <code>SealThresholds</code>,
+with <code>None</code> for a purpose the keyring has no active version of. Key ids compare by
+<code>KeyId::as_u32()</code> within one purpose, the order in which the keyring numbers its versions, so the
+query of a sweep is:</p>
+<ul>
+<li><code>seal.randomized &lt; thresholds.randomized</code>, and likewise for <code>deterministic</code> and <code>beacon</code>;</li>
+<li><code>seal.format = 'envelope'</code>, for the records not yet migrated.</li>
+</ul>
+<p>A store whose query cannot express the condition, or a candidate read back before its re-seal,
+uses <code>SealMarker::is_behind(&amp;thresholds)</code>, the same test in Rust: true for an envelope marker,
+and for a marker that names a version below the threshold of its purpose. A purpose without a
+threshold has nothing to re-seal under, so no marker is behind on it.</p>
+<p>The thresholds come from the cached record, so a job that starts right after a promotion in
+another process calls <code>reload()</code> first.</p>
+<h3 id="re-sealing-a-value"><a class="header" href="#re-sealing-a-value">Re-sealing a value</a></h3>
+<p><code>Keyring::reseal(aad, value)</code> returns <code>None</code> for a value under the active randomised version, and
+otherwise reads it with <code>decrypt_with_trust</code> and seals it again under the active version. The
+<code>Resealed</code> it returns holds the new <code>value</code> and the <code>trust</code> of the version the old value was read
+under, so the compromised-value decision stays with the caller, see
+<a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>. <code>reseal_deterministic</code> does the
+same for deterministic values, under the <code>deterministic</code> feature.</p>
+<p>A beacon cannot be re-sealed: it is a MAC of the plaintext. A field with a beacon is read with
+<code>decrypt_with_trust</code> instead, and its plaintext gives both the value under the active version,
+through <code>encrypt</code>, and the beacon under the active beacon version, through <code>beacon(field, &amp;plaintext)</code>. <code>Resealed</code> holds no plaintext, since a beacon rotation leaves the value itself
+current, and <code>reseal</code> then opens nothing.</p>
+<h3 id="running-a-sweep"><a class="header" href="#running-a-sweep">Running a sweep</a></h3>
+<p><code>sweep::run</code> drives the application’s re-seal over a stream of candidates, with at most
+<code>concurrency</code> in flight, and counts what happened. A sweep is data plane: it takes a <code>Keyring</code>
+and needs the application’s rights only, since a re-seal encrypts under a DEK the record already
+holds. The rotation before it and the <code>retire</code> after it are the administrative job’s, on a
+<code>KeyringAdmin</code>. Here over an in-memory table, with both in one process:</p>
+<pre><code class="language-rust">use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
+
+use futures_util::stream;
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
+    Purpose, Resealed, Rotation,
+};
+use secret_vault_value::SecretValue;
+
+const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+
+#[derive(Clone)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+#[derive(Clone)]
+struct UserRow {
+    email: Encrypted&lt;Email, Randomized&gt;,
+    seal: SealMarker,
+}
+
+/// The users table, by user id.
+type Table = Mutex&lt;BTreeMap&lt;String, UserRow&gt;&gt;;
+
+/// Re-seals the row of `user` under the active version.
+async fn reseal(
+    keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt;,
+    table: &amp;Table,
+    user: &amp;str,
+) -&gt; KeyringResult&lt;ResealOutcome&gt; {
+    let Some(row) = table.lock().unwrap().get(user).cloned() else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
+    let Some(resealed): Option&lt;Resealed&lt;Email, Randomized&gt;&gt; =
+        keyring.reseal(&amp;aad, &amp;row.email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let seal = SealMarker::keyring([resealed.value.key_id()])?;
+    let email = resealed.value;
+    table
+        .lock()
+        .unwrap()
+        .insert(user.to_string(), UserRow { email, seal });
+    Ok(ResealOutcome::Resealed {
+        from_compromised: matches!(resealed.trust, KeyTrust::Compromised(_)),
+    })
+}
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let provider =
+</span><span class="boring">    LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+</span><span class="boring">let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+</span><span class="boring">    MemoryKeyringStore::new(),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = registry
+</span><span class="boring">    .create(provider, TENANT, KeyringAlgorithms::new())
+</span><span class="boring">    .await?;
+</span><span class="boring">let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
+</span><span class="boring">let table = Table::default();
+</span><span class="boring">for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
+</span><span class="boring">    let email = keyring
+</span><span class="boring">        .encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;Email(email.to_string()))
+</span><span class="boring">        .await?;
+</span><span class="boring">    let seal = SealMarker::keyring([email.key_id()])?;
+</span><span class="boring">    table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
+</span><span class="boring">}
+</span>// The administrative job stages a version, and promotes it after the wait for every process to
+// see it
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+let rotation: Rotation = admin.promote(staged).await?;
+
+// The sweep, on the data-plane handle: the query of every row behind the active versions
+let thresholds: SealThresholds = keyring.seal_thresholds();
+let candidates = table
+    .lock()
+    .unwrap()
+    .iter()
+    .filter(|(_, row)| row.seal.is_behind(&amp;thresholds))
+    .map(|(user, _)| user.clone())
+    .collect::&lt;Vec&lt;String&gt;&gt;();
+
+let report: SweepReport = sweep::run(
+    keyring.id(),
+    stream::iter(candidates),
+    NonZeroUsize::new(8).unwrap(),
+    |candidate| {
+        let table = &amp;table;
+        async move { reseal(keyring, table, &amp;candidate).await }
+    },
+)
+.await;
+
+// Nothing left under the old version: the administrative job retires it
+let behind = table
+    .lock()
+    .unwrap()
+    .values()
+    .any(|row| row.seal.is_behind(&amp;thresholds));
+if report.failed == 0 &amp;&amp; !behind {
+    if let Some(previous) = rotation.previous {
+        admin.retire(previous).await?;
+    }
+}
+<span class="boring">assert_eq!(report.resealed, 2);
+</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>resealed</code>, <code>skipped</code> or
+<code>failed</code>. A re-seal that fails does not stop the sweep: it is counted in <code>failed</code> and logged at
+<code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code>. A candidate is the application’s
+own type, such as a record id, a struct of key columns or the record itself, and its <code>Display</code>
+names the record and nothing else. A record id is often an entity id, so read the sweep’s log as
+an administrative log.</p>
+<p>The re-seal returns <code>Result&lt;ResealOutcome, E&gt;</code> with the application’s own error type, any type
+that implements <code>Display</code>. The keyring’s calls inside it return a <code>KeyringError</code>, and a <code>From</code>
+impl on the application’s error lets <code>?</code> convert it, as the examples below do with an error of
+their data store; a re-seal with no errors of its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as
+above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
+no value, secret or personal data. The report counts failures and keeps no error: an application
+that wants the errors themselves records them inside its re-seal.</p>
+<p>Once a sweep reports <code>failed == 0</code> and the query returns nothing, <code>retire</code> the old version. Keep it
+retired for a while before <code>destroy</code>: <code>reinstate</code> brings a retired version back for a value that
+turned up after all, while a destroyed one is gone.</p>
+<h3 id="sweeps-by-store"><a class="header" href="#sweeps-by-store">Sweeps by store</a></h3>
+<p>At millions of records a sweep streams its candidates from the store and never holds the result
+of its query in memory. Every example below has the same four properties:</p>
+<ul>
+<li>it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
+matches it, so a cancelled or failed run is started again over the same query;</li>
+<li>a concurrent writer wins: the write is conditional on the record the sweep read, and a record
+that changed in between is <code>Skipped</code>. The application’s own write re-seals every field under
+the active versions anyway;</li>
+<li><code>concurrency</code> bounds the re-seals in flight, and with them the load on both the store and the
+KMS. The DEK cache keeps each version’s key, so a sweep makes one KMS decrypt per key version
+and cache TTL, never one per record. The keys of a compromised version are the exception: they are decrypted
+for every value and never cached;</li>
+<li>it ends with <code>retire</code>, then later <code>destroy</code>, once a run reports <code>failed == 0</code> and the query
+returns nothing.</li>
+</ul>
+<h4 id="firestore"><a class="header" href="#firestore">Firestore</a></h4>
+<p>The marker is a map field, <code>seal</code>, whose <code>seal.randomized</code> Firestore indexes by default. The query
+streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a failed
+candidate, and the sweep never ends early on it. The write carries the document’s update time as
+its precondition, and Firestore refuses it once anything changed the document since the query
+read it:</p>
+<pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
+use std::num::NonZeroUsize;
+
+use firestore::errors::FirestoreError;
+use firestore::{
+    paths, FirestoreDb, FirestoreResult, FirestoreTimestamp, FirestoreWritePrecondition,
+};
+use futures_util::StreamExt;
+use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+use serde::{Deserialize, Serialize};
+
+type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
+
+const USERS: &amp;str = "users";
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+
+<span class="boring">#[derive(Clone)]
+</span><span class="boring">struct Email(String);
+</span><span class="boring">
+</span><span class="boring">impl Plaintext for Email {
+</span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+</span><span class="boring">        self.0.to_plaintext()
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">
+</span>#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(rename = "_firestore_updated", skip_serializing)]
+    updated: FirestoreTimestamp,
+    email: Encrypted&lt;Email, Randomized&gt;,
+    seal: SealMarker,
+}
+
+/// A document the query returned, or the error of reading it, which the sweep counts as failed.
+struct Candidate(FirestoreResult&lt;UserDoc&gt;);
+
+/// The document id, and nothing of its fields.
+impl Display for Candidate {
+    fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match &amp;self.0 {
+            Ok(doc) =&gt; write!(f, "{USERS}/{}", doc.id),
+            Err(_) =&gt; write!(f, "an unreadable document of {USERS}"),
+        }
+    }
+}
+
+/// Why the re-seal of a document failed: an error of the keyring or of the users collection.
+enum SweepError {
+    Keyring(KeyringError),
+    Users(FirestoreError),
+}
+
+impl From&lt;KeyringError&gt; for SweepError {
+    fn from(error: KeyringError) -&gt; Self {
+        SweepError::Keyring(error)
+    }
+}
+
+impl From&lt;FirestoreError&gt; for SweepError {
+    fn from(error: FirestoreError) -&gt; Self {
+        SweepError::Users(error)
+    }
+}
+
+/// The text the sweep logs: codes, never Firestore's messages, since a deserialisation error can
+/// quote the field it could not read.
+impl Display for SweepError {
+    fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            SweepError::Keyring(error) =&gt; write!(f, "the keyring failed with {}", error.code()),
+            SweepError::Users(FirestoreError::DatabaseError(error)) =&gt; {
+                write!(f, "the users collection failed with {}", error.public.code)
+            }
+            SweepError::Users(FirestoreError::DeserializeError(_)) =&gt; {
+                f.write_str("a document of users did not deserialise")
+            }
+            SweepError::Users(_) =&gt; f.write_str("the users collection failed"),
+        }
+    }
+}
+
+async fn reseal(
+    keyring: &amp;UsersKeyring,
+    db: &amp;FirestoreDb,
+    candidate: Candidate,
+) -&gt; Result&lt;ResealOutcome, SweepError&gt; {
+    let doc = candidate.0?;
+    let aad = EMAIL.aad(&amp;EntityId::try_from(doc.id.as_str())?);
+    let Some(resealed): Option&lt;Resealed&lt;Email, Randomized&gt;&gt; =
+        keyring.reseal(&amp;aad, &amp;doc.email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+    let update = UserDoc {
+        seal: SealMarker::keyring([resealed.value.key_id()])?,
+        email: resealed.value,
+        ..doc
+    };
+    let written: FirestoreResult&lt;UserDoc&gt; = db
+        .fluent()
+        .update()
+        .fields(paths!(UserDoc::{email, seal}))
+        .in_col(USERS)
+        .precondition(FirestoreWritePrecondition::UpdateTime(update.updated.into()))
+        .document_id(&amp;update.id)
+        .object(&amp;update)
+        .execute()
+        .await;
+    match written {
+        Ok(_) =&gt; Ok(ResealOutcome::Resealed { from_compromised }),
+        // A write since the query: the writer re-sealed the document itself
+        Err(FirestoreError::DatabaseError(error)) if error.public.code == "FailedPrecondition" =&gt; {
+            Ok(ResealOutcome::Skipped)
+        }
+        Err(error) =&gt; Err(SweepError::Users(error)),
+    }
+}
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let key_ref = GcpKmsKeyRef::new(
+</span><span class="boring">    "my-project".to_string(),
+</span><span class="boring">    "europe-north1".to_string(),
+</span><span class="boring">    "my-key-ring".to_string(),
+</span><span class="boring">    "my-key".to_string(),
+</span><span class="boring">);
+</span>let db = FirestoreDb::new("my-project").await?;
+let registry = KeyringRegistry::&lt;FirestoreKeyringStore, Ring&gt;::new(
+    FirestoreKeyringStore::new(db.clone()),
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: UsersKeyring = registry
+    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
+    .await?;
+
+let thresholds: SealThresholds = keyring.seal_thresholds();
+if let Some(active) = thresholds.randomized {
+    let candidates = db
+        .fluent()
+        .select()
+        .from(USERS)
+        .filter(|q| q.field("seal.randomized").less_than(active.as_u32()))
+        .obj::&lt;UserDoc&gt;()
+        .stream_query_with_errors()
+        .await?
+        .map(Candidate);
+    let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |candidate| {
+        let (keyring, db) = (&amp;keyring, &amp;db);
+        async move { reseal(keyring, db, candidate).await }
+    })
+    .await;
+    println!("{report:?}");
+}
+registry.shutdown().await?;
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A query of <code>seal.randomized</code> matches no document without that field: documents written before the
+marker existed are found by <code>seal.format == "envelope"</code> only once a backfill wrote their marker,
+or by a scan of the collection that tests <code>is_behind</code> on each, since the marker reads as
+<code>SealMarker::ENVELOPE</code> through <code>#[serde(default)]</code>.</p>
+<p><code>partition_query()</code> splits a collection into cursors that separate workers run in parallel, for
+a sweep faster than one stream reads. Firestore partitions only a query with no filter, so each
+worker tests <code>is_behind(&amp;thresholds)</code> on its documents and skips the current ones before the
+re-seal.</p>
+<h4 id="postgresql"><a class="header" href="#postgresql">PostgreSQL</a></h4>
+<p>The marker is four columns, <code>seal_format TEXT</code>, and <code>seal_randomized</code>, <code>seal_deterministic</code>,
+<code>seal_beacon</code> as <code>BIGINT</code>, since a key id goes up to 2^32 - 1. The candidates stream in pages
+by keyset pagination on the primary key, with <code>futures_util::stream::unfold</code>: each page is one
+short query, so no transaction stays open across the sweep, and memory holds one page. The
+<code>UPDATE</code> is conditional on the bytes it read, which a write of any other process changes, since
+every randomised value has its own nonce. A process that has not seen the promotion yet still
+seals under the old version and leaves <code>seal_randomized</code> as it was, so the marker alone does not
+detect its write:</p>
+<pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
+use std::num::NonZeroUsize;
+
+use futures_util::{stream, Stream, StreamExt};
+use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::PostgresKeyringStore;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringError,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+use tokio_postgres::{Client, Config, NoTls, Row};
+
+type UsersKeyring = Keyring&lt;PostgresKeyringStore&lt;NoTls&gt;, GcpKmsProvider, Ring&gt;;
+
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+const PAGE_SIZE: u16 = 1000;
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+
+<span class="boring">#[derive(Clone)]
+</span><span class="boring">struct Email(String);
+</span><span class="boring">
+</span><span class="boring">impl Plaintext for Email {
+</span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+</span><span class="boring">        self.0.to_plaintext()
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">
+</span>/// A row the query returned, or the error of reading its page, which the sweep counts as failed.
+enum Candidate {
+    Row { id: i64, email: Encrypted&lt;Email, Randomized&gt; },
+    Unread(tokio_postgres::Error),
+}
+
+/// The row id, and nothing of its columns.
+impl Display for Candidate {
+    fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            Candidate::Row { id, .. } =&gt; write!(f, "users/{id}"),
+            Candidate::Unread(_) =&gt; f.write_str("a row or page of users that did not read"),
+        }
+    }
+}
+
+impl TryFrom&lt;Row&gt; for Candidate {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: Row) -&gt; Result&lt;Self, Self::Error&gt; {
+        Ok(Candidate::Row {
+            id: row.try_get("id")?,
+            email: row.try_get("email")?,
+        })
+    }
+}
+
+/// Why the re-seal of a row failed: an error of the keyring or of the users table.
+enum SweepError {
+    Keyring(KeyringError),
+    Users(tokio_postgres::Error),
+}
+
+impl From&lt;KeyringError&gt; for SweepError {
+    fn from(error: KeyringError) -&gt; Self {
+        SweepError::Keyring(error)
+    }
+}
+
+impl From&lt;tokio_postgres::Error&gt; for SweepError {
+    fn from(error: tokio_postgres::Error) -&gt; Self {
+        SweepError::Users(error)
+    }
+}
+
+/// The text the sweep logs: codes, never the server's message, whose detail can quote a row's
+/// values.
+impl Display for SweepError {
+    fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        match self {
+            SweepError::Keyring(error) =&gt; write!(f, "the keyring failed with {}", error.code()),
+            SweepError::Users(error) =&gt; match error.code() {
+                Some(state) =&gt; write!(f, "the users table failed with SQLSTATE {}", state.code()),
+                None =&gt; f.write_str("the users table failed"),
+            },
+        }
+    }
+}
+
+/// The rows whose `seal_randomized` is below `active`, a page at a time in the order of `id`.
+fn candidates(client: &amp;Client, active: KeyId) -&gt; impl Stream&lt;Item = Candidate&gt; + '_ {
+    let active = i64::from(active.as_u32());
+    stream::unfold(Some(i64::MIN), move |after| async move {
+        let rows = client
+            .query(
+                "SELECT id, email FROM users \
+                 WHERE seal_randomized &lt; $1 AND id &gt; $2 ORDER BY id LIMIT $3",
+                &amp;[&amp;active, &amp;after?, &amp;i64::from(PAGE_SIZE)],
+            )
+            .await;
+        let page = match rows {
+            Ok(rows) =&gt; rows
+                .into_iter()
+                .map(|row| Candidate::try_from(row).unwrap_or_else(Candidate::Unread))
+                .collect::&lt;Vec&lt;Candidate&gt;&gt;(),
+            Err(error) =&gt; return Some((vec![Candidate::Unread(error)], None)),
+        };
+        let last = page.iter().rev().find_map(|candidate| match candidate {
+            Candidate::Row { id, .. } =&gt; Some(*id),
+            Candidate::Unread(_) =&gt; None,
+        });
+        let next = match last {
+            Some(last) if page.len() == usize::from(PAGE_SIZE) =&gt; Some(last),
+            _ =&gt; None,
+        };
+        (!page.is_empty()).then_some((page, next))
+    })
+    .flat_map(stream::iter)
+}
+
+async fn reseal(
+    keyring: &amp;UsersKeyring,
+    client: &amp;Client,
+    candidate: Candidate,
+) -&gt; Result&lt;ResealOutcome, SweepError&gt; {
+    let (id, email) = match candidate {
+        Candidate::Row { id, email } =&gt; (id, email),
+        Candidate::Unread(error) =&gt; return Err(SweepError::Users(error)),
+    };
+    let aad = EMAIL.aad(&amp;EntityId::try_from(id.to_string())?);
+    let Some(resealed): Option&lt;Resealed&lt;Email, Randomized&gt;&gt; =
+        keyring.reseal(&amp;aad, &amp;email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let seal = SealMarker::keyring([resealed.value.key_id()])?;
+    let seal_randomized: Option&lt;i64&gt; = seal.randomized.map(|key_id| i64::from(key_id.as_u32()));
+    let updated: u64 = client
+        .execute(
+            "UPDATE users SET email = $2, seal_format = 'keyring', seal_randomized = $3 \
+             WHERE id = $1 AND email = $4",
+            &amp;[&amp;id, &amp;resealed.value, &amp;seal_randomized, &amp;email],
+        )
+        .await?;
+    Ok(match updated {
+        // A write since the query: the writer re-sealed the row itself
+        0 =&gt; ResealOutcome::Skipped,
+        _ =&gt; ResealOutcome::Resealed {
+            from_compromised: matches!(resealed.trust, KeyTrust::Compromised(_)),
+        },
+    })
+}
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let key_ref = GcpKmsKeyRef::new(
+</span><span class="boring">    "my-project".to_string(),
+</span><span class="boring">    "europe-north1".to_string(),
+</span><span class="boring">    "my-key-ring".to_string(),
+</span><span class="boring">    "my-key".to_string(),
+</span><span class="boring">);
+</span>let config: Config = "postgres://app@localhost/app".parse()?;
+let (client, connection) = config.connect(NoTls).await?;
+tokio::spawn(connection);
+let registry = KeyringRegistry::&lt;PostgresKeyringStore&lt;NoTls&gt;, Ring&gt;::new(
+    PostgresKeyringStore::new(config, NoTls),
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: UsersKeyring = registry
+    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
+    .await?;
+
+let thresholds: SealThresholds = keyring.seal_thresholds();
+if let Some(active) = thresholds.randomized {
+    let report: SweepReport = sweep::run(
+        keyring.id(),
+        candidates(&amp;client, active),
+        CONCURRENCY,
+        |candidate| {
+            let (keyring, client) = (&amp;keyring, &amp;client);
+            async move { reseal(keyring, client, candidate).await }
+        },
+    )
+    .await;
+    println!("{report:?}");
+}
+registry.shutdown().await?;
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>One tokio-postgres <code>Client</code> pipelines the page queries and the concurrent <code>UPDATE</code>s on one
+connection. The primary key serves every page, and the filter on <code>seal_randomized</code> reads each row
+once over the whole sweep; an index on <code>seal_randomized</code> serves a sweep that leaves most rows
+current.</p>
+<p>A single query read through a portal is the alternative to pages: <code>Transaction::bind</code> and
+<code>query_portal_raw</code> fetch the rows of one <code>SELECT</code> in batches. A portal lives only inside its
+transaction, so that transaction stays open for the whole sweep, hours at millions of rows. Its
+snapshot keeps vacuum from removing the dead row versions the <code>UPDATE</code>s leave behind, and the
+<code>UPDATE</code>s run on a second connection, since the first holds the portal.</p>
+<h4 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h4>
+<p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-sealed by one <code>UPDATE</code> in SQL,
+with no Rust loop and no value leaving BigQuery. The marker is a <code>STRUCT&lt;format STRING, randomized INT64, deterministic INT64, beacon INT64&gt;</code> column. With <code>keyset</code> standing for the
+<code>KEYS.KEYSET_CHAIN(…)</code> expression of a <code>Readable(Purpose::Randomized)</code> export, see
+<a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>, and
+<code>@active</code> for the active version’s key id:</p>
+<pre><code class="language-sql">UPDATE users
+SET
+  email = AEAD.ENCRYPT(
+    keyset,
+    AEAD.DECRYPT_BYTES(keyset, email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
+    CAST(CONCAT('user/', id, '/email') AS BYTES)),
+  seal = STRUCT(
+    'keyring' AS format,
+    @active AS randomized,
+    seal.deterministic AS deterministic,
+    seal.beacon AS beacon)
+WHERE seal.randomized &lt; @active;
+</code></pre>
+<p><code>AEAD.DECRYPT_BYTES</code>, and <code>AEAD.ENCRYPT</code> of bytes, take the AAD as <code>BYTES</code>, the UTF-8 of the
+same text. <code>AEAD.ENCRYPT</code> seals under the keyset’s primary, which a <code>Readable</code> export sets to the active
+version. A keyset exported before the promotion has the previous version as its primary, so the
+sweep exports its keyset after the promotion, and then takes <code>@active</code> from
+<code>admin.keyring().seal_thresholds().randomized</code>: the export reads the record from the store and
+takes it as the cached record both handles share, so both come from the same record. The export
+is a <code>KeyringAdmin</code> call of the administrative job. The statement re-seals every randomised field
+of the row, or <code>@active</code> is not the oldest version among them.</p>
+<p>This sweep:</p>
+<ul>
+<li>resumes without a checkpoint: the statement is atomic, and a failed one changed nothing;</li>
+<li>loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
+statements on the same rows one fails and runs again, and its <code>WHERE</code> then sees the other’s
+marker;</li>
+<li>makes no KMS call per record: BigQuery opens the keyset through Cloud KMS for the statement;</li>
+<li>ends with <code>retire</code>, then later <code>destroy</code>, once <code>SELECT COUNT(*) FROM users WHERE seal.randomized &lt; @active</code> returns 0.</li>
+</ul>
+<p>A <code>Readable</code> keyset leaves a compromised version out, so the values under it fail
+<code>AEAD.DECRYPT_BYTES</code> and the whole statement with them. After a compromise those rows go through
+the Rust path below, where <code>reseal</code> reports their trust.</p>
+<p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-sealed in
+Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one <code>MERGE</code>
+per page of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
+<pre><code class="language-sql">MERGE users u
+USING UNNEST(@pages) p
+ON u.id = p.id AND u.phone = p.old_phone
+WHEN MATCHED THEN UPDATE SET
+  phone = p.phone,
+  seal = STRUCT(
+    'keyring' AS format,
+    p.seal_randomized AS randomized,
+    u.seal.deterministic AS deterministic,
+    u.seal.beacon AS beacon);
+</code></pre>
+<p>The pages stream from the application’s BigQuery client, a query of <code>SELECT id, phone FROM users WHERE seal.randomized &lt; @active</code> read a page at a time, and the client runs the <code>MERGE</code>. The
+candidate is then a page, and the report counts pages:</p>
+<pre><code class="language-rust">use std::fmt::{self, Display, Formatter};
+use std::future::Future;
+use std::num::NonZeroUsize;
+
+use futures_util::Stream;
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringError,
+    Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+
+type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
+
+const PHONE: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("phone"),
+);
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+
+<span class="boring">struct Phone(String);
+</span><span class="boring">
+</span><span class="boring">impl Plaintext for Phone {
+</span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+</span><span class="boring">        self.0.to_plaintext()
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+</span><span class="boring">        String::from_plaintext(plaintext).map(Phone)
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">
+</span>/// A row of `SELECT id, phone FROM users WHERE seal.randomized &lt; @active`.
+struct UserRow {
+    id: String,
+    phone: Encrypted&lt;Phone, Randomized&gt;,
+}
+
+/// A page of rows, as the application's BigQuery client reads the query result.
+struct UsersPage {
+    /// The page token the client read the page with, which names the page and no row.
+    token: String,
+    rows: Vec&lt;UserRow&gt;,
+}
+
+impl Display for UsersPage {
+    fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
+        write!(f, "users page {}", self.token)
+    }
+}
+
+/// One element of `@pages`: a row re-sealed, with the bytes it held.
+struct PhoneUpdate {
+    id: String,
+    old_phone: Encrypted&lt;Phone, Randomized&gt;,
+    phone: Encrypted&lt;Phone, Randomized&gt;,
+    seal_randomized: Option&lt;KeyId&gt;,
+}
+
+/// Re-seals the `pages` of the query, and writes each through `merge`, which runs the `MERGE`
+/// and returns its number of affected rows. `ClientError` is the error of the application's
+/// BigQuery client, which a `KeyringError` converts into, and its `Display` is the text the
+/// sweep logs for a failed page.
+async fn sweep_phones&lt;Pages, Merge, Merged, ClientError&gt;(
+    keyring: &amp;UsersKeyring,
+    pages: Pages,
+    merge: Merge,
+) -&gt; SweepReport
+where
+    Pages: Stream&lt;Item = UsersPage&gt;,
+    Merge: Fn(Vec&lt;PhoneUpdate&gt;) -&gt; Merged,
+    Merged: Future&lt;Output = Result&lt;u64, ClientError&gt;&gt;,
+    ClientError: From&lt;KeyringError&gt; + Display,
+{
+    sweep::run(keyring.id(), pages, CONCURRENCY, |page| {
+        let merge = &amp;merge;
+        async move {
+            let mut updates = Vec::with_capacity(page.rows.len());
+            let mut from_compromised = false;
+            for row in page.rows {
+                let aad = PHONE.aad(&amp;EntityId::try_from(row.id.as_str())?);
+                let Some(resealed): Option&lt;Resealed&lt;Phone, Randomized&gt;&gt; =
+                    keyring.reseal(&amp;aad, &amp;row.phone).await?
+                else {
+                    continue;
+                };
+                from_compromised |= matches!(resealed.trust, KeyTrust::Compromised(_));
+                updates.push(PhoneUpdate {
+                    seal_randomized: SealMarker::keyring([resealed.value.key_id()])?.randomized,
+                    id: row.id,
+                    old_phone: row.phone,
+                    phone: resealed.value,
+                });
+            }
+            if updates.is_empty() {
+                return Ok(ResealOutcome::Skipped);
+            }
+            Ok::&lt;ResealOutcome, ClientError&gt;(match merge(updates).await? {
+                0 =&gt; ResealOutcome::Skipped,
+                _ =&gt; ResealOutcome::Resealed { from_compromised },
+            })
+        }
+    })
+    .await
+}
+<span class="boring">
+</span><span class="boring">fn main() {}</span></code></pre>
+<p>A page is re-sealed sequentially inside its re-seal, and <code>concurrency</code> bounds the pages in flight,
+which BigQuery’s limit on concurrent DML per table sets low. The four properties hold per page: a
+row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for the next
+run.</p>
+<h3 id="the-trust-of-re-sealed-values"><a class="header" href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a></h3>
+<p>A sweep reads every field with <code>decrypt_with_trust</code>, and reports in <code>ResealOutcome::Resealed</code>
+whether the <code>KeyTrust</code> of any of them is compromised. A value read under a compromised version is untrusted data: whoever holds the
+leaked DEK can have forged it. Re-sealing it under a new version makes it read as trusted
+everywhere afterwards.</p>
+<p>So after a compromise the application decides per record before it re-seals:</p>
+<ul>
+<li>a quarantine field beside the marker, for a person to review;</li>
+<li>a comparison against a backup taken before the compromise;</li>
+<li>or acceptance, when forged values do no harm.</li>
+</ul>
+<p><code>SweepReport::resealed_from_compromised</code> counts the records that went through that decision.</p>
+<h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
+<p>Values that kms-aead’s <code>KmsAeadEnvelope</code> wrote, per call or store-less, move to keyring values in
+five steps:</p>
+<ol>
+<li>the model gains <code>seal: SealMarker</code> with <code>#[serde(default)]</code>, or a column default, so every
+record without one reads as <code>SealMarker::ENVELOPE</code>;</li>
+<li>the field keeps its stored bytes, whose layout the marker names;</li>
+<li>reads go through the marker: <code>Keyring::decrypt_envelope_for_migration</code> opens an envelope value, with
+the AAD and the algorithm the application used for it, and <code>Keyring::decrypt</code> a keyring value;</li>
+<li>a sweep over <code>seal.format = 'envelope'</code> re-seals each record as keyring values and writes its
+keyring marker;</li>
+<li>once that query returns nothing, the read path drops its envelope branch.</li>
+</ol>
+<p>The keyring’s provider decrypts the envelope values, so they must have been encrypted by the
+keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout kms-aead 0.30 writes.
+Values written by kms-aead 0.29 or earlier are upgraded in place first, with
+<code>KmsAeadEnvelope::upgrade_legacy_value(aad, value)</code> under kms-aead’s <code>legacy-formats</code> feature, see
+<a href="./formats.html#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
+the marker’s, never inferred from its bytes.</p>
+<p><code>decrypt_envelope_for_migration</code> decrypts whatever encrypted DEK an envelope value carries, under the
+keyring’s KEK. It knows no key version, and so no compromised flag and no destroyed state: keep its
+branch in the read path for the migration only.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs">here</a>,
+run it with <code>cargo run -p kms-aead-keyring --example migrate --features ring,admin</code>.</p>
+<h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
+<p>Rehearse each on a staging keyring, on a schedule, and record how long propagation took.</p>
+<h3 id="a-plaintext-dek-leaked"><a class="header" href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></h3>
+<p>Or is suspected to have.</p>
+<ol>
+<li><code>mark_compromised(key_id, note)</code>: the version is flagged and, if active, replaced in one write
+by a version that is active at once. The replacement skips the staged wait on purpose: sealing
+under the leaked key stops at each process’s next refresh, and a process that has not seen the
+replacement yet reloads its record once, rate-limited, when it meets a value under it. When the
+KMS cannot encrypt a new DEK, the flag lands alone and <code>encrypt</code> fails with <code>NoActiveVersion</code>;
+once the KMS answers, <code>rotate</code> and <code>promote</code> at once, since nothing seals under the purpose
+meanwhile, or <code>promote</code> the pending version if the purpose has one. A pending version itself
+is never compromised: <code>destroy</code> it instead;</li>
+<li>every process stops using the key within the bound of the
+<a href="./keyring/record-cache.html#how-late-a-change-is-seen">record cache</a>, and its DEK is evicted from
+the DEK cache. With the default <code>Block</code> policy values under the version stop decrypting
+through <code>decrypt</code>. Set <code>Allow</code> for the time of the sweep if availability matters more, and be
+aware the leaked DEK can forge values under its id meanwhile;</li>
+<li>sweep with <code>decrypt_with_trust</code>, and decide per record on the values read through the
+compromised version, see <a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
+<li>export the BigQuery keysets again: a <code>Readable</code> keyset leaves the compromised version out.
+Delete the <code>Single</code> keyset of the compromised version once the sweep is done;</li>
+<li><code>retire</code> the version once the sweep is done.</li>
+</ol>
+<p>Rotation protects nothing already copied: backups, point-in-time recovery and data exports still
+hold values the leaked DEK opens. Treat them as exposed and revoke the secrets inside them.</p>
+<h3 id="a-kms-iam-over-grant"><a class="header" href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></h3>
+<ol>
+<li>Fix the IAM binding, back to the split in
+<a href="./security.html#keyring-deployment">Keyring deployment</a>;</li>
+<li>rotate the KEK in the KMS and <code>reencrypt_deks()</code>;</li>
+<li>with KMS data-access logs enabled in advance, list the <code>Decrypt</code> calls the wrong principal
+made: every encrypted DEK they decrypted is a leaked DEK, see above. Without those logs, every
+version is a leaked DEK.</li>
+</ol>
+<h3 id="an-encrypted-dek-or-the-keyring-record-leaked"><a class="header" href="#an-encrypted-dek-or-the-keyring-record-leaked">An encrypted DEK or the keyring record leaked</a></h3>
+<p>Harmless by itself, since decrypting needs the KMS. If the attacker may also gain <code>Decrypt</code> on the
+KEK, follow the IAM over-grant steps. If the attacker may also write the keyring store, see
+<a href="#a-version-the-administrative-job-did-not-create">the next case</a> and the store-writer threat in
+<a href="./security.html#keyring-deployment">Keyring deployment</a>.</p>
+<h3 id="a-version-the-administrative-job-did-not-create"><a class="header" href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></h3>
+<p>This case starts from the <code>ERROR</code> event of a refused record that moves backwards, whose <code>rule</code>
+names the version, or from a version in the record that the administrative job’s log does not
+show. Either means that something other than the job wrote the record: a restore, which
+<a href="#the-keyring-record-was-deleted-or-corrupted">the next case</a> covers, or a writer of the
+store.</p>
+<ol>
+<li>If the version is active, <code>mark_compromised</code> it, so that nothing new is sealed under it from
+each process’s next refresh. If it is pending, <code>destroy</code> it;</li>
+<li><code>retire</code> and then <code>destroy</code> the version, after a sweep if values were sealed under it;</li>
+<li>check the KMS audit log for the <code>Encrypt</code> call that encrypted its DEK. None means its encrypted
+DEK was copied or relabelled from another version, of this keyring or of another under the
+same KEK, which the KMS decrypts as it would the original; one from a principal other than the
+administrative job is an IAM over-grant, see above;</li>
+<li>audit who can write the keyring store: the application has no write, and only the
+administrative job should.</li>
+</ol>
+<h3 id="the-keyring-record-was-deleted-or-corrupted"><a class="header" href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></h3>
+<p>Running processes keep their cached record and log a <code>WARN</code>; new processes fail at <code>open</code> with
+<code>RecordMissing</code> or <code>RecordInvalid</code>.</p>
+<ol>
+<li>Restore the record from the store’s backup: Firestore point-in-time recovery, a PostgreSQL
+backup, or a noncurrent version of the Cloud Storage or S3 object. The encrypted DEKs inside are
+still valid under the KEK;</li>
+<li>repeat on the restored record every administrative call made after the copy was taken, from
+the administrative job’s log, before starting new processes.</li>
+</ol>
+<p>A running process refuses a restored copy that is older than its cached record and logs an
+<code>ERROR</code>, while new processes take it. Values are never lost with the record as long as a copy of
+it exists. Without any copy they are gone, so keep versioning on the bucket and back up the
+table.</p>
+<h3 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h3>
+<p>To make a scope’s values unrecoverable:</p>
+<ul>
+<li>with a KEK per scope: destroy the KEK’s versions in the KMS. Every encrypted DEK of the scope is
+then unrecoverable, backups included;</li>
+<li>with a shared KEK: <code>dangerously_destroy_all_versions</code>, which destroys every version of the
+keyring in one write, so that it encrypts and decrypts nothing from then on. A backup of the
+record still holds the encrypted DEKs, which the KMS opens as long as the KEK version that
+encrypted them exists, so then either delete the record and every backup of it, or destroy that
+KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, <code>reencrypt_deks</code> every
+other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
+never destroyed, so only the deletion of the KMS key itself shreds.</li>
+</ul>
+<p>A deployment that needs shredding guarantees uses a KEK per scope.</p>
+<h3 id="a-kms-outage"><a class="header" href="#a-kms-outage">A KMS outage</a></h3>
+<p>DEKs in the cache serve reads and writes until their TTL. A longer DEK cache TTL buys time at the
+cost of a longer life of plaintext keys in memory. No decryption, encryption or rotation succeeds
+until the KMS returns, and errors carry the provider’s message. <code>mark_compromised</code> still lands the
+flag.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="keyring/bigquery.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="formats.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="keyring/bigquery.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="formats.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

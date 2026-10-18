@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f8bc823.js"></script>
+        <script src="toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -198,8 +198,8 @@ there is no default one.</p>
 <p>There is no default because Cargo unifies features: a default chosen by features would change
 for every crate in a build when one crate enables another backend.</p>
 <h2 id="code-generic-over-the-backend"><a class="header" href="#code-generic-over-the-backend">Code generic over the backend</a></h2>
-<p>The backend types implement <code>AeadBackend</code>, a sealed trait in <code>kms_aead::backends</code>. Its items are the
-constant <code>NAME</code>, the backend’s name in spans and logs: <code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>, and
+<p>The backend types implement <code>AeadBackend</code>, a sealed trait in <code>kms_aead::backends</code>. Its items are
+the constant <code>NAME</code>, the backend’s name in spans and logs: <code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>, and
 <code>generate_random_bytes</code>. Code that works with any backend bounds its type parameter with
 <code>AeadBackend</code> and nothing else:</p>
 <pre><code class="language-rust">use kms_aead::backends::{AeadBackend, Ring};

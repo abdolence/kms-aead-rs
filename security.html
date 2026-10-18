@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f8bc823.js"></script>
+        <script src="toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -266,6 +266,91 @@ new DEKs;</li>
 <p>With the local KMS, rotation is a new KEK version. The old version has to stay in the provider for
 as long as DEKs encrypted under it are read, and crypto-shredding means destroying every copy of it,
 backups included.</p>
+<h2 id="keyring-deployment"><a class="header" href="#keyring-deployment">Keyring deployment</a></h2>
+<p>A <a href="./keyring.html">keyring</a> record decides which versions are read and which one seals new values,
+and nothing signs it: its integrity rests on the keyring store’s access control. So a deployment
+splits the two sides of
+<a href="./keyring.html#applications-and-administration">Applications and administration</a> into two
+principals:</p>
+<ul>
+<li><strong>Application</strong>: builds without the <code>admin</code> feature, and calls <code>Keyring</code> only: encryption,
+decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
+store. None of its calls asks the KMS to encrypt, so it needs nothing more;</li>
+<li><strong>Administration</strong>: builds with the <code>admin</code> feature, and calls the registry’s <code>create</code>,
+<code>open_or_create</code> and <code>admin</code>, and the <code>KeyringAdmin</code> they return: <code>rotate</code>, <code>promote</code>,
+<code>change_algorithm</code>, <code>mark_compromised</code>, <code>retire</code>, <code>reinstate</code>, <code>destroy</code>,
+<code>dangerously_destroy_all_versions</code>, <code>reencrypt_deks</code>, <code>export_bigquery_keyset</code> and
+<code>export_tink_keyset</code>. It needs KMS encrypt and decrypt on the KEK, and is the only principal
+with write access to the keyring store. It runs in a job or in infrastructure automation, never
+in a request handler.</li>
+</ul>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KMS</th><th>Application</th><th>Administration</th></tr>
+</thead>
+<tbody>
+<tr><td>GCP</td><td><code>roles/cloudkms.cryptoKeyDecrypter</code></td><td><code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code></td></tr>
+<tr><td>AWS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:Encrypt</code> and <code>kms:Decrypt</code> on the key, plus <code>kms:GenerateRandom</code> with the KMS random generator</td></tr>
+<tr><td>Azure Key Vault</td><td>a role with <code>keys/unwrap/action</code> on the key</td><td>a role with <code>keys/wrap/action</code> and <code>keys/unwrap/action</code> on the key</td></tr>
+<tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>update</code> on <code>transit/encrypt/&lt;key&gt;</code> and <code>transit/decrypt/&lt;key&gt;</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The permissions of each store are in <a href="./keyring/stores.html">Keyring stores</a>.</p>
+<p>A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
+or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
+to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
+compromised or destroyed version’s DEK back into use under a new key id, or point one tenant’s
+version at another tenant’s DEK. A writer without KMS rights cannot add a DEK of its own, since
+every decryption names the configured KEK and the KMS refuses a DEK encrypted under another key. The
+controls for this are the deployment’s, as in the <a href="#threat-model">threat model</a>:</p>
+<ul>
+<li>write access to the keyring store for the administration only, and read-only access for the
+applications;</li>
+<li>one KEK per isolation boundary, such as a tenant or an environment, so a DEK copied across it
+fails to decrypt;</li>
+<li>backups of the record, or versioning in the store, to compare with and restore from;</li>
+<li>the KMS audit log of encrypt calls, which shows whether the administrative job encrypted a
+version’s DEK.</li>
+</ul>
+<p>A running process also refuses every record that moves a version backwards, with an <code>ERROR</code>, see
+<a href="./keyring/record-cache.html#when-the-store-fails-or-misbehaves">Record cache</a>. That catches a
+rewritten state, such as a cleared compromised flag, and not a copied DEK filed under a new
+version.</p>
+<h2 id="keyring-limits"><a class="header" href="#keyring-limits">Keyring limits</a></h2>
+<ul>
+<li><strong>The administration is trusted.</strong> KMS encrypt plus store write re-activates any version, and
+so does an application that provisions keyrings lazily with the <code>admin</code> feature and those
+rights. The KMS audit log is the detection;</li>
+<li><strong>a new process has no baseline.</strong> A store writer can clear a compromised flag, re-activate a
+version or restore a destroyed one for the processes that start after the write. Running
+processes refuse such a record and log an <code>ERROR</code>; new ones take it. The record is not signed in
+this release;</li>
+<li><strong>an RSA key on Azure Key Vault encrypts for anyone.</strong> With an RSA key the encryption is a
+public-key operation, so whoever holds the public key encrypts a DEK of their own into the record.
+Use an AES key, from Managed HSM;</li>
+<li><strong><code>decrypt_envelope_for_migration</code> knows no key version.</strong> It decrypts the encrypted DEK an envelope value
+carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
+values through it. Keep it in the read path for the migration only;</li>
+<li><strong>a destroyed version’s DEK lives as long as the KEK version that encrypted it.</strong> A backup of the
+record holds encrypted DEKs the KMS still opens, see
+<a href="./operations.html#crypto-shredding">Crypto-shredding</a>;</li>
+<li><strong>an exported BigQuery keyset holds the versions’ keys</strong>, encrypted with no associated data, since
+BigQuery decrypts it with none. Treat it as a copy of the record’s readable versions, and export
+again after every rotation and every <code>mark_compromised</code>;</li>
+<li><strong>a sweep re-seals forgeries as trusted values.</strong> Values read through a compromised version are
+decided per record before a sweep re-seals them, see
+<a href="./operations.html#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
+<li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
+links a value’s history for whoever reads the query, see
+<a href="./keyring/deterministic.html#what-they-leak">Deterministic fields</a>;</li>
+<li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
+<a href="./keyring/beacons.html#what-a-beacon-leaks">Beacons</a>;</li>
+<li><strong>a promotion has no guard.</strong> A process that has not seen a promoted version reloads its record
+when it meets a value under it, and fails the read when it cannot reach the store, so the wait
+before <code>promote</code> is the operator’s, see <a href="./keyring/lifecycle.html#staged-rotation">Staged rotation</a>.</li>
+</ul>
 <h2 id="oss"><a class="header" href="#oss">OSS</a></h2>
 <p>Open source code is created through voluntary collaboration of software developers. The original
 authors license the code so that anyone can see it, modify it, and distribute new versions of it.

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f8bc823.js"></script>
+        <script src="toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,10 +236,7 @@ let decrypted: SecretValue = envelope.decrypt(aad, &amp;read_back).await?;
 assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
-lowercase hex. Stored bytes become an <code>Encrypted</code> again only through <code>Encrypted::try_from</code>, and
-stored hex through <code>Encrypted::try_from_hex_string</code>, which check them against the layout of the
-format.</p>
+<p>The bytes in and out of an <code>Encrypted</code> are in <a href="./stored-values.html#bytes-in-and-out">Stored values</a>.</p>
 <p>The value is in Tink’s KMS envelope format for every provider, so Tink’s <code>KmsEnvelopeAead</code> reads
 it with the same KMS key and algorithm, see <a href="./formats.html#tinks-kms-envelope">Formats</a>.</p>
 <p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
@@ -286,9 +283,8 @@ assert_eq!(decrypted, email);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <ul>
-<li><code>Plaintext</code> is implemented for <code>String</code>, <code>Vec&lt;u8&gt;</code>, <code>SecretValue</code>, <code>bool</code>, <code>i32</code>, <code>i64</code>, <code>u32</code>
-and <code>u64</code>, and with the <code>serde-json</code> feature for <code>Json&lt;T&gt;</code>, any serde type stored as its compact
-JSON. An application type maps to one of them, as <code>Email</code> does;</li>
+<li>an application type maps to one of the built-in <code>Plaintext</code> types, as <code>Email</code> does, see
+<a href="./stored-values.html#plaintext">Stored values</a>;</li>
 <li>the calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt
 through the envelope’s DEK cache, whatever the type;</li>
 <li><code>Encrypted::try_from</code> checks the stored bytes against Tink’s KMS envelope layout, so a
@@ -297,43 +293,11 @@ truncated or foreign value fails when it is read, before any KMS call, with
 <code>LEGACY_FORMAT</code>. It checks the framing only: a changed value fails to decrypt with <code>DECRYPT</code>;</li>
 <li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>.</li>
 </ul>
-<p><code>Encrypted&lt;T, Envelope&gt;</code> has no <code>==</code>: two values of the same plaintext differ, so compare
-<code>value()</code> to tell whether two values are the same stored bytes. <code>Debug</code> shows the length only. See
-<a href="./formats.html#formats-of-encrypted">Formats</a> for its layout.</p>
+<p><code>Encrypted&lt;T, Envelope&gt;</code> has no <code>==</code> and its <code>Debug</code> shows the length only, see
+<a href="./stored-values.html#encryptedt-f">Stored values</a>.</p>
 <h3 id="storing-typed-fields"><a class="header" href="#storing-typed-fields">Storing typed fields</a></h3>
-<p>Three features store <code>Encrypted</code> as bytes, and each one reads it back through <code>TryFrom</code>, so a
-malformed stored value fails in the decode:</p>
-<ul>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code>, a <code>bytes</code> value in Firestore and an array of numbers in
-serde_json;</li>
-<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types, for tokio-postgres, as <code>BYTEA</code>, and a
-slice as <code>BYTEA[]</code> for <code>= ANY($1)</code>;</li>
-<li><code>sqlx</code>: sqlx’s <code>Type</code>, <code>Encode</code>, <code>Decode</code> and <code>PgHasArrayType</code> for PostgreSQL, as <code>BYTEA</code>. It
-depends on <code>sqlx-core</code> and <code>sqlx-postgres</code> only, so the application chooses sqlx’s runtime and
-TLS stack.</li>
-</ul>
-<p>With sqlx:</p>
-<pre><code class="language-rust no_run">use kms_aead::formats::Envelope;
-use kms_aead::Encrypted;
-use sqlx::PgPool;
-
-<span class="boring">#[derive(Clone)]
-</span><span class="boring">struct Email(String);
-</span>async fn store(pool: &amp;PgPool, id: i64, email: &amp;Encrypted&lt;Email, Envelope&gt;) -&gt; sqlx::Result&lt;()&gt; {
-    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
-        .bind(id)
-        .bind(email)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
-async fn load(pool: &amp;PgPool, id: i64) -&gt; sqlx::Result&lt;Encrypted&lt;Email, Envelope&gt;&gt; {
-    sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-}</code></pre>
+<p>serde, tokio-postgres and sqlx store <code>Encrypted</code> as bytes, see
+<a href="./stored-values.html#storing">Stored values</a>.</p>
 <h3 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h3>
 <p><code>AeadCipher::encrypt</code> seals a field under a key the application holds, in Tink’s layout of a key
 whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
@@ -432,126 +396,16 @@ caller picks the key by <code>key_id()</code>, which the prefix names without au
 kms-aead-keyring keeps those versions.</li>
 </ul>
 <h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
-<p>A beacon, or blind index, finds rows by a field’s value without decrypting the column: an
-HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
-query calculates the beacon of the value it looks for and matches it by equality. <code>Beacon&lt;T&gt;</code> holds
-the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:</p>
-<pre><code class="language-rust">use kms_aead::backends::Ring;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{
-    Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KeyId, KmsAeadEnvelope,
-    KmsAeadResult, Plaintext,
-};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-// The application's id of its beacon key, which every beacon names
-const EMAIL_BEACON_KEY: KeyId = KeyId::new(1);
-
-impl Email {
-    // The beacon of an email matches regardless of case
-    fn new(email: &amp;str) -&gt; Self {
-        Email(email.to_lowercase())
-    }
-}
-
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-<span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
-
-// Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)
-    .generate_encrypted_dek(envelope.provider())
-    .await?;
-
-// On every write: the field and its beacon
-let email = Email::new("Alice@Example.com");
-let encrypted: Encrypted&lt;Email, Envelope&gt; =
-    envelope.encrypt(b"users/1042/email", &amp;email).await?;
-let beacon: Beacon&lt;Email&gt; = envelope
-    .beacon(EMAIL_BEACON_KEY, b"users/email", BeaconBits::DEFAULT, &amp;email, &amp;encrypted_dek)
-    .await?;
-
-// A lookup: the beacon of the value looked for, then a decryption of each matching row
-let probe: Beacon&lt;Email&gt; = envelope
-    .beacon(
-        EMAIL_BEACON_KEY,
-        b"users/email",
-        BeaconBits::DEFAULT,
-        &amp;Email::new("alice@example.com"),
-        &amp;encrypted_dek,
-    )
-    .await?;
-assert_eq!(probe, beacon);
-let decrypted: Email = envelope.decrypt(b"users/1042/email", &amp;encrypted).await?;
-assert_eq!(decrypted, email);
-<span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<ul>
-<li>the context, <code>users/email</code> here, names the field and never a row, so that equal values in one
-field give equal beacons. A beacon of one field never matches a beacon of another;</li>
-<li><code>BeaconBits</code> sets how much of the HMAC a beacon keeps, 1 to 256 bits, 16 by default. With <code>n</code>
-distinct values and <code>b</code> bits, about <code>n / 2^b</code> values share each beacon: a lookup returns that
-many rows, which the application decrypts and filters, and an equal beacon never proves an
-equal value. More bits leak more; fewer bits return more rows to filter;</li>
-<li>normalisation is the application’s: the beacon of <code>Alice@Example.com</code> and of
-<code>alice@example.com</code> differ unless the type normalises the value before it is sealed, as
-<code>Email::new</code> does;</li>
-<li>the key id, a <code>KeyId</code>, is the application’s number for the beacon key, written into every
-beacon so that a column can hold beacons of two keys at once;</li>
-<li>the beacon key is decrypted through the envelope’s DEK cache, as a DEK is.</li>
-</ul>
-<p>A beacon column leaks which rows are likely to hold equal values, and with them how often each
-value occurs, to anyone who reads the column. A leaked beacon key lets its holder test guesses
-against the whole column offline. Beacons fit fields that are looked up and have many distinct
-values, such as emails and external ids, and never low-cardinality fields such as a status or a
-country. BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery
-cannot calculate a beacon; it matches beacons the application calculated.</p>
-<p>Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
-beacons under the new one, query with a beacon under each key until a re-index has rewritten
-every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
-beacon. kms-aead-keyring does this with key versions.</p>
-<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
-read back through <code>TryFrom</code>, which checks its layout. See <a href="./formats.html#beacons">Formats</a>.</p>
-<h3 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h3>
-<p>A <a href="./deterministic.html">deterministic field</a> also finds rows by equality, by its cipher text:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
-</thead>
-<tbody>
-<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
-<tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
-<tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
-<tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
-<tr><td>BigQuery</td><td>SQL cannot calculate a beacon; it matches beacons the application calculated</td><td>SQL decrypts the field and searches it by equality</td></tr>
-</tbody>
-</table>
-</div>
-<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
-emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
-about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.</p>
+<p>A beacon, or blind index, finds rows by a field’s value without decrypting the column, see
+<a href="./beacons.html">Beacons</a>.</p>
 <h2 id="aad"><a class="header" href="#aad">AAD</a></h2>
 <p>The AAD is authenticated but not encrypted: a value opens only with the AAD it was sealed with,
 and a wrong AAD fails with <code>DECRYPT</code>. Use it to bind a value to its place, such as
 <code>&lt;table&gt;/&lt;row id&gt;/&lt;column&gt;</code>, so that a value copied into another row or column fails to open.</p>
 <p>The AAD is not stored in the value, so the reader rebuilds it from the same data. It is never
 logged or put in an error, but it is not secret either: keep secrets in the value itself.</p>
+<p>The keyring takes a structured AAD instead of free bytes, built from the field and the row, see
+<a href="./keyring/fields.html#why-the-aad-is-structured">Why the AAD is structured</a>.</p>
 <h2 id="working-with-deks-yourself"><a class="header" href="#working-with-deks-yourself">Working with DEKs yourself</a></h2>
 <p>The <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls let the application keep one DEK for many
 values and store the encrypted DEK apart from them, such as one DEK per tenant or per file. The

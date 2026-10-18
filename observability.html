@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f8bc823.js"></script>
+        <script src="toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -322,6 +322,84 @@ CA certificate that cannot be loaded;</li>
 from, in the <code>key</code> and <code>key_versions</code> fields.</li>
 </ul>
 <p>The library retries nothing itself, so there is no retry field.</p>
+<h2 id="keyring-spans"><a class="header" href="#keyring-spans">Keyring spans</a></h2>
+<p>The <code>kms-aead-keyring</code> crate follows the same rules: one <code>DEBUG</code> span per call, field names with
+the <code>/kms_aead_keyring/</code> prefix, and nothing recorded for a value nobody reported. kms-aead’s spans
+nest inside them, so a <code>KMS decrypt DEK</code> under a <code>Keyring decrypt</code> is a DEK cache miss, and a
+<code>KMS encrypt DEK</code> under a <code>Keyring rotate</code> is the new version’s DEK. Enable <code>kms_aead_keyring=debug</code>
+in the filter beside <code>kms_aead=debug</code>. The spans from <code>Keyring rotate</code> to <code>Keyring export</code> are
+those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Keyring encrypt</code></td><td><code>encrypt</code>, <code>encrypt_deterministic</code>, <code>deterministic_probes</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring beacon</code></td><td><code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring rotate</code></td><td><code>rotate</code>, <code>change_algorithm</code></td><td><code>keyring</code>, <code>purpose</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring promote</code></td><td><code>promote</code></td><td><code>keyring</code>, <code>key_id</code>, <code>from_key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring mark compromised</code></td><td><code>mark_compromised</code></td><td><code>keyring</code>, <code>key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring retire</code>, <code>Keyring reinstate</code>, <code>Keyring destroy</code></td><td>the call of that name</td><td><code>keyring</code>, <code>key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>keyring</code></td><td>the keyring id, which can name a tenant</td></tr>
+<tr><td><code>purpose</code></td><td><code>randomized</code>, <code>deterministic</code> or <code>beacon</code></td></tr>
+<tr><td><code>key_id</code></td><td>the decimal key id; unrecorded for an envelope value, which names no version, and for <code>deterministic_probes</code> and <code>beacon_probes</code>, which run under several</td></tr>
+<tr><td><code>algorithm</code></td><td>the version’s algorithm, such as <code>aes-256-gcm</code> or <code>hmac-sha256</code>; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring’s backend</td></tr>
+<tr><td><code>key_state</code></td><td><code>pending</code>, <code>active</code>, <code>decrypt_only</code>, <code>retired</code>, <code>destroyed</code>, <code>compromised</code>, or <code>unknown</code> for a key id the record does not have</td></tr>
+<tr><td><code>reload</code></td><td>what an unknown key id caused: <code>none</code>, <code>reloaded</code> or <code>rate_limited</code></td></tr>
+<tr><td><code>dek_cache</code></td><td><code>hit</code>, <code>miss</code> or <code>disabled</code>; <code>bypassed</code> for <code>reencrypt_deks</code>, the export, and a compromised version read past the cache; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
+<tr><td><code>store</code></td><td><code>memory</code>, <code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>, or an application store’s name</td></tr>
+<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
+<tr><td><code>changed</code></td><td><code>true</code> for a new record taken, <code>false</code>, or <code>regressed</code> for one refused because it moves a version backwards</td></tr>
+<tr><td><code>revision</code></td><td>the store’s revision of the record read, as text</td></tr>
+<tr><td><code>response_time</code></td><td>milliseconds the store call took</td></tr>
+<tr><td><code>from_key_id</code>, <code>to_key_id</code></td><td>the version a promotion or a compromise replaced, and the new active one; for <code>rotate</code>, <code>to_key_id</code> is the staged version</td></tr>
+<tr><td><code>cas_retries</code></td><td>the compare-and-swap conflicts before the write landed</td></tr>
+<tr><td><code>versions</code></td><td>the versions <code>reencrypt_deks</code> encrypted again, or an export put in the keyset</td></tr>
+<tr><td><code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td><td>the counts of the <code>SweepReport</code></td></tr>
+<tr><td><code>error_code</code></td><td><code>KeyringError::code()</code> of the error returned: kms-aead’s code for a KMS or AEAD error, such as <code>DECRYPT</code>, and the variant’s name in upper snake case otherwise, such as <code>KEY_VERSION_COMPROMISED</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="keyring-events"><a class="header" href="#keyring-events">Keyring events</a></h3>
+<ul>
+<li><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy, with the key id;</li>
+<li><code>WARN</code>: a read refused because its version is retired or destroyed, for an operator watching a
+sweep;</li>
+<li><code>WARN</code>: a failed revalidation, and a record the store no longer holds, the cached one staying in
+use;</li>
+<li><code>ERROR</code>: a refreshed record refused because it moves a version backwards, with the first rule it
+breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
+<li><code>WARN</code>: a compromised flag written without a rotation because the new DEK could not be encrypted;</li>
+<li><code>INFO</code>: the active version of a purpose changed, with the old and new key ids;</li>
+<li><code>WARN</code>: the store’s listener disconnected, reconnected, or did not start, and a keyring
+opened with no tokio runtime to follow the store’s signals;</li>
+<li><code>WARN</code>: a record a sweep could not re-seal, with the <code>Display</code> of the application’s candidate
+in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
+values, secrets and personal data out of them. A record id is often an entity id, so the
+sweep’s log is an administrative log;</li>
+<li><code>DEBUG</code>: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
+retried.</li>
+</ul>
+<p>The keyring’s spans, events and errors leave out everything kms-aead’s do, listed below. The AAD
+rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
+<code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
 <h2 id="what-is-never-logged"><a class="header" href="#what-is-never-logged">What is never logged</a></h2>
 <p>No span field or event carries:</p>
 <ul>

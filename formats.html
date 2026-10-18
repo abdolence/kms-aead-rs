@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
+            window.path_to_searchindex_js = "searchindex-940bca23.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f8bc823.js"></script>
+        <script src="toc-13ad1cdb.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,7 +194,7 @@ algorithm, and a value Tink encrypts opens with <code>KmsAeadEnvelope::decrypt</
 <tr><td>Serialised DEK</td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message, see <a href="#serialised-deks">Serialised DEKs</a></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
 <tr><td>TINK-prefixed value</td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
 <tr><td>Tink keyset</td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td>Tink encrypted keyset</td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later</td></tr>
+<tr><td>Tink encrypted keyset</td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
 <tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
 <tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
 <tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets before 0.24.0</td><td>kms-aead with <code>legacy-formats</code></td><td>0.8.0 to 0.28.1</td></tr>
@@ -337,7 +337,8 @@ encrypted keyset: a <code>google.crypto.tink.EncryptedKeyset</code> whose <code>
 KMS ciphertext of the serialised keyset, encrypted with no associated data. Tink’s binary keyset
 writers leave out <code>keyset_info</code>, field 3, and so does the library. Tink’s <code>KeysetHandle.read</code>
 reads it with the KMS client of <code>KekRef::tink_key_uri</code>, which Tink has for GCP and AWS keys, and
-Tink for Go for Vault Transit keys too.</p>
+Tink for Go for Vault Transit keys too. A keyring exports it for its versions, see
+<a href="./keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>.</p>
 <h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
 <p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
 format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
@@ -368,7 +369,7 @@ an <code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decryp
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
 bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
 the integers, and compact JSON for <code>Json&lt;T&gt;</code>. See
-<a href="./envelope-encryption.html#typed-fields">Typed fields</a>.</p>
+<a href="./stored-values.html#plaintext">Stored values</a>.</p>
 <h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
 <p>A <code>Beacon&lt;T&gt;</code> is a prefix and a truncated HMAC-SHA256:</p>
 <pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
@@ -385,6 +386,117 @@ beacon is 6 to 37 bytes.</li>
 </code></pre>
 <p>so that beacons of two fields, or of two bit counts, never match. <code>Beacon::try_from</code> checks the
 prefix and that 1 to 32 bytes of HMAC follow, and fails with <code>INVALID_BEACON_FORMAT</code> otherwise.</p>
+<h2 id="keyring-key-ids"><a class="header" href="#keyring-key-ids">Keyring key ids</a></h2>
+<p>kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
+under it. The two high bits of the id are the purpose, and the rest is the ordinal:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Bits</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td>31</td><td>set for deterministic versions</td></tr>
+<tr><td>30</td><td>set for beacon versions</td></tr>
+<tr><td>0 to 29</td><td>the ordinal, from 1, counted per purpose</td></tr>
+</tbody>
+</table>
+</div>
+<p>So the ids of each purpose are:</p>
+<ul>
+<li>randomised: <code>1</code>, <code>2</code>, <code>3</code>, …;</li>
+<li>deterministic: <code>2147483649</code>, <code>2147483650</code>, …;</li>
+<li>beacon: <code>1073741825</code>, <code>1073741826</code>, ….</li>
+</ul>
+<p>An id whose ordinal is 0, such as <code>0</code>, <code>2^30</code> and <code>2^31</code>, and an id with both high bits set are
+reserved: a value that carries one fails with <code>ReservedKeyId</code>. A value whose id is of another
+purpose than the call fails with <code>KeyPurposeMismatch</code>. Both fail before any store or KMS call. Ids
+are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
+a SQL column holding one is a <code>BIGINT</code>.</p>
+<h2 id="keyring-records"><a class="header" href="#keyring-records">Keyring records</a></h2>
+<p>kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
+record with deterministic and beacon versions, after one randomised rotation and with another one
+staged, with the encrypted DEKs shortened:</p>
+<pre><code class="language-json">{
+  "schema": 1,
+  "id": "tenant-42",
+  "kek": { "provider": "local", "key": "tenant-kek" },
+  "algorithms": {
+    "randomized": "aes-256-gcm",
+    "deterministic": "aes-256-siv",
+    "beacon": "hmac-sha256"
+  },
+  "versions": [
+    {
+      "key_id": 1,
+      "algorithm": "aes-256-gcm",
+      "state": "decrypt_only",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.054258061Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+    },
+    {
+      "key_id": 2147483649,
+      "algorithm": "aes-256-siv",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.053483320Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+    },
+    {
+      "key_id": 1073741825,
+      "algorithm": "hmac-sha256",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.053483320Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+    },
+    {
+      "key_id": 2,
+      "algorithm": "aes-256-gcm",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053897100Z",
+      "state_changed_at": "2026-10-18T12:18:31.054258061Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+    },
+    {
+      "key_id": 3,
+      "algorithm": "aes-256-gcm",
+      "state": "pending",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.054603074Z",
+      "state_changed_at": "2026-10-18T12:18:31.054603074Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+    }
+  ],
+  "created_at": "2026-10-18T12:18:31.053483320Z",
+  "updated_at": "2026-10-18T12:18:31.054603074Z"
+}
+</code></pre>
+<ul>
+<li><code>schema</code> is <code>1</code>;</li>
+<li><code>kek</code> names the provider and the KEK the keyring was created with;</li>
+<li><code>algorithms</code> holds the algorithm new versions of each purpose use. <code>deterministic</code> and <code>beacon</code>
+are <code>null</code> for a keyring without versions of that purpose;</li>
+<li><code>versions</code> holds every version ever created, in creation order, each under its
+<a href="#keyring-key-ids">key id</a>;</li>
+<li><code>state</code> is <code>pending</code>, <code>active</code>, <code>decrypt_only</code>, <code>retired</code> or <code>destroyed</code>. For a pending version,
+<code>state_changed_at</code> is the time it was staged;</li>
+<li><code>compromised</code> is <code>null</code>, or <code>{"at": "&lt;time&gt;", "note": "&lt;the operator's note, or null&gt;"}</code>;</li>
+<li><code>encrypted_dek</code> is the standard base64 of the <a href="#encrypted-deks">encrypted DEK</a>, the bytes the
+provider returned, here the local KMS layout. It is <code>null</code> for a destroyed version;</li>
+<li>the times are RFC 3339, in UTC.</li>
+</ul>
+<p>A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
+fails with <code>RecordInvalid</code> on a document that breaks any of:</p>
+<ul>
+<li>at most one active and one pending version per purpose, neither of them compromised;</li>
+<li>an encrypted DEK on every version but the destroyed ones;</li>
+<li>unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.</li>
+</ul>
 <h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
 <p>The first bytes of a stored value:</p>
 <div class="table-wrapper">
@@ -527,7 +639,7 @@ older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="deterministic.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="operations.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -541,7 +653,7 @@ older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="deterministic.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="operations.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
