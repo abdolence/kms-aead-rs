@@ -43,6 +43,19 @@
 //! upgraded in place first, with kms-aead's `legacy-formats` feature and
 //! `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD. The layout of a value
 //! is always the marker's, never guessed from its bytes.
+//!
+//! # Cancellation
+//!
+//! A job runner may cancel [`run`] and start it again over the same marker query. A sweep keeps
+//! no state of its own beyond the counts of its report: a cancelled run drops the re-seals in
+//! flight, at most `concurrency` of them, and its counts, and its span closes without them.
+//!
+//! It leaves no half-written record, provided the re-seal writes a record's fields and its
+//! [`SealMarker`] in one conditional write: a cancelled write either committed, and the marker
+//! moved, or did not, and the record is as it was. The keyring calls of a re-seal, `encrypt`
+//! and `decrypt`, cache keys and write nothing to the store. The marker is the sweep's progress:
+//! the records re-sealed before the cancellation no longer match the query, and the next run
+//! visits the rest.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -343,10 +356,10 @@ mod tests {
         use kms_aead::{AeadAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 
         use super::*;
-        use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider};
+        use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider, TestRegistry};
         use crate::testing::MemoryKeyringStore;
         use crate::{
-            EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringOptions,
+            EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringRegistryOptions,
         };
 
         const ALICE: &str = "alice@example.com";
@@ -359,13 +372,11 @@ mod tests {
         const ENVELOPE_AAD: &[u8] = b"users:42:email";
 
         async fn keyring(provider: TestProvider) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
-            TestKeyring::create(
+            TestRegistry::new(
                 MemoryKeyringStore::new(),
-                provider,
-                TENANT,
-                KeyringAlgorithms::new(),
-                KeyringOptions::new().with_watch(false),
-            )
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(provider, TENANT, KeyringAlgorithms::new())
             .await
         }
 

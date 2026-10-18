@@ -40,7 +40,7 @@ use kms_aead_keyring::formats::Deterministic;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringOptions, Plaintext,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -66,14 +66,17 @@ const EMAIL: FieldSpec = FieldSpec::new(
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    provider,
-    KeyringId::from_static("tenant-42"),
-    KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open_or_create(
+        provider,
+        KeyringId::from_static("tenant-42"),
+        KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+    )
+    .await?;
 
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
@@ -83,6 +86,7 @@ let second: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
 assert_eq!(keyring.decrypt_deterministic(&aad, &first).await?, alice);
+registry.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -121,7 +125,7 @@ So an equality query matches against every version that still decrypts, with
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{
 #     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring,
-#     KeyringAlgorithms, KeyringId, KeyringOptions, Plaintext, Purpose,
+#     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 # };
 # use secret_vault_value::SecretValue;
 # #[derive(Debug, Clone, PartialEq)]
@@ -137,14 +141,17 @@ So an equality query matches against every version that still decrypts, with
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
 #     MemoryKeyringStore::new(),
-#     provider,
-#     KeyringId::from_static("tenant-42"),
-#     KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
-#     KeyringOptions::new(),
-# )
-# .await?;
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .open_or_create(
+#         provider,
+#         KeyringId::from_static("tenant-42"),
+#         KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+#     )
+#     .await?;
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
 let before: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
@@ -156,6 +163,7 @@ keyring.promote(staged).await?;
 let probes: Vec<Encrypted<Email, Deterministic>> = keyring.deterministic_probes(&aad, &alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&before));
+# registry.shutdown().await?;
 # Ok(())
 # }
 ```

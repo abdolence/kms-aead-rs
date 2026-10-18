@@ -42,7 +42,7 @@ use firestore::FirestoreDb;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions};
+use kms_aead_keyring::{Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions};
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,14 +51,15 @@ use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions};
 let db = FirestoreDb::new("my-project").await?;
 let store = FirestoreKeyringStore::new(db);
 
-let keyring = Keyring::<FirestoreKeyringStore, LocalKmsProvider<Ring>, Ring>::open(
+let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
     store,
-    provider,
-    KeyringId::try_from("tenant-42".to_string())?,
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<FirestoreKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open(provider, KeyringId::try_from("tenant-42".to_string())?)
+    .await?;
 # let _ = keyring;
+registry.shutdown().await?;
 # Ok(())
 # }
 ```

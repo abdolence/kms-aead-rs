@@ -23,7 +23,7 @@ use kms_aead_keyring::sweep::{self, ResealOutcome, SealFormat, SealMarker};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringOptions, KeyringResult, Plaintext,
+    KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -190,14 +190,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wrote 3 rows with a store-less envelope");
 
     // The keyring under the same KEK, which reads the rows through their markers.
-    let keyring = UsersKeyring::open_or_create(
+    let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
         MemoryKeyringStore::new(),
-        provider(&material)?,
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new(),
-    )
-    .await?;
+        KeyringRegistryOptions::new(),
+    )?;
+    let keyring: UsersKeyring = registry
+        .open_or_create(provider(&material)?, TENANT, KeyringAlgorithms::new())
+        .await?;
     print_rows(&keyring, &table).await?;
 
     // The sweep over `seal.format = 'envelope'`.
@@ -224,5 +223,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     print_rows(&keyring, &table).await?;
+    registry.shutdown().await?;
     Ok(())
 }

@@ -18,6 +18,7 @@ use crate::store::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, 
 use crate::testing::{MemoryKeyringStore, MemoryRevision};
 use crate::{
     EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringId, KeyringRecord,
+    KeyringRegistry,
 };
 
 /// The backend of the build: the gate runs each backend feature on its own.
@@ -30,6 +31,9 @@ pub(crate) type TestBackend = kms_aead::backends::RustCrypto;
 
 /// A keyring on the store `S`, the test provider and the backend of the build.
 pub(crate) type TestKeyring<S> = Keyring<S, TestProvider, TestBackend>;
+
+/// A registry on the store `S` and the backend of the build.
+pub(crate) type TestRegistry<S> = KeyringRegistry<S, TestBackend>;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -118,7 +122,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
 pub(crate) struct TestStore {
     pub(crate) memory: MemoryKeyringStore,
     pub(crate) calls: Arc<StoreCalls>,
-    /// How long each revalidation takes, so that concurrent calls overlap it.
+    /// How long each load and revalidation takes, so that concurrent calls overlap it.
     delay: Duration,
 }
 
@@ -126,10 +130,14 @@ pub(crate) struct TestStore {
 pub(crate) struct StoreCalls {
     pub(crate) loads: AtomicUsize,
     pub(crate) revalidations: AtomicUsize,
+    pub(crate) watches: AtomicUsize,
     /// The writes still to refuse with a conflict.
     pub(crate) conflicts: AtomicU32,
     /// Whether the record reads as missing.
     pub(crate) missing: AtomicBool,
+    /// Whether a watch's listener stops at once, as a store's does when it shuts down under its
+    /// keyrings.
+    pub(crate) listener_stopped: AtomicBool,
     /// A record that `watch` writes before it subscribes, as a write by another process
     /// between a keyring's first load and its subscription would.
     pub(crate) written_before_watch: Mutex<Option<KeyringRecord>>,
@@ -152,6 +160,7 @@ impl KeyringStore for TestStore {
 
     async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<MemoryRevision>>> {
         self.calls.loads.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
         if self.calls.missing.load(Ordering::SeqCst) {
             Ok(None)
         } else {
@@ -193,6 +202,11 @@ impl KeyringStore for TestStore {
     }
 
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
+        self.calls.watches.fetch_add(1, Ordering::SeqCst);
+        if self.calls.listener_stopped.load(Ordering::SeqCst) {
+            let (_, events) = tokio::sync::mpsc::channel(1);
+            return Ok(Some(KeyringWatch::new(events)));
+        }
         let written = self
             .calls
             .written_before_watch

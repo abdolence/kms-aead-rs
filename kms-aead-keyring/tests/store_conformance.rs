@@ -603,6 +603,103 @@ mod postgres {
         drop_table(&admin, &table).await
     }
 
+    /// Shutdown closes the listener connection and ends every watch, and keeps the query
+    /// connection, which the keyrings' handles still use.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn shutdown_closes_the_listener_connection() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let application = unique_application();
+        let store = named_store(&application, &table)?;
+        let mut watches = [
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
+        assert!(store.load(&unique_keyring_id()?).await?.is_none());
+        assert_eq!(sessions(&admin, &application).await?, 2);
+
+        store.shutdown(None).await;
+        for watch in &mut watches {
+            assert_eq!(next_event(watch).await?, None);
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while sessions(&admin, &application).await? > 1 {
+            assert!(
+                Instant::now() < deadline,
+                "the listener connection stayed open"
+            );
+        }
+        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+        assert!(store.load(&unique_keyring_id()?).await?.is_none());
+        drop_table(&admin, &table).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn shutdown_twice_is_a_no_op() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let store = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
+        let _watch = store.watch(&unique_keyring_id()?).await?;
+        store.shutdown(None).await;
+        tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
+        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+        drop_table(&admin, &table).await
+    }
+
+    /// Shutdown interrupts the delay between two attempts to replace a lost listener
+    /// connection, here while a role that may no longer log in keeps every attempt failing.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn shutdown_during_a_reconnect_delay_returns_at_once() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let application = unique_application();
+        let role = format!("keyring_{}", uuid::Uuid::now_v7().simple());
+        admin
+            .batch_execute(&format!("CREATE ROLE {role} LOGIN PASSWORD '{role}'"))
+            .await?;
+        let mut config = config()?;
+        config
+            .user(&role)
+            .password(&role)
+            .application_name(&application);
+        let store = PostgresKeyringStore::new(config, NoTls).with_table(table.clone());
+        let mut watch = store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?;
+
+        admin
+            .batch_execute(&format!("ALTER ROLE {role} NOLOGIN"))
+            .await?;
+        terminate_sessions(&admin, &application).await?;
+        assert_eq!(
+            next_event(&mut watch).await?,
+            Some(WatchEvent::Disconnected)
+        );
+        // Four failed attempts in, the delay before the next one is 4 seconds.
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        let started = Instant::now();
+        store.shutdown(None).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "shutdown took {:?}",
+            started.elapsed()
+        );
+        assert_eq!(next_event(&mut watch).await?, None);
+
+        admin.batch_execute(&format!("DROP ROLE {role}")).await?;
+        drop_table(&admin, &table).await
+    }
+
     /// The keyring over the PostgreSQL store.
     #[cfg(feature = "ring")]
     mod keyring {
@@ -617,7 +714,8 @@ mod postgres {
             StoreKind, Stored, Swap,
         };
         use kms_aead_keyring::{
-            Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, KeyringRecord, KeyringResult,
+            Keyring, KeyringAlgorithms, KeyringId, KeyringRecord, KeyringRegistry,
+            KeyringRegistryOptions, KeyringResult,
         };
 
         use tokio_postgres::NoTls;
@@ -663,6 +761,10 @@ mod postgres {
             async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
                 self.inner.watch(id).await
             }
+
+            async fn shutdown(&self, timeout: Option<Duration>) {
+                self.inner.shutdown(timeout).await;
+            }
         }
 
         /// Any session may `NOTIFY` the channel. A flood of signals costs a keyring one
@@ -679,14 +781,17 @@ mod postgres {
             };
             let interval = Duration::from_millis(500);
             let id = unique_keyring_id()?;
-            let keyring = Keyring::<CountingStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+            let registry = KeyringRegistry::<CountingStore, Ring>::new(
                 store,
-                LocalKmsProvider::ephemeral(LocalKekId::try_from("postgres-kek".to_string())?)?,
-                id.clone(),
-                KeyringAlgorithms::new(),
-                KeyringOptions::new().with_reload_min_interval(interval),
-            )
-            .await?;
+                KeyringRegistryOptions::new().with_reload_min_interval(interval),
+            )?;
+            let keyring: Keyring<CountingStore, LocalKmsProvider<Ring>, Ring> = registry
+                .open_or_create(
+                    LocalKmsProvider::ephemeral(LocalKekId::try_from("postgres-kek".to_string())?)?,
+                    id.clone(),
+                    KeyringAlgorithms::new(),
+                )
+                .await?;
             // The watch task's first revalidation, which no signal causes.
             let deadline = Instant::now() + Duration::from_secs(10);
             while revalidations.load(Ordering::SeqCst) == 0 {
@@ -716,6 +821,7 @@ mod postgres {
                 "{caused} revalidations in {intervals} intervals"
             );
             drop(keyring);
+            registry.shutdown().await?;
             drop_table(&admin, &table).await
         }
     }

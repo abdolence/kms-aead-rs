@@ -61,7 +61,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringAlgorithms,
-    KeyringError, KeyringId, KeyringOptions, KeyringResult, Plaintext,
+    KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -89,14 +89,13 @@ const EMAIL: FieldSpec = FieldSpec::new(
 // A local KEK, which BigQuery cannot decrypt with
 let provider =
     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    provider,
-    KeyringId::from_static("tenant-42"),
-    KeyringAlgorithms::new(),
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+    .await?;
 
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
@@ -108,6 +107,7 @@ assert!(matches!(
         ..
     }))
 ));
+registry.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -144,7 +144,8 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,
+    encodings, EncryptedKeyset, Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeysetSelection, Purpose,
 };
 
 # #[tokio::main]
@@ -155,13 +156,13 @@ let key_ref = GcpKmsKeyRef::new(
     "my-key-ring".to_string(),
     "my-key".to_string(),
 );
-let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    GcpKmsProvider::new(&key_ref).await?,
-    KeyringId::try_from("tenant-42".to_string())?,
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
+    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
+    .await?;
 
 let keyset: EncryptedKeyset<encodings::BigQuery> = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
@@ -169,6 +170,7 @@ let keyset: EncryptedKeyset<encodings::BigQuery> = keyring
 let literal: String = keyset.to_sql_literal();
 let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
 # let _ = chain;
+registry.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -289,7 +291,8 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,
+    encodings, EncryptedKeyset, Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeysetSelection, Purpose,
 };
 
 # #[tokio::main]
@@ -300,19 +303,20 @@ let key_ref = GcpKmsKeyRef::new(
     "my-key-ring".to_string(),
     "my-key".to_string(),
 );
-let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    GcpKmsProvider::new(&key_ref).await?,
-    KeyringId::try_from("tenant-42".to_string())?,
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
+    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
+    .await?;
 
 let keyset: EncryptedKeyset<encodings::Tink> = keyring
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 std::fs::write("tenant-42.keyset", keyset.value())?;
 println!("{}", keyset.key_uri());
+registry.shutdown().await?;
 # Ok(())
 # }
 ```

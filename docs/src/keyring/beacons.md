@@ -40,7 +40,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringOptions, Plaintext,
+    KeyringRegistry, KeyringRegistryOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -74,14 +74,17 @@ const EMAIL: FieldSpec = FieldSpec::new(
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    provider,
-    KeyringId::from_static("tenant-42"),
-    KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open_or_create(
+        provider,
+        KeyringId::from_static("tenant-42"),
+        KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+    )
+    .await?;
 
 // On every write: the field and its beacon
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
@@ -95,6 +98,7 @@ let probes: Vec<Beacon<Email>> = keyring
     .await?;
 assert!(probes.contains(&beacon));
 assert_eq!(keyring.decrypt(&aad, &encrypted).await?, email);
+registry.shutdown().await?;
 # Ok(())
 # }
 ```

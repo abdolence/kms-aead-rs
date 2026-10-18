@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use kms_aead::cache::DekCache;
 use kms_aead::KekRef;
+use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
@@ -28,7 +29,7 @@ use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
 pub(crate) struct RecordCache<S: KeyringStore> {
-    store: S,
+    store: Arc<S>,
     id: KeyringId,
     kek: KekRef,
     dek_cache: DekCache,
@@ -54,7 +55,7 @@ impl<S: KeyringStore> RecordCache<S> {
     /// The cache of `stored`, the record of its keyring as just read or written. `kek` is the
     /// provider's, under which `dek_cache` holds the decrypted keys of the record's versions.
     pub(crate) fn new(
-        store: S,
+        store: Arc<S>,
         kek: KekRef,
         dek_cache: DekCache,
         record_ttl: Duration,
@@ -82,16 +83,8 @@ impl<S: KeyringStore> RecordCache<S> {
         &self.id
     }
 
-    pub(crate) fn store(&self) -> &S {
-        &self.store
-    }
-
     pub(crate) fn dek_cache(&self) -> &DekCache {
         &self.dek_cache
-    }
-
-    pub(crate) fn reload_min_interval(&self) -> Duration {
-        self.reload_min_interval
     }
 
     pub(crate) fn record(&self) -> Arc<KeyringRecord> {
@@ -313,6 +306,14 @@ impl<S: KeyringStore> RecordCache<S> {
         }
     }
 
+    /// Evicts from the DEK cache the keys of the cached record's versions, and no other key: the
+    /// DEK cache may be shared with other keyrings and envelopes.
+    pub(crate) fn evict_deks(&self) {
+        for (_, encrypted_dek) in self.record().encrypted_deks() {
+            self.dek_cache.invalidate(&self.kek, &encrypted_dek);
+        }
+    }
+
     fn regressed(&self, rule: RegressionRule) -> KeyringError {
         spans::record_regressed(&self.id, rule);
         KeyringError::RecordRegressed(RecordRegressedError {
@@ -333,27 +334,43 @@ impl<S: KeyringStore> RecordCache<S> {
 
 impl<S: KeyringStore> RecordCache<S> {
     /// Revalidates `cache` once at the start, then on the change signals of `watch`, at most
-    /// once per reload interval, until the watch ends or the cache is dropped. A signal inside
-    /// the interval waits for its end, and every signal that arrived meanwhile is covered by that
-    /// one revalidation. The first revalidation covers a write between the record's load and the
-    /// subscription, which no signal reports.
+    /// once per reload interval, until `stop` is set or its sender dropped, the watch ends, or
+    /// the cache is dropped. A signal inside the interval waits for its end, and every signal
+    /// that arrived meanwhile is covered by that one revalidation. The first revalidation covers
+    /// a write between the record's load and the subscription, which no signal reports.
+    ///
+    /// `stop` ends every wait at once, while a revalidation in flight finishes and is taken. A
+    /// watch that ends before `stop` is set means that the store stopped its listener under the
+    /// keyring, which then runs on its record TTL.
     pub(crate) async fn follow(
         cache: Weak<Self>,
         id: KeyringId,
         interval: Duration,
         mut watch: KeyringWatch,
+        mut stop: watch::Receiver<bool>,
     ) {
         let mut last: Option<Instant> = None;
         loop {
             if let Some(last) = last {
                 loop {
-                    match watch.next().await {
-                        None => return,
-                        Some(event) if log_watch_event(&id, event) => break,
-                        Some(_) => {}
+                    tokio::select! {
+                        biased;
+                        _ = stop.wait_for(|stop| *stop) => return,
+                        event = watch.next() => match event {
+                            None => {
+                                spans::watch_ended(&id);
+                                return;
+                            }
+                            Some(event) if log_watch_event(&id, event) => break,
+                            Some(_) => {}
+                        },
                     }
                 }
-                tokio::time::sleep_until(after(last, interval)).await;
+                tokio::select! {
+                    biased;
+                    _ = stop.wait_for(|stop| *stop) => return,
+                    () = tokio::time::sleep_until(after(last, interval)) => {}
+                }
             }
             // No more than were queued here, so that a listener that keeps sending cannot hold
             // the task in this loop.
@@ -367,7 +384,11 @@ impl<S: KeyringStore> RecordCache<S> {
                 return;
             };
             last = Some(Instant::now());
-            let refresh = cache.refresh.lock().await;
+            let refresh = tokio::select! {
+                biased;
+                _ = stop.wait_for(|stop| *stop) => return,
+                refresh = cache.refresh.lock() => refresh,
+            };
             cache.revalidate(&refresh, LoadReason::Watch).await;
         }
     }

@@ -253,11 +253,13 @@ mod tests {
     use kms_aead::{DeterministicAlgorithm, KekProvider};
 
     use crate::errors::InteropRequirement;
-    use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::test_support::{
+        email_of, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+    };
     use crate::testing::MemoryKeyringStore;
     use crate::{
         EntityKind, FieldName, FieldSpec, Interop, KeyId, KeyTrust, KeyringAlgorithms,
-        KeyringError, KeyringOptions, KeyringResult, Purpose,
+        KeyringError, KeyringRegistryOptions, KeyringResult, Purpose,
     };
 
     const EMAIL: FieldSpec = FieldSpec::new(
@@ -271,12 +273,14 @@ mod tests {
     async fn deterministic_keyring(
         provider: TestProvider,
     ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
-        TestKeyring::create(
+        TestRegistry::new(
             MemoryKeyringStore::new(),
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .create(
             provider,
             TENANT,
             KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
-            KeyringOptions::new().with_watch(false),
         )
         .await
     }

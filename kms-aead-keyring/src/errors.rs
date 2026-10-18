@@ -36,7 +36,8 @@ pub enum KeyringError {
     /// The store holds no record for the keyring, when a keyring is opened or a record is
     /// read before an administrative write.
     RecordMissing(KeyringId),
-    /// [`Keyring::create`](crate::Keyring::create) found a record for the keyring.
+    /// [`KeyringRegistry::create`](crate::KeyringRegistry::create) found the keyring's record, in
+    /// the store or already open.
     RecordExists(KeyringId),
     /// A record breaks a size cap or an invariant of the keyring record.
     RecordInvalid(RecordInvalidError),

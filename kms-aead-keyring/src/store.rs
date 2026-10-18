@@ -4,8 +4,11 @@
 
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
+use tokio::time::Instant;
 
 use crate::errors::KeyringResult;
 use crate::{KeyringId, KeyringRecord};
@@ -92,9 +95,10 @@ pub trait KeyringStore: Send + Sync + 'static {
         expected: Option<&Self::Revision>,
     ) -> impl Future<Output = KeyringResult<Swap<Self::Revision>>> + Send;
 
-    /// Change signals for `id`, or `None` for a store that has no push. A signal carries no
-    /// record: the keyring revalidates when it receives one. The keyring calls it only on a
-    /// tokio runtime, so an implementation may spawn its listener with `tokio::spawn`.
+    /// Change signals for `id`, or `None` for a store that has no push, or one that was
+    /// [shut down](Self::shutdown). A signal carries no record: the keyring revalidates when it
+    /// receives one. The keyring calls it only on a tokio runtime, so an implementation may
+    /// spawn its listener with `tokio::spawn`.
     ///
     /// # Errors
     ///
@@ -103,6 +107,50 @@ pub trait KeyringStore: Send + Sync + 'static {
         &self,
         id: &KeyringId,
     ) -> impl Future<Output = KeyringResult<Option<KeyringWatch>>> + Send;
+
+    /// Stops the store's background work for good, such as the listener behind its watches, and
+    /// waits for it: every live watch then ends, and a later [`watch`](Self::watch) returns
+    /// `None`. Loads and writes keep working. Work that outlives `timeout` is aborted, at once
+    /// for a zero timeout; `None` waits for it to finish. A second call returns at once, and a
+    /// cancelled call leaves what it did not join to the next one.
+    ///
+    /// [`KeyringRegistry::shutdown`](crate::KeyringRegistry::shutdown) calls it. The default does
+    /// nothing, which fits a store without push.
+    fn shutdown(&self, timeout: Option<Duration>) -> impl Future<Output = ()> + Send {
+        let _ = timeout;
+        std::future::ready(())
+    }
+}
+
+/// Joins every task of `tasks`, as [`KeyringStore::shutdown`] does with its own: the tasks still
+/// running at `deadline` are aborted, at once when it has passed, and `None` waits for all of
+/// them. Returns how many it aborted. A cancelled call leaves the tasks it did not join in
+/// `tasks`.
+pub(crate) async fn join_until(tasks: &mut JoinSet<()>, deadline: Option<Instant>) -> usize {
+    let finished = {
+        let drained = async { while tasks.join_next().await.is_some() {} };
+        match deadline {
+            None => {
+                drained.await;
+                true
+            }
+            Some(deadline) => {
+                deadline > Instant::now()
+                    && tokio::time::timeout_at(deadline, drained).await.is_ok()
+            }
+        }
+    };
+    if finished {
+        return 0;
+    }
+    tasks.abort_all();
+    let mut aborted = 0;
+    while let Some(joined) = tasks.join_next().await {
+        if joined.is_err_and(|error| error.is_cancelled()) {
+            aborted += 1;
+        }
+    }
+    aborted
 }
 
 /// A record and the revision it was read or written at.

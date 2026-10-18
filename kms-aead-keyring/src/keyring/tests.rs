@@ -15,48 +15,45 @@ use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::KeyringStore;
 use crate::test_support::{
-    email_of, TestBackend, TestKeyring, TestProvider, TestResult, TestStore, TENANT,
+    email_of, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult, TestStore, TENANT,
 };
 use crate::testing::MemoryKeyringStore;
-use crate::{EntityId, EntityKind, FieldName, FieldSpec, Transition};
+use crate::{EntityId, EntityKind, FieldName, FieldSpec, KeyringRegistryOptions, Transition};
 
 /// A keyring created on a counting store, beside the memory store it writes to.
 struct Fixture {
     memory: MemoryKeyringStore,
     store: TestStore,
     provider: TestProvider,
+    registry: TestRegistry<TestStore>,
     keyring: TestKeyring<TestStore>,
 }
 
 impl Fixture {
-    async fn new(options: KeyringOptions) -> KeyringResult<Self> {
+    async fn new(options: KeyringRegistryOptions) -> KeyringResult<Self> {
         let memory = MemoryKeyringStore::new();
         let store = TestStore::new(&memory, Duration::ZERO);
         let provider = TestProvider::new("tenant-42-kek")?;
-        let keyring = TestKeyring::create(
-            store.clone(),
-            provider.clone(),
-            TENANT,
-            KeyringAlgorithms::new(),
-            options,
-        )
-        .await?;
+        let registry = TestRegistry::new(store.clone(), options)?;
+        let keyring = registry
+            .create(provider.clone(), TENANT, KeyringAlgorithms::new())
+            .await?;
         Ok(Self {
             memory,
             store,
             provider,
+            registry,
             keyring,
         })
     }
 
     /// The same keyring in another process, such as the administrative job.
     async fn other_process(&self) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
-        TestKeyring::open(
+        TestRegistry::new(
             self.memory.clone(),
-            self.provider.clone(),
-            TENANT,
-            KeyringOptions::new().with_watch(false),
-        )
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .open(self.provider.clone(), TENANT)
         .await
     }
 }
@@ -75,7 +72,7 @@ fn relabelled<T>(
 
 #[tokio::test]
 async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let bytes = value.value();
@@ -100,7 +97,7 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
 
 #[tokio::test]
 async fn values_round_trip_through_their_plaintext_types() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
 
@@ -138,7 +135,7 @@ impl Plaintext for Email {
 /// such as BigQuery's `AEAD.DECRYPT_STRING` for a `String`, opens it.
 #[tokio::test]
 async fn a_newtype_field_is_sealed_as_its_string() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let alice = Email(ALICE.to_string());
 
@@ -152,7 +149,7 @@ async fn a_newtype_field_is_sealed_as_its_string() -> TestResult {
 
 #[tokio::test]
 async fn a_value_opens_only_with_its_aad() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let value = keyring
         .encrypt(&email_of("42")?, &ALICE.to_string())
@@ -175,7 +172,7 @@ async fn a_value_opens_only_with_its_aad() -> TestResult {
 
 #[tokio::test]
 async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -202,7 +199,7 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
 
 #[tokio::test]
 async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let store_calls = || {
@@ -232,7 +229,7 @@ async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call()
 
 #[tokio::test]
 async fn an_operation_on_a_reserved_key_id_fails_before_any_store_call() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let store_calls = || {
         (
@@ -265,22 +262,19 @@ async fn an_operation_on_a_reserved_key_id_fails_before_any_store_call() -> Test
 async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
     let memory = MemoryKeyringStore::new();
     let provider = TestProvider::new("tenant-42-kek")?;
-    let admin = TestKeyring::create(
+    let admin = TestRegistry::new(
         memory.clone(),
-        provider.clone(),
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(provider.clone(), TENANT, KeyringAlgorithms::new())
     .await?;
     let store = TestStore::new(&memory, Duration::from_millis(50));
     let reader = Arc::new(
-        TestKeyring::open(
+        TestRegistry::new(
             store.clone(),
-            provider,
-            TENANT,
-            KeyringOptions::new().with_watch(false),
-        )
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .open(provider, TENANT)
         .await?,
     );
     admin
@@ -303,7 +297,7 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
 
 #[tokio::test(start_paused = true)]
 async fn reload_is_rate_limited() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let unknown = relabelled(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?, 9)?;
 
@@ -322,7 +316,7 @@ async fn reload_is_rate_limited() -> TestResult {
 
 #[tokio::test(start_paused = true)]
 async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let admin = fixture.other_process().await?;
     admin
@@ -366,7 +360,7 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
 
 #[tokio::test(start_paused = true)]
 async fn a_missing_record_keeps_the_cached_one() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     fixture.store.calls.missing.store(true, Ordering::SeqCst);
@@ -384,12 +378,11 @@ async fn a_missing_record_keeps_the_cached_one() -> TestResult {
     ));
     assert_eq!(fixture.keyring.decrypt(&aad, &value).await?, ALICE);
 
-    let opened = TestKeyring::open(
+    let opened = TestRegistry::new(
         fixture.store.clone(),
-        fixture.provider.clone(),
-        TENANT,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .open(fixture.provider.clone(), TENANT)
     .await;
     assert!(matches!(opened, Err(KeyringError::RecordMissing(_))));
     Ok(())
@@ -397,7 +390,7 @@ async fn a_missing_record_keeps_the_cached_one() -> TestResult {
 
 #[tokio::test]
 async fn a_record_ttl_of_duration_max_opens() -> TestResult {
-    let options = KeyringOptions::new()
+    let options = KeyringRegistryOptions::new()
         .with_watch(false)
         .with_record_ttl(Duration::MAX)
         .with_reload_min_interval(Duration::MAX);
@@ -418,14 +411,13 @@ async fn a_record_ttl_of_duration_max_opens() -> TestResult {
 
 #[tokio::test]
 async fn open_with_the_wrong_kek_fails() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let other = TestProvider::new("another-kek")?;
-    let opened = TestKeyring::open(
+    let opened = TestRegistry::new(
         fixture.memory.clone(),
-        other.clone(),
-        TENANT,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .open(other.clone(), TENANT)
     .await;
     assert!(matches!(
         opened,
@@ -437,7 +429,12 @@ async fn open_with_the_wrong_kek_fails() -> TestResult {
 
 #[tokio::test]
 async fn cas_conflicts_are_retried_then_refused() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false).with_cas_retries(2)).await?;
+    let fixture = Fixture::new(
+        KeyringRegistryOptions::new()
+            .with_watch(false)
+            .with_keyring(KeyringOptions::new().with_cas_retries(2)),
+    )
+    .await?;
     fixture.store.calls.conflicts.store(2, Ordering::SeqCst);
     let encryptions = fixture.provider.calls.encryptions.load(Ordering::SeqCst);
     let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
@@ -467,9 +464,11 @@ async fn cas_conflicts_are_retried_then_refused() -> TestResult {
 #[tokio::test]
 async fn mark_compromised_evicts_the_dek() -> TestResult {
     let fixture = Fixture::new(
-        KeyringOptions::new()
+        KeyringRegistryOptions::new()
             .with_watch(false)
-            .with_compromised_reads(CompromisedReadPolicy::Allow),
+            .with_keyring(
+                KeyringOptions::new().with_compromised_reads(CompromisedReadPolicy::Allow),
+            ),
     )
     .await?;
     let aad = email_of("42")?;
@@ -502,7 +501,7 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 
 #[tokio::test]
 async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
     let encrypted_dek = held
         .version(KeyId::new(1))
@@ -530,7 +529,7 @@ async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
 
 #[tokio::test]
 async fn block_refuses_before_decrypting() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     fixture
@@ -557,7 +556,7 @@ async fn block_refuses_before_decrypting() -> TestResult {
 
 #[tokio::test]
 async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let record = fixture.keyring.record();
     let encrypted_dek = record
@@ -599,9 +598,11 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
 #[tokio::test]
 async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> TestResult {
     let fixture = Fixture::new(
-        KeyringOptions::new()
+        KeyringRegistryOptions::new()
             .with_watch(false)
-            .with_compromised_reads(CompromisedReadPolicy::Allow),
+            .with_keyring(
+                KeyringOptions::new().with_compromised_reads(CompromisedReadPolicy::Allow),
+            ),
     )
     .await?;
     let aad = email_of("42")?;
@@ -638,7 +639,7 @@ async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> T
 
 #[tokio::test]
 async fn a_reload_runs_while_a_write_waits_for_the_kms() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let calls = &fixture.provider.calls;
     let held = calls.encryption_gate.write().await;
     let encryptions = calls.encryptions.load(Ordering::SeqCst);
@@ -659,7 +660,7 @@ async fn a_reload_runs_while_a_write_waits_for_the_kms() -> TestResult {
 
 #[tokio::test]
 async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     fixture
         .provider
@@ -713,7 +714,7 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
 
 #[tokio::test]
 async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -754,7 +755,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
 #[tokio::test]
 async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_with() -> TestResult
 {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let sealed = keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -783,24 +784,20 @@ async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_w
 
 #[tokio::test]
 async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
-    let created = TestKeyring::create(
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let created = TestRegistry::new(
         fixture.memory.clone(),
-        fixture.provider.clone(),
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(fixture.provider.clone(), TENANT, KeyringAlgorithms::new())
     .await;
     assert!(matches!(created, Err(KeyringError::RecordExists(_))));
 
-    let opened = TestKeyring::open_or_create(
+    let opened = TestRegistry::new(
         fixture.memory.clone(),
-        fixture.provider.clone(),
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .open_or_create(fixture.provider.clone(), TENANT, KeyringAlgorithms::new())
     .await?;
     assert_eq!(
         opened.record().to_json()?,
@@ -808,22 +805,16 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     );
 
     let empty = MemoryKeyringStore::new();
-    let opened = TestKeyring::open(
+    let opened = TestRegistry::new(
         empty.clone(),
-        fixture.provider.clone(),
-        TENANT,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .open(fixture.provider.clone(), TENANT)
     .await;
     assert!(matches!(opened, Err(KeyringError::RecordMissing(_))));
-    let fresh = TestKeyring::open_or_create(
-        empty,
-        fixture.provider.clone(),
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new().with_watch(false),
-    )
-    .await?;
+    let fresh = TestRegistry::new(empty, KeyringRegistryOptions::new().with_watch(false))?
+        .open_or_create(fixture.provider.clone(), TENANT, KeyringAlgorithms::new())
+        .await?;
     let record = fresh.record();
     let active = record
         .active(Purpose::Randomized)
@@ -840,7 +831,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
 
 #[tokio::test]
 async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -866,7 +857,7 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
 
 #[tokio::test]
 async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -894,7 +885,7 @@ async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
 #[cfg(feature = "ring")]
 #[tokio::test]
 async fn an_algorithm_the_backend_lacks_is_refused_before_any_write() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let before = fixture.keyring.record().to_json()?;
     assert!(matches!(
         fixture
@@ -912,13 +903,11 @@ async fn an_algorithm_the_backend_lacks_is_refused_before_any_write() -> TestRes
 async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
     let provider = TestProvider::new("tenant-42-kek")?;
     let algorithms = KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv);
-    let keyring = TestKeyring::create(
+    let keyring = TestRegistry::new(
         MemoryKeyringStore::new(),
-        provider.clone(),
-        TENANT,
-        algorithms,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(provider.clone(), TENANT, algorithms)
     .await?;
     let record = keyring.record();
     assert_eq!(
@@ -936,13 +925,11 @@ async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
 #[tokio::test]
 async fn a_deterministic_policy_needs_the_feature() -> TestResult {
     let algorithms = KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv);
-    let created = TestKeyring::create(
+    let created = TestRegistry::new(
         MemoryKeyringStore::new(),
-        TestProvider::new("tenant-42-kek")?,
-        TENANT,
-        algorithms,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(TestProvider::new("tenant-42-kek")?, TENANT, algorithms)
     .await;
     assert!(matches!(created, Err(KeyringError::DeterministicDisabled)));
     Ok(())
@@ -952,7 +939,7 @@ async fn a_deterministic_policy_needs_the_feature() -> TestResult {
 /// other rules are the record's own tests.
 #[tokio::test(start_paused = true)]
 async fn a_regressed_record_is_refused() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     fixture
         .other_process()
         .await?
@@ -992,9 +979,11 @@ async fn a_regressed_record_is_refused() -> TestResult {
 #[tokio::test(start_paused = true)]
 async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
     let fixture = Fixture::new(
-        KeyringOptions::new()
+        KeyringRegistryOptions::new()
             .with_watch(false)
-            .with_compromised_reads(CompromisedReadPolicy::Allow),
+            .with_keyring(
+                KeyringOptions::new().with_compromised_reads(CompromisedReadPolicy::Allow),
+            ),
     )
     .await?;
     let aad = email_of("42")?;
@@ -1023,7 +1012,7 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
 
 #[tokio::test(start_paused = true)]
 async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let late = MemoryKeyringStore::new();
     let opened = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
     late.compare_and_swap(&opened.record, None).await?;
@@ -1039,13 +1028,8 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
         .lock()
         .map_err(|_| "poisoned")? = Some(rotated.record);
 
-    let keyring = TestKeyring::open(
-        store,
-        fixture.provider.clone(),
-        TENANT,
-        KeyringOptions::new(),
-    )
-    .await?;
+    let registry = TestRegistry::new(store, KeyringRegistryOptions::new())?;
+    let keyring = registry.open(fixture.provider.clone(), TENANT).await?;
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert_eq!(
         keyring
@@ -1054,12 +1038,13 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
             .map(KeyVersion::id),
         Some(KeyId::new(2))
     );
+    registry.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test(start_paused = true)]
 async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new()).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new()).await?;
     let admin = fixture.other_process().await?;
 
     admin.rotate(Purpose::Randomized).await?;
@@ -1086,12 +1071,13 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
     );
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 2);
+    fixture.registry.shutdown().await?;
     Ok(())
 }
 
 #[tokio::test]
 async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let first = KeyId::new(1);
@@ -1117,12 +1103,12 @@ async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
 /// once it is promoted, before the instance sees the promotion and without a reload.
 #[tokio::test(start_paused = true)]
 async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let admin = fixture.other_process().await?;
     let aad = email_of("42")?;
 
     let staged = admin.rotate(Purpose::Randomized).await?;
-    tokio::time::advance(KeyringOptions::DEFAULT_RECORD_TTL).await;
+    tokio::time::advance(KeyringRegistryOptions::DEFAULT_RECORD_TTL).await;
     let sealed_before = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(sealed_before.key_id(), KeyId::new(1));
     assert_eq!(
@@ -1155,7 +1141,7 @@ async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestRes
 
 #[tokio::test]
 async fn a_pending_version_is_destroyed_or_promoted_and_blocks_another_rotation() -> TestResult {
-    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let staged = keyring.rotate(Purpose::Randomized).await?;
 
@@ -1208,13 +1194,11 @@ async fn bigquery_keyring(
     let algorithms = KeyringAlgorithms::new();
     #[cfg(feature = "deterministic")]
     let algorithms = algorithms.with_deterministic(DeterministicAlgorithm::Aes256Siv);
-    TestKeyring::create(
+    TestRegistry::new(
         MemoryKeyringStore::new(),
-        provider,
-        TENANT,
-        algorithms,
-        KeyringOptions::new().with_watch(false),
-    )
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(provider, TENANT, algorithms)
     .await
 }
 

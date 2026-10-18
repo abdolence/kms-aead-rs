@@ -107,11 +107,12 @@ A rotation is two calls, so that no process meets a value under a version it doe
 
 Promote only after the longest time any process may run without a successful refresh of its
 record, counted from `KeyVersion::staged_at()`. For a healthy process that time is at most
-`record_ttl`, `KeyringOptions::DEFAULT_RECORD_TTL` by default. A process whose revalidations fail
-keeps its cached record for as long as they fail, and logs a `WARN` on each failure: "The keyring
-record could not be revalidated; the cached record stays in use". A deployment whose instances can
-take hours to update or to reach the store waits as long. Alert on that `WARN`: an instance that
-logs it is one a promotion can leave behind. The library has no guard that holds a promotion back.
+`record_ttl`, `KeyringRegistryOptions::DEFAULT_RECORD_TTL` by default. A process whose
+revalidations fail keeps its cached record for as long as they fail, and logs a `WARN` on each
+failure: "The keyring record could not be revalidated; the cached record stays in use". A
+deployment whose instances can take hours to update or to reach the store waits as long. Alert on
+that `WARN`: an instance that logs it is one a promotion can leave behind. The library has no
+guard that holds a promotion back.
 
 An instance that has not seen the version when it reads a value under it treats the key id as
 unknown and reloads its record once, at most once per `reload_min_interval`. When the store
@@ -123,22 +124,21 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, Purpose,
-    Rotation,
+    KeyId, KeyVersionState, Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry,
+    KeyringRegistryOptions, Purpose, Rotation,
 };
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    provider,
-    KeyringId::from_static("tenant-42"),
-    KeyringAlgorithms::new(),
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+    .await?;
 
 // The administrative job stages the version
 let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
@@ -152,6 +152,7 @@ assert_eq!(pending.state(), KeyVersionState::Pending);
 let rotation: Rotation = keyring.promote(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
+registry.shutdown().await?;
 # Ok(())
 # }
 ```

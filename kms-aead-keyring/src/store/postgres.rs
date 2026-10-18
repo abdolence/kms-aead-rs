@@ -6,13 +6,16 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinSet;
+use tokio::time::Instant;
 use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Client, Config, Connection, Socket};
 
 use super::{
-    KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
+    join_until, KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+    WatchEvent,
 };
 use crate::errors::{Identifier, IdentifierRule, KeyringResult};
 use crate::{KeyringError, KeyringId, KeyringRecord};
@@ -41,7 +44,7 @@ const LISTENER_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// `UPDATE`. Every write sends `NOTIFY <table>, '<keyring id>'` when it commits, and a
 /// [`watch`](KeyringStore::watch) listens on that channel. PostgreSQL lets any session notify
 /// any channel; a keyring revalidates at most once per
-/// [`reload_min_interval`](crate::KeyringOptions::reload_min_interval) however many signals
+/// [`reload_min_interval`](crate::KeyringRegistryOptions::reload_min_interval) however many signals
 /// arrive. PostgreSQL keeps no notification for a lost session, so a watch reports a lost
 /// listener connection as [`WatchEvent::Disconnected`], replaces it, and reports
 /// [`WatchEvent::Reconnected`], on which the keyring revalidates.
@@ -52,7 +55,9 @@ const LISTENER_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 ///   the first call after it closes. Concurrent callers wait for one attempt and share its
 ///   outcome. The call that finds the connection lost fails; the next one reconnects;
 /// - the listener connection, opened by the first watch and closed once the last watch is
-///   dropped, however many keyrings watch.
+///   dropped, however many keyrings watch, or once the store is
+///   [shut down](KeyringStore::shutdown), which ends every watch. The query connection stays open
+///   after a shutdown.
 ///
 /// `Clone` shares both connections, and [`with_table`](Self::with_table) shares the query
 /// connection.
@@ -107,13 +112,33 @@ struct Statements {
     update: String,
 }
 
-/// The senders of the live watches of a store, by keyring id, which its listener task signals.
+/// The senders of the live watches of a store, by keyring id, and the listener task that
+/// signals them.
 ///
 /// The map is not empty exactly while the task runs: a watch that finds it empty starts the
-/// task, and the task ends when it finds every watch dropped. Only the task removes senders, so
-/// that both decisions are taken under the one lock.
+/// task, and the task ends when it finds every watch dropped. Only the task and a shutdown remove
+/// senders, so that both decisions are taken under the one lock.
 #[derive(Default)]
-struct Watches(Mutex<HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>>);
+struct Watches {
+    senders: Mutex<HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>>,
+    /// `true` once the store was shut down: from then on no watch joins, and the task stops.
+    /// Set under the `senders` lock, which every join holds while it reads it.
+    stop: watch::Sender<bool>,
+    /// The listener task, kept until it is joined. A watch holds the lock from before it adds
+    /// the first sender until the task is spawned.
+    listener_task: tokio::sync::Mutex<JoinSet<()>>,
+}
+
+/// Where a watch's sender went.
+#[derive(Debug, PartialEq, Eq)]
+enum Joined {
+    /// Among the watches the running listener task signals.
+    Running,
+    /// Among the watches, as the first: the caller starts the listener task.
+    First,
+    /// Nowhere, since the store was shut down: the watch is `None`.
+    Stopped,
+}
 
 impl<T> PostgresKeyringStore<T>
 where
@@ -229,21 +254,25 @@ where
     }
 
     /// Forwards the notifications on `table`'s channel to the watches of the keyring each one
-    /// names, until every watch is dropped. A lost connection is reported to every watch and
-    /// replaced at once, then after a delay that doubles from [`LISTENER_FIRST_RETRY_DELAY`] up to
-    /// [`LISTENER_MAX_RETRY_DELAY`] while PostgreSQL stays unreachable.
+    /// names, until every watch is dropped or the store is shut down. A lost connection is
+    /// reported to every watch and replaced at once, then after a delay that doubles from
+    /// [`LISTENER_FIRST_RETRY_DELAY`] up to [`LISTENER_MAX_RETRY_DELAY`] while PostgreSQL stays
+    /// unreachable. A shutdown interrupts every wait, a connection attempt included.
     async fn forward(
         self: Arc<Self>,
         mut listener: Listener<T::Stream>,
         table: PostgresTable,
         watches: Arc<Watches>,
     ) {
+        let mut stop = watches.stop.subscribe();
         loop {
             loop {
                 let Some(senders) = watches.live() else {
                     return;
                 };
                 let received = tokio::select! {
+                    biased;
+                    _ = stop.wait_for(|stop| *stop) => return,
                     _ = join_all(senders.iter().map(mpsc::Sender::closed)) => continue,
                     received = poll_fn(|cx| listener.connection.poll_message(cx)) => received,
                 };
@@ -261,10 +290,17 @@ where
                 let Some(senders) = watches.live() else {
                     return;
                 };
-                if let Ok(listener) = self.listen(&table, &watches).await {
+                let listened = tokio::select! {
+                    biased;
+                    _ = stop.wait_for(|stop| *stop) => return,
+                    listened = self.listen(&table, &watches) => listened,
+                };
+                if let Ok(listener) = listened {
                     break listener;
                 }
                 tokio::select! {
+                    biased;
+                    _ = stop.wait_for(|stop| *stop) => return,
                     _ = join_all(senders.iter().map(mpsc::Sender::closed)) => {}
                     () = tokio::time::sleep(delay) => {}
                 }
@@ -279,7 +315,7 @@ impl Watches {
     /// The map stays consistent through a panic elsewhere: no code under the lock panics
     /// between two changes of it.
     fn lock(&self) -> MutexGuard<'_, HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.senders.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Adds `events` to the watches of `id` when the listener task runs, and gives it back when
@@ -288,22 +324,39 @@ impl Watches {
         &self,
         id: &KeyringId,
         events: mpsc::Sender<WatchEvent>,
-    ) -> Result<(), mpsc::Sender<WatchEvent>> {
+    ) -> Result<Joined, mpsc::Sender<WatchEvent>> {
         let mut watches = self.lock();
+        if *self.stop.borrow() {
+            return Ok(Joined::Stopped);
+        }
         if watches.is_empty() {
             return Err(events);
         }
         watches.entry(id.clone()).or_default().push(events);
-        Ok(())
+        Ok(Joined::Running)
     }
 
-    /// Adds `events` to the watches of `id`, and returns `true` when no listener task runs, so
-    /// that the caller starts one.
-    fn insert(&self, id: &KeyringId, events: mpsc::Sender<WatchEvent>) -> bool {
+    /// Adds `events` to the watches of `id`, as the first when no listener task runs.
+    fn insert(&self, id: &KeyringId, events: mpsc::Sender<WatchEvent>) -> Joined {
         let mut watches = self.lock();
-        let start = watches.is_empty();
+        if *self.stop.borrow() {
+            return Joined::Stopped;
+        }
+        let joined = if watches.is_empty() {
+            Joined::First
+        } else {
+            Joined::Running
+        };
         watches.entry(id.clone()).or_default().push(events);
-        start
+        joined
+    }
+
+    /// Stops the listener task for good: no watch joins from now on, and every sender the map
+    /// holds is dropped.
+    fn shut_down(&self) {
+        let mut watches = self.lock();
+        self.stop.send_replace(true);
+        watches.clear();
     }
 
     /// Forgets the dropped watches, and returns a sender of each live one, or `None` when every
@@ -523,26 +576,41 @@ where
     }
 
     /// A watch on the store's shared listener. The first watch opens the listener connection,
-    /// which closes once the last watch is dropped.
+    /// which closes once the last watch is dropped or the store is shut down.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
         let (events, receiver) = mpsc::channel(16);
-        if let Err(events) = self.watches.join(id, events) {
-            let listener = self
-                .connections
-                .listen(&self.table, &self.watches)
-                .await
-                .map_err(|error| store_error(StoreOperation::Watch, error))?;
-            // Another watch may have started the listener meanwhile; this one is then dropped,
-            // and its connection closed.
-            if self.watches.insert(id, events) {
-                tokio::spawn(self.connections.clone().forward(
-                    listener,
-                    self.table.clone(),
-                    self.watches.clone(),
-                ));
+        let joined = match self.watches.join(id, events) {
+            Ok(joined) => joined,
+            Err(events) => {
+                let listener = self
+                    .connections
+                    .listen(&self.table, &self.watches)
+                    .await
+                    .map_err(|error| store_error(StoreOperation::Watch, error))?;
+                let mut listener_task = self.watches.listener_task.lock().await;
+                // Another watch may have started the listener meanwhile, or a shutdown stopped
+                // it; this listener is then dropped, and its connection closed.
+                let joined = self.watches.insert(id, events);
+                if joined == Joined::First {
+                    while listener_task.try_join_next().is_some() {}
+                    listener_task.spawn(self.connections.clone().forward(
+                        listener,
+                        self.table.clone(),
+                        self.watches.clone(),
+                    ));
+                }
+                joined
             }
-        }
-        Ok(Some(KeyringWatch::new(receiver)))
+        };
+        Ok((joined != Joined::Stopped).then(|| KeyringWatch::new(receiver)))
+    }
+
+    /// Stops the listener task, which closes its connection, and joins it: every watch ends, and
+    /// a later watch is `None`. The query connection stays open.
+    async fn shutdown(&self, timeout: Option<Duration>) {
+        let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+        self.watches.shut_down();
+        join_until(&mut *self.watches.listener_task.lock().await, deadline).await;
     }
 }
 

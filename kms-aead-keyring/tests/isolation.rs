@@ -10,7 +10,8 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
-    KeyVersion, Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, Purpose,
+    KeyVersion, Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    Purpose,
 };
 
 #[cfg(feature = "ring")]
@@ -34,12 +35,14 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 /// A keyring with the default algorithms and options, on a local KEK.
 async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
     let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-    Ok(LocalKeyring::create(
+    Ok(KeyringRegistry::<MemoryKeyringStore, Backend>::new(
         MemoryKeyringStore::new(),
+        KeyringRegistryOptions::new().with_watch(false),
+    )?
+    .create(
         provider,
         KeyringId::from_static("tenant-42"),
         KeyringAlgorithms::new(),
-        KeyringOptions::new().with_watch(false),
     )
     .await?)
 }

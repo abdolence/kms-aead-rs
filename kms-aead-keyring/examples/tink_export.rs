@@ -19,7 +19,8 @@ use kms_aead::{AeadAlgorithm, KmsAeadEncryptionProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
-    KeyringAlgorithms, KeyringId, KeyringOptions, KeysetSelection, Purpose,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection,
+    Purpose,
 };
 use serde_json::json;
 
@@ -63,14 +64,17 @@ async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> ExampleR
 where
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
 {
-    let keyring = Keyring::<MemoryKeyringStore, P, AwsLc>::create(
-        MemoryKeyringStore::new(),
-        provider,
-        KeyringId::from_static("tenant-42"),
-        KeyringAlgorithms::new().with_randomized(algorithm),
-        KeyringOptions::new().with_watch(false),
-    )
-    .await?;
+    let keyring: Keyring<MemoryKeyringStore, P, AwsLc> =
+        KeyringRegistry::<MemoryKeyringStore, AwsLc>::new(
+            MemoryKeyringStore::new(),
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .create(
+            provider,
+            KeyringId::from_static("tenant-42"),
+            KeyringAlgorithms::new().with_randomized(algorithm),
+        )
+        .await?;
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let plain_text = format!("sealed by kms-aead-keyring {}", env!("CARGO_PKG_VERSION"));
     let value = keyring.encrypt(&aad, &plain_text).await?;

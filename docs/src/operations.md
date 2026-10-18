@@ -94,7 +94,8 @@ use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
-    KeyringAlgorithms, KeyringId, KeyringOptions, KeyringResult, Plaintext, Purpose, Rotation,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
+    Purpose, Rotation,
 };
 use secret_vault_value::SecretValue;
 
@@ -152,10 +153,13 @@ async fn reseal(
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
-#     MemoryKeyringStore::new(), provider, TENANT, KeyringAlgorithms::new(), KeyringOptions::new(),
-# )
-# .await?;
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+#     MemoryKeyringStore::new(),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+#     .await?;
 # let table = Table::default();
 # for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
 #     let email = keyring
@@ -197,6 +201,7 @@ if report.failed == 0 {
     }
 }
 # assert_eq!(report.resealed, 2);
+# registry.shutdown().await?;
 # Ok(())
 # }
 ```

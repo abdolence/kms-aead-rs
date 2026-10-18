@@ -7,6 +7,10 @@
 //! call to the store or the KMS on the hot path: the record is cached in the process, and the
 //! decrypted keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
 //!
+//! An application opens its keyrings through one [`KeyringRegistry`] per store, which loads and
+//! watches each keyring once, however many parts of the application open it, and whose
+//! [`shutdown`](KeyringRegistry::shutdown) stops the work it runs.
+//!
 //! # Values
 //!
 //! A value is in Tink's TINK-prefixed layout: the key id of the version that sealed it, then
@@ -84,10 +88,10 @@
 //! # Caching
 //!
 //! The record is revalidated with a conditional read once it is older than
-//! [`record_ttl`](KeyringOptions::record_ttl), and early on a change signal from a store with
-//! push. An unknown key id causes one reload per
-//! [`reload_min_interval`](KeyringOptions::reload_min_interval). The DEK cache drops expired
-//! keys only when it is called, so a process that can sit idle while it holds keys calls
+//! [`record_ttl`](KeyringRegistryOptions::record_ttl), and early on a change signal from a store
+//! with push. An unknown key id causes one reload per
+//! [`reload_min_interval`](KeyringRegistryOptions::reload_min_interval). The DEK cache drops
+//! expired keys only when it is called, so a process that can sit idle while it holds keys calls
 //! [`DekCache::purge_expired`](kms_aead::cache::DekCache::purge_expired) on a timer of its own.
 //!
 //! # Stores
@@ -130,7 +134,7 @@
 //! use kms_aead_keyring::testing::MemoryKeyringStore;
 //! use kms_aead_keyring::{
 //!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-//!     KeyringOptions, Plaintext, Purpose,
+//!     KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 //! };
 //! use secret_vault_value::SecretValue;
 //!
@@ -153,16 +157,15 @@
 //!     FieldName::from_static("email"),
 //! );
 //!
+//! let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+//!     MemoryKeyringStore::new(),
+//!     KeyringRegistryOptions::new(),
+//! )?;
 //! let provider =
 //!     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-//! let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
-//!     MemoryKeyringStore::new(),
-//!     provider,
-//!     TENANT,
-//!     KeyringAlgorithms::new(),
-//!     KeyringOptions::new(),
-//! )
-//! .await?;
+//! let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+//!     .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+//!     .await?;
 //!
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
 //! let alice = Email("alice@example.com".to_string());
@@ -171,6 +174,7 @@
 //! keyring.promote(staged).await?;
 //!
 //! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
+//! registry.shutdown().await?;
 //! # Ok(())
 //! # }
 //! # #[cfg(not(feature = "ring"))]
@@ -203,6 +207,9 @@ mod record;
 pub use record::*;
 
 mod record_cache;
+
+mod registry;
+pub use registry::*;
 
 // The book's code uses the deterministic fields, serde, every store and the BigQuery export, so it
 // compiles in the build with the docs.rs feature set only.

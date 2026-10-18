@@ -312,22 +312,22 @@ mod tests {
 
     use super::*;
     use crate::errors::{InteropError, KeyVersionError};
-    use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::test_support::{
+        email_of, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+    };
     use crate::testing::MemoryKeyringStore;
-    use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringOptions};
+    use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringRegistryOptions};
 
     /// A keyring on `provider` with one version of each purpose `algorithms` names.
     async fn keyring(
         provider: TestProvider,
         algorithms: KeyringAlgorithms,
     ) -> KeyringResult<(TestKeyring<MemoryKeyringStore>, TestProvider)> {
-        let keyring = TestKeyring::create(
+        let keyring = TestRegistry::new(
             MemoryKeyringStore::new(),
-            provider.clone(),
-            TENANT,
-            algorithms,
-            KeyringOptions::new().with_watch(false),
-        )
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .create(provider.clone(), TENANT, algorithms)
         .await?;
         Ok((keyring, provider))
     }
@@ -433,15 +433,15 @@ mod tests {
 
     #[tokio::test]
     async fn readable_follows_a_compromise_by_another_process() -> TestResult {
-        let (exporter, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
-        let administrator = TestKeyring::open(
-            exporter.cache.store().clone(),
-            provider.clone(),
-            TENANT,
-            KeyringOptions::new().with_watch(false),
-        )
-        .await?;
+        let store = MemoryKeyringStore::new();
+        let provider = TestProvider::cloud_kms()?;
+        let options = KeyringRegistryOptions::new().with_watch(false);
+        let exporter = TestRegistry::new(store.clone(), options.clone())?
+            .create(provider.clone(), TENANT, KeyringAlgorithms::new())
+            .await?;
+        let administrator = TestRegistry::new(store, options)?
+            .open(provider.clone(), TENANT)
+            .await?;
         let leaked = KeyId::new(1);
         administrator.mark_compromised(leaked, None).await?;
 

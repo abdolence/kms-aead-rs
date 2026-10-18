@@ -65,7 +65,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring,
-    KeyringAlgorithms, KeyringId, KeyringOptions, Plaintext, Purpose,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -92,14 +92,13 @@ const EMAIL: FieldSpec = FieldSpec::new(
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 let provider =
     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
-    provider,
-    TENANT,
-    KeyringAlgorithms::new(),
-    KeyringOptions::new(),
-)
-.await?;
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+    .await?;
 
 // The AAD ties the value to user 42's email: `user/42/email`
 let aad: FieldAad = EMAIL.aad(&EntityId::try_from("42")?);
@@ -111,15 +110,18 @@ assert_eq!(value.key_id(), KeyId::new(1));
 let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 keyring.promote(staged).await?;
 assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
+registry.shutdown().await?;
 # Ok(())
 # }
 ```
 
-`Keyring::open_or_create` creates the record on the first start, with one active version of each
-purpose its `KeyringAlgorithms` name, and opens it on every later start. `Keyring::open` only
-opens, and fails with `RecordMissing` when there is no record. `Keyring::create` only creates, and
-is the call for the administrative job, see [Principals](#principals). The three take the store,
-the provider and the backend as the type parameters of `Keyring<S, P, B>`.
+`KeyringRegistry::open_or_create` creates the record on the first start, with one active version
+of each purpose its `KeyringAlgorithms` name, and opens it on every later start.
+`KeyringRegistry::open` only opens, and fails with `RecordMissing` when there is no record.
+`KeyringRegistry::create` only creates, and is the call for the administrative job, see
+[Principals](#principals). The registry takes the store and the backend as the type parameters of
+`KeyringRegistry<S, B>`, and each call takes the provider, so that the handle it returns is a
+`Keyring<S, P, B>`.
 
 `encrypt` seals under the active version, and `decrypt` opens under the version the value names.
 Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is

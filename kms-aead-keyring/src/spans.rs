@@ -420,6 +420,34 @@ pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
     );
 }
 
+/// The store's listener stopped for good under an open keyring, such as on the store's own
+/// shutdown.
+pub(crate) fn watch_ended(keyring: &KeyringId) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        "The keyring store stopped following changes; the record TTL bounds how late a change is \
+         seen"
+    );
+}
+
+/// A registry dropped while its follow tasks run, which aborts them. It names no keyring: the
+/// count is the number of open keyrings.
+pub(crate) fn registry_dropped_without_shutdown(keyrings: usize) {
+    tracing::warn!(
+        keyrings,
+        "KeyringRegistry dropped while it runs background tasks; await KeyringRegistry::shutdown \
+         before dropping it"
+    );
+}
+
+/// A registry shutdown whose timeout aborted follow tasks.
+pub(crate) fn shutdown_aborted(aborted: usize) {
+    tracing::warn!(
+        aborted,
+        "The keyring registry's shutdown aborted the follow tasks still running at its timeout"
+    );
+}
+
 /// No tokio runtime to run the task that follows the store's signals.
 pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
     tracing::warn!(

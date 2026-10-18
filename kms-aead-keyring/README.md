@@ -46,7 +46,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringOptions, Plaintext, Purpose,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -73,14 +73,13 @@ const EMAIL: FieldSpec = FieldSpec::new(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider =
         LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-    let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+    let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
         MemoryKeyringStore::new(),
-        provider,
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new(),
-    )
-    .await?;
+        KeyringRegistryOptions::new(),
+    )?;
+    let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+        .await?;
 
     // The AAD binds the value to user 42's email
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
@@ -92,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     keyring.promote(staged).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
+    registry.shutdown().await?;
     Ok(())
 }
 ```

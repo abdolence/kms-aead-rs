@@ -2,28 +2,26 @@
 
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
-use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
+use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::formats::{Envelope, Randomized};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, BeaconMac, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
     KmsAeadEncryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
-use tokio::task::AbortHandle;
 
 use crate::errors::{
-    InteropRequirement, KekMismatchError, KeyVersionCompromisedError, KeyVersionError,
-    KeyringError, KeyringResult, RecordInvalidReason,
+    InteropRequirement, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
+    RecordInvalidReason,
 };
 use crate::purpose::unreserved;
 use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
 use crate::spans::{self, LoadReason};
-use crate::store::{KeyringStore, Stored, Swap};
+use crate::store::KeyringStore;
 use crate::{
     Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
     KeyringAlgorithms, KeyringId, KeyringRecord, Purpose,
@@ -37,33 +35,32 @@ mod deterministic;
 mod export;
 pub use export::{EncryptedKeyset, KeysetSelection};
 
-/// Field encryption under the key versions of one keyring, whose record lives in the store `S`
-/// and is cached in the process, with keys encrypted by the provider `P` and AEAD on the backend
-/// `B`.
+/// A handle on one keyring of a [`KeyringRegistry`](crate::KeyringRegistry), for field
+/// encryption under the keyring's key versions: its record lives in the store `S` and is cached
+/// in the process, its keys are encrypted by the provider `P`, and AEAD runs on the backend `B`.
 ///
 /// `encrypt` seals under the active version of the purpose, and `decrypt` opens under the
 /// version the value names, without a call to the store while the cached record is younger than
-/// [`record_ttl`](KeyringOptions::record_ttl), and without a call to the KMS while the
-/// version's key is in the [`DekCache`]. Every decryption of `encrypt` and `decrypt` goes through
-/// that cache, which drops expired keys only when it is called: a process that can sit idle
-/// while it holds keys, and needs the cache's TTL to bound their time in memory, calls
+/// [`record_ttl`](crate::KeyringRegistryOptions::record_ttl), and without a call to the KMS while
+/// the version's key is in the [`DekCache`]. Every decryption of `encrypt` and `decrypt` goes
+/// through that cache, which drops expired keys only when it is called: a process that can sit
+/// idle while it holds keys, and needs the cache's TTL to bound their time in memory, calls
 /// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
-/// The administrative calls, `create`, `rotate`, `promote`, `mark_compromised`, `retire`,
-/// `reinstate`, `destroy`, `dangerously_destroy_all_versions`, `reencrypt_deks` and
-/// `change_algorithm`, write the record, and `create`, `rotate`, `mark_compromised`,
-/// `reencrypt_deks` and `change_algorithm` also encrypt DEKs, so they need the KMS's encrypt
-/// right. They run under an administrative principal, in a job, while the
-/// serving processes only decrypt keys and read the store.
+/// The handles of one keyring share its cached record, and a write through one is seen by all of
+/// them. Each handle has its own provider and [`KeyringOptions`]. Dropping a handle leaves the
+/// keyring open in the registry.
 ///
-/// Where the store has push, a task on the current tokio runtime follows the record's change
-/// signals for as long as the keyring lives.
+/// The administrative calls, `rotate`, `promote`, `mark_compromised`, `retire`, `reinstate`,
+/// `destroy`, `dangerously_destroy_all_versions`, `reencrypt_deks` and `change_algorithm`, write
+/// the record, and `rotate`, `mark_compromised`, `reencrypt_deks` and `change_algorithm`, like the
+/// registry's `create`, also encrypt DEKs, so they need the KMS's encrypt right. They run under an
+/// administrative principal, in a job, while the serving processes only decrypt keys and read
+/// the store.
 pub struct Keyring<S: KeyringStore, P, B> {
     cache: Arc<RecordCache<S>>,
     provider: P,
-    compromised_reads: CompromisedReadPolicy,
-    cas_retries: u32,
-    _watch: Option<WatchTask>,
+    options: KeyringOptions,
     backend: PhantomData<B>,
 }
 
@@ -73,79 +70,21 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
     B: AeadBackend,
 {
-    /// Opens the keyring `id` from `store`: loads its record once and starts following the
-    /// store's change signals. `provider` decrypts the record's keys.
-    ///
-    /// # Errors
-    ///
-    /// The store's errors, [`KeyringError::RecordMissing`] when the store holds no record,
-    /// [`KeyringError::RecordInvalid`] when it holds an invalid one, and
-    /// [`KeyringError::KekMismatch`] when the provider's KEK is not the one the record names.
-    pub async fn open(
-        store: S,
-        provider: P,
-        id: KeyringId,
-        options: KeyringOptions,
-    ) -> KeyringResult<Self> {
-        let stored = RecordCache::read(&store, &id)
-            .await?
-            .ok_or(KeyringError::RecordMissing(id))?;
-        Self::start(store, provider, options, stored).await
-    }
-
-    /// Creates the record of the keyring `id`, with one active version of each purpose
-    /// `algorithms` names an algorithm for, and opens it. Encrypts one key per version, so it
-    /// needs the KMS's encrypt right.
-    ///
-    /// # Errors
-    ///
-    /// The provider's and the store's errors, [`KeyringError::RecordExists`] when the store
-    /// already holds a record, `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement
-    /// an algorithm of `algorithms`, and [`KeyringError::DeterministicDisabled`] for a
-    /// deterministic algorithm without the `deterministic` feature.
-    pub async fn create(
-        store: S,
-        provider: P,
-        id: KeyringId,
-        algorithms: KeyringAlgorithms,
-        options: KeyringOptions,
-    ) -> KeyringResult<Self> {
-        let record = algorithms.new_record::<P, B>(id, &provider).await?;
-        match store.compare_and_swap(&record, None).await? {
-            Swap::Written(revision) => {
-                Self::start(store, provider, options, Stored { record, revision }).await
-            }
-            Swap::Conflict => Err(KeyringError::RecordExists(record.id().clone())),
+    /// A handle on the keyring `cache` holds, with `provider`, whose KEK the record names.
+    pub(crate) fn new(cache: Arc<RecordCache<S>>, provider: P, options: KeyringOptions) -> Self {
+        Self {
+            cache,
+            provider,
+            options,
+            backend: PhantomData,
         }
     }
 
-    /// Opens the keyring `id`, or creates it as [`create`](Self::create) does when the store
-    /// holds no record. When another process creates it at the same time, opens that one.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`open`](Self::open) and [`create`](Self::create), but not
-    /// `RecordMissing` or `RecordExists`.
-    pub async fn open_or_create(
-        store: S,
-        provider: P,
-        id: KeyringId,
-        algorithms: KeyringAlgorithms,
-        options: KeyringOptions,
-    ) -> KeyringResult<Self> {
-        let stored = match RecordCache::read(&store, &id).await? {
-            Some(stored) => stored,
-            None => {
-                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => Stored { record, revision },
-                    Swap::Conflict => RecordCache::read(&store, &id)
-                        .await?
-                        .ok_or(KeyringError::RecordMissing(id))?,
-                }
-            }
-        };
-        Self::start(store, provider, options, stored).await
+    /// The handle with `options` instead of the registry's
+    /// [`keyring`](crate::KeyringRegistryOptions::keyring) options. The keyring's other handles
+    /// keep their own.
+    pub fn with_options(self, options: KeyringOptions) -> Self {
+        Self { options, ..self }
     }
 
     /// The keyring's id.
@@ -217,7 +156,7 @@ where
     ///
     /// - [`KeyringError::KeyVersionUnknown`] when the record has no such version, also after
     ///   one reload, which runs at most once per
-    ///   [`reload_min_interval`](KeyringOptions::reload_min_interval);
+    ///   [`reload_min_interval`](crate::KeyringRegistryOptions::reload_min_interval);
     /// - [`KeyringError::KeyVersionRetired`] and [`KeyringError::KeyVersionDestroyed`];
     /// - [`KeyringError::KeyVersionCompromised`] under [`CompromisedReadPolicy::Block`], before
     ///   any decryption;
@@ -311,7 +250,7 @@ where
             let new = self.new_version(algorithm).await?;
             let staged = self
                 .cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     let algorithm = self.algorithm_of(edit.record(), purpose)?;
                     let new = if algorithm == new.algorithm {
                         new.clone()
@@ -343,7 +282,7 @@ where
         spans::in_span(spans::promote(self.id(), key_id), async {
             let rotation = self
                 .cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     edit.promote(key_id, Timestamp::now())
                 })
                 .await?;
@@ -365,7 +304,7 @@ where
             let new = self.new_version(algorithm).await?;
             let staged = self
                 .cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     let now = Timestamp::now();
                     edit.set_algorithm(algorithm, now);
                     edit.stage(new.clone(), now)
@@ -415,7 +354,7 @@ where
             };
             let rotation = self
                 .cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     let record = edit.record();
                     let replacement = match record.version(key_id) {
                         Some(version) if version.state() == KeyVersionState::Active => {
@@ -464,7 +403,7 @@ where
         unreserved(key_id)?;
         spans::in_span(spans::retire(self.id(), key_id), async {
             self.cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     edit.retire(key_id, Timestamp::now())
                 })
                 .await
@@ -482,7 +421,7 @@ where
         unreserved(key_id)?;
         spans::in_span(spans::reinstate(self.id(), key_id), async {
             self.cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     edit.reinstate(key_id, Timestamp::now())
                 })
                 .await
@@ -501,7 +440,7 @@ where
         unreserved(key_id)?;
         spans::in_span(spans::destroy(self.id(), key_id), async {
             self.cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     edit.destroy(key_id, Timestamp::now())
                 })
                 .await
@@ -525,7 +464,7 @@ where
     pub async fn dangerously_destroy_all_versions(&self) -> KeyringResult<()> {
         spans::in_span(spans::destroy_all_versions(self.id()), async {
             self.cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     edit.destroy_all(Timestamp::now());
                     Ok(())
                 })
@@ -551,7 +490,7 @@ where
             }
             let versions = self
                 .cache
-                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
                     let encrypted_deks = edit.record().encrypted_deks();
                     for (key_id, encrypted_dek) in &encrypted_deks {
                         let prepared = reencrypted
@@ -572,47 +511,6 @@ where
             Ok(versions)
         })
         .await
-    }
-
-    async fn start(
-        store: S,
-        provider: P,
-        options: KeyringOptions,
-        stored: Stored<S::Revision>,
-    ) -> KeyringResult<Self> {
-        let kek = provider.kek();
-        if stored.record.kek() != kek {
-            return Err(KeyringError::KekMismatch(Box::new(KekMismatchError {
-                keyring: stored.record.id().clone(),
-                recorded: stored.record.kek().clone(),
-                provider: kek.clone(),
-            })));
-        }
-        let dek_cache = match options.dek_cache {
-            Some(dek_cache) => dek_cache,
-            None => DekCache::new(DekCacheOptions::new())?,
-        };
-        let cache = Arc::new(RecordCache::new(
-            store,
-            kek.clone(),
-            dek_cache,
-            options.record_ttl,
-            options.reload_min_interval,
-            stored,
-        ));
-        let watch = if options.watch {
-            WatchTask::start(&cache).await
-        } else {
-            None
-        };
-        Ok(Self {
-            cache,
-            provider,
-            compromised_reads: options.compromised_reads,
-            cas_retries: options.cas_retries,
-            _watch: watch,
-            backend: PhantomData,
-        })
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error
@@ -658,7 +556,7 @@ where
         version: &KeyVersion,
         compromise: Option<&Compromise>,
     ) -> KeyringResult<()> {
-        match (compromise, self.compromised_reads) {
+        match (compromise, self.options.compromised_reads) {
             (None, _) => Ok(()),
             (Some(compromise), CompromisedReadPolicy::Block) => Err(
                 KeyringError::KeyVersionCompromised(KeyVersionCompromisedError {
@@ -920,47 +818,14 @@ impl NewVersion {
     }
 }
 
-/// Stops the task that follows the store's change signals when the keyring is dropped.
-struct WatchTask(AbortHandle);
-
-impl WatchTask {
-    /// Starts following the store's signals for `cache`'s keyring, or returns `None`, with a
-    /// `WARN` for a failure, when the store has no push, its listener does not start, or no
-    /// tokio runtime runs the call: the record TTL alone then bounds how late a change is seen.
-    async fn start<S: KeyringStore>(cache: &Arc<RecordCache<S>>) -> Option<Self> {
-        // Checked before `watch`, since a store's listener may spawn a task of its own, and
-        // `tokio::spawn` panics outside a runtime.
-        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-            spans::watch_without_runtime(cache.id());
-            return None;
-        };
-        let watch = match cache.store().watch(cache.id()).await {
-            Ok(watch) => watch?,
-            Err(error) => {
-                spans::watch_failed(cache.id(), &error);
-                return None;
-            }
-        };
-        let task = runtime.spawn(RecordCache::follow(
-            Arc::downgrade(cache),
-            cache.id().clone(),
-            cache.reload_min_interval(),
-            watch,
-        ));
-        Some(Self(task.abort_handle()))
-    }
-}
-
-impl Drop for WatchTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
 impl KeyringAlgorithms {
     /// The record of a new keyring `id` with these algorithms, and one active version of each
     /// purpose they name an algorithm for, each encrypted by `provider`.
-    async fn new_record<P, B>(&self, id: KeyringId, provider: &P) -> KeyringResult<KeyringRecord>
+    pub(crate) async fn new_record<P, B>(
+        &self,
+        id: KeyringId,
+        provider: &P,
+    ) -> KeyringResult<KeyringRecord>
     where
         P: KmsAeadEncryptionProvider + Sync,
         B: AeadBackend,
@@ -989,27 +854,12 @@ pub struct Rotation {
     pub current: KeyId,
 }
 
-/// How a [`Keyring`] caches its record and writes it.
+/// How a [`Keyring`] handle writes the record and reads values under a compromised version. The
+/// handles of one keyring may differ in them; the record cache they share is configured by
+/// [`KeyringRegistryOptions`](crate::KeyringRegistryOptions).
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KeyringOptions {
-    /// How long the cached record serves without a store call:
-    /// [`DEFAULT_RECORD_TTL`](Self::DEFAULT_RECORD_TTL) by default. The first call after it
-    /// revalidates with a conditional read, while the other calls keep using the cached record.
-    /// Where the store has no push, it bounds how late a process sees a change, such as a
-    /// compromised flag.
-    #[default = "Self::DEFAULT_RECORD_TTL"]
-    pub record_ttl: Duration,
-    /// The least time between two store reads that an unknown key id or a change signal
-    /// triggers: [`DEFAULT_RELOAD_MIN_INTERVAL`](Self::DEFAULT_RELOAD_MIN_INTERVAL) by default.
-    /// Values with random key ids, and a writer that can send change signals, then cost at most
-    /// one store read per interval.
-    #[default = "Self::DEFAULT_RELOAD_MIN_INTERVAL"]
-    pub reload_min_interval: Duration,
-    /// Whether to follow the store's change signals, where it has them:
-    /// [`DEFAULT_WATCH`](Self::DEFAULT_WATCH) by default.
-    #[default = "Self::DEFAULT_WATCH"]
-    pub watch: bool,
     /// The conflicts an administrative write retries before it fails with `RecordConflict`:
     /// [`DEFAULT_CAS_RETRIES`](Self::DEFAULT_CAS_RETRIES) by default.
     #[default = "Self::DEFAULT_CAS_RETRIES"]
@@ -1018,19 +868,9 @@ pub struct KeyringOptions {
     /// [`DEFAULT_COMPROMISED_READS`](Self::DEFAULT_COMPROMISED_READS) by default.
     #[default = "Self::DEFAULT_COMPROMISED_READS"]
     pub compromised_reads: CompromisedReadPolicy,
-    /// The cache of decrypted keys, which may be shared with other keyrings and envelopes, or
-    /// `None`, the default, for `DekCache::new(DekCacheOptions::new())`, with kms-aead's
-    /// [`DekCacheOptions::DEFAULT_TTL`] and [`DekCacheOptions::DEFAULT_MAX_ENTRIES`].
-    pub dek_cache: Option<DekCache>,
 }
 
 impl KeyringOptions {
-    /// The default [`record_ttl`](Self::record_ttl): 5 minutes.
-    pub const DEFAULT_RECORD_TTL: Duration = Duration::from_secs(5 * 60);
-    /// The default [`reload_min_interval`](Self::reload_min_interval): 5 seconds.
-    pub const DEFAULT_RELOAD_MIN_INTERVAL: Duration = Duration::from_secs(5);
-    /// The default [`watch`](Self::watch): `true`, following the store's change signals.
-    pub const DEFAULT_WATCH: bool = true;
     /// The default [`cas_retries`](Self::cas_retries): 5.
     pub const DEFAULT_CAS_RETRIES: u32 = 5;
     /// The default [`compromised_reads`](Self::compromised_reads):

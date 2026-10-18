@@ -6,30 +6,32 @@ path calls neither the store nor the KMS.
 
 ## Options
 
-`KeyringOptions`, each default a public constant of it:
+`KeyringRegistryOptions` configures the record cache of every keyring a registry opens, and its
+`keyring` field holds the `KeyringOptions` of the handles it returns. Each default is a public
+constant of the type that holds the option:
 
 | Option | Default | What it does |
 |---|---|---|
 | `record_ttl` | `DEFAULT_RECORD_TTL`, 5 minutes | how long the cached record serves without a store call |
 | `reload_min_interval` | `DEFAULT_RELOAD_MIN_INTERVAL`, 5 seconds | the least time between two store reads that an unknown key id or a change signal causes |
 | `watch` | `DEFAULT_WATCH`, `true` | whether to follow the store's change signals, where it has them |
-| `cas_retries` | `DEFAULT_CAS_RETRIES`, 5 | the conflicts an administrative write retries before `RecordConflict` |
-| `compromised_reads` | `DEFAULT_COMPROMISED_READS`, `Block` | what `decrypt` does with a value under a compromised version, see [Lifecycle](./lifecycle.md#reading-a-compromised-version) |
 | `dek_cache` | `None`, a new cache | the cache of decrypted DEKs; a new one has kms-aead's `DekCacheOptions::DEFAULT_TTL` and `DekCacheOptions::DEFAULT_MAX_ENTRIES` |
+| `keyring.cas_retries` | `KeyringOptions::DEFAULT_CAS_RETRIES`, 5 | the conflicts an administrative write retries before `RecordConflict` |
+| `keyring.compromised_reads` | `KeyringOptions::DEFAULT_COMPROMISED_READS`, `Block` | what `decrypt` does with a value under a compromised version, see [Lifecycle](./lifecycle.md#reading-a-compromised-version) |
 
 ```rust
 use std::time::Duration;
 
 use kms_aead::cache::{DekCache, DekCacheOptions};
-use kms_aead_keyring::KeyringOptions;
+use kms_aead_keyring::{KeyringOptions, KeyringRegistryOptions};
 
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-let options: KeyringOptions = KeyringOptions::new()
+let options: KeyringRegistryOptions = KeyringRegistryOptions::new()
     .with_record_ttl(Duration::from_secs(60))
     .with_dek_cache(DekCache::new(
         DekCacheOptions::new().with_ttl(Duration::from_secs(5 * 60)),
     )?);
-assert_eq!(options.cas_retries, KeyringOptions::DEFAULT_CAS_RETRIES);
+assert_eq!(options.keyring.cas_retries, KeyringOptions::DEFAULT_CAS_RETRIES);
 # Ok(())
 # }
 ```

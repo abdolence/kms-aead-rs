@@ -130,9 +130,13 @@ mod tests {
     use kms_aead::{BeaconAlgorithm, BeaconBits, BeaconMac};
 
     use super::*;
-    use crate::test_support::{TestBackend, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::test_support::{
+        TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+    };
     use crate::testing::MemoryKeyringStore;
-    use crate::{EntityKind, FieldName, KeyId, KeyVersion, KeyringAlgorithms, KeyringOptions};
+    use crate::{
+        EntityKind, FieldName, KeyId, KeyVersion, KeyringAlgorithms, KeyringRegistryOptions,
+    };
 
     const EMAIL: FieldSpec = FieldSpec::new(
         EntityKind::from_static("user"),
@@ -148,12 +152,14 @@ mod tests {
     async fn beacon_keyring(
         provider: TestProvider,
     ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
-        TestKeyring::create(
+        TestRegistry::new(
             MemoryKeyringStore::new(),
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .create(
             provider,
             TENANT,
             KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
-            KeyringOptions::new().with_watch(false),
         )
         .await
     }

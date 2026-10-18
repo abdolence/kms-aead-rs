@@ -13,7 +13,7 @@ use kms_aead::DeterministicAlgorithm;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringOptions, KeysetSelection, Purpose,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection, Purpose,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -98,14 +98,17 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         env("KMS_KEY_RING")?,
         env("KMS_KEY")?,
     );
-    let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::create(
-        MemoryKeyringStore::new(),
-        GcpKmsProvider::new(&key_ref).await?,
-        KeyringId::try_from(format!("bigquery-live-{}", uuid::Uuid::now_v7()))?,
-        KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
-        KeyringOptions::new().with_watch(false),
-    )
-    .await?;
+    let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> =
+        KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+            MemoryKeyringStore::new(),
+            KeyringRegistryOptions::new().with_watch(false),
+        )?
+        .create(
+            GcpKmsProvider::new(&key_ref).await?,
+            KeyringId::try_from(format!("bigquery-live-{}", uuid::Uuid::now_v7()))?,
+            KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+        )
+        .await?;
     let field = EMAIL.with_interop(Interop::BigQuery);
     let aad = field.aad(&EntityId::try_from("42")?);
     let deterministic_aad = field.deterministic_aad();

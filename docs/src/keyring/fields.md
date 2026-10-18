@@ -46,7 +46,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringOptions, Plaintext,
+    KeyringRegistry, KeyringRegistryOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -79,14 +79,13 @@ struct User {
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
 #     MemoryKeyringStore::new(),
-#     provider,
-#     KeyringId::from_static("tenant-42"),
-#     KeyringAlgorithms::new(),
-#     KeyringOptions::new(),
-# )
-# .await?;
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+#     .await?;
 let id = EntityId::try_from("42")?;
 let alice = Email("alice@example.com".to_string());
 let user = User {
@@ -98,6 +97,7 @@ let stored: Vec<u8> = serde_json::to_vec(&user)?;
 let read: User = serde_json::from_slice(&stored)?;
 let email: Email = keyring.decrypt(&EMAIL.aad(&id), &read.email).await?;
 assert_eq!(email, alice);
+# registry.shutdown().await?;
 # Ok(())
 # }
 ```

@@ -11,7 +11,7 @@ use kms_aead::KmsAeadResult;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringOptions, Plaintext, Purpose,
+    KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -37,16 +37,15 @@ impl Plaintext for Email {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+        MemoryKeyringStore::new(),
+        KeyringRegistryOptions::new(),
+    )?;
     let provider =
         LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("orders-kek".to_string())?)?;
-    let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
-        MemoryKeyringStore::new(),
-        provider,
-        TENANT,
-        KeyringAlgorithms::new(),
-        KeyringOptions::new(),
-    )
-    .await?;
+    let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+        .await?;
 
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let alice = Email("alice@example.com".to_string());
@@ -69,5 +68,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Email(email) = keyring.decrypt(&aad, &value).await?;
         println!("value under {}: {email}", value.key_id().as_u32());
     }
+    registry.shutdown().await?;
     Ok(())
 }

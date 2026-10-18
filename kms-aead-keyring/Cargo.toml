@@ -30,8 +30,9 @@ secret-vault-value = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subtle = { workspace = true }
-# `rt` runs the task that follows a store's change signals and `time` spaces its revalidations.
-tokio = { workspace = true, features = ["sync", "rt", "time"] }
+# `rt` runs the task that follows a store's change signals, `time` spaces its revalidations, and
+# `macros` lets it stop on a shutdown while it waits.
+tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
 firestore = { version = "0.58", optional = true }
 tokio-postgres = { version = "0.7", optional = true, default-features = false, features = ["runtime"] }
@@ -76,9 +77,8 @@ serde-json = ["serde", "kms-aead/serde-json"]
 # `FirestoreKeyringStore`, on firestore-rs with its default TLS roots and crypto provider.
 firestore = ["dep:firestore"]
 # `PostgresKeyringStore` on tokio-postgres, and kms-aead's `ToSql` and `FromSql` for `Encrypted`
-# as `BYTEA`. The store's listener task waits on its notifications and on the watch with
-# `tokio::select!`.
-postgres = ["dep:tokio-postgres", "kms-aead/postgres", "tokio/macros"]
+# as `BYTEA`.
+postgres = ["dep:tokio-postgres", "kms-aead/postgres"]
 # `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
 # feature from the application, or one of the two below, to build.
 gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
