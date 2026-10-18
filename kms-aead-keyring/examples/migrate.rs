@@ -1,6 +1,7 @@
 //! Migrates a table of store-less envelope values to keyring values: rows written before the
 //! table had a seal marker read as envelope values, a sweep re-seals each under the keyring and
-//! marks it, and every row then reads through the keyring. Runs on the memory store with a local
+//! marks it, and every row then reads through the keyring. After a rotation, the same sweep moves
+//! the rows to the new version. Runs on the memory store with a local
 //! KEK, and needs no cloud credentials.
 //!
 //! ```sh
@@ -19,11 +20,14 @@ use kms_aead::{
     KmsAeadResult,
 };
 use kms_aead_keyring::formats::{Envelope, Randomized};
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealFormat, SealMarker};
+use kms_aead_keyring::sweep::{
+    self, ResealOutcome, SealFormat, SealMarker, SealThresholds, SweepReport,
+};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringAlgorithms,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Purpose,
+    Resealed,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -125,37 +129,75 @@ async fn print_rows(
     Ok(())
 }
 
-/// Re-seals the row of `user` as a keyring value, unless a writer did since the sweep's query.
+/// Re-seals the row of `user` under the active version, from an envelope value or a keyring value
+/// under an older version, unless a writer did since the sweep's query.
 async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
     let row = table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(user)
         .cloned();
-    let Some(row) = row.filter(|row| row.seal.format == SealFormat::Envelope) else {
+    let Some(row) = row else {
         return Ok(ResealOutcome::Skipped);
     };
-    let email: Email = keyring
-        .decrypt_envelope(
-            &envelope_aad(user),
-            &Encrypted::<Email, Envelope>::try_from(row.email)?,
-            ENVELOPE_ALGORITHM,
-        )
-        .await?;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let resealed = keyring.encrypt(&aad, &email).await?;
+    let (email, from_compromised) = match row.seal.format {
+        SealFormat::Envelope => {
+            let email: Email = keyring
+                .decrypt_envelope(
+                    &envelope_aad(user),
+                    &Encrypted::<Email, Envelope>::try_from(row.email)?,
+                    ENVELOPE_ALGORITHM,
+                )
+                .await?;
+            // Envelope values name no key version, so the record carries no trust to decide on.
+            (keyring.encrypt(&aad, &email).await?, false)
+        }
+        SealFormat::Keyring => {
+            let email = Encrypted::<Email, Randomized>::try_from(row.email)?;
+            let Some(resealed): Option<Resealed<Email, Randomized>> =
+                keyring.reseal(&aad, &email).await?
+            else {
+                return Ok(ResealOutcome::Skipped);
+            };
+            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+            (resealed.value, from_compromised)
+        }
+        // A layout this application does not write.
+        _ => return Ok(ResealOutcome::Skipped),
+    };
     let row = UserRow {
-        seal: SealMarker::keyring([resealed.key_id()])?,
-        email: resealed.into_value(),
+        seal: SealMarker::keyring([email.key_id()])?,
+        email: email.into_value(),
     };
     table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .insert(user.to_string(), row);
-    // Envelope values name no key version, so the record carries no trust to decide on.
-    Ok(ResealOutcome::Resealed {
-        from_compromised: false,
-    })
+    Ok(ResealOutcome::Resealed { from_compromised })
+}
+
+/// Sweeps every row behind the keyring's active versions, and prints the report.
+async fn sweep_table(keyring: &UsersKeyring, table: &Table) {
+    let thresholds: SealThresholds = keyring.seal_thresholds();
+    let candidates: Vec<String> = table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .filter(|(_, row)| row.seal.is_behind(&thresholds))
+        .map(|(user, _)| user.clone())
+        .collect();
+    let report: SweepReport = sweep::run(
+        keyring.id(),
+        stream::iter(candidates),
+        NonZeroUsize::MIN.saturating_add(1),
+        |candidate| async move { reseal(keyring, table, &candidate).await },
+    )
+    .await;
+    println!(
+        "sweep: scanned {}, resealed {}, skipped {}, failed {}",
+        report.scanned, report.resealed, report.skipped, report.failed
+    );
 }
 
 #[tokio::main]
@@ -199,29 +241,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     print_rows(&keyring, &table).await?;
 
-    // The sweep over `seal.format = 'envelope'`.
-    let candidates: Vec<String> = table
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .filter(|(_, row)| row.seal.format == SealFormat::Envelope)
-        .map(|(user, _)| user.clone())
-        .collect();
-    let report = sweep::run(
-        &TENANT,
-        stream::iter(candidates),
-        NonZeroUsize::MIN.saturating_add(1),
-        |candidate| {
-            let (keyring, table) = (&keyring, &table);
-            async move { reseal(keyring, table, &candidate).await }
-        },
-    )
-    .await;
-    println!(
-        "sweep: scanned {}, resealed {}, skipped {}, failed {}",
-        report.scanned, report.resealed, report.skipped, report.failed
-    );
+    // The migration: every envelope row is behind any thresholds.
+    sweep_table(&keyring, &table).await;
+    print_rows(&keyring, &table).await?;
 
+    // A rotation later: the same sweep moves the rows to the new version.
+    keyring
+        .promote(keyring.rotate(Purpose::Randomized).await?)
+        .await?;
+    sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
     registry.shutdown().await?;
     Ok(())

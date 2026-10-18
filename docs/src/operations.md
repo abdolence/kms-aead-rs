@@ -80,10 +80,43 @@ visit: after the promotion of randomised key id `n`, the records whose `seal.ran
 likewise for deterministic and beacon versions. A key id goes up to 2^32 - 1, so a SQL column
 holding one is a `BIGINT`.
 
+### Finding records behind
+
+`Keyring::seal_thresholds()` returns the active version of each purpose as a `SealThresholds`,
+with `None` for a purpose the keyring has no active version of. Key ids compare by
+`KeyId::as_u32()` within one purpose, the order in which the keyring numbers its versions, so the
+query of a sweep is:
+
+- `seal.randomized < thresholds.randomized`, and likewise for `deterministic` and `beacon`;
+- `seal.format = 'envelope'`, for the records not yet migrated.
+
+A store whose query cannot express the condition, or a candidate read back before its re-seal,
+uses `SealMarker::is_behind(&thresholds)`, the same test in Rust: true for an envelope marker,
+and for a marker that names a version below the threshold of its purpose. A purpose without a
+threshold has nothing to re-seal under, so no marker is behind on it.
+
+The thresholds come from the cached record, so a job that starts right after a promotion in
+another process calls `reload()` first.
+
+### Re-sealing a value
+
+`Keyring::reseal(aad, value)` returns `None` for a value under the active randomised version, and
+otherwise reads it with `decrypt_with_trust` and seals it again under the active version. The
+`Resealed` it returns holds the new `value` and the `trust` of the version the old value was read
+under, so the compromised-value decision stays with the caller, see
+[The trust of re-sealed values](#the-trust-of-re-sealed-values). `reseal_deterministic` does the
+same for deterministic values, under the `deterministic` feature.
+
+A beacon cannot be re-sealed: it is a MAC of the plaintext. A field with a beacon is read with
+`decrypt_with_trust` instead, and its plaintext gives both the value under the active version,
+through `encrypt`, and the beacon under the active beacon version, through `beacon(field,
+&plaintext)`. `Resealed` holds no plaintext, since a beacon rotation leaves the value itself
+current, and `reseal` then opens nothing.
+
 ### Running a sweep
 
-`sweep::run` drives the application's re-seal over the records a query found, with a bounded
-number in flight, and counts what happened:
+`sweep::run` drives the application's re-seal over a stream of candidates, with at most
+`concurrency` in flight, and counts what happened. Here over an in-memory table:
 
 ```rust
 use std::collections::BTreeMap;
@@ -95,12 +128,12 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
-    Purpose, Rotation,
+    Purpose, Resealed, Rotation,
 };
 use secret_vault_value::SecretValue;
 
@@ -142,15 +175,19 @@ async fn reseal(
         return Ok(ResealOutcome::Skipped);
     };
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let decrypted: Decrypted<Email> = keyring.decrypt_with_trust(&aad, &row.email).await?;
-    let email: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &decrypted.value).await?;
-    let seal = SealMarker::keyring([email.key_id()])?;
+    let Some(resealed): Option<Resealed<Email, Randomized>> =
+        keyring.reseal(&aad, &row.email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let seal = SealMarker::keyring([resealed.value.key_id()])?;
+    let email = resealed.value;
     table
         .lock()
         .unwrap()
         .insert(user.to_string(), UserRow { email, seal });
     Ok(ResealOutcome::Resealed {
-        from_compromised: matches!(decrypted.trust, KeyTrust::Compromised(_)),
+        from_compromised: matches!(resealed.trust, KeyTrust::Compromised(_)),
     })
 }
 
@@ -177,19 +214,18 @@ let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 // After the wait for every process to see the staged version
 let rotation: Rotation = keyring.promote(staged).await?;
 
-// The query: every row whose oldest randomised version is below the new one
+// The query: every row behind the active versions
+let thresholds: SealThresholds = keyring.seal_thresholds();
 let candidates = table
     .lock()
     .unwrap()
     .iter()
-    .filter(|(_, row)| {
-        row.seal.randomized.map(KeyId::as_u32) < Some(rotation.current.as_u32())
-    })
+    .filter(|(_, row)| row.seal.is_behind(&thresholds))
     .map(|(user, _)| user.clone())
     .collect::<Vec<String>>();
 
 let report: SweepReport = sweep::run(
-    &TENANT,
+    keyring.id(),
     stream::iter(candidates),
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
@@ -200,7 +236,12 @@ let report: SweepReport = sweep::run(
 .await;
 
 // Nothing left under the old version: retire it
-if report.failed == 0 {
+let behind = table
+    .lock()
+    .unwrap()
+    .values()
+    .any(|row| row.seal.is_behind(&thresholds));
+if report.failed == 0 && !behind {
     if let Some(previous) = rotation.previous {
         keyring.retire(previous).await?;
     }
@@ -214,21 +255,602 @@ if report.failed == 0 {
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
 `failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
 `WARN` with the candidate's `Display` and the error's code, never a value. A candidate is the
-application's own type, such as a record id or a struct of key columns, and its `Display` names
-the record and nothing else. A record id is often an entity id, so read the sweep's log as an
-administrative log.
+application's own type, such as a record id, a struct of key columns or the record itself, and its
+`Display` names the record and nothing else. A record id is often an entity id, so read the
+sweep's log as an administrative log.
 
-In a real data store the re-seal is a transaction per record or per batch:
-
-- Firestore: a transaction per document, which reads the document, re-seals every field and writes
-  it with the marker. A concurrent application write wins, and the candidate is `Skipped`;
-- PostgreSQL: `SELECT … WHERE seal_randomized < $1 ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED` in a
-  transaction per batch, then the `UPDATE` and the commit. `$1` is the new version's
-  `KeyId::as_u32()`, bound as a `BIGINT`.
+The re-seal returns a `KeyringResult`, so an error of the application's own data store becomes a
+`KeyringError::Store` with `StoreKind::Other`, as the examples below do.
 
 Once a sweep reports `failed == 0` and the query returns nothing, `retire` the old version. Keep it
 retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
 turned up after all, while a destroyed one is gone.
+
+### Sweeps by store
+
+At millions of records a sweep streams its candidates from the store and never holds the result
+of its query in memory. Every example below has the same four properties:
+
+- it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
+  matches it, so a cancelled or failed run is started again over the same query;
+- a concurrent writer wins: the write is conditional on the record the sweep read, and a record
+  that changed in between is `Skipped`. The application's own write re-seals every field under
+  the active versions anyway;
+- `concurrency` bounds the re-seals in flight, and with them the load on both the store and the
+  KMS. The DEK cache keeps each version's key, so a sweep makes one KMS decrypt per key version
+  and cache TTL, never one per record. The keys of a compromised version are the exception: they are decrypted
+  for every value and never cached;
+- it ends with `retire`, then later `destroy`, once a run reports `failed == 0` and the query
+  returns nothing.
+
+#### Firestore
+
+The marker is a map field, `seal`, whose `seal.randomized` Firestore indexes by default. The query
+streams with `stream_query_with_errors()`, so that a document that does not read is a failed
+candidate, and the sweep never ends early on it. The write carries the document's update time as
+its precondition, and Firestore refuses it once anything changed the document since the query
+read it:
+
+```rust,no_run
+use std::fmt::{self, Display, Formatter};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+
+use firestore::errors::FirestoreError;
+use firestore::{
+    paths, FirestoreDb, FirestoreResult, FirestoreTimestamp, FirestoreWritePrecondition,
+};
+use futures_util::StreamExt;
+use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::errors::KeyringStoreError;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::{FirestoreKeyringStore, StoreKind, StoreOperation};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+use serde::{Deserialize, Serialize};
+
+type UsersKeyring = Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>;
+
+const USERS: &str = "users";
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+
+# #[derive(Clone)]
+# struct Email(String);
+#
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+#         self.0.to_plaintext()
+#     }
+#
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
+#
+#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(rename = "_firestore_updated", skip_serializing)]
+    updated: FirestoreTimestamp,
+    email: Encrypted<Email, Randomized>,
+    seal: SealMarker,
+}
+
+/// A document the query returned, or the error of reading it, which the sweep counts as failed.
+struct Candidate(FirestoreResult<UserDoc>);
+
+/// The document id, and nothing of its fields.
+impl Display for Candidate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.0 {
+            Ok(doc) => write!(f, "{USERS}/{}", doc.id),
+            Err(_) => write!(f, "an unreadable document of {USERS}"),
+        }
+    }
+}
+
+/// An error of the users collection, as the sweep counts it.
+fn users_error(operation: StoreOperation, error: FirestoreError) -> KeyringError {
+    KeyringError::Store(
+        KeyringStoreError::new(
+            StoreKind::Other(USERS),
+            operation,
+            "the users collection failed".to_string(),
+        )
+        .with_root_cause(Arc::new(error)),
+    )
+}
+
+async fn reseal(
+    keyring: &UsersKeyring,
+    db: &FirestoreDb,
+    candidate: Candidate,
+) -> KeyringResult<ResealOutcome> {
+    let doc = candidate
+        .0
+        .map_err(|error| users_error(StoreOperation::Load, error))?;
+    let aad = EMAIL.aad(&EntityId::try_from(doc.id.as_str())?);
+    let Some(resealed): Option<Resealed<Email, Randomized>> =
+        keyring.reseal(&aad, &doc.email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+    let update = UserDoc {
+        seal: SealMarker::keyring([resealed.value.key_id()])?,
+        email: resealed.value,
+        ..doc
+    };
+    let written: FirestoreResult<UserDoc> = db
+        .fluent()
+        .update()
+        .fields(paths!(UserDoc::{email, seal}))
+        .in_col(USERS)
+        .precondition(FirestoreWritePrecondition::UpdateTime(update.updated.into()))
+        .document_id(&update.id)
+        .object(&update)
+        .execute()
+        .await;
+    match written {
+        Ok(_) => Ok(ResealOutcome::Resealed { from_compromised }),
+        // A write since the query: the writer re-sealed the document itself
+        Err(FirestoreError::DatabaseError(error)) if error.public.code == "FailedPrecondition" => {
+            Ok(ResealOutcome::Skipped)
+        }
+        Err(error) => Err(users_error(StoreOperation::CompareAndSwap, error)),
+    }
+}
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let key_ref = GcpKmsKeyRef::new(
+#     "my-project".to_string(),
+#     "europe-north1".to_string(),
+#     "my-key-ring".to_string(),
+#     "my-key".to_string(),
+# );
+let db = FirestoreDb::new("my-project").await?;
+let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
+    FirestoreKeyringStore::new(db.clone()),
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: UsersKeyring = registry
+    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
+    .await?;
+
+let thresholds: SealThresholds = keyring.seal_thresholds();
+if let Some(active) = thresholds.randomized {
+    let candidates = db
+        .fluent()
+        .select()
+        .from(USERS)
+        .filter(|q| q.field("seal.randomized").less_than(active.as_u32()))
+        .obj::<UserDoc>()
+        .stream_query_with_errors()
+        .await?
+        .map(Candidate);
+    let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |candidate| {
+        let (keyring, db) = (&keyring, &db);
+        async move { reseal(keyring, db, candidate).await }
+    })
+    .await;
+    println!("{report:?}");
+}
+registry.shutdown().await?;
+# Ok(())
+# }
+```
+
+A query of `seal.randomized` matches no document without that field: documents written before the
+marker existed are found by `seal.format == "envelope"` only once a backfill wrote their marker,
+or by a scan of the collection that tests `is_behind` on each, since the marker reads as
+`SealMarker::ENVELOPE` through `#[serde(default)]`.
+
+`partition_query()` splits a collection into cursors that separate workers run in parallel, for
+a sweep faster than one stream reads. Firestore partitions only a query with no filter, so each
+worker tests `is_behind(&thresholds)` on its documents and skips the current ones before the
+re-seal.
+
+#### PostgreSQL
+
+The marker is four columns, `seal_format TEXT`, and `seal_randomized`, `seal_deterministic`,
+`seal_beacon` as `BIGINT`, since a key id goes up to 2^32 - 1. The candidates stream in pages
+by keyset pagination on the primary key, with `futures_util::stream::unfold`: each page is one
+short query, so no transaction stays open across the sweep, and memory holds one page. The
+`UPDATE` is conditional on the bytes it read, which a write of any other process changes, since
+every randomised value has its own nonce. A process that has not seen the promotion yet still
+seals under the old version and leaves `seal_randomized` as it was, so the marker alone does not
+detect its write:
+
+```rust,no_run
+use std::fmt::{self, Display, Formatter};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+
+use futures_util::{stream, Stream, StreamExt};
+use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::errors::KeyringStoreError;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::{PostgresKeyringStore, StoreKind, StoreOperation};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringError,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+use tokio_postgres::{Client, Config, NoTls, Row};
+
+type UsersKeyring = Keyring<PostgresKeyringStore<NoTls>, GcpKmsProvider, Ring>;
+
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+const PAGE_SIZE: u16 = 1000;
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+
+# #[derive(Clone)]
+# struct Email(String);
+#
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+#         self.0.to_plaintext()
+#     }
+#
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
+#
+/// A row the query returned, or the error of reading its page, which the sweep counts as failed.
+enum Candidate {
+    Row { id: i64, email: Encrypted<Email, Randomized> },
+    Unread(tokio_postgres::Error),
+}
+
+/// The row id, and nothing of its columns.
+impl Display for Candidate {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Candidate::Row { id, .. } => write!(f, "users/{id}"),
+            Candidate::Unread(_) => f.write_str("a row or page of users that did not read"),
+        }
+    }
+}
+
+impl TryFrom<Row> for Candidate {
+    type Error = tokio_postgres::Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Candidate::Row {
+            id: row.try_get("id")?,
+            email: row.try_get("email")?,
+        })
+    }
+}
+
+/// An error of the users table, as the sweep counts it.
+fn users_error(operation: StoreOperation, error: tokio_postgres::Error) -> KeyringError {
+    KeyringError::Store(
+        KeyringStoreError::new(
+            StoreKind::Other("users"),
+            operation,
+            "the users table failed".to_string(),
+        )
+        .with_root_cause(Arc::new(error)),
+    )
+}
+
+/// The rows whose `seal_randomized` is below `active`, a page at a time in the order of `id`.
+fn candidates(client: &Client, active: KeyId) -> impl Stream<Item = Candidate> + '_ {
+    let active = i64::from(active.as_u32());
+    stream::unfold(Some(i64::MIN), move |after| async move {
+        let rows = client
+            .query(
+                "SELECT id, email FROM users \
+                 WHERE seal_randomized < $1 AND id > $2 ORDER BY id LIMIT $3",
+                &[&active, &after?, &i64::from(PAGE_SIZE)],
+            )
+            .await;
+        let page = match rows {
+            Ok(rows) => rows
+                .into_iter()
+                .map(|row| Candidate::try_from(row).unwrap_or_else(Candidate::Unread))
+                .collect::<Vec<Candidate>>(),
+            Err(error) => return Some((vec![Candidate::Unread(error)], None)),
+        };
+        let last = page.iter().rev().find_map(|candidate| match candidate {
+            Candidate::Row { id, .. } => Some(*id),
+            Candidate::Unread(_) => None,
+        });
+        let next = match last {
+            Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last),
+            _ => None,
+        };
+        (!page.is_empty()).then_some((page, next))
+    })
+    .flat_map(stream::iter)
+}
+
+async fn reseal(
+    keyring: &UsersKeyring,
+    client: &Client,
+    candidate: Candidate,
+) -> KeyringResult<ResealOutcome> {
+    let (id, email) = match candidate {
+        Candidate::Row { id, email } => (id, email),
+        Candidate::Unread(error) => return Err(users_error(StoreOperation::Load, error)),
+    };
+    let aad = EMAIL.aad(&EntityId::try_from(id.to_string())?);
+    let Some(resealed): Option<Resealed<Email, Randomized>> =
+        keyring.reseal(&aad, &email).await?
+    else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let seal = SealMarker::keyring([resealed.value.key_id()])?;
+    let seal_randomized: Option<i64> = seal.randomized.map(|key_id| i64::from(key_id.as_u32()));
+    let updated: u64 = client
+        .execute(
+            "UPDATE users SET email = $2, seal_format = 'keyring', seal_randomized = $3 \
+             WHERE id = $1 AND email = $4",
+            &[&id, &resealed.value, &seal_randomized, &email],
+        )
+        .await
+        .map_err(|error| users_error(StoreOperation::CompareAndSwap, error))?;
+    Ok(match updated {
+        // A write since the query: the writer re-sealed the row itself
+        0 => ResealOutcome::Skipped,
+        _ => ResealOutcome::Resealed {
+            from_compromised: matches!(resealed.trust, KeyTrust::Compromised(_)),
+        },
+    })
+}
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let key_ref = GcpKmsKeyRef::new(
+#     "my-project".to_string(),
+#     "europe-north1".to_string(),
+#     "my-key-ring".to_string(),
+#     "my-key".to_string(),
+# );
+let config: Config = "postgres://app@localhost/app".parse()?;
+let (client, connection) = config.connect(NoTls).await?;
+tokio::spawn(connection);
+let registry = KeyringRegistry::<PostgresKeyringStore<NoTls>, Ring>::new(
+    PostgresKeyringStore::new(config, NoTls),
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: UsersKeyring = registry
+    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
+    .await?;
+
+let thresholds: SealThresholds = keyring.seal_thresholds();
+if let Some(active) = thresholds.randomized {
+    let report: SweepReport = sweep::run(
+        keyring.id(),
+        candidates(&client, active),
+        CONCURRENCY,
+        |candidate| {
+            let (keyring, client) = (&keyring, &client);
+            async move { reseal(keyring, client, candidate).await }
+        },
+    )
+    .await;
+    println!("{report:?}");
+}
+registry.shutdown().await?;
+# Ok(())
+# }
+```
+
+One tokio-postgres `Client` pipelines the page queries and the concurrent `UPDATE`s on one
+connection. The primary key serves every page, and the filter on `seal_randomized` reads each row
+once over the whole sweep; an index on `seal_randomized` serves a sweep that leaves most rows
+current.
+
+A single query read through a portal is the alternative to pages: `Transaction::bind` and
+`query_portal_raw` fetch the rows of one `SELECT` in batches. A portal lives only inside its
+transaction, so that transaction stays open for the whole sweep, hours at millions of rows. Its
+snapshot keeps vacuum from removing the dead row versions the `UPDATE`s leave behind, and the
+`UPDATE`s run on a second connection, since the first holds the portal.
+
+#### BigQuery
+
+A field BigQuery reads, declared with `Interop::BigQuery`, is re-sealed by one `UPDATE` in SQL,
+with no Rust loop and no value leaving BigQuery. The marker is a `STRUCT<format STRING,
+randomized INT64, deterministic INT64, beacon INT64>` column. With `keyset` standing for the
+`KEYS.KEYSET_CHAIN(…)` expression of a `Readable(Purpose::Randomized)` export, see
+[Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery), and
+`@active` for the active version's key id:
+
+```sql
+UPDATE users
+SET
+  email = AEAD.ENCRYPT(
+    keyset,
+    AEAD.DECRYPT_BYTES(keyset, email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
+    CAST(CONCAT('user/', id, '/email') AS BYTES)),
+  seal = STRUCT(
+    'keyring' AS format,
+    @active AS randomized,
+    seal.deterministic AS deterministic,
+    seal.beacon AS beacon)
+WHERE seal.randomized < @active;
+```
+
+`AEAD.DECRYPT_BYTES`, and `AEAD.ENCRYPT` of bytes, take the AAD as `BYTES`, the UTF-8 of the
+same text. `AEAD.ENCRYPT` seals under the keyset's primary, which a `Readable` export sets to the active
+version. A keyset exported before the promotion has the previous version as its primary, so the
+sweep exports its keyset after the promotion, and then takes `@active` from
+`seal_thresholds().randomized`: the export reads the record from the store and takes it as the
+cached record, so both come from the same record. The statement re-seals every randomised field
+of the row, or `@active` is not the oldest version among them.
+
+This sweep:
+
+- resumes without a checkpoint: the statement is atomic, and a failed one changed nothing;
+- loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
+  statements on the same rows one fails and runs again, and its `WHERE` then sees the other's
+  marker;
+- makes no KMS call per record: BigQuery opens the keyset through Cloud KMS for the statement;
+- ends with `retire`, then later `destroy`, once `SELECT COUNT(*) FROM users WHERE
+  seal.randomized < @active` returns 0.
+
+A `Readable` keyset leaves a compromised version out, so the values under it fail
+`AEAD.DECRYPT_BYTES` and the whole statement with them. After a compromise those rows go through
+the Rust path below, where `reseal` reports their trust.
+
+Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-sealed in
+Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one `MERGE`
+per page of rows rather than one `UPDATE` per row, conditional on the bytes each row held:
+
+```sql
+MERGE users u
+USING UNNEST(@pages) p
+ON u.id = p.id AND u.phone = p.old_phone
+WHEN MATCHED THEN UPDATE SET
+  phone = p.phone,
+  seal = STRUCT(
+    'keyring' AS format,
+    p.seal_randomized AS randomized,
+    u.seal.deterministic AS deterministic,
+    u.seal.beacon AS beacon);
+```
+
+The pages stream from the application's BigQuery client, a query of `SELECT id, phone FROM users
+WHERE seal.randomized < @active` read a page at a time, and the client runs the `MERGE`. The
+candidate is then a page, and the report counts pages:
+
+```rust
+use std::fmt::{self, Display, Formatter};
+use std::future::Future;
+use std::num::NonZeroUsize;
+
+use futures_util::Stream;
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
+    KeyringResult, Plaintext, Resealed,
+};
+use secret_vault_value::SecretValue;
+
+type UsersKeyring = Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>;
+
+const PHONE: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("phone"),
+);
+const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
+
+# struct Phone(String);
+#
+# impl Plaintext for Phone {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+#         self.0.to_plaintext()
+#     }
+#
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Phone)
+#     }
+# }
+#
+/// A row of `SELECT id, phone FROM users WHERE seal.randomized < @active`.
+struct UserRow {
+    id: String,
+    phone: Encrypted<Phone, Randomized>,
+}
+
+/// A page of rows, as the application's BigQuery client reads the query result.
+struct UsersPage {
+    /// The page token the client read the page with, which names the page and no row.
+    token: String,
+    rows: Vec<UserRow>,
+}
+
+impl Display for UsersPage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "users page {}", self.token)
+    }
+}
+
+/// One element of `@pages`: a row re-sealed, with the bytes it held.
+struct PhoneUpdate {
+    id: String,
+    old_phone: Encrypted<Phone, Randomized>,
+    phone: Encrypted<Phone, Randomized>,
+    seal_randomized: Option<KeyId>,
+}
+
+/// Re-seals the `pages` of the query, and writes each through `merge`, which runs the `MERGE`
+/// and returns its number of affected rows.
+async fn sweep_phones<Pages, Merge, Merged>(
+    keyring: &UsersKeyring,
+    pages: Pages,
+    merge: Merge,
+) -> SweepReport
+where
+    Pages: Stream<Item = UsersPage>,
+    Merge: Fn(Vec<PhoneUpdate>) -> Merged,
+    Merged: Future<Output = KeyringResult<u64>>,
+{
+    sweep::run(keyring.id(), pages, CONCURRENCY, |page| {
+        let merge = &merge;
+        async move {
+            let mut updates = Vec::with_capacity(page.rows.len());
+            let mut from_compromised = false;
+            for row in page.rows {
+                let aad = PHONE.aad(&EntityId::try_from(row.id.as_str())?);
+                let Some(resealed): Option<Resealed<Phone, Randomized>> =
+                    keyring.reseal(&aad, &row.phone).await?
+                else {
+                    continue;
+                };
+                from_compromised |= matches!(resealed.trust, KeyTrust::Compromised(_));
+                updates.push(PhoneUpdate {
+                    seal_randomized: SealMarker::keyring([resealed.value.key_id()])?.randomized,
+                    id: row.id,
+                    old_phone: row.phone,
+                    phone: resealed.value,
+                });
+            }
+            if updates.is_empty() {
+                return Ok(ResealOutcome::Skipped);
+            }
+            Ok(match merge(updates).await? {
+                0 => ResealOutcome::Skipped,
+                _ => ResealOutcome::Resealed { from_compromised },
+            })
+        }
+    })
+    .await
+}
+#
+# fn main() {}
+```
+
+A page is re-sealed sequentially inside its re-seal, and `concurrency` bounds the pages in flight,
+which BigQuery's limit on concurrent DML per table sets low. The four properties hold per page: a
+row that a concurrent writer changed fails the `ON` condition and stays in the query for the next
+run.
 
 ### The trust of re-sealed values
 
