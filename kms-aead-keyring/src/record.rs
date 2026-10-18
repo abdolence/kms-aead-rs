@@ -670,20 +670,21 @@ impl KeyringRecord {
         Ok(())
     }
 
-    /// The wrapped keys of the versions of this record that `next` takes out of use: flagged
-    /// compromised, retired or destroyed since this record.
+    /// The wrapped keys this record reads under that `next` takes out of use: their version is
+    /// gone, retired or destroyed, newly flagged compromised, or holds another wrapped key, as
+    /// after a rewrap, which leaves the cached plaintext of the old bytes orphaned.
     pub(crate) fn withdrawn_deks<'a>(
         &'a self,
         next: &'a KeyringRecord,
     ) -> impl Iterator<Item = &'a EncryptedDataEncryptionKey> + 'a {
-        let out_of_use =
-            |state| matches!(state, KeyVersionState::Retired | KeyVersionState::Destroyed);
         self.versions.iter().filter_map(move |held| {
-            let dek = held.wrapped_dek()?;
-            let withdrawn = next.version(held.key_id).is_none_or(|version| {
-                (version.compromised().is_some() && held.compromised().is_none())
-                    || (out_of_use(version.state()) && !out_of_use(held.state()))
-            });
+            let (dek, compromise) = held.readable_dek()?;
+            let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
+                None => true,
+                Some((next_dek, next_compromise)) => {
+                    next_dek != dek || (next_compromise.is_some() && compromise.is_none())
+                }
+            };
             withdrawn.then_some(dek)
         })
     }

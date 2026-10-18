@@ -671,6 +671,19 @@ fn versions_taken_out_of_use_are_withdrawn() -> TestResult {
 }
 
 #[test]
+fn a_rewrapped_key_withdraws_the_bytes_it_replaces() -> TestResult {
+    let held_record = parse(&held()?)?;
+    let mut next = held()?;
+    next["versions"][1]["wrapped_dek"] = json!(STANDARD.encode(
+        EncryptedDataEncryptionKey::new(vec![0x0B, 0xAD], None).to_bytes()?
+    ));
+    let next = parse(&next)?;
+    let withdrawn: Vec<_> = held_record.withdrawn_deks(&next).collect();
+    assert_eq!(withdrawn, [&wrapped_dek()?]);
+    Ok(())
+}
+
+#[test]
 fn dot_and_dotdot_keyring_ids_are_rejected() -> KeyringResult<()> {
     for id in [".", "..", "__x__", "____"] {
         assert!(matches!(
