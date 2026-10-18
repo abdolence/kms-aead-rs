@@ -76,10 +76,10 @@ pub struct KmsAeadEnvelopeOptions {
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
 /// and the first encryption after it has left the cache renews it: past the cache's TTL,
-/// whatever `max_age`, or after [`DekCache::invalidate`] or [`DekCache::clear`]. The cache
-/// zeroizes the expired DEK at its next call or at [`DekCache::purge_expired`], so a writer that
-/// falls quiet leaves the DEK in memory until then: a process that can sit idle calls
-/// `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
+/// whatever `max_age`, or after [`DekCache::invalidate`] with `envelope.provider().kek()` or
+/// [`DekCache::clear`]. The cache zeroizes the expired DEK at its next call or at
+/// [`DekCache::purge_expired`], so a writer that falls quiet leaves the DEK in memory until then:
+/// a process that can sit idle calls `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
 /// DEK are readable by whoever reads the process's memory in that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
@@ -254,8 +254,14 @@ where
         self.cipher.algorithm()
     }
 
+    /// The provider this envelope wraps and unwraps DEKs with.
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
     /// The cache this envelope unwraps DEKs through, for [`DekCache::invalidate`] and
-    /// [`DekCache::clear`].
+    /// [`DekCache::clear`]. Pass `envelope.provider().kek()` to `invalidate`: a
+    /// [`KekRef`](crate::KekRef) built by hand that differs from it matches no entry.
     pub fn dek_cache(&self) -> &DekCache {
         &self.dek_cache
     }
@@ -1019,7 +1025,7 @@ mod tests {
             .1;
         envelope
             .dek_cache()
-            .invalidate(envelope.provider.kek(), &first, None);
+            .invalidate(envelope.provider().kek(), &first, None);
         let after_invalidate = envelope
             .encrypt_value(AAD, &plain_text)
             .await?
