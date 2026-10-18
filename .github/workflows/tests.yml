@@ -56,6 +56,9 @@ jobs:
             absent: ring aws-lc-rs
           - name: all backends, legacy formats
             features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
+          - name: 'fields: serde-json, postgres, sqlx on ring'
+            features: ring,serde,serde-json,postgres,sqlx
+            absent: rustls native-tls
           - name: backend aws-lc FIPS
             features: aws-lc-fips
             absent: ring aws-lc-sys
@@ -112,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
         env:
           RUSTDOCFLAGS: -D warnings
   # The book's code compiles as doctests only with the docs.rs feature set, which no build row has.
@@ -126,7 +129,7 @@ jobs:
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: '0.5.4'
-      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
       - run: cd docs && mdbook build
   # `rust-version` in Cargo.toml: the docs.rs feature set builds on it.
   msrv:
@@ -136,7 +139,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
-      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -171,3 +174,26 @@ jobs:
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
       - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
+  # The PostgreSQL integrations of `Encrypted` through tokio-postgres and sqlx.
+  postgres-live:
+    name: postgres-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --features ring,postgres,sqlx --test postgres_fields -- --ignored
