@@ -6,7 +6,7 @@
 //! cloud credentials.
 //!
 //! ```sh
-//! cargo run -p kms-aead-keyring --example migrate --features ring,admin
+//! cargo run -p kms-aead-keyring --example migrate --features ring,admin,serde
 //! ```
 
 use std::collections::BTreeMap;
