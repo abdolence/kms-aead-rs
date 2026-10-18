@@ -275,6 +275,7 @@ where
 
 #[cfg(all(
     test,
+    feature = "admin",
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod tests {
@@ -284,7 +285,7 @@ mod tests {
 
     use crate::errors::InteropRequirement;
     use crate::test_support::{
-        email_of, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+        email_of, TestAdmin, TestProvider, TestRegistry, TestResult, TENANT,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{
@@ -302,7 +303,7 @@ mod tests {
     /// A keyring with an AES-SIV version beside the randomised one.
     async fn deterministic_keyring(
         provider: TestProvider,
-    ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
+    ) -> KeyringResult<TestAdmin<MemoryKeyringStore>> {
         TestRegistry::new(
             MemoryKeyringStore::new(),
             KeyringRegistryOptions::new().with_watch(false),
@@ -317,7 +318,8 @@ mod tests {
 
     #[tokio::test]
     async fn equal_plaintexts_give_equal_values_under_one_version() -> TestResult {
-        let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let alice = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
@@ -344,15 +346,16 @@ mod tests {
     #[tokio::test]
     async fn probes_cover_every_decrypting_version_newest_first_with_the_pending_one() -> TestResult
     {
-        let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
-        keyring
-            .promote(keyring.rotate(Purpose::Deterministic).await?)
+        admin
+            .promote(admin.rotate(Purpose::Deterministic).await?)
             .await?;
-        let pending = keyring.rotate(Purpose::Deterministic).await?;
+        let pending = admin.rotate(Purpose::Deterministic).await?;
 
         let probes = keyring
             .deterministic_probes(&aad, &ALICE.to_string())
@@ -377,7 +380,8 @@ mod tests {
     #[tokio::test]
     async fn probes_refuse_a_field_whose_interop_the_keyring_breaks() -> TestResult {
         let provider = TestProvider::new("tenant-42-kek")?;
-        let keyring = deterministic_keyring(provider.clone()).await?;
+        let admin = deterministic_keyring(provider.clone()).await?;
+        let keyring = admin.keyring();
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         let probes = keyring
@@ -404,15 +408,16 @@ mod tests {
 
     #[tokio::test]
     async fn retired_versions_give_no_probe() -> TestResult {
-        let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
-        keyring
-            .promote(keyring.rotate(Purpose::Deterministic).await?)
+        admin
+            .promote(admin.rotate(Purpose::Deterministic).await?)
             .await?;
         let first = KeyId::new(0x8000_0001);
         let current = [KeyId::new(0x8000_0002)];
 
-        keyring.retire(first).await?;
+        admin.retire(first).await?;
         let probes = keyring
             .deterministic_probes(&aad, &ALICE.to_string())
             .await?;
@@ -424,7 +429,7 @@ mod tests {
             current
         );
 
-        keyring.destroy(first).await?;
+        admin.destroy(first).await?;
         let probes = keyring
             .deterministic_probes(&aad, &ALICE.to_string())
             .await?;
@@ -441,12 +446,13 @@ mod tests {
     #[tokio::test]
     async fn a_probe_under_a_compromised_version_is_listed() -> TestResult {
         let provider = TestProvider::new("tenant-42-kek")?;
-        let keyring = deterministic_keyring(provider.clone()).await?;
+        let admin = deterministic_keyring(provider.clone()).await?;
+        let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
-        keyring.mark_compromised(first.key_id(), None).await?;
+        admin.mark_compromised(first.key_id(), None).await?;
 
         let probes = keyring
             .deterministic_probes(&aad, &ALICE.to_string())
@@ -475,13 +481,14 @@ mod tests {
     #[tokio::test]
     async fn a_deterministic_read_under_a_compromised_version_follows_the_read_policy() -> TestResult
     {
-        let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let value = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         let key_id = value.key_id();
-        keyring.mark_compromised(key_id, None).await?;
+        admin.mark_compromised(key_id, None).await?;
 
         assert!(matches!(
             keyring.decrypt_deterministic(&aad, &value).await,
@@ -500,7 +507,8 @@ mod tests {
     /// opens there, where the randomised twin, bound to its row, does not.
     #[tokio::test]
     async fn a_deterministic_value_opens_in_another_row() -> TestResult {
-        let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let deterministic = keyring
             .encrypt_deterministic(&EMAIL.deterministic_aad(), &ALICE.to_string())
             .await?;

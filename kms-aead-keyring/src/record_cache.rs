@@ -21,10 +21,12 @@ use kms_aead::KekRef;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
-use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
-use crate::record::{check_successor, withdrawn_deks, RecordEdit};
+use crate::errors::{KeyringResult, RecordRegressedError, RegressionRule};
+use crate::record::{check_successor, withdrawn_deks};
 use crate::spans::{self, LoadChanged, LoadReason, Reload};
-use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, Swap, WatchEvent};
+use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, WatchEvent};
+#[cfg(feature = "admin")]
+use crate::{errors::RecordConflictError, record::RecordEdit, store::Swap};
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
@@ -159,41 +161,6 @@ impl<S: KeyringStore> RecordCache<S> {
         .await
     }
 
-    /// Applies `change` to the record as the store holds it and writes the result with a
-    /// compare-and-swap, reading again after each conflict, up to `cas_retries` times. Takes the
-    /// written record, records the conflicts retried on the current span, and returns what
-    /// `change` returned. A stored record that moves backwards from the cached one is refused
-    /// before `change` runs.
-    pub(crate) async fn write<T>(
-        &self,
-        cas_retries: u32,
-        mut change: impl AsyncFnMut(&mut RecordEdit) -> KeyringResult<T>,
-    ) -> KeyringResult<T> {
-        let refresh = self.refresh.lock().await;
-        for conflicts in 0..=cas_retries {
-            let stored = self.read_for_write().await?;
-            let mut edit = RecordEdit::from(stored.record);
-            let outcome = change(&mut edit).await?;
-            let record = edit.finish()?;
-            match self
-                .store
-                .compare_and_swap(&record, Some(&stored.revision))
-                .await?
-            {
-                Swap::Written(revision) => {
-                    self.install(&refresh, Stored { record, revision });
-                    spans::record_cas_retries(conflicts);
-                    return Ok(outcome);
-                }
-                Swap::Conflict => spans::write_conflict(&self.id, conflicts.saturating_add(1)),
-            }
-        }
-        Err(KeyringError::RecordConflict(RecordConflictError {
-            keyring: self.id.clone(),
-            attempts: cas_retries.saturating_add(1),
-        }))
-    }
-
     pub(crate) async fn read(
         store: &S,
         id: &KeyringId,
@@ -205,28 +172,6 @@ impl<S: KeyringStore> RecordCache<S> {
                 spans::record_load(LoadChanged::Taken, Some(&stored.revision));
             }
             Ok(stored)
-        })
-        .await
-    }
-
-    /// The store's record, refused when it moves backwards from the cached one, for a write to
-    /// build on.
-    async fn read_for_write(&self) -> KeyringResult<Stored<S::Revision>> {
-        let span = spans::load(&self.id, S::KIND, LoadReason::Admin);
-        spans::in_span(span, async {
-            let stored = spans::timed(self.store.load(&self.id))
-                .await?
-                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
-            match check_successor(&self.record(), &stored.record) {
-                Ok(()) => {
-                    spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));
-                    Ok(stored)
-                }
-                Err(rule) => {
-                    spans::record_load(LoadChanged::Regressed, Some(&stored.revision));
-                    Err(self.regressed(rule))
-                }
-            }
         })
         .await
     }
@@ -329,6 +274,67 @@ impl<S: KeyringStore> RecordCache<S> {
     /// The cached state, also from a poisoned lock: nothing that runs under the lock panics.
     fn lock(&self) -> MutexGuard<'_, Cached<S::Revision>> {
         self.cached.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The writes of a `KeyringAdmin`.
+#[cfg(feature = "admin")]
+impl<S: KeyringStore> RecordCache<S> {
+    /// Applies `change` to the record as the store holds it and writes the result with a
+    /// compare-and-swap, reading again after each conflict, up to `cas_retries` times. Takes the
+    /// written record, records the conflicts retried on the current span, and returns what
+    /// `change` returned. A stored record that moves backwards from the cached one is refused
+    /// before `change` runs.
+    pub(crate) async fn write<T>(
+        &self,
+        cas_retries: u32,
+        mut change: impl AsyncFnMut(&mut RecordEdit) -> KeyringResult<T>,
+    ) -> KeyringResult<T> {
+        let refresh = self.refresh.lock().await;
+        for conflicts in 0..=cas_retries {
+            let stored = self.read_for_write().await?;
+            let mut edit = RecordEdit::from(stored.record);
+            let outcome = change(&mut edit).await?;
+            let record = edit.finish()?;
+            match self
+                .store
+                .compare_and_swap(&record, Some(&stored.revision))
+                .await?
+            {
+                Swap::Written(revision) => {
+                    self.install(&refresh, Stored { record, revision });
+                    spans::record_cas_retries(conflicts);
+                    return Ok(outcome);
+                }
+                Swap::Conflict => spans::write_conflict(&self.id, conflicts.saturating_add(1)),
+            }
+        }
+        Err(KeyringError::RecordConflict(RecordConflictError {
+            keyring: self.id.clone(),
+            attempts: cas_retries.saturating_add(1),
+        }))
+    }
+
+    /// The store's record, refused when it moves backwards from the cached one, for a write to
+    /// build on.
+    async fn read_for_write(&self) -> KeyringResult<Stored<S::Revision>> {
+        let span = spans::load(&self.id, S::KIND, LoadReason::Admin);
+        spans::in_span(span, async {
+            let stored = spans::timed(self.store.load(&self.id))
+                .await?
+                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
+            match check_successor(&self.record(), &stored.record) {
+                Ok(()) => {
+                    spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));
+                    Ok(stored)
+                }
+                Err(rule) => {
+                    spans::record_load(LoadChanged::Regressed, Some(&stored.revision));
+                    Err(self.regressed(rule))
+                }
+            }
+        })
+        .await
     }
 }
 

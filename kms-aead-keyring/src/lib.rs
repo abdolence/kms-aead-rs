@@ -11,6 +11,18 @@
 //! watches each keyring once, however many parts of the application open it, and whose
 //! [`shutdown`](KeyringRegistry::shutdown) stops the work it runs.
 //!
+//! # Applications and administration
+//!
+//! A [`Keyring`] is the application's handle. It encrypts, decrypts, computes beacons and
+//! re-seals, with the KMS's decrypt right and read access to the store, and it has no call that
+//! encrypts a DEK or writes the record. Those calls, the creation of a keyring, its lifecycle and
+//! the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds together with the
+//! registry's `create`, `open_or_create` and `admin`. An application builds without the feature
+//! and runs under a principal without the rights those calls need; infrastructure automation, or
+//! a service that provisions keyrings on purpose, builds with it. A keyring is created before an
+//! application opens it: [`open`](KeyringRegistry::open) on a keyring the store does not hold
+//! fails with [`KeyringError::RecordMissing`].
+//!
 //! # Values
 //!
 //! A value is in Tink's TINK-prefixed layout: the key id of the version that sealed it, then
@@ -35,10 +47,10 @@
 //! A field that BigQuery also decrypts is declared with
 //! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal
 //! it under an algorithm or a KEK that BigQuery cannot read. With the `bigquery-export` feature,
-//! `Keyring::export_bigquery_keyset` exports the keyset that BigQuery's `KEYS.KEYSET_CHAIN` reads
-//! such fields with. A field that Tink also decrypts is declared with [`Interop::Tink`], and
-//! [`Keyring::export_tink_keyset`] exports the encrypted keyset that Tink's keyset readers take,
-//! on a KEK in Cloud KMS, AWS KMS or Vault Transit.
+//! `KeyringAdmin::export_bigquery_keyset` exports the keyset that BigQuery's `KEYS.KEYSET_CHAIN`
+//! reads such fields with. A field that Tink also decrypts is declared with [`Interop::Tink`],
+//! and `KeyringAdmin::export_tink_keyset` exports the encrypted keyset that Tink's keyset readers
+//! take, on a KEK in Cloud KMS, AWS KMS or Vault Transit.
 //!
 //! # Deterministic fields
 //!
@@ -72,17 +84,18 @@
 //!
 //! A version is `Pending`, `Active`, `DecryptOnly`, `Retired` or `Destroyed`, and any state past
 //! `Active` may be compromised; see [`KeyVersionState`]. A rotation is staged:
-//! [`Keyring::rotate`] adds a pending version, which every process decrypts under once its record
-//! refreshes, and [`Keyring::promote`] makes it active, after the longest time any process may
-//! run without a successful refresh; the old version keeps decrypting.
-//! [`Keyring::mark_compromised`] flags a version for good, and replaces an active one with a
+//! `KeyringAdmin::rotate` adds a pending version, which every process decrypts under once its
+//! record refreshes, and `KeyringAdmin::promote` makes it active, after the longest time any
+//! process may run without a successful refresh; the old version keeps decrypting.
+//! `KeyringAdmin::mark_compromised` flags a version for good, and replaces an active one with a
 //! version that is active at once. Under the default [`CompromisedReadPolicy::Block`] values
 //! under a compromised version stop decrypting through [`Keyring::decrypt`];
 //! [`Keyring::decrypt_with_trust`] still opens them and reports them as untrusted.
 //!
 //! The record's integrity rests on the store's access control. The processes that serve
-//! requests need the KMS's decrypt right and read access to the store; only an administrative
-//! job encrypts DEKs and writes the record. A running process takes a record from the store only
+//! requests need the KMS's decrypt right and read access to the store; only a `KeyringAdmin`, in
+//! an administrative job, encrypts DEKs and writes the record. A running process takes a record
+//! from the store only
 //! if it moves every version forward from the one it holds, and logs an `ERROR` otherwise.
 //!
 //! # Caching
@@ -109,6 +122,7 @@
 //! | Feature | Enables |
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
+//! | `admin` | `KeyringAdmin`, and the registry's `create`, `open_or_create` and `admin`: the calls that encrypt DEKs, write the record or export keysets |
 //! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`; the deterministic types are in every build |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
@@ -117,14 +131,15 @@
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |
-//! | `bigquery-export` | `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
+//! | `bigquery-export` | `admin`, and `KeyringAdmin::export_bigquery_keyset` on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
 //!
 //! # Example
 //!
-//! A keyring on the memory store with a local KEK, on the ring backend:
+//! A keyring on the memory store with a local KEK, on the ring backend, created and rotated
+//! through its administrative handle, which also lends the application's handle:
 //!
 //! ```rust
-//! # #[cfg(feature = "ring")]
+//! # #[cfg(all(feature = "ring", feature = "admin"))]
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use kms_aead::backends::Ring;
@@ -133,8 +148,8 @@
 //! use kms_aead_keyring::formats::Randomized;
 //! use kms_aead_keyring::testing::MemoryKeyringStore;
 //! use kms_aead_keyring::{
-//!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-//!     KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+//!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+//!     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 //! };
 //! use secret_vault_value::SecretValue;
 //!
@@ -163,21 +178,22 @@
 //! )?;
 //! let provider =
 //!     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-//! let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+//! let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
 //!     .open_or_create(provider, TENANT, KeyringAlgorithms::new())
 //!     .await?;
+//! let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 //!
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
 //! let alice = Email("alice@example.com".to_string());
 //! let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
-//! let staged = keyring.rotate(Purpose::Randomized).await?;
-//! keyring.promote(staged).await?;
+//! let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+//! admin.promote(staged).await?;
 //!
 //! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 //! registry.shutdown().await?;
 //! # Ok(())
 //! # }
-//! # #[cfg(not(feature = "ring"))]
+//! # #[cfg(not(all(feature = "ring", feature = "admin")))]
 //! # fn main() {}
 //! ```
 
@@ -187,6 +203,7 @@
 mod aad;
 pub use aad::*;
 
+#[cfg(feature = "admin")]
 pub mod encodings;
 
 pub mod errors;
@@ -211,11 +228,12 @@ mod record_cache;
 mod registry;
 pub use registry::*;
 
-// The book's code uses the deterministic fields, serde, every store and the BigQuery export, so it
-// compiles in the build with the docs.rs feature set only.
+// The book's code uses the administrative calls, the deterministic fields, serde, every store and
+// the BigQuery export, so it compiles in the build with the docs.rs feature set only.
 #[cfg(all(
     doctest,
     feature = "ring",
+    feature = "admin",
     feature = "deterministic",
     feature = "serde-json",
     feature = "firestore",

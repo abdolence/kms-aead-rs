@@ -2,7 +2,10 @@
 //! defaults and AAD rules. The gate runs this file in both builds, so a difference between them
 //! fails one of the two runs.
 
-#![cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+#![cfg(all(
+    feature = "admin",
+    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+))]
 
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::AeadAlgorithm;
@@ -10,7 +13,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyAlgorithm, KeyId, KeyVersion,
-    Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Purpose,
+    KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Purpose,
 };
 
 #[cfg(feature = "ring")]
@@ -20,7 +23,7 @@ type Backend = kms_aead::backends::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
 type Backend = kms_aead::backends::RustCrypto;
 
-type LocalKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Backend>, Backend>;
+type LocalKeyringAdmin = KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Backend>, Backend>;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -32,7 +35,7 @@ const ALICE: &str = "alice@example.com";
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// A keyring with the default algorithms and options, on a local KEK.
-async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
+async fn default_keyring() -> Result<LocalKeyringAdmin, Box<dyn std::error::Error>> {
     let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
     Ok(KeyringRegistry::<MemoryKeyringStore, Backend>::new(
         MemoryKeyringStore::new(),
@@ -48,7 +51,8 @@ async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
 
 #[tokio::test]
 async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
-    let keyring = default_keyring().await?;
+    let admin = default_keyring().await?;
+    let keyring = admin.keyring();
     let record = keyring.record();
     assert_eq!(record.algorithms().randomized, AeadAlgorithm::Aes256Gcm);
     assert_eq!(record.algorithms().deterministic, None);
@@ -70,7 +74,8 @@ async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
 /// A randomised value's bytes are Tink's AES-GCM layout.
 #[tokio::test]
 async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
-    let keyring = default_keyring().await?;
+    let admin = default_keyring().await?;
+    let keyring = admin.keyring();
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let value: Encrypted<String, Randomized> = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(value.value()[..5], [0x01, 0, 0, 0, 1]);
@@ -82,11 +87,12 @@ async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
 /// A field without an interop requirement takes any algorithm, any AAD and any KEK.
 #[tokio::test]
 async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
-    let keyring = default_keyring().await?;
-    let staged = keyring
+    let admin = default_keyring().await?;
+    let keyring = admin.keyring();
+    let staged = admin
         .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
         .await?;
-    keyring.promote(staged).await?;
+    admin.promote(staged).await?;
     for aad in [
         EMAIL.aad(&EntityId::try_from("42")?),
         EMAIL.custom_aad(&[0xFF; 3])?,

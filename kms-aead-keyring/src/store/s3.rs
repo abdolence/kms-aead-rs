@@ -62,7 +62,7 @@ impl Display for S3ETag {
 /// returns `None` and a process sees a change once its record is older than the keyring's
 /// `record_ttl`.
 ///
-/// The serving principal needs `s3:GetObject` on the objects, and the administrative one
+/// The application's principal needs `s3:GetObject` on the objects, and the administrative one
 /// `s3:PutObject` as well. With versioning on the bucket, every record written is kept as a
 /// noncurrent version.
 ///

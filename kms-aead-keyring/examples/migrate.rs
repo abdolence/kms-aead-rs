@@ -1,11 +1,12 @@
 //! Migrates a table of store-less envelope values to keyring values: rows written before the
 //! table had a seal marker read as envelope values, a sweep re-seals each under the keyring and
 //! marks it, and every row then reads through the keyring. After a rotation, the same sweep moves
-//! the rows to the new version. Runs on the memory store with a local
-//! KEK, and needs no cloud credentials.
+//! the rows to the new version. The administrative job creates and rotates the keyring, and the
+//! application reads and sweeps the rows. Runs on the memory store with a local KEK, and needs no
+//! cloud credentials.
 //!
 //! ```sh
-//! cargo run -p kms-aead-keyring --example migrate --features ring
+//! cargo run -p kms-aead-keyring --example migrate --features ring,admin
 //! ```
 
 use std::collections::BTreeMap;
@@ -27,8 +28,9 @@ use kms_aead_keyring::sweep::{
 };
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringAlgorithms,
-    KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose, Resealed,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
+    Purpose, Resealed,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -268,24 +270,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("wrote 3 rows with a store-less envelope");
 
-    // The keyring under the same KEK, which reads the rows through their markers.
+    // The administrative job creates the keyring under the same KEK, and the application opens
+    // it to read the rows through their markers.
     let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
         MemoryKeyringStore::new(),
         KeyringRegistryOptions::new(),
     )?;
-    let keyring: UsersKeyring = registry
-        .open_or_create(provider(&material)?, TENANT, KeyringAlgorithms::new())
+    let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .create(provider(&material)?, TENANT, KeyringAlgorithms::new())
         .await?;
+    let keyring: UsersKeyring = registry.open(provider(&material)?, TENANT).await?;
     print_rows(&keyring, &table).await?;
 
     // The migration: every envelope row is behind any thresholds.
     sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
 
-    // A rotation later: the same sweep moves the rows to the new version.
-    keyring
-        .promote(keyring.rotate(Purpose::Randomized).await?)
-        .await?;
+    // A rotation later, by the administrative job: the same sweep moves the rows to the new
+    // version.
+    let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+    admin.promote(staged).await?;
     sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
     registry.shutdown().await?;

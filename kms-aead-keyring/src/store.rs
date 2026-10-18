@@ -36,7 +36,7 @@ pub use s3::*;
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///
 /// The store's access control is what the record's integrity rests on: only the administrative
-/// principal writes it, and the serving principal reads it. A process accepts a record that
+/// principal writes it, and the application's principal reads it. A process accepts a record that
 /// moves a version backwards from the one it holds only at startup, when it has none.
 ///
 /// # Implementing a store

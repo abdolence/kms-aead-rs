@@ -3,12 +3,11 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::formats::{Envelope, Format, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, BeaconMac, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
     KmsAeadEncryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
@@ -17,24 +16,25 @@ use crate::errors::{
     InteropRequirement, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
     RecordInvalidReason,
 };
-use crate::purpose::unreserved;
-use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
+use crate::record::withdrawn_deks;
 use crate::record_cache::RecordCache;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
 use crate::sweep::SealThresholds;
 use crate::{
-    Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
-    KeyringAlgorithms, KeyringId, KeyringRecord, Purpose,
+    Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringId,
+    KeyringRecord, Purpose,
 };
+
+#[cfg(feature = "admin")]
+mod admin;
+#[cfg(feature = "admin")]
+pub use admin::{EncryptedKeyset, KeyringAdmin, KeysetSelection, Rotation};
 
 mod beacon;
 
 #[cfg(feature = "deterministic")]
 mod deterministic;
-
-mod export;
-pub use export::{EncryptedKeyset, KeysetSelection};
 
 /// A handle on one keyring of a [`KeyringRegistry`](crate::KeyringRegistry), for field
 /// encryption under the keyring's key versions: its record lives in the store `S` and is cached
@@ -48,16 +48,30 @@ pub use export::{EncryptedKeyset, KeysetSelection};
 /// idle while it holds keys, and needs the cache's TTL to bound their time in memory, calls
 /// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
-/// The handles of one keyring share its cached record, and a write through one is seen by all of
-/// them. Each handle has its own provider and [`KeyringOptions`]. Dropping a handle leaves the
-/// keyring open in the registry.
+/// The handles of one keyring share its cached record, so a write through a `KeyringAdmin` of the
+/// same registry is seen by all of them at once. Each handle has its own provider and
+/// [`KeyringOptions`]. Dropping a handle leaves the keyring open in the registry.
 ///
-/// The administrative calls, `rotate`, `promote`, `mark_compromised`, `retire`, `reinstate`,
-/// `destroy`, `dangerously_destroy_all_versions`, `reencrypt_deks` and `change_algorithm`, write
-/// the record, and `rotate`, `mark_compromised`, `reencrypt_deks` and `change_algorithm`, like the
-/// registry's `create`, also encrypt DEKs, so they need the KMS's encrypt right. They run under an
-/// administrative principal, in a job, while the serving processes only decrypt keys and read
-/// the store.
+/// Its calls need the KMS's decrypt right and read access to the store, and nothing more: a
+/// `Keyring` never encrypts a DEK and never writes the record. The calls that do, the lifecycle
+/// and the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds, so that an
+/// application built without the feature reaches none of them:
+///
+/// ```compile_fail,E0599
+/// use kms_aead::backends::AeadBackend;
+/// use kms_aead::KmsAeadEncryptionProvider;
+/// use kms_aead_keyring::store::KeyringStore;
+/// use kms_aead_keyring::{KeyId, Keyring, KeyringResult, Purpose};
+///
+/// async fn rotate<S, P, B>(keyring: &Keyring<S, P, B>) -> KeyringResult<KeyId>
+/// where
+///     S: KeyringStore,
+///     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+///     B: AeadBackend,
+/// {
+///     keyring.rotate(Purpose::Randomized).await
+/// }
+/// ```
 pub struct Keyring<S: KeyringStore, P, B> {
     cache: Arc<RecordCache<S>>,
     provider: P,
@@ -277,292 +291,6 @@ where
         }))
     }
 
-    /// Stages a new version of `purpose`, with the record's algorithm for it, and returns its
-    /// key id. The version is [`Pending`](KeyVersionState::Pending): every process decrypts under
-    /// it once its record refreshes, and none encrypts under it until
-    /// [`promote`](Self::promote) makes it active.
-    ///
-    /// Promote it only after the longest time any process may run without a successful refresh
-    /// of its record, from [`staged_at`](KeyVersion::staged_at): a process that has not seen the
-    /// pending version reads a value under it as an unknown key id, and reloads its record first.
-    ///
-    /// # Errors
-    ///
-    /// The provider's and the store's errors, [`KeyringError::NoAlgorithm`] for a purpose the
-    /// record names no algorithm for, [`KeyringError::InvalidTransition`] with
-    /// [`Transition::Rotate`](crate::Transition::Rotate) naming the pending version when the
-    /// purpose has one already, [`KeyringError::RecordRegressed`] when the stored record moves
-    /// backwards from the cached one, and [`KeyringError::RecordConflict`] after
-    /// [`cas_retries`](KeyringOptions::cas_retries) conflicts.
-    pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {
-        spans::in_span(spans::rotate(self.id(), purpose), async {
-            let algorithm = self.algorithm_of(&self.record(), purpose)?;
-            let new = self.new_version(algorithm).await?;
-            let staged = self
-                .cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    let algorithm = self.algorithm_of(edit.record(), purpose)?;
-                    let new = if algorithm == new.algorithm {
-                        new.clone()
-                    } else {
-                        // Another writer changed the purpose's algorithm since the key was made.
-                        self.new_version(algorithm).await?
-                    };
-                    edit.stage(new, Timestamp::now())
-                })
-                .await?;
-            spans::record_rotation(None, staged);
-            Ok(staged)
-        })
-        .await
-    }
-
-    /// Makes the pending version `key_id` the active version of its purpose; the version it
-    /// replaces decrypts only. Processes on the old record keep sealing under the previous
-    /// version until their record refreshes, and those values decrypt.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
-    /// store's errors, [`KeyringError::KeyVersionUnknown`], [`KeyringError::InvalidTransition`]
-    /// for a version that is not pending, and the errors of a write as for
-    /// [`rotate`](Self::rotate).
-    pub async fn promote(&self, key_id: KeyId) -> KeyringResult<Rotation> {
-        unreserved(key_id)?;
-        spans::in_span(spans::promote(self.id(), key_id), async {
-            let rotation = self
-                .cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.promote(key_id, Timestamp::now())
-                })
-                .await?;
-            spans::record_rotation(rotation.previous, rotation.current);
-            Ok(rotation)
-        })
-        .await
-    }
-
-    /// Makes `algorithm` the one new versions of its purpose use, and stages a version of it as
-    /// [`rotate`](Self::rotate) does, returning its key id.
-    ///
-    /// # Errors
-    ///
-    /// As [`rotate`](Self::rotate), and `UNSUPPORTED_ALGORITHM` from kms-aead when the backend
-    /// does not implement `algorithm`.
-    pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
-        spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
-            let new = self.new_version(algorithm).await?;
-            let staged = self
-                .cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    let now = Timestamp::now();
-                    edit.set_algorithm(algorithm, now);
-                    edit.stage(new.clone(), now)
-                })
-                .await?;
-            spans::record_rotation(None, staged);
-            Ok(staged)
-        })
-        .await
-    }
-
-    /// Flags the version `key_id` compromised, for good, and drops its key from this process's
-    /// [`DekCache`] before returning; other processes drop it when their record refreshes.
-    ///
-    /// For the active version, it also adds a new version in the same write, active at once
-    /// rather than pending, and returns the rotation: every encryption under the compromised key
-    /// stops as soon as each process refreshes, and the processes that have not seen the new
-    /// version yet reload their record when they read a value under it. A pending version of the
-    /// purpose stays pending. When the KMS cannot encrypt the new key, during an outage or without
-    /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
-    /// `Ok(None)`: the purpose then has no active version, and `encrypt` fails with
-    /// `NoActiveVersion` until a version is promoted. For any other version it returns
-    /// `Ok(None)`.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
-    /// store's errors, [`KeyringError::KeyVersionUnknown`],
-    /// [`KeyringError::InvalidTransition`] for a pending, destroyed or already compromised
-    /// version, and the errors of a write as for [`rotate`](Self::rotate). A pending version
-    /// never sealed a value: [`destroy`](Self::destroy) it instead.
-    pub async fn mark_compromised(
-        &self,
-        key_id: KeyId,
-        note: Option<String>,
-    ) -> KeyringResult<Option<Rotation>> {
-        unreserved(key_id)?;
-        spans::in_span(spans::mark_compromised(self.id(), key_id), async {
-            // `None` when the cached record has no active `key_id`, and `Some(None)` when the
-            // replacement's key could not be encrypted, which is not tried again in the write.
-            let cached = self.record();
-            let prepared = match cached.version(key_id) {
-                Some(version) if version.state() == KeyVersionState::Active => {
-                    Some(self.replacement(&cached, version).await)
-                }
-                _ => None,
-            };
-            let rotation = self
-                .cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    let record = edit.record();
-                    let replacement = match record.version(key_id) {
-                        Some(version) if version.state() == KeyVersionState::Active => {
-                            match &prepared {
-                                Some(Some(new))
-                                    if record.algorithms().of(new.algorithm.purpose())
-                                        == Some(new.algorithm) =>
-                                {
-                                    Some(new.clone())
-                                }
-                                Some(None) => None,
-                                // The record changed since the cached one: another writer
-                                // promoted this version or changed its purpose's algorithm.
-                                _ => self.replacement(record, version).await,
-                            }
-                        }
-                        _ => None,
-                    };
-                    let now = Timestamp::now();
-                    edit.mark_compromised(
-                        key_id,
-                        Compromise::new(now, note.clone()),
-                        replacement,
-                        now,
-                    )
-                })
-                .await?;
-            if let Some(rotation) = &rotation {
-                spans::record_rotation(None, rotation.current);
-            }
-            Ok(rotation)
-        })
-        .await
-    }
-
-    /// Moves a decrypt-only version to `Retired`, once a sweep found no value left under it:
-    /// reads under it fail from then on, and [`reinstate`](Self::reinstate) undoes it.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
-    /// store's errors, [`KeyringError::KeyVersionUnknown`],
-    /// [`KeyringError::InvalidTransition`] for any version that is not decrypt-only, and the
-    /// errors of a write as for [`rotate`](Self::rotate).
-    pub async fn retire(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
-        spans::in_span(spans::retire(self.id(), key_id), async {
-            self.cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.retire(key_id, Timestamp::now())
-                })
-                .await
-        })
-        .await
-    }
-
-    /// Moves a retired version back to `DecryptOnly`, for a value that turned up after all. A
-    /// compromised flag stays.
-    ///
-    /// # Errors
-    ///
-    /// As [`retire`](Self::retire), for any version that is not retired.
-    pub async fn reinstate(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
-        spans::in_span(spans::reinstate(self.id(), key_id), async {
-            self.cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.reinstate(key_id, Timestamp::now())
-                })
-                .await
-        })
-        .await
-    }
-
-    /// Removes a retired or pending version's encrypted DEK from the record: the values under it
-    /// can never be read again, from this record. The version stays, so that its id is never
-    /// reused.
-    ///
-    /// # Errors
-    ///
-    /// As [`retire`](Self::retire), for any version that is neither retired nor pending.
-    pub async fn destroy(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
-        spans::in_span(spans::destroy(self.id(), key_id), async {
-            self.cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.destroy(key_id, Timestamp::now())
-                })
-                .await
-        })
-        .await
-    }
-
-    /// Destroys every version of every purpose in one write, whatever its state: their encrypted
-    /// DEKs leave the record, and from then on the keyring encrypts nothing and decrypts nothing.
-    /// It cannot be undone from this record, and it is the shredding of one keyring's values
-    /// under a KEK that other keyrings share.
-    ///
-    /// A backup of the record still holds the encrypted DEKs, which the KMS decrypts for as long
-    /// as the KEK version that encrypted them exists. So the record's backups are deleted too, or
-    /// the KEK is rotated, every other keyring under it runs
-    /// [`reencrypt_deks`](Self::reencrypt_deks), and the previous KEK version is destroyed.
-    ///
-    /// # Errors
-    ///
-    /// The store's errors, and the errors of a write as for [`rotate`](Self::rotate).
-    pub async fn dangerously_destroy_all_versions(&self) -> KeyringResult<()> {
-        spans::in_span(spans::destroy_all_versions(self.id()), async {
-            self.cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.destroy_all(Timestamp::now());
-                    Ok(())
-                })
-                .await
-        })
-        .await
-    }
-
-    /// Decrypts and encrypts again the key of every version that holds one, so that all of them sit
-    /// under the KEK's current version after the KEK rotated in the KMS. No value changes. The
-    /// keys are decrypted through the provider, never through the [`DekCache`]. Returns the
-    /// number of versions encrypted again.
-    ///
-    /// # Errors
-    ///
-    /// The provider's errors, and the errors of a write as for [`rotate`](Self::rotate).
-    pub async fn reencrypt_deks(&self) -> KeyringResult<usize> {
-        spans::in_span(spans::reencrypt_deks(self.id()), async {
-            let mut reencrypted = Vec::new();
-            for (_, encrypted_dek) in self.record().encrypted_deks() {
-                let new_encrypted_dek = self.reencrypted(&encrypted_dek).await?;
-                reencrypted.push((encrypted_dek, new_encrypted_dek));
-            }
-            let versions = self
-                .cache
-                .write(self.options.cas_retries, async |edit: &mut RecordEdit| {
-                    let encrypted_deks = edit.record().encrypted_deks();
-                    for (key_id, encrypted_dek) in &encrypted_deks {
-                        let prepared = reencrypted
-                            .iter()
-                            .find(|(held, _)| held == encrypted_dek)
-                            .map(|(_, new_encrypted_dek)| new_encrypted_dek.clone());
-                        let new_encrypted_dek = match prepared {
-                            Some(new_encrypted_dek) => new_encrypted_dek,
-                            // A version that another writer added or encrypted again meanwhile.
-                            None => self.reencrypted(encrypted_dek).await?,
-                        };
-                        edit.replace_dek(*key_id, new_encrypted_dek, Timestamp::now())?;
-                    }
-                    Ok(encrypted_deks.len())
-                })
-                .await?;
-            spans::record_versions(versions);
-            Ok(versions)
-        })
-        .await
-    }
-
     /// Whether `key_id` of `purpose` is below the purpose's active version in the current
     /// record, or [`KeyringError::NoActiveVersion`] when it has none.
     async fn is_behind_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
@@ -735,24 +463,6 @@ where
         Ok(result)
     }
 
-    /// A new version to replace `replaced`, the active version of `record` being flagged
-    /// compromised, or `None`, with a `WARN`, when its key cannot be encrypted: the flag goes in
-    /// without it.
-    async fn replacement(
-        &self,
-        record: &KeyringRecord,
-        replaced: &KeyVersion,
-    ) -> Option<NewVersion> {
-        let new = match self.algorithm_of(record, replaced.algorithm().purpose()) {
-            Ok(algorithm) => self.new_version(algorithm).await,
-            Err(error) => Err(error),
-        };
-        new.inspect_err(|error| {
-            spans::compromised_without_rotation(self.id(), replaced.id(), error)
-        })
-        .ok()
-    }
-
     /// Opens `value` with a key the provider decrypts for this call only, which never enters the
     /// [`DekCache`].
     async fn open_uncached<T: Plaintext>(
@@ -766,37 +476,6 @@ where
         Ok(self
             .with_uncached_dek(encrypted_dek, |dek| cipher.decrypt(&aad.bytes, value, dek))
             .await??)
-    }
-
-    /// The algorithm `record` names for new versions of `purpose`, or `NoAlgorithm`.
-    fn algorithm_of(
-        &self,
-        record: &KeyringRecord,
-        purpose: Purpose,
-    ) -> KeyringResult<KeyAlgorithm> {
-        record
-            .algorithms()
-            .of(purpose)
-            .ok_or_else(|| KeyringError::no_algorithm(self.id(), purpose))
-    }
-
-    /// A new version of `algorithm`, with its key encrypted. Made before a write takes the record,
-    /// so that no KMS call runs while the record is held, and a conflict retries with the same key.
-    async fn new_version(&self, algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
-        NewVersion::generate::<P, B>(algorithm, &self.provider).await
-    }
-
-    /// `encrypted_dek` decrypted through the provider and encrypted again. What the KMS decrypts
-    /// is the serialised Tink key it encrypted, so it is encrypted again as it is.
-    async fn reencrypted(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KeyringResult<EncryptedDataEncryptionKey> {
-        let dek = self
-            .provider
-            .decrypt_data_encryption_key(encrypted_dek)
-            .await?;
-        Ok(self.provider.encrypt_data_encryption_key(&dek).await?)
     }
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
@@ -840,87 +519,13 @@ where
     }
 }
 
-impl NewVersion {
-    /// A version with a new key for `algorithm`, from the KMS generator when the provider uses
-    /// one and from the CSPRNG of `B` otherwise, encrypted by `provider`.
-    async fn generate<P, B>(algorithm: KeyAlgorithm, provider: &P) -> KeyringResult<Self>
-    where
-        P: KmsAeadEncryptionProvider + Sync,
-        B: AeadBackend,
-    {
-        let encrypted_dek = match algorithm {
-            KeyAlgorithm::Randomized(algorithm) => {
-                let (_, encrypted_dek) = AeadCipher::<B>::new(algorithm)?
-                    .generate_encrypted_dek(provider)
-                    .await?;
-                encrypted_dek
-            }
-            #[cfg(feature = "deterministic")]
-            KeyAlgorithm::Deterministic(algorithm) => {
-                let (_, encrypted_dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
-                    .generate_encrypted_dek(provider)
-                    .await?;
-                encrypted_dek
-            }
-            #[cfg(not(feature = "deterministic"))]
-            KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
-            KeyAlgorithm::Beacon(algorithm) => {
-                let (_, encrypted_dek) = BeaconMac::<B>::new(algorithm)
-                    .generate_encrypted_dek(provider)
-                    .await?;
-                encrypted_dek
-            }
-        };
-        Ok(Self {
-            algorithm,
-            encrypted_dek,
-        })
-    }
-}
-
-impl KeyringAlgorithms {
-    /// The record of a new keyring `id` with these algorithms, and one active version of each
-    /// purpose they name an algorithm for, each encrypted by `provider`.
-    pub(crate) async fn new_record<P, B>(
-        &self,
-        id: KeyringId,
-        provider: &P,
-    ) -> KeyringResult<KeyringRecord>
-    where
-        P: KmsAeadEncryptionProvider + Sync,
-        B: AeadBackend,
-    {
-        let now = Timestamp::now();
-        let mut edit = RecordEdit::from(KeyringRecord::new(id, provider.kek().clone(), *self, now));
-        for purpose in Purpose::ALL {
-            if let Some(algorithm) = self.of(purpose) {
-                let new = NewVersion::generate::<P, B>(algorithm, provider).await?;
-                let key_id = edit.stage(new, now)?;
-                edit.promote(key_id, now)?;
-            }
-        }
-        edit.finish()
-    }
-}
-
-/// What a promotion, or the replacement of a compromised active version, did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rotation {
-    /// The purpose rotated.
-    pub purpose: Purpose,
-    /// The version that was active before, and decrypts only now.
-    pub previous: Option<KeyId>,
-    /// The new active version.
-    pub current: KeyId,
-}
-
-/// How a [`Keyring`] handle writes the record and reads values under a compromised version. The
-/// handles of one keyring may differ in them; the record cache they share is configured by
-/// [`KeyringRegistryOptions`](crate::KeyringRegistryOptions).
+/// How a [`Keyring`] handle reads values under a compromised version, and how the writes of a
+/// `KeyringAdmin` that holds it retry. The handles of one keyring may differ in them; the record
+/// cache they share is configured by [`KeyringRegistryOptions`](crate::KeyringRegistryOptions).
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KeyringOptions {
-    /// The conflicts an administrative write retries before it fails with `RecordConflict`:
+    /// The conflicts a write of a `KeyringAdmin` retries before it fails with `RecordConflict`:
     /// [`DEFAULT_CAS_RETRIES`](Self::DEFAULT_CAS_RETRIES) by default.
     #[default = "Self::DEFAULT_CAS_RETRIES"]
     pub cas_retries: u32,
@@ -983,6 +588,7 @@ pub enum KeyTrust {
 
 #[cfg(all(
     test,
+    feature = "admin",
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod tests;

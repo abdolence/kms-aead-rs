@@ -18,18 +18,20 @@ use tokio::time::Instant;
 use crate::errors::{KekMismatchError, KeyringError, KeyringResult};
 use crate::record_cache::RecordCache;
 use crate::spans;
-use crate::store::{join_until, KeyringStore, Stored, Swap};
-use crate::{Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, KeyringRecord};
+use crate::store::{join_until, KeyringStore, Stored};
+#[cfg(feature = "admin")]
+use crate::{store::Swap, KeyringAdmin, KeyringAlgorithms};
+use crate::{Keyring, KeyringId, KeyringOptions, KeyringRecord};
 
 /// The keyrings of one application on one store: the store, with its connections and its
 /// listener, one [`DekCache`], and every keyring opened through it, which is loaded and watched
 /// once however many parts of the application open it. `Clone` shares all of it.
 ///
-/// [`open`](Self::open), [`create`](Self::create) and [`open_or_create`](Self::open_or_create)
-/// return a [`Keyring`] handle with the provider the call names, so that each keyring can have a
-/// KEK of its own, and `B` is the AEAD backend of every handle. A second open of an open keyring
-/// reads nothing from the store and shares the first one's cached record and watch. A keyring
-/// stays open until the registry shuts down.
+/// [`open`](Self::open) returns a [`Keyring`] handle with the provider the call names, so that
+/// each keyring can have a KEK of its own, and `B` is the AEAD backend of every handle. With the
+/// `admin` feature, `create`, `open_or_create` and `admin` return a `KeyringAdmin` the same way.
+/// A second open of an open keyring, through any of them, reads nothing from the store and shares
+/// the first one's cached record and watch. A keyring stays open until the registry shuts down.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the change signals of
 /// each open keyring. [`shutdown`](Self::shutdown) stops those tasks and the store's listener,
@@ -189,92 +191,6 @@ where
         ))
     }
 
-    /// Creates the record of the keyring `id`, with one active version of each purpose
-    /// `algorithms` names an algorithm for, and returns a handle on it as
-    /// [`open`](Self::open) does. Encrypts one key per version, so it needs the KMS's encrypt
-    /// right.
-    ///
-    /// # Errors
-    ///
-    /// The provider's and the store's errors; [`KeyringError::RecordExists`] when the store
-    /// already holds a record, and when the keyring is open, before any call to the store or the
-    /// KMS; `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement an algorithm of
-    /// `algorithms`; and [`KeyringError::DeterministicDisabled`] for a deterministic algorithm
-    /// without the `deterministic` feature.
-    pub async fn create<P>(
-        &self,
-        provider: P,
-        id: KeyringId,
-        algorithms: KeyringAlgorithms,
-    ) -> KeyringResult<Keyring<S, P, B>>
-    where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
-    {
-        let store = &*self.inner.store;
-        let mut created = false;
-        let cache = self
-            .inner
-            .cache(&id, provider.kek(), async || {
-                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => {
-                        created = true;
-                        Ok(Stored { record, revision })
-                    }
-                    Swap::Conflict => Err(KeyringError::RecordExists(id.clone())),
-                }
-            })
-            .await?;
-        if !created {
-            return Err(KeyringError::RecordExists(id));
-        }
-        Ok(Keyring::new(
-            cache,
-            provider,
-            self.inner.keyring_options.clone(),
-        ))
-    }
-
-    /// A handle on the keyring `id` as [`open`](Self::open) returns, after creating its record
-    /// as [`create`](Self::create) does when the store holds none. When another process creates
-    /// it at the same time, opens that one.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`open`](Self::open) and [`create`](Self::create), but not
-    /// `RecordMissing` or `RecordExists`.
-    pub async fn open_or_create<P>(
-        &self,
-        provider: P,
-        id: KeyringId,
-        algorithms: KeyringAlgorithms,
-    ) -> KeyringResult<Keyring<S, P, B>>
-    where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
-    {
-        let store = &*self.inner.store;
-        let cache = self
-            .inner
-            .cache(&id, provider.kek(), async || {
-                if let Some(stored) = RecordCache::read(store, &id).await? {
-                    return Ok(stored);
-                }
-                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => Ok(Stored { record, revision }),
-                    Swap::Conflict => RecordCache::read(store, &id)
-                        .await?
-                        .ok_or_else(|| KeyringError::RecordMissing(id.clone())),
-                }
-            })
-            .await?;
-        Ok(Keyring::new(
-            cache,
-            provider,
-            self.inner.keyring_options.clone(),
-        ))
-    }
-
     /// The cache of the decrypted keys of every keyring the registry opens, which the
     /// application's timer calls [`DekCache::purge_expired`] on when the process can sit idle
     /// while it holds keys.
@@ -319,6 +235,115 @@ where
     pub async fn shutdown_with_timeout(&self, timeout: Duration) -> KeyringResult<()> {
         self.inner.shutdown_with(Some(timeout)).await;
         Ok(())
+    }
+}
+
+/// The administrative entry points, with the `admin` feature: each returns a [`KeyringAdmin`] on
+/// a keyring that is then open in the registry, as [`open`](Self::open) leaves it.
+#[cfg(feature = "admin")]
+impl<S, B> KeyringRegistry<S, B>
+where
+    S: KeyringStore,
+    B: AeadBackend,
+{
+    /// An administrative handle on the keyring `id` with `provider`, opened as
+    /// [`open`](Self::open) opens it, and sharing its record cache and watch with the keyring's
+    /// [`Keyring`] handles.
+    ///
+    /// # Errors
+    ///
+    /// As [`open`](Self::open).
+    pub async fn admin<P>(&self, provider: P, id: KeyringId) -> KeyringResult<KeyringAdmin<S, P, B>>
+    where
+        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    {
+        Ok(KeyringAdmin::new(self.open(provider, id).await?))
+    }
+
+    /// Creates the record of the keyring `id`, with one active version of each purpose
+    /// `algorithms` names an algorithm for, and returns an administrative handle on it. Encrypts
+    /// one key per version and writes the record, so it needs the KMS's encrypt right and write
+    /// access to the store.
+    ///
+    /// # Errors
+    ///
+    /// The provider's and the store's errors; [`KeyringError::RecordExists`] when the store
+    /// already holds a record, and when the keyring is open, before any call to the store or the
+    /// KMS; `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement an algorithm of
+    /// `algorithms`; and [`KeyringError::DeterministicDisabled`] for a deterministic algorithm
+    /// without the `deterministic` feature.
+    pub async fn create<P>(
+        &self,
+        provider: P,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B>>
+    where
+        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    {
+        let store = &*self.inner.store;
+        let mut created = false;
+        let cache = self
+            .inner
+            .cache(&id, provider.kek(), async || {
+                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
+                match store.compare_and_swap(&record, None).await? {
+                    Swap::Written(revision) => {
+                        created = true;
+                        Ok(Stored { record, revision })
+                    }
+                    Swap::Conflict => Err(KeyringError::RecordExists(id.clone())),
+                }
+            })
+            .await?;
+        if !created {
+            return Err(KeyringError::RecordExists(id));
+        }
+        Ok(KeyringAdmin::new(Keyring::new(
+            cache,
+            provider,
+            self.inner.keyring_options.clone(),
+        )))
+    }
+
+    /// An administrative handle on the keyring `id` as [`admin`](Self::admin) returns, after
+    /// creating its record as [`create`](Self::create) does when the store holds none. When
+    /// another process creates it at the same time, opens that one.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`open`](Self::open) and [`create`](Self::create), but not
+    /// `RecordMissing` or `RecordExists`.
+    pub async fn open_or_create<P>(
+        &self,
+        provider: P,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B>>
+    where
+        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    {
+        let store = &*self.inner.store;
+        let cache = self
+            .inner
+            .cache(&id, provider.kek(), async || {
+                if let Some(stored) = RecordCache::read(store, &id).await? {
+                    return Ok(stored);
+                }
+                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
+                match store.compare_and_swap(&record, None).await? {
+                    Swap::Written(revision) => Ok(Stored { record, revision }),
+                    Swap::Conflict => RecordCache::read(store, &id)
+                        .await?
+                        .ok_or_else(|| KeyringError::RecordMissing(id.clone())),
+                }
+            })
+            .await?;
+        Ok(KeyringAdmin::new(Keyring::new(
+            cache,
+            provider,
+            self.inner.keyring_options.clone(),
+        )))
     }
 }
 
@@ -501,6 +526,7 @@ impl KeyringRecord {
 
 #[cfg(all(
     test,
+    feature = "admin",
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod tests {
@@ -510,7 +536,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        email_of, TestKeyring, TestProvider, TestRegistry, TestResult, TestStore, TENANT,
+        email_of, TestAdmin, TestProvider, TestRegistry, TestResult, TestStore, TENANT,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{KeyId, Purpose};
@@ -520,12 +546,12 @@ mod tests {
     const OTHER_TENANT: KeyringId = KeyringId::from_static("tenant-43");
 
     /// The keyring `TENANT`, created in a memory store by the administrative job's registry, and
-    /// a serving registry over a counting store on the same memory, whose loads and
+    /// an application's registry over a counting store on the same memory, whose loads and
     /// revalidations take `delay`.
     struct Fixture {
         store: TestStore,
         provider: TestProvider,
-        admin: TestKeyring<MemoryKeyringStore>,
+        admin: TestAdmin<MemoryKeyringStore>,
         registry: TestRegistry<TestStore>,
     }
 
@@ -550,15 +576,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn opening_an_open_keyring_shares_its_record_cache() -> TestResult {
+    async fn an_admin_handle_shares_the_record_cache_of_the_open_keyring() -> TestResult {
         let fixture = Fixture::new(Duration::ZERO, KeyringRegistryOptions::new()).await?;
-        let first = fixture
+        let keyring = fixture
             .registry
             .open(fixture.provider.clone(), TENANT)
             .await?;
-        let second = fixture
+        let admin = fixture
             .registry
-            .open(fixture.provider.clone(), TENANT)
+            .admin(fixture.provider.clone(), TENANT)
             .await?;
 
         assert_eq!(
@@ -568,8 +594,8 @@ mod tests {
             ),
             (1, 1)
         );
-        let staged = first.rotate(Purpose::Randomized).await?;
-        assert!(second.record().version(staged).is_some());
+        let staged = admin.rotate(Purpose::Randomized).await?;
+        assert!(keyring.record().version(staged).is_some());
         fixture.registry.shutdown().await?;
         Ok(())
     }
@@ -646,7 +672,11 @@ mod tests {
                 if &error.provider == other.kek() && &error.recorded == fixture.provider.kek()
         ));
         let aad = email_of("42")?;
-        let value = fixture.admin.encrypt(&aad, &ALICE.to_string()).await?;
+        let value = fixture
+            .admin
+            .keyring()
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(first.decrypt(&aad, &value).await?, ALICE);
         Ok(())
     }
@@ -854,13 +884,13 @@ mod tests {
             .await?;
         let aad = email_of("42")?;
         let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-        let other_value = other.encrypt(&aad, &ALICE.to_string()).await?;
+        let other_value = other.keyring().encrypt(&aad, &ALICE.to_string()).await?;
         let decryptions = &fixture.provider.calls.decryptions;
         let before = decryptions.load(Ordering::SeqCst);
 
         fixture.registry.shutdown().await?;
 
-        other.decrypt(&aad, &other_value).await?;
+        other.keyring().decrypt(&aad, &other_value).await?;
         assert_eq!(decryptions.load(Ordering::SeqCst), before);
         keyring.decrypt(&aad, &value).await?;
         assert_eq!(decryptions.load(Ordering::SeqCst), before + 1);

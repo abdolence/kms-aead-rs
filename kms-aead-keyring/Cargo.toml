@@ -70,6 +70,10 @@ rustcrypto = ["kms-aead/rustcrypto"]
 # Deterministic key versions and every call on them. The deterministic types exist in every
 # build.
 deterministic = ["kms-aead/deterministic"]
+# `KeyringAdmin` and the registry's `create`, `open_or_create` and `admin`: the calls that encrypt
+# DEKs, write the record or export keysets, for the job or service that administers keyrings. An
+# application that only encrypts, decrypts and sweeps builds without it.
+admin = []
 # `Serialize` and `Deserialize` for `Encrypted`.
 serde = ["kms-aead/serde"]
 # `Json<T>`, a plaintext stored as its JSON.
@@ -86,9 +90,10 @@ gcs-tls-roots = ["gcs", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"
 gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 # `S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client.
 s3 = ["dep:aws-sdk-s3"]
-# `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider without a TLS root store or crypto
-# provider: the application enables kms-aead's `gcp-kms-encryption` to build it.
-bigquery-export = ["kms-aead/gcp-kms-encryption-base"]
+# `KeyringAdmin::export_bigquery_keyset`, an administrative call, on kms-aead's GCP provider without
+# a TLS root store or crypto provider: the application enables kms-aead's `gcp-kms-encryption` to
+# build it.
+bigquery-export = ["admin", "kms-aead/gcp-kms-encryption-base"]
 # The live test of the keyset export: BigQuery's `jobs.query`, and a root store and crypto provider
 # for its Cloud KMS and BigQuery clients.
 ci-bigquery = [
@@ -99,7 +104,7 @@ ci-bigquery = [
 ]
 # The live check of the Tink keyset export: kms-aead's Cloud KMS and AWS KMS providers, with a
 # root store and crypto provider, for the `tink_export` example.
-ci-tink = ["kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
+ci-tink = ["admin", "kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
 
 [lints]
 workspace = true
@@ -108,6 +113,7 @@ workspace = true
 all-features = false
 features = [
     "ring",
+    "admin",
     "deterministic",
     "serde-json",
     "firestore",
@@ -120,12 +126,12 @@ features = [
 [[example]]
 name = "local_kms"
 path = "examples/local_kms.rs"
-required-features = ["ring"]
+required-features = ["ring", "admin"]
 
 [[example]]
 name = "migrate"
 path = "examples/migrate.rs"
-required-features = ["ring"]
+required-features = ["ring", "admin"]
 
 [[example]]
 name = "tink_export"

@@ -181,12 +181,11 @@ pub enum Interop {
     /// The AAD is the default one, which SQL rebuilds, so the field takes no
     /// [`custom_aad`](FieldSpec::custom_aad).
     BigQuery,
-    /// Tink decrypts the field with the keyset of
-    /// [`Keyring::export_tink_keyset`](crate::Keyring::export_tink_keyset): sealing needs an
-    /// AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomised value, an AES-SIV
-    /// version for a deterministic one, and a KEK with a Tink key URI, in Cloud KMS, in AWS KMS by
-    /// key ARN, or in Vault Transit. Tink for Python and C++ do not read ChaCha20-Poly1305 in a
-    /// keyset.
+    /// Tink decrypts the field with the keyset of `KeyringAdmin::export_tink_keyset`: sealing
+    /// needs an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomised value, an
+    /// AES-SIV version for a deterministic one, and a KEK with a Tink key URI, in Cloud KMS, in AWS
+    /// KMS by key ARN, or in Vault Transit. Tink for Python and C++ do not read ChaCha20-Poly1305
+    /// in a keyset.
     Tink,
 }
 

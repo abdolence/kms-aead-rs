@@ -12,8 +12,8 @@
 //! versions and writes `SealMarker::keyring` of their key ids, so that one query finds every
 //! record a sweep still has to visit: after a randomised rotation to key id `n`, the records
 //! whose `seal.randomized < n`, and likewise for deterministic versions. Once a sweep reports
-//! `failed == 0` and that query returns nothing, the old version can be
-//! [`retire`](crate::Keyring::retire)d.
+//! `failed == 0` and that query returns nothing, the administrative job can retire the old version
+//! with `KeyringAdmin::retire`.
 //!
 //! [`Keyring::seal_thresholds`](crate::Keyring::seal_thresholds) gives each purpose's `n`,
 //! [`SealMarker::is_behind`] makes the query's test on a record in hand, and
@@ -291,7 +291,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::{TestResult, TENANT};
-    use crate::{KeyTrust, KeyringError};
+    use crate::KeyringError;
 
     const DETERMINISTIC: u32 = 1 << 31;
     const BEACON: u32 = 1 << 30;
@@ -449,7 +449,10 @@ mod tests {
         );
     }
 
-    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+    #[cfg(all(
+        feature = "admin",
+        any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+    ))]
     mod with_backend {
         use std::sync::{Mutex, PoisonError};
 
@@ -460,10 +463,11 @@ mod tests {
         };
 
         use super::*;
-        use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider, TestRegistry};
+        use crate::test_support::{email_of, TestAdmin, TestBackend, TestProvider, TestRegistry};
         use crate::testing::MemoryKeyringStore;
         use crate::{
-            EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringRegistryOptions,
+            EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, KeyringAlgorithms,
+            KeyringRegistryOptions,
         };
 
         const ALICE: &str = "alice@example.com";
@@ -480,7 +484,9 @@ mod tests {
         /// The AAD an application gave its envelope values.
         const ENVELOPE_AAD: &[u8] = b"users:42:email";
 
-        async fn keyring(provider: TestProvider) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
+        async fn keyring_admin(
+            provider: TestProvider,
+        ) -> KeyringResult<TestAdmin<MemoryKeyringStore>> {
             TestRegistry::new(
                 MemoryKeyringStore::new(),
                 KeyringRegistryOptions::new().with_watch(false),
@@ -491,11 +497,12 @@ mod tests {
 
         #[tokio::test]
         async fn reseal_receives_the_trust_of_every_field() -> TestResult {
-            let keyring = keyring(TestProvider::new("tenant-42-kek")?).await?;
+            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
+            let keyring = admin.keyring();
             let email_aad = email_of("42")?;
             let phone_aad = PHONE.aad(&EntityId::try_from("42")?);
             let email = keyring.encrypt(&email_aad, &ALICE.to_string()).await?;
-            keyring.mark_compromised(email.key_id(), None).await?;
+            admin.mark_compromised(email.key_id(), None).await?;
             let phone = keyring
                 .encrypt(&phone_aad, &ALICE_PHONE.to_string())
                 .await?;
@@ -533,7 +540,7 @@ mod tests {
 
         #[tokio::test]
         async fn thresholds_are_the_active_version_of_each_purpose() -> TestResult {
-            let keyring = TestRegistry::new(
+            let admin = TestRegistry::new(
                 MemoryKeyringStore::new(),
                 KeyringRegistryOptions::new().with_watch(false),
             )?
@@ -543,7 +550,8 @@ mod tests {
                 KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
             )
             .await?;
-            let staged = keyring.rotate(Purpose::Randomized).await?;
+            let keyring = admin.keyring();
+            let staged = admin.rotate(Purpose::Randomized).await?;
 
             assert_eq!(
                 keyring.seal_thresholds(),
@@ -553,20 +561,21 @@ mod tests {
                     beacon: Some(KeyId::new(BEACON | 1)),
                 }
             );
-            keyring.promote(staged).await?;
+            admin.promote(staged).await?;
             assert_eq!(keyring.seal_thresholds().randomized, Some(staged));
             Ok(())
         }
 
         #[tokio::test]
         async fn reseal_moves_only_a_value_behind_the_active_version() -> TestResult {
-            let keyring = keyring(TestProvider::new("tenant-42-kek")?).await?;
+            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
+            let keyring = admin.keyring();
             let aad = email_of("42")?;
             let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
             assert!(keyring.reseal(&aad, &old).await?.is_none());
 
-            let rotation = keyring
-                .promote(keyring.rotate(Purpose::Randomized).await?)
+            let rotation = admin
+                .promote(admin.rotate(Purpose::Randomized).await?)
                 .await?;
             let resealed = keyring
                 .reseal(&aad, &old)
@@ -582,10 +591,11 @@ mod tests {
 
         #[tokio::test]
         async fn reseal_reports_the_trust_of_a_compromised_value() -> TestResult {
-            let keyring = keyring(TestProvider::new("tenant-42-kek")?).await?;
+            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
+            let keyring = admin.keyring();
             let aad = email_of("42")?;
             let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-            let rotation = keyring
+            let rotation = admin
                 .mark_compromised(old.key_id(), None)
                 .await?
                 .ok_or("the compromised active version is replaced")?;
@@ -603,7 +613,7 @@ mod tests {
         #[cfg(feature = "deterministic")]
         #[tokio::test]
         async fn reseal_deterministic_moves_only_a_value_behind_the_active_version() -> TestResult {
-            let keyring = TestRegistry::new(
+            let admin = TestRegistry::new(
                 MemoryKeyringStore::new(),
                 KeyringRegistryOptions::new().with_watch(false),
             )?
@@ -613,14 +623,15 @@ mod tests {
                 KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
             )
             .await?;
+            let keyring = admin.keyring();
             let aad = EMAIL.deterministic_aad();
             let old = keyring
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?;
             assert!(keyring.reseal_deterministic(&aad, &old).await?.is_none());
 
-            let rotation = keyring
-                .promote(keyring.rotate(Purpose::Deterministic).await?)
+            let rotation = admin
+                .promote(admin.rotate(Purpose::Deterministic).await?)
                 .await?;
             let resealed = keyring
                 .reseal_deterministic(&aad, &old)
@@ -649,7 +660,8 @@ mod tests {
                 envelope.encrypt(ENVELOPE_AAD, &ALICE.to_string()).await?,
                 envelope.encrypt(ENVELOPE_AAD, &ALICE.to_string()).await?,
             ];
-            let keyring = keyring(provider).await?;
+            let admin = keyring_admin(provider).await?;
+            let keyring = admin.keyring();
 
             for value in &values {
                 let opened = keyring

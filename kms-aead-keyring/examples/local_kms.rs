@@ -1,17 +1,20 @@
-//! A keyring on the memory store with a local KEK: encrypts a field, stages and promotes a new
-//! key version, and reads the value written before the rotation. Needs no cloud credentials.
+//! A keyring on the memory store with a local KEK: the administrative handle creates the keyring
+//! and stages and promotes a new key version, and the application's handle encrypts a field and
+//! reads the value written before the rotation. Needs no cloud credentials.
 //!
 //! ```sh
-//! cargo run -p kms-aead-keyring --example local_kms --features ring
+//! cargo run -p kms-aead-keyring --example local_kms --features ring,admin
 //! ```
 
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Rotation,
 };
 use secret_vault_value::SecretValue;
 
@@ -43,18 +46,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let provider =
         LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("orders-kek".to_string())?)?;
-    let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-        .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+    let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .create(provider, TENANT, KeyringAlgorithms::new())
         .await?;
+    // An application opens its own handle with `registry.open`, under a second copy of the KEK;
+    // the ephemeral KEK has none, so this one shares the administrative handle's.
+    let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let alice = Email("alice@example.com".to_string());
 
-    let before = keyring.encrypt(&aad, &alice).await?;
-    let staged = keyring.rotate(Purpose::Randomized).await?;
+    let before: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+    let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
     println!("staged key version {}", staged.as_u32());
-    let rotation = keyring.promote(staged).await?;
-    let after = keyring.encrypt(&aad, &alice).await?;
+    let rotation: Rotation = admin.promote(staged).await?;
+    let after: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
         Some(previous) => println!(

@@ -32,7 +32,7 @@ mod private {
 #[derive(Debug, Clone, Copy)]
 pub enum BigQuery {}
 
-/// The keyset of [`export_tink_keyset`](crate::Keyring::export_tink_keyset): Tink's
+/// The keyset of [`export_tink_keyset`](crate::KeyringAdmin::export_tink_keyset): Tink's
 /// `EncryptedKeyset` message around the KMS ciphertext of the serialised `Keyset`, which Tink's
 /// keyset readers take with the KMS client of the KEK's Tink key URI. Its keys are the ones every
 /// Tink language reads in a keyset: AES-GCM, AES-GCM-SIV and AES-SIV.

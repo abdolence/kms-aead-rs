@@ -123,6 +123,7 @@ where
 
 #[cfg(all(
     test,
+    feature = "admin",
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
 ))]
 mod tests {
@@ -131,7 +132,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+        TestAdmin, TestBackend, TestProvider, TestRegistry, TestResult, TENANT,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{
@@ -151,7 +152,7 @@ mod tests {
     /// A keyring with a beacon version beside the randomised one.
     async fn beacon_keyring(
         provider: TestProvider,
-    ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
+    ) -> KeyringResult<TestAdmin<MemoryKeyringStore>> {
         TestRegistry::new(
             MemoryKeyringStore::new(),
             KeyringRegistryOptions::new().with_watch(false),
@@ -167,7 +168,8 @@ mod tests {
     #[tokio::test]
     async fn a_beacon_is_the_hmac_of_the_field_under_the_active_version() -> TestResult {
         let provider = TestProvider::new("tenant-42-kek")?;
-        let keyring = beacon_keyring(provider.clone()).await?;
+        let admin = beacon_keyring(provider.clone()).await?;
+        let keyring = admin.keyring();
         let first = KeyId::new((1 << 30) | 1);
         let alice = ALICE.to_string();
 
@@ -195,12 +197,13 @@ mod tests {
 
     #[tokio::test]
     async fn probes_cover_every_live_beacon_version_newest_first() -> TestResult {
-        let keyring = beacon_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let admin = beacon_keyring(TestProvider::new("tenant-42-kek")?).await?;
+        let keyring = admin.keyring();
         let alice = ALICE.to_string();
         let first = keyring.beacon(&EMAIL, &alice).await?;
-        let second = keyring.rotate(Purpose::Beacon).await?;
-        keyring.promote(second).await?;
-        let pending = keyring.rotate(Purpose::Beacon).await?;
+        let second = admin.rotate(Purpose::Beacon).await?;
+        admin.promote(second).await?;
+        let pending = admin.rotate(Purpose::Beacon).await?;
 
         let probes = keyring.beacon_probes(&EMAIL, &alice).await?;
         assert_eq!(
@@ -210,7 +213,7 @@ mod tests {
         assert_eq!(probes[1], keyring.beacon(&EMAIL, &alice).await?);
         assert_eq!(probes[2], first);
 
-        keyring.retire(first.key_id()).await?;
+        admin.retire(first.key_id()).await?;
         let probes = keyring.beacon_probes(&EMAIL, &alice).await?;
         assert_eq!(
             probes.iter().map(Beacon::key_id).collect::<Vec<_>>(),

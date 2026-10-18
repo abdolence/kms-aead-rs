@@ -1,6 +1,6 @@
 //! Keyring keysets read by Tink: for each KMS whose key is configured and each algorithm Tink
 //! for Python reads, a keyring seals a value, rotates, and exports its `Readable` keyset with
-//! `export_tink_keyset`. Each keyset is one JSON line, which kms-aead's
+//! `KeyringAdmin::export_tink_keyset`. Each keyset is one JSON line, which kms-aead's
 //! `tests/tink_interop.py read-keysets` reads with `KeysetHandle.read`, opening the value sealed
 //! before the rotation, under the keyset's other key.
 //!
@@ -16,11 +16,12 @@
 use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadEncryptionProvider};
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
-    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection,
-    Purpose,
+    encodings, Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop,
+    KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeysetSelection, Purpose,
 };
 use serde_json::json;
 
@@ -64,7 +65,7 @@ async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> ExampleR
 where
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
 {
-    let keyring: Keyring<MemoryKeyringStore, P, AwsLc> =
+    let admin: KeyringAdmin<MemoryKeyringStore, P, AwsLc> =
         KeyringRegistry::<MemoryKeyringStore, AwsLc>::new(
             MemoryKeyringStore::new(),
             KeyringRegistryOptions::new().with_watch(false),
@@ -77,11 +78,10 @@ where
         .await?;
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let plain_text = format!("sealed by kms-aead-keyring {}", env!("CARGO_PKG_VERSION"));
-    let value = keyring.encrypt(&aad, &plain_text).await?;
-    keyring
-        .promote(keyring.rotate(Purpose::Randomized).await?)
-        .await?;
-    let keyset: EncryptedKeyset<encodings::Tink> = keyring
+    let value: Encrypted<String, Randomized> = admin.keyring().encrypt(&aad, &plain_text).await?;
+    let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+    admin.promote(staged).await?;
+    let keyset: EncryptedKeyset<encodings::Tink> = admin
         .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
     println!(

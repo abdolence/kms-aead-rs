@@ -700,8 +700,8 @@ mod postgres {
         drop_table(&admin, &table).await
     }
 
-    /// The keyring over the PostgreSQL store.
-    #[cfg(feature = "ring")]
+    /// The keyring over the PostgreSQL store, which the administrative API creates.
+    #[cfg(all(feature = "ring", feature = "admin"))]
     mod keyring {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
@@ -714,7 +714,7 @@ mod postgres {
             StoreKind, Stored, Swap,
         };
         use kms_aead_keyring::{
-            Keyring, KeyringAlgorithms, KeyringId, KeyringRecord, KeyringRegistry,
+            KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRecord, KeyringRegistry,
             KeyringRegistryOptions, KeyringResult,
         };
 
@@ -785,7 +785,7 @@ mod postgres {
                 store,
                 KeyringRegistryOptions::new().with_reload_min_interval(interval),
             )?;
-            let keyring: Keyring<CountingStore, LocalKmsProvider<Ring>, Ring> = registry
+            let keyring: KeyringAdmin<CountingStore, LocalKmsProvider<Ring>, Ring> = registry
                 .open_or_create(
                     LocalKmsProvider::ephemeral(LocalKekId::try_from("postgres-kek".to_string())?)?,
                     id.clone(),

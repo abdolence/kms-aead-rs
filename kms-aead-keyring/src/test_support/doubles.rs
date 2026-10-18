@@ -17,8 +17,8 @@ use crate::errors::KeyringResult;
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap};
 use crate::testing::{MemoryKeyringStore, MemoryRevision};
 use crate::{
-    EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringId, KeyringRecord,
-    KeyringRegistry,
+    EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringAdmin, KeyringId,
+    KeyringRecord, KeyringRegistry,
 };
 
 /// The backend of the build: the gate runs each backend feature on its own.
@@ -31,6 +31,9 @@ pub(crate) type TestBackend = kms_aead::backends::RustCrypto;
 
 /// A keyring on the store `S`, the test provider and the backend of the build.
 pub(crate) type TestKeyring<S> = Keyring<S, TestProvider, TestBackend>;
+
+/// The administrative handle of a [`TestKeyring`].
+pub(crate) type TestAdmin<S> = KeyringAdmin<S, TestProvider, TestBackend>;
 
 /// A registry on the store `S` and the backend of the build.
 pub(crate) type TestRegistry<S> = KeyringRegistry<S, TestBackend>;

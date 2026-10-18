@@ -72,8 +72,8 @@ impl Display for GcsGeneration {
 /// [`watch`](KeyringStore::watch) returns `None` and a process sees a change once its record is
 /// older than the keyring's `record_ttl`.
 ///
-/// The serving principal needs `storage.objects.get` on the bucket, and the administrative one
-/// `storage.objects.create` and `storage.objects.delete` as well, since a write replaces the
+/// The application's principal needs `storage.objects.get` on the bucket, and the administrative
+/// one `storage.objects.create` and `storage.objects.delete` as well, since a write replaces the
 /// object. With object versioning on the bucket, every record written is kept as a noncurrent
 /// version.
 #[derive(Clone)]

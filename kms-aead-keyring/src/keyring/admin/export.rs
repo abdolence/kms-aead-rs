@@ -18,7 +18,7 @@ use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringRe
 use crate::purpose::unreserved;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
-use crate::{Interop, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
+use crate::{Interop, KeyId, KeyVersionState, KeyringAdmin, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +118,7 @@ impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
 /// The BigQuery export, which exists for keyrings on a Cloud KMS key alone: `KEYS.KEYSET_CHAIN`
 /// decrypts with Cloud KMS only.
 #[cfg(feature = "bigquery-export")]
-impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
+impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
     /// The versions `selection` names as a Tink keyset encrypted by the keyring's KMS key, for
     /// BigQuery's `KEYS.KEYSET_CHAIN` in the KMS key's location. An administrative call: it
     /// decrypts every selected key through the provider, never through the
@@ -155,7 +155,7 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     }
 }
 
-impl<S, P, B> Keyring<S, P, B>
+impl<S, P, B> KeyringAdmin<S, P, B>
 where
     S: KeyringStore,
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
@@ -191,26 +191,27 @@ where
         &self,
         selection: KeysetSelection,
     ) -> KeyringResult<EncryptedKeyset<E>> {
-        spans::in_span(spans::export(self.id(), selection.purpose()?), async {
+        let keyring = &self.keyring;
+        spans::in_span(spans::export(keyring.id(), selection.purpose()?), async {
             let interop = E::INTEROP;
-            let kek = self.provider.kek();
+            let kek = keyring.provider.kek();
             let key_uri = interop.key_uri(kek).ok_or_else(|| {
                 KeyringError::interop(
-                    self.id(),
+                    keyring.id(),
                     interop,
                     InteropRequirement::Kek(kek.provider().clone()),
                 )
             })?;
             // The store's record rather than the cached one, so that a version another process
             // flagged compromised since this process last refreshed is never exported.
-            let record = self.cache.reload(LoadReason::Export).await?;
+            let record = keyring.cache.reload(LoadReason::Export).await?;
             let (primary, versions) = self.exported_versions(&record, selection, interop)?;
             let mut keyset = TinkKeyset::new(primary);
             for (key_id, key_type, encrypted_dek) in &versions {
                 // Uncached, so that the export leaves no key in the cache of a process that
                 // serves no reads under it.
                 let (added, _) = DekCache::disabled()
-                    .with_dek(&self.provider, encrypted_dek, |dek| {
+                    .with_dek(&keyring.provider, encrypted_dek, |dek| {
                         keyset.add_key(*key_id, *key_type, dek)
                     })
                     .await?;
@@ -222,12 +223,13 @@ where
                     // Zeroises the keys inside the keyset before the KMS round trip, so that the
                     // serialised keyset is the one copy left while it is encrypted.
                     drop(keyset);
-                    self.provider
+                    keyring
+                        .provider
                         .encrypt_data_encryption_key(&keyset_dek)
                         .await?
                         .into_value()
                 }
-                Interop::Tink => keyset.into_encrypted_bytes(&self.provider).await?,
+                Interop::Tink => keyset.into_encrypted_bytes(&keyring.provider).await?,
             };
             spans::record_versions(versions.len());
             Ok(EncryptedKeyset {
@@ -248,11 +250,12 @@ where
         selection: KeysetSelection,
         interop: Interop,
     ) -> KeyringResult<(KeyId, Vec<ExportedVersion<'r>>)> {
+        let keyring = &self.keyring;
         let (primary, versions): (KeyId, Vec<_>) = match selection {
             KeysetSelection::Readable(purpose) => {
                 let primary = record
                     .active(purpose)
-                    .ok_or_else(|| KeyringError::no_active_version(self.id(), purpose))?;
+                    .ok_or_else(|| KeyringError::no_active_version(keyring.id(), purpose))?;
                 let versions = record
                     .versions()
                     .iter()
@@ -267,16 +270,16 @@ where
             KeysetSelection::Single(key_id) => {
                 let version = record
                     .version(key_id)
-                    .ok_or_else(|| KeyringError::key_version_unknown(self.id(), key_id))?;
+                    .ok_or_else(|| KeyringError::key_version_unknown(keyring.id(), key_id))?;
                 if version.state() == KeyVersionState::Pending {
                     return Err(KeyringError::KeyVersionPending(KeyVersionError {
-                        keyring: self.id().clone(),
+                        keyring: keyring.id().clone(),
                         key_id,
                     }));
                 }
                 let (encrypted_dek, _) = version
                     .readable_dek()
-                    .ok_or_else(|| self.unreadable(version))?;
+                    .ok_or_else(|| keyring.unreadable(version))?;
                 (key_id, vec![(version, encrypted_dek)])
             }
         };
@@ -285,7 +288,7 @@ where
             .map(|(version, encrypted_dek)| {
                 let key_type = interop.key_type(version.algorithm()).ok_or_else(|| {
                     KeyringError::ExportAlgorithmUnsupported(KeyVersionError {
-                        keyring: self.id().clone(),
+                        keyring: keyring.id().clone(),
                         key_id: version.id(),
                     })
                 })?;
@@ -313,23 +316,23 @@ mod tests {
     use super::*;
     use crate::errors::{InteropError, KeyVersionError};
     use crate::test_support::{
-        email_of, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+        email_of, TestAdmin, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringRegistryOptions};
 
     /// A keyring on `provider` with one version of each purpose `algorithms` names.
-    async fn keyring(
+    async fn keyring_admin(
         provider: TestProvider,
         algorithms: KeyringAlgorithms,
-    ) -> KeyringResult<(TestKeyring<MemoryKeyringStore>, TestProvider)> {
-        let keyring = TestRegistry::new(
+    ) -> KeyringResult<(TestAdmin<MemoryKeyringStore>, TestProvider)> {
+        let admin = TestRegistry::new(
             MemoryKeyringStore::new(),
             KeyringRegistryOptions::new().with_watch(false),
         )?
         .create(provider.clone(), TENANT, algorithms)
         .await?;
-        Ok((keyring, provider))
+        Ok((admin, provider))
     }
 
     /// The keyset of `keyring`'s randomised versions `key_ids` with `primary` as the primary, as
@@ -360,17 +363,17 @@ mod tests {
 
     #[tokio::test]
     async fn export_refuses_a_version_of_another_algorithm() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
-        keyring
+        let (admin, provider) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        admin
             .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
             .await?;
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
-        let readable = keyring
+        let readable = admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await;
-        let first = keyring
+        let first = admin
             .export_keyset::<BigQuery>(KeysetSelection::Single(KeyId::new(1)))
             .await?;
 
@@ -389,16 +392,17 @@ mod tests {
 
     #[tokio::test]
     async fn readable_omits_compromised_versions() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let (admin, provider) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let keyring = admin.keyring();
         for _ in 0..2 {
-            keyring
-                .promote(keyring.rotate(Purpose::Randomized).await?)
+            admin
+                .promote(admin.rotate(Purpose::Randomized).await?)
                 .await?;
         }
-        keyring.mark_compromised(KeyId::new(2), None).await?;
+        admin.mark_compromised(KeyId::new(2), None).await?;
 
-        let exported = keyring
+        let exported = admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
@@ -410,7 +414,7 @@ mod tests {
         assert_eq!(exported.key_ids(), [KeyId::new(1), KeyId::new(3)]);
         assert_eq!(
             *keyset.value(),
-            keyset_of(&keyring, &provider, 3, &[1, 3]).await?
+            keyset_of(keyring, &provider, 3, &[1, 3]).await?
         );
         Ok(())
     }
@@ -440,7 +444,7 @@ mod tests {
             .create(provider.clone(), TENANT, KeyringAlgorithms::new())
             .await?;
         let administrator = TestRegistry::new(store, options)?
-            .open(provider.clone(), TENANT)
+            .admin(provider.clone(), TENANT)
             .await?;
         let leaked = KeyId::new(1);
         administrator.mark_compromised(leaked, None).await?;
@@ -457,25 +461,26 @@ mod tests {
         assert_eq!(exported.key_ids(), [KeyId::new(2)]);
         assert_eq!(
             *keyset.value(),
-            keyset_of(&exporter, &provider, 2, &[2]).await?
+            keyset_of(exporter.keyring(), &provider, 2, &[2]).await?
         );
         Ok(())
     }
 
     #[tokio::test]
     async fn export_does_not_populate_the_cache() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let (admin, provider) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let keyring = admin.keyring();
         let aad = email_of("42")?;
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
-        keyring
+        admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         keyring
             .encrypt(&aad, &"alice@example.com".to_string())
             .await?;
-        keyring
+        admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
 
@@ -489,9 +494,10 @@ mod tests {
 
     #[tokio::test]
     async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
-        let exported = keyring
+        let (admin, provider) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let keyring = admin.keyring();
+        let exported = admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let value = Encrypted::<SecretValue, Envelope>::join(
@@ -520,11 +526,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_pending_version_is_readable_and_never_the_primary() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
-        let staged = keyring.rotate(Purpose::Randomized).await?;
+        let (admin, provider) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let keyring = admin.keyring();
+        let staged = admin.rotate(Purpose::Randomized).await?;
 
-        let exported = keyring
+        let exported = admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
@@ -535,10 +542,10 @@ mod tests {
         assert_eq!(exported.key_ids(), [KeyId::new(1), staged]);
         assert_eq!(
             *keyset.value(),
-            keyset_of(&keyring, &provider, 1, &[1, staged.as_u32()]).await?
+            keyset_of(keyring, &provider, 1, &[1, staged.as_u32()]).await?
         );
         assert!(matches!(
-            keyring
+            admin
                 .export_keyset::<BigQuery>(KeysetSelection::Single(staged))
                 .await,
             Err(KeyringError::KeyVersionPending(KeyVersionError { key_id, .. })) if key_id == staged
@@ -549,9 +556,9 @@ mod tests {
     #[tokio::test]
     async fn beacon_keys_are_never_exported() -> TestResult {
         let algorithms = KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256);
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, algorithms).await?;
+        let (admin, _) = keyring_admin(TestProvider::cloud_kms()?, algorithms).await?;
 
-        let exported = keyring
+        let exported = admin
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Beacon))
             .await;
 
@@ -564,15 +571,16 @@ mod tests {
 
     #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
+        let (admin, _) =
+            keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let first = KeyId::new(1);
-        keyring
-            .promote(keyring.rotate(Purpose::Randomized).await?)
+        admin
+            .promote(admin.rotate(Purpose::Randomized).await?)
             .await?;
-        keyring.retire(first).await?;
-        keyring.destroy(first).await?;
+        admin.retire(first).await?;
+        admin.destroy(first).await?;
 
-        let result = keyring
+        let result = admin
             .export_keyset::<BigQuery>(KeysetSelection::Single(first))
             .await;
 
@@ -585,7 +593,7 @@ mod tests {
 
     #[tokio::test]
     async fn tink_export_refuses_a_kek_without_a_tink_key_uri() -> TestResult {
-        let (keyring, provider) = keyring(
+        let (admin, provider) = keyring_admin(
             TestProvider::new("tenant-42-kek")?,
             KeyringAlgorithms::new(),
         )
@@ -593,7 +601,7 @@ mod tests {
         let encryptions = provider.calls.encryptions.load(Ordering::SeqCst);
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
-        let exported = keyring
+        let exported = admin
             .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
             .await;
 
@@ -619,15 +627,15 @@ mod tests {
     #[tokio::test]
     async fn tink_export_selects_the_versions_of_the_bigquery_export() -> TestResult {
         let algorithms = KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256);
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, algorithms).await?;
+        let (admin, _) = keyring_admin(TestProvider::cloud_kms()?, algorithms).await?;
         for _ in 0..2 {
-            keyring
-                .promote(keyring.rotate(Purpose::Randomized).await?)
+            admin
+                .promote(admin.rotate(Purpose::Randomized).await?)
                 .await?;
         }
         let compromised = KeyId::new(2);
-        keyring.mark_compromised(compromised, None).await?;
-        let pending = keyring.rotate(Purpose::Randomized).await?;
+        admin.mark_compromised(compromised, None).await?;
+        let pending = admin.rotate(Purpose::Randomized).await?;
         let cases = [
             (
                 KeysetSelection::Readable(Purpose::Randomized),
@@ -642,8 +650,8 @@ mod tests {
         ];
 
         for (selection, expected) in cases {
-            let bigquery = keyring.export_keyset::<BigQuery>(selection).await;
-            let tink = keyring.export_keyset::<Tink>(selection).await;
+            let bigquery = admin.export_keyset::<BigQuery>(selection).await;
+            let tink = admin.export_keyset::<Tink>(selection).await;
             for key_ids in [
                 bigquery
                     .as_ref()

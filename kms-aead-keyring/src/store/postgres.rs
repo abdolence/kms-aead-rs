@@ -40,7 +40,7 @@ const LISTENER_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// );
 /// ```
 ///
-/// The serving principal needs `SELECT` on it, and the administrative one also `INSERT` and
+/// The application's principal needs `SELECT` on it, and the administrative one also `INSERT` and
 /// `UPDATE`. Every write sends `NOTIFY <table>, '<keyring id>'` when it commits, and a
 /// [`watch`](KeyringStore::watch) listens on that channel. PostgreSQL lets any session notify
 /// any channel; a keyring revalidates at most once per

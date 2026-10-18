@@ -12,8 +12,9 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::DeterministicAlgorithm;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection, Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection,
+    Purpose,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -98,7 +99,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         env("KMS_KEY_RING")?,
         env("KMS_KEY")?,
     );
-    let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> =
+    let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> =
         KeyringRegistry::<MemoryKeyringStore, Ring>::new(
             MemoryKeyringStore::new(),
             KeyringRegistryOptions::new().with_watch(false),
@@ -109,13 +110,14 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
             KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
         )
         .await?;
+    let keyring: &Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> = admin.keyring();
     let field = EMAIL.with_interop(Interop::BigQuery);
     let aad = field.aad(&EntityId::try_from("42")?);
     let deterministic_aad = field.deterministic_aad();
 
     let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    keyring
-        .promote(keyring.rotate(Purpose::Randomized).await?)
+    admin
+        .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let mut relabelled = first.value().to_vec();
@@ -123,10 +125,10 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let deterministic = keyring
         .encrypt_deterministic(&deterministic_aad, &ALICE.to_string())
         .await?;
-    let randomized_keyset = keyring
+    let randomized_keyset = admin
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
-    let deterministic_keyset = keyring
+    let deterministic_keyset = admin
         .export_bigquery_keyset(KeysetSelection::Single(deterministic.key_id()))
         .await?;
     let randomized_chain = format!(

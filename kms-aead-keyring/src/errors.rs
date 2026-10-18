@@ -36,8 +36,7 @@ pub enum KeyringError {
     /// The store holds no record for the keyring, when a keyring is opened or a record is
     /// read before an administrative write.
     RecordMissing(KeyringId),
-    /// [`KeyringRegistry::create`](crate::KeyringRegistry::create) found the keyring's record, in
-    /// the store or already open.
+    /// `KeyringRegistry::create` found the keyring's record, in the store or already open.
     RecordExists(KeyringId),
     /// A record breaks a size cap or an invariant of the keyring record.
     RecordInvalid(RecordInvalidError),
@@ -55,8 +54,7 @@ pub enum KeyringError {
     NoAlgorithm(PurposeError),
     /// The record has no version with the value's key id, also after a reload.
     KeyVersionUnknown(KeyVersionError),
-    /// The value's key version is retired: it decrypts again after
-    /// [`reinstate`](crate::Keyring::reinstate).
+    /// The value's key version is retired: it decrypts again after `KeyringAdmin::reinstate`.
     KeyVersionRetired(KeyVersionError),
     /// The value's key version is destroyed: its key is gone.
     KeyVersionDestroyed(KeyVersionError),
@@ -151,13 +149,6 @@ impl KeyringError {
 
     pub(crate) fn no_active_version(keyring: &KeyringId, purpose: Purpose) -> Self {
         KeyringError::NoActiveVersion(PurposeError {
-            keyring: keyring.clone(),
-            purpose,
-        })
-    }
-
-    pub(crate) fn no_algorithm(keyring: &KeyringId, purpose: Purpose) -> Self {
-        KeyringError::NoAlgorithm(PurposeError {
             keyring: keyring.clone(),
             purpose,
         })

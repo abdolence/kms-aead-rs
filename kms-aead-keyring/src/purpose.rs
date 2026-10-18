@@ -49,6 +49,7 @@ impl Purpose {
     }
 
     /// The key id of the first version of this purpose.
+    #[cfg(feature = "admin")]
     pub(crate) fn first_key_id(self) -> KeyId {
         KeyId::new(match self {
             Purpose::Randomized => 1,
@@ -110,6 +111,7 @@ pub(crate) fn unreserved(key_id: KeyId) -> KeyringResult<KeyId> {
 
 /// The key id of the version after `key_id` in its purpose, or `None` once the ordinals of the
 /// purpose run out at 2^30 - 1.
+#[cfg(feature = "admin")]
 pub(crate) fn next_key_id(key_id: KeyId) -> Option<KeyId> {
     let id = key_id.as_u32();
     (id & KEY_ID_ORDINAL_MASK != KEY_ID_ORDINAL_MASK).then(|| KeyId::new(id + 1))
@@ -160,6 +162,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "admin")]
     fn the_last_ordinal_of_each_purpose_has_no_next() {
         for last in [(1 << 30) - 1, (1 << 31) | ((1 << 30) - 1), u32::MAX >> 1] {
             assert_eq!(next_key_id(KeyId::new(last)), None);
@@ -167,6 +170,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "admin")]
     fn the_purpose_bits_separate_the_purposes() {
         for purpose in Purpose::ALL {
             let first = purpose.first_key_id();
