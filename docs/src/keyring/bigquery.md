@@ -139,7 +139,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    BigQuery, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
 };
 
 # #[tokio::main]
@@ -158,7 +158,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset<BigQuery> = keyring
+let keyset: WrappedKeyset<encodings::BigQuery> = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 let literal: String = keyset.to_sql_literal();
@@ -184,12 +184,13 @@ Beacon versions are never exported: a selection of the beacon purpose fails with
 `ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
 [Beacons](./beacons.md#bigquery).
 
-The `WrappedKeyset<BigQuery>` it returns:
+The type parameter of a `WrappedKeyset` is its encoding, from the `encodings` module, which names
+the reader of its bytes. The `WrappedKeyset<encodings::BigQuery>` this export returns:
 
 - `as_bytes()`: the wrapped keyset, as a `BYTES` column or query parameter holds it;
 - `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`. Only a
-  `WrappedKeyset<BigQuery>` has it: `export_tink_keyset` returns a `WrappedKeyset<Tink>`, which
-  `KEYS.KEYSET_CHAIN` does not read;
+  `WrappedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
+  `WrappedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`;
 - `key_ids()`: the versions inside, in ascending order.
@@ -281,7 +282,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, Tink, WrappedKeyset,
+    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
 };
 
 # #[tokio::main]
@@ -300,7 +301,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset<Tink> = keyring
+let keyset: WrappedKeyset<encodings::Tink> = keyring
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 std::fs::write("tenant-42.keyset", keyset.as_bytes())?;

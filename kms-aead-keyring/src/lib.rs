@@ -181,6 +181,8 @@
 mod aad;
 pub use aad::*;
 
+pub mod encodings;
+
 pub mod errors;
 pub use errors::{KeyringError, KeyringResult};
 

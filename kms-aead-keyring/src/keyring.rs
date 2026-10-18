@@ -16,6 +16,7 @@ use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
 use tokio::task::AbortHandle;
 
+use crate::encodings::Encoding;
 use crate::errors::{
     InteropRequirement, KekMismatchError, KeyVersionCompromisedError, KeyVersionError,
     KeyringError, KeyringResult, RecordInvalidReason,
@@ -35,8 +36,7 @@ mod beacon;
 mod deterministic;
 
 mod export;
-use export::Encoding;
-pub use export::{BigQuery, KeysetEncoding, KeysetSelection, Tink, WrappedKeyset};
+pub use export::{KeysetSelection, WrappedKeyset};
 
 /// Field encryption under the key versions of one keyring, whose record lives in the store `S`
 /// and is cached in the process, with keys wrapped by the provider `P` and AEAD on the backend
