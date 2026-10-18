@@ -6,8 +6,8 @@ A keyring record holds:
 
 - the keyring id, the scope it encrypts for: 1 to 128 ASCII alphanumerics, `-`, `_` and `.`,
   except `.` and `..` and ids that start and end with `__`. Such an id is a Firestore document
-  id, a PostgreSQL key, a part of a GCS object name and a BigQuery string without escaping. It is
-  an identifier, not a secret, and appears in spans and errors;
+  id, a PostgreSQL key, a part of a GCS object name or an S3 object key, and a BigQuery string
+  without escaping. It is an identifier, not a secret, and appears in spans and errors;
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
 - every key version ever created, in creation order.

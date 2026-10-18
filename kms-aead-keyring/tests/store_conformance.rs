@@ -22,7 +22,12 @@ const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
 
 /// As [`WRAPPED_DEK`], with `record-bytes-marker` after the layout bytes: a wrapped key whose
 /// bytes a test looks for in the store's errors.
-#[cfg(any(feature = "firestore", feature = "postgres", feature = "gcs"))]
+#[cfg(any(
+    feature = "firestore",
+    feature = "postgres",
+    feature = "gcs",
+    feature = "s3"
+))]
 const MARKED_WRAPPED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
 
 /// The record of `id` after `rotations` rotations: randomized versions 1 to `rotations`
@@ -237,7 +242,12 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
 /// A store error carries none of the record it failed to write: the wrapped key appears neither
 /// as text nor as bytes in the error's `Display`, its `Debug`, or those of its causes.
 /// `failing` is a store whose write at `expected` fails.
-#[cfg(any(feature = "firestore", feature = "postgres", feature = "gcs"))]
+#[cfg(any(
+    feature = "firestore",
+    feature = "postgres",
+    feature = "gcs",
+    feature = "s3"
+))]
 async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
     failing: S,
     expected: Option<&S::Revision>,
@@ -791,6 +801,88 @@ mod gcs {
         client.get().write_object(request).await?;
         let store =
             GcsKeyringStore::new(client, GcsBucketName::try_from(bucket)?)?.with_prefix(prefix);
+        assert!(matches!(
+            store.load(&id).await,
+            Err(KeyringError::RecordInvalid(RecordInvalidError {
+                reason: RecordInvalidReason::TooLarge,
+                ..
+            }))
+        ));
+        Ok(())
+    }
+}
+
+/// The S3 store against the S3-compatible server at `KEYRING_S3_ENDPOINT`, such as MinIO, in the
+/// bucket `KEYRING_S3_BUCKET`, with path-style requests and the credentials of the environment.
+/// Each run writes under a prefix of its own, `kms-keyrings-conformance/<uuid>/`.
+#[cfg(feature = "s3")]
+mod s3 {
+    use aws_config::{BehaviorVersion, Region};
+    use aws_sdk_s3::primitives::ByteStream;
+    use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
+    use kms_aead_keyring::store::{KeyringStore, S3BucketName, S3KeyringStore};
+    use kms_aead_keyring::KeyringError;
+
+    use super::{conformance, unique_keyring_id, TestResult};
+
+    /// The client of the server `KEYRING_S3_ENDPOINT` names. Without the variable it fails,
+    /// rather than sending the tests to AWS.
+    async fn client() -> Result<aws_sdk_s3::Client, Box<dyn std::error::Error>> {
+        let config = aws_config::defaults(BehaviorVersion::latest())
+            .endpoint_url(std::env::var("KEYRING_S3_ENDPOINT")?)
+            .region(Region::new("us-east-1"))
+            .load()
+            .await;
+        Ok(aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::config::Builder::from(&config)
+                .force_path_style(true)
+                .build(),
+        ))
+    }
+
+    fn bucket() -> Result<S3BucketName, Box<dyn std::error::Error>> {
+        Ok(S3BucketName::try_from(std::env::var("KEYRING_S3_BUCKET")?)?)
+    }
+
+    fn run_prefix() -> String {
+        format!("kms-keyrings-conformance/{}/", uuid::Uuid::now_v7())
+    }
+
+    async fn store() -> Result<S3KeyringStore, Box<dyn std::error::Error>> {
+        Ok(S3KeyringStore::new(client().await?, bucket()?).with_prefix(run_prefix()))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
+    async fn the_s3_store_conforms() -> TestResult {
+        let store = store().await?;
+        conformance(|| store.clone()).await
+    }
+
+    /// An object key past the 1,024-byte limit makes every write fail.
+    #[tokio::test]
+    #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
+    async fn a_store_error_carries_no_record_bytes() -> TestResult {
+        let failing = store().await?.with_prefix("x".repeat(1100));
+        super::a_store_error_carries_no_record_bytes(failing, None).await
+    }
+
+    /// An object past the 1 MiB record cap loads as too large, whatever it holds.
+    #[tokio::test]
+    #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
+    async fn an_object_over_the_record_cap_is_too_large() -> TestResult {
+        let client = client().await?;
+        let bucket = bucket()?;
+        let prefix = run_prefix();
+        let id = unique_keyring_id()?;
+        client
+            .put_object()
+            .bucket(bucket.to_string())
+            .key(format!("{prefix}{id}.json"))
+            .body(ByteStream::from(vec![b' '; (1 << 20) + 1]))
+            .send()
+            .await?;
+        let store = S3KeyringStore::new(client, bucket).with_prefix(prefix);
         assert!(matches!(
             store.load(&id).await,
             Err(KeyringError::RecordInvalid(RecordInvalidError {

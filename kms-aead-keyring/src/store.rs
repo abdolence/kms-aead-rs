@@ -27,6 +27,11 @@ mod gcs;
 #[cfg(feature = "gcs")]
 pub use gcs::*;
 
+#[cfg(feature = "s3")]
+mod s3;
+#[cfg(feature = "s3")]
+pub use s3::*;
+
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///
 /// The store's access control is what the record's integrity rests on: only the administrative
@@ -176,12 +181,14 @@ pub enum StoreKind {
     Postgres,
     /// `GcsKeyringStore`, of the `gcs` feature.
     Gcs,
+    /// `S3KeyringStore`, of the `s3` feature.
+    S3,
     /// An application's own store, by the name it gives.
     Other(&'static str),
 }
 
-/// `memory`, `firestore`, `postgres`, `gcs`, or the application's name: the value of the `store`
-/// span field.
+/// `memory`, `firestore`, `postgres`, `gcs`, `s3`, or the application's name: the value of the
+/// `store` span field.
 impl Display for StoreKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -189,6 +196,7 @@ impl Display for StoreKind {
             StoreKind::Firestore => "firestore",
             StoreKind::Postgres => "postgres",
             StoreKind::Gcs => "gcs",
+            StoreKind::S3 => "s3",
             StoreKind::Other(name) => name,
         })
     }

@@ -37,8 +37,8 @@ The crate has no default features, and the backend features are those of kms-aea
   [migration](./operations.md#migrating-from-envelope-values);
 - `serde`: `Serialize` and `Deserialize` for `Encrypted`;
 - `serde-json`: `serde`, and `Json<T>`, a plaintext stored as its JSON;
-- `firestore`, `postgres`, `gcs`: the keyring stores, see [Keyring stores](./keyring/stores.md).
-  `postgres` and `gcs` have TLS variants listed there;
+- `firestore`, `postgres`, `gcs`, `s3`: the keyring stores, see
+  [Keyring stores](./keyring/stores.md). `postgres` and `gcs` have TLS variants listed there;
 - `bigquery-export`: `export_bigquery_keyset`, see
   [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 

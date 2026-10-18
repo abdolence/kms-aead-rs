@@ -21,7 +21,7 @@ pub(crate) mod stored;
 /// The id of a keyring, the scope it encrypts for, such as a tenant: 1 to 128 ASCII
 /// alphanumerics, `-`, `_` and `.`, except `.` and `..` as the whole id and ids that start and
 /// end with `__`. Such an id is a Firestore document id, a PostgreSQL key, a part of a GCS
-/// object name and a BigQuery string, all without escaping.
+/// object name or an S3 object key, and a BigQuery string, all without escaping.
 ///
 /// It is an identifier, not a secret: it appears in spans, events and errors.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

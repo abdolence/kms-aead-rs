@@ -9,6 +9,7 @@ signals changes to it. The library provides:
 | Firestore | `FirestoreKeyringStore` | `firestore` | the document's update time | a listener on the document |
 | PostgreSQL | `PostgresKeyringStore` | `postgres` | a `revision` column | `NOTIFY` |
 | Cloud Storage | `GcsKeyringStore` | `gcs` | the object's generation | none |
+| S3 | `S3KeyringStore` | `s3` | the object's ETag | none |
 
 Every store keeps the record as the same [JSON document](./lifecycle.md#the-record), and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
@@ -161,6 +162,70 @@ features from the application, or one of:
 
 - `gcs-tls-roots`: the system's native roots;
 - `gcs-tls-webpki`: the bundled WebPKI roots.
+
+## S3
+
+Each record is the object `kms-keyrings/<keyring id>.json` in a bucket of Amazon S3 or of an
+S3-compatible server. `with_prefix` sets another prefix; one that should read as a folder ends
+with `/`. A create is conditional on no object existing (`If-None-Match: *`), an update on the
+ETag the writer read (`If-Match`), and a revalidation reads the object only when its ETag changed
+(`If-None-Match` on the read).
+
+- The serving principal needs `s3:GetObject` on the objects, and the administrative one also
+  `s3:PutObject`;
+- S3 has no change notification the store listens to, so a process sees a change once its record
+  is older than `record_ttl`, 5 minutes by default;
+- turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
+  restore from.
+
+```rust,no_run
+use aws_config::BehaviorVersion;
+use kms_aead_keyring::store::{S3BucketName, S3KeyringStore};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+let config = aws_config::load_defaults(BehaviorVersion::latest()).await;
+let store = S3KeyringStore::new(
+    aws_sdk_s3::Client::new(&config),
+    S3BucketName::try_from("my-keyrings".to_string())?,
+);
+# let _ = store;
+# Ok(())
+# }
+```
+
+The client is aws-sdk-s3's, built with the credentials, region, endpoint and HTTP client the
+application chooses. The `s3` feature enables the SDK's default HTTPS client, rustls on
+aws-lc-rs, as kms-aead's AWS KMS provider does.
+
+An S3-compatible server works when it honours both preconditions on writes. Set its endpoint on
+the client, and `force_path_style(true)` when it serves buckets by path, as MinIO does by default:
+
+```rust,no_run
+use aws_config::BehaviorVersion;
+use kms_aead_keyring::store::{S3BucketName, S3KeyringStore};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+let config = aws_config::defaults(BehaviorVersion::latest())
+    .endpoint_url("http://minio:9000")
+    .load()
+    .await;
+let client = aws_sdk_s3::Client::from_conf(
+    aws_sdk_s3::config::Builder::from(&config)
+        .force_path_style(true)
+        .build(),
+);
+let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_string())?);
+# let _ = store;
+# Ok(())
+# }
+```
+
+Be aware that a server must refuse an update whose object does not exist. MinIO
+`RELEASE.2025-07-23T15-54-02Z` writes the object instead, so an update recreates a deleted record
+there. The library's tests run on the `pgsty/minio` build of MinIO
+`RELEASE.2026-08-04T00-00-00Z`, which refuses it as S3 does.
 
 ## Your own store
 

@@ -13,7 +13,7 @@ The library provides:
   BigQuery read too;
 - no KMS call on write, and one unwrap per key version per cache TTL on read;
 - rotation, retirement, destruction and a compromised flag every process sees;
-- keyring stores on Firestore, PostgreSQL and Cloud Storage, and in memory;
+- keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory;
 - `Encrypted<T>` fields with serde and sqlx support, and an AAD that binds a value to its row;
 - deterministic fields for equality queries, across rotations;
 - sweeps that re-seal stored values, and the migration from kms-aead's envelope values.

@@ -84,6 +84,7 @@
 //! | Firestore, with a listener for push | `store::FirestoreKeyringStore` | `firestore` |
 //! | PostgreSQL, through sqlx, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
 //! | Cloud Storage, with generation preconditions and no push | `store::GcsKeyringStore` | `gcs` |
+//! | Amazon S3 and S3-compatible servers, with ETag preconditions and no push | `store::S3KeyringStore` | `s3` |
 //!
 //! # Features
 //!
@@ -99,6 +100,7 @@
 //! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
+//! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |
 //! | `bigquery-export` | `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
 //!
 //! # Example
@@ -182,6 +184,7 @@ mod record_cache;
     feature = "firestore",
     feature = "postgres",
     feature = "gcs",
+    feature = "s3",
     feature = "bigquery-export"
 ))]
 mod book;

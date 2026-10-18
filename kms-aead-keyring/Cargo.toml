@@ -43,6 +43,8 @@ tokio-stream = { version = "0.1", optional = true, default-features = false }
 # The version gcloud-sdk depends on, so that the Tink keyset messages add no crate.
 prost = { version = "0.14", optional = true }
 zeroize = { version = "1", optional = true }
+# The features kms-aead's aws-sdk-kms has, so that both share one HTTPS client and runtime.
+aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -50,6 +52,8 @@ async-trait = { workspace = true }
 proptest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 uuid = { version = "1", features = ["v7"] }
+# The S3 client of the S3 store's examples.
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 
 [features]
 default = []
@@ -80,6 +84,8 @@ postgres-tls-native = ["postgres", "sqlx/tls-native-tls"]
 gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
 gcs-tls-roots = ["gcs", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
 gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
+# `S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client.
+s3 = ["dep:aws-sdk-s3"]
 # `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider without a TLS root store or crypto
 # provider: the application enables kms-aead's `gcp-kms-encryption` to build it.
 bigquery-export = ["kms-aead/gcp-kms-encryption-base", "dep:prost", "dep:zeroize"]
@@ -104,6 +110,7 @@ features = [
     "firestore",
     "postgres-tls-rustls",
     "gcs-tls-roots",
+    "s3",
     "bigquery-export",
 ]
 
