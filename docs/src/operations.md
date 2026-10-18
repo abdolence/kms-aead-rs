@@ -26,8 +26,8 @@ How often:
 - A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
   [Nonces](./security.md#nonces). The library cannot count the values a fleet seals, so estimate
   them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
-  sooner at higher rates. AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all take a 12-byte
-  nonce, so the same cadence applies to each;
+  sooner at higher rates. AES-128-GCM, AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all
+  take a 12-byte nonce, so the same cadence applies to each;
 - AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
   for an AE advantage of about 2^-57. The keyring does not count bytes, since its DEKs are shared
   across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the

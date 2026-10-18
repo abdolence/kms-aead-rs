@@ -209,6 +209,9 @@ those of `KeyringAdmin` calls, under the `admin` feature.
 - `INFO`: the active version of a purpose changed, with the old and new key ids;
 - `WARN`: the store's listener disconnected, reconnected, or did not start, and a keyring
   opened with no tokio runtime to follow the store's signals;
+- `WARN`: a `KeyringRegistry` dropped while its background tasks run, which aborts them, with the
+  count of open keyrings, and a `shutdown` whose timeout aborted the tasks still running, with
+  their count;
 - `WARN`: a record a sweep could not re-seal, with the `Display` of the application's candidate
   in `record` and of its error in `error`. Both are the application's own text, so it keeps
   values, secrets and personal data out of them. A record id is often an entity id, so the
