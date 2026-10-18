@@ -3,7 +3,7 @@
 //! ```sh
 //! docker run --rm -d --name lowkey-vault -p 8443:8443 docker.io/nagyesta/lowkey-vault:7.3.112
 //! AZURE_KEY_VAULT_EMULATOR_URL=https://localhost:8443 \
-//!   cargo test --features azure-kms-encryption --test azure_kms_emulator -- --ignored
+//!   cargo test --features azure-kms-encryption,aws-lc --test azure_kms_emulator -- --ignored
 //! ```
 
 use azure_core::http::{ClientOptions, RequestContent, Transport};
