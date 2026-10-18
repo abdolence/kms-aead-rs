@@ -10,19 +10,20 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 #[non_exhaustive]
 pub enum AeadAlgorithm {
     /// ChaCha20-Poly1305 (RFC 8439). The default of
-    /// [`KmsAeadEnvelope::new`](crate::KmsAeadEnvelope::new).
+    /// [`KmsAeadEnvelope::new`](crate::KmsAeadEnvelope::new) before 0.30.
     ChaCha20Poly1305,
     /// AES-GCM with a 16-byte key.
     Aes128Gcm,
-    /// AES-GCM with a 32-byte key.
+    /// AES-GCM with a 32-byte key. The default of
+    /// [`KmsAeadEnvelope::new`](crate::KmsAeadEnvelope::new).
     Aes256Gcm,
     /// AES-GCM-SIV (RFC 8452) with a 32-byte key.
     Aes256GcmSiv,
 }
 
 impl AeadAlgorithm {
-    /// Every algorithm. [`DekCache::with_key`](crate::DekCache::with_key) refuses a key whose
-    /// length fits none of these, so a variant left out here has its keys refused.
+    /// Every algorithm, for the tests that cover each.
+    #[cfg(test)]
     pub(crate) const ALL: [AeadAlgorithm; 4] = [
         AeadAlgorithm::ChaCha20Poly1305,
         AeadAlgorithm::Aes128Gcm,

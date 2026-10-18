@@ -56,6 +56,9 @@ jobs:
             absent: ring aws-lc-rs
           - name: all backends, legacy formats
             features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
+          - name: 'fields: serde-json, postgres, sqlx on ring'
+            features: ring,serde,serde-json,postgres,sqlx
+            absent: rustls native-tls
           - name: backend aws-lc FIPS
             features: aws-lc-fips
             absent: ring aws-lc-sys
@@ -112,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
         env:
           RUSTDOCFLAGS: -D warnings
   # The book's code compiles as doctests only with each crate's docs.rs feature set, which no build
@@ -127,10 +130,10 @@ jobs:
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: '0.5.4'
-      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
       - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export"
       - run: cd docs && mdbook build
-  # `rust-version` in each crate's Cargo.toml: its docs.rs feature set builds on it, on
+  # `rust-version` in the workspace's Cargo.toml: each crate's docs.rs feature set builds on it, on
   # dependencies resolved for it.
   msrv:
     name: rust-version
@@ -140,10 +143,9 @@ jobs:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.91
-      - uses: dtolnay/rust-toolchain@1.94
-      - run: cargo +1.91 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo +1.94 check -p kms-aead-keyring --lib --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export"
+      - uses: dtolnay/rust-toolchain@1.99
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -359,7 +361,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FEATURES: ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,s3,bigquery-export
-      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
       ABSENT: firestore sqlx aws-sdk-s3
     steps:
       - uses: actions/checkout@v7
@@ -376,3 +378,26 @@ jobs:
           done
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES"
+  # The PostgreSQL integrations of `Encrypted` through tokio-postgres and sqlx.
+  postgres-live:
+    name: postgres-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --features ring,postgres,sqlx --test postgres_fields -- --ignored

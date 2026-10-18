@@ -1,8 +1,8 @@
-//! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext key itself,
+//! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext it is given,
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -10,23 +10,22 @@ use secret_vault_value::SecretValue;
 use tokio::sync::watch;
 
 use crate::errors::KmsAeadEncryptionError;
-#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-use crate::AeadBackend;
+use crate::formats::TinkKeyType;
 use crate::{
-    DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
+    KmsAeadResult, ValueStruct,
 };
 
 #[cfg(feature = "ring")]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
+pub(crate) type TestBackend = crate::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
+pub(crate) type TestBackend = crate::AwsLc;
 #[cfg(all(
     not(feature = "ring"),
     not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
+pub(crate) type TestBackend = crate::RustCrypto;
 
 /// How many calls the concurrency tests start at once.
 pub(crate) const CONCURRENT_CALLS: usize = 16;
@@ -34,7 +33,6 @@ pub(crate) const CONCURRENT_CALLS: usize = 16;
 static TEST_KEK: LazyLock<KekRef> =
     LazyLock::new(|| KekRef::new(KekProvider::Other("test".to_string()), "test-kek"));
 
-/// Ignores the binding: a wrapped key opens under any binding.
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {
     Working,
@@ -48,9 +46,6 @@ pub(crate) enum TestKmsProvider {
     /// holds to the unwrap, as a little-endian `u64`, so that a caller can tell how old the key
     /// it is given is.
     Stamping(Instant),
-    /// Unwraps every key into the key it holds, whatever the wrapped bytes.
-    #[cfg(feature = "deterministic")]
-    Unwrapping(SecretValue),
 }
 
 #[async_trait]
@@ -62,7 +57,6 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        _binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
             #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
@@ -72,7 +66,6 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
             )),
             _ => Ok(EncryptedDataEncryptionKey::new(
                 encryption_key.value().ref_sensitive_value().clone(),
-                None,
             )),
         }
     }
@@ -80,7 +73,6 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        _binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         match self {
             TestKmsProvider::FailingToUnwrap => Err(KmsAeadEncryptionError::create(
@@ -90,14 +82,12 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
             TestKmsProvider::Stamping(since) => {
                 let nanos = u64::try_from(since.elapsed().as_nanos())
                     .expect("a test runs for less than 584 years");
-                let mut key = encrypted_key.wrapped().to_vec();
+                let mut key = encrypted_key.value().clone();
                 key.extend(nanos.to_le_bytes());
                 Ok(DataEncryptionKey::from(SecretValue::new(key)))
             }
-            #[cfg(feature = "deterministic")]
-            TestKmsProvider::Unwrapping(key) => Ok(DataEncryptionKey::from(key.clone())),
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
-                encrypted_key.wrapped().to_vec(),
+                encrypted_key.value().clone(),
             ))),
         }
     }
@@ -118,19 +108,26 @@ pub(crate) struct CountingKmsProvider {
     kek: KekRef,
     wraps: AtomicUsize,
     unwraps: AtomicUsize,
-    unwrap_bindings: Mutex<Vec<Option<DekBinding>>>,
     gate: watch::Sender<bool>,
 }
 
 impl CountingKmsProvider {
     /// A provider whose calls go through at once.
     pub(crate) fn new(inner: TestKmsProvider, kek: &str) -> Self {
+        Self::with_kek(
+            inner,
+            KekRef::new(KekProvider::Other("test".to_string()), kek),
+        )
+    }
+
+    /// A provider that names `kek`, such as the KEK of a built-in provider, whose bytes kms-aead
+    /// tells apart from the layouts of 0.29.
+    pub(crate) fn with_kek(inner: TestKmsProvider, kek: KekRef) -> Self {
         Self {
             inner,
-            kek: KekRef::new(KekProvider::Other("test".to_string()), kek),
+            kek,
             wraps: AtomicUsize::new(0),
             unwraps: AtomicUsize::new(0),
-            unwrap_bindings: Mutex::new(Vec::new()),
             gate: watch::Sender::new(true),
         }
     }
@@ -151,11 +148,6 @@ impl CountingKmsProvider {
         self.wraps.load(Ordering::SeqCst)
     }
 
-    /// The binding of every unwrap, in order.
-    pub(crate) fn unwrap_bindings(&self) -> Vec<Option<DekBinding>> {
-        self.unwrap_bindings.lock().unwrap().clone()
-    }
-
     pub(crate) fn unwraps(&self) -> usize {
         self.unwraps.load(Ordering::SeqCst)
     }
@@ -174,27 +166,31 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         self.wraps.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
-        self.inner
-            .encrypt_data_encryption_key(encryption_key, binding)
-            .await
+        self.inner.encrypt_data_encryption_key(encryption_key).await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         self.unwraps.fetch_add(1, Ordering::SeqCst);
-        self.unwrap_bindings.lock().unwrap().push(binding.cloned());
         self.pass_gate().await;
-        self.inner
-            .decrypt_data_encryption_key(encrypted_key, binding)
-            .await
+        self.inner.decrypt_data_encryption_key(encrypted_key).await
     }
+}
+
+/// What [`TestKmsProvider`] returns when kms-aead wraps `key` as a key of `key_type`: the key as
+/// Tink serializes it.
+pub(crate) fn wrapped_by_test_provider(
+    key_type: impl Into<TinkKeyType>,
+    key: &[u8],
+) -> EncryptedDataEncryptionKey {
+    let key = DataEncryptionKey::from(SecretValue::new(key.to_vec()));
+    let serialized = key_type.into().serialize(&key);
+    EncryptedDataEncryptionKey::new(serialized.ref_sensitive_value().clone())
 }
 
 /// Lets every spawned task of a current-thread runtime run until it waits on something.
@@ -217,4 +213,13 @@ pub(crate) fn renderings(bytes: &[u8]) -> Vec<String> {
             .to_string(),
         format!("{bytes:?}").trim_matches(['[', ']']).to_string(),
     ]
+}
+
+/// A value Tink's `KmsEnvelopeAead` wrote on a live KMS key.
+#[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
+pub(crate) struct TinkEnvelope {
+    pub(crate) algorithm: crate::AeadAlgorithm,
+    pub(crate) aad: &'static str,
+    pub(crate) plain_text: &'static str,
+    pub(crate) value: &'static str,
 }

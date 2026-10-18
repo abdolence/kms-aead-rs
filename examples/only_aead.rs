@@ -2,7 +2,7 @@ use kms_aead::*;
 use secret_vault_value::SecretValue;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let encryption = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)?;
+    let encryption = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
     let key = encryption.generate_key()?;
 
     let secret_value = SecretValue::from("test-secret");

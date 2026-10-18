@@ -11,27 +11,25 @@ Without a cache, every read of a value unwraps its DEK with one KMS call, and ev
 ## DEK cache
 
 `kms_aead::cache::DekCache` holds plaintext DEKs a provider unwrapped, keyed by the provider's
-KEK, the `DekBinding` of the unwrap and the wrapped DEK's bytes. A per-call envelope has no cache
-unless the options give it one:
+KEK and the wrapped DEK's bytes. A per-call envelope has no cache unless the options give it one:
 
 ```rust
 use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let cache = DekCache::new(
     DekCacheOptions::new()
         .with_ttl(Duration::from_secs(5 * 60))
         .with_max_entries(NonZeroUsize::new(10_000).expect("not zero")),
 )?;
 
-let envelope = KmsAeadEnvelope::with_options(
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
     KmsAeadEnvelopeOptions::new().with_dek_cache(cache.clone()),
 )?;
 # let _ = envelope;
@@ -41,15 +39,14 @@ let envelope = KmsAeadEnvelope::with_options(
 
 `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap through
 the envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
-several KEKs: an entry serves only a lookup that names the same KEK and binding, and a key
-unwrapped under one KEK never reaches a caller with the provider of another.
+several KEKs: an entry serves only a lookup that names the same KEK, and a key unwrapped under
+one KEK never reaches a caller with the provider of another.
 
 The cache:
 
 - serves an entry for its TTL after it was inserted, however often it is used, 15 minutes by
   default;
-- holds at most `max_entries` entries of each purpose, randomized and deterministic, 1024 by
-  default, and evicts the oldest entry of that purpose past it;
+- holds at most `max_entries` entries, 1024 by default, and evicts the oldest entry past it;
 - makes one provider call for concurrent misses of the same key, and every caller receives its
   result, the key or the error;
 - keeps no entry for a failed unwrap, so during a KMS outage every call fails as fast as the KMS
@@ -78,20 +75,20 @@ To drop one at once, invalidate it with the envelope's own KEK:
 ```rust
 # use kms_aead::cache::{DekCache, DekCacheOptions};
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+# use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use kms_aead::KmsAeadEncryptionProvider;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-# let envelope = KmsAeadEnvelope::with_options(provider, AeadBackend::Ring,
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
-// One wrapped DEK, unbound as the envelope wraps it
+// One wrapped DEK
 envelope
     .dek_cache()
-    .invalidate(envelope.provider().kek(), &encrypted_dek, None);
+    .invalidate(envelope.provider().kek(), &encrypted_dek);
 
 // Every DEK
 envelope.dek_cache().clear();
@@ -135,22 +132,21 @@ key: a copy taken out of it outlives the cache's control of its lifetime.
 
 A `KmsAeadEnvelope` with a `DekReusePolicy` encrypts many values under one DEK and renews it at
 the first encryption past `max_age` or past `max_uses`, whichever comes first. A renewal makes one
-KMS wrap call. Each value still carries its wrapped DEK in envelope layout v1, so nothing is
+KMS wrap call. Each value still carries its wrapped DEK in Tink's KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use secret_vault_value::SecretValue;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::with_options(
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
     KmsAeadEnvelopeOptions::new().with_dek_reuse(
         DekReusePolicy::new()
             .with_max_age(Duration::from_secs(60 * 60))

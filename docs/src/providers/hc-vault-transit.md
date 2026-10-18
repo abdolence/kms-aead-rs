@@ -8,14 +8,15 @@ names the key, and the mount is `transit` unless set with `with_mount`.
 
 ```rust,no_run
 use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
 // VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE and VAULT_CACERT are read by the provider
 let key_ref = HcVaultTransitKeyRef::new("orders".to_string());
 
-let envelope = KmsAeadEnvelope::new(HcVaultTransitProvider::new(&key_ref)?, AeadBackend::AwsLc)?;
+let provider = HcVaultTransitProvider::new(&key_ref)?;
+let envelope = KmsAeadEnvelope::<HcVaultTransitProvider, AwsLc>::new(provider)?;
 
 let cipher_text = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))
@@ -80,8 +81,7 @@ The token needs `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`.
 ## Key versions and rotation
 
 The wrapped DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
-it still unwraps after the key is rotated. That version is also recorded as the wrapped DEK's
-key version, for audit only: the unwrap sends the ciphertext and never the recorded version.
+it still unwraps after the key is rotated. The KMS spans record that version as `key_version`.
 
 The unwrap names the configured key in its URL, so Vault refuses a ciphertext of another key.
 
@@ -93,10 +93,3 @@ errors for a request that got no complete response, and `VAULT_RESPONSE`,
 `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` are encryption errors for a response or a
 wrapped DEK that cannot be read. Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
 or `VAULT_TLS` when the TLS configuration cannot be built.
-
-## Binding
-
-A `DekBinding` is sent as Transit `associated_data`, which needs Vault 1.13 or later and an AEAD
-key type such as `aes256-gcm96`. A Vault that does not know the field ignores it and says so in
-its warnings, and the call then fails with `VAULT_BINDING_IGNORED`, so a bound wrap never
-succeeds unbound.

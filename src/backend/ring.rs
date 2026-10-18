@@ -4,53 +4,41 @@ use ::ring::aead::{
 };
 use ::ring::rand::{SecureRandom, SystemRandom};
 
-use super::{AeadBackendOps, Failure, Nonce, Tag};
+use super::private::Sealed;
+use super::{AeadBackend, AeadBackendOps, Failure, Nonce, Tag};
 use crate::AeadAlgorithm;
 
-pub(super) struct RingOps;
+/// The [ring](https://crates.io/crates/ring) library, with the `ring` feature: ChaCha20-Poly1305,
+/// AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. It does not zeroize its expanded key
+/// schedules, so they stay in freed memory after each call.
+#[derive(Debug, Clone, Copy)]
+pub struct Ring;
 
-impl RingOps {
-    fn algorithm(algorithm: AeadAlgorithm) -> Option<&'static Algorithm> {
-        match algorithm {
-            AeadAlgorithm::ChaCha20Poly1305 => Some(&CHACHA20_POLY1305),
-            AeadAlgorithm::Aes128Gcm => Some(&AES_128_GCM),
-            AeadAlgorithm::Aes256Gcm => Some(&AES_256_GCM),
-            AeadAlgorithm::Aes256GcmSiv => None,
-        }
-    }
-
-    fn key(algorithm: AeadAlgorithm, key: &[u8]) -> Result<LessSafeKey, Failure> {
-        let algorithm = Self::algorithm(algorithm).ok_or(Failure::Key)?;
-        UnboundKey::new(algorithm, key)
-            .map(LessSafeKey::new)
-            .map_err(|_| Failure::Key)
-    }
+impl AeadBackend for Ring {
+    const NAME: &'static str = "ring";
 }
 
-impl AeadBackendOps for RingOps {
-    fn name(&self) -> &'static str {
-        "ring"
+impl Sealed for Ring {}
+
+impl AeadBackendOps for Ring {
+    fn supports(algorithm: AeadAlgorithm) -> bool {
+        ring_algorithm(algorithm).is_some()
     }
 
-    fn supports(&self, algorithm: AeadAlgorithm) -> bool {
-        Self::algorithm(algorithm).is_some()
-    }
-
-    fn fill_random(&self, out: &mut [u8]) -> Result<(), Failure> {
+    fn fill_random(out: &mut [u8]) -> Result<(), Failure> {
         SystemRandom::new()
             .fill(out)
             .map_err(|_| Failure::Operation)
     }
 
     fn seal_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<Tag, Failure> {
-        let tag = Self::key(algorithm, key)?
+        let tag = less_safe_key(algorithm, key)?
             .seal_in_place_separate_tag(
                 AeadNonce::assume_unique_for_key(*nonce),
                 Aad::from(aad),
@@ -61,14 +49,13 @@ impl AeadBackendOps for RingOps {
     }
 
     fn open_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure> {
-        Self::key(algorithm, key)?
+        less_safe_key(algorithm, key)?
             .open_in_place(
                 AeadNonce::assume_unique_for_key(*nonce),
                 Aad::from(aad),
@@ -77,4 +64,20 @@ impl AeadBackendOps for RingOps {
             .map(|plain_text| plain_text.len())
             .map_err(|_| Failure::Operation)
     }
+}
+
+fn ring_algorithm(algorithm: AeadAlgorithm) -> Option<&'static Algorithm> {
+    match algorithm {
+        AeadAlgorithm::ChaCha20Poly1305 => Some(&CHACHA20_POLY1305),
+        AeadAlgorithm::Aes128Gcm => Some(&AES_128_GCM),
+        AeadAlgorithm::Aes256Gcm => Some(&AES_256_GCM),
+        AeadAlgorithm::Aes256GcmSiv => None,
+    }
+}
+
+fn less_safe_key(algorithm: AeadAlgorithm, key: &[u8]) -> Result<LessSafeKey, Failure> {
+    let algorithm = ring_algorithm(algorithm).ok_or(Failure::Key)?;
+    UnboundKey::new(algorithm, key)
+        .map(LessSafeKey::new)
+        .map_err(|_| Failure::Key)
 }

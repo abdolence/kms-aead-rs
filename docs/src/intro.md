@@ -11,12 +11,14 @@ encryption without a KMS:
     - A local KMS with a key the application holds, for development, tests and single-host
       installs;
 - AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
-- Crypto backends chosen at runtime: ring, aws-lc-rs (including its FIPS module) and the pure
-  Rust RustCrypto crates. A value sealed by one backend opens with any other;
+- Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
+  and the library reads Tink's, see [Formats](./formats.md);
+- Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
+  crates. A value sealed by one backend opens with any other;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
   keys;
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
-- Binding a wrapped key to non-secret text the KMS authenticates;
+- Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
 - Optional KMS-side random generators for GCP and AWS;
 - Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
   Firestore, PostgreSQL or Cloud Storage, central rotation, and values in Tink's wire format;
@@ -43,8 +45,8 @@ and a row id, so that a value copied to another row fails to open.
 
 ## Choosing a mode
 
-The library has three ways to use a KMS, and they differ in how many DEKs exist and how often
-the KMS is called:
+The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
+stored value holds:
 
 - **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, wrapped
   with one KMS call, and stored in the value itself. Every decryption unwraps its DEK with one
@@ -56,6 +58,11 @@ the KMS is called:
   still carry their wrapped DEK, so nothing is stored apart from them, and reads unwrap through
   the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
   [DEK caching and reuse](./dek-caching.md);
+- **Typed fields without a store**, `encrypt_field` and `decrypt_field` of either envelope above:
+  a value of a Rust type, such as an application newtype, sealed into an
+  `Encrypted<T, Envelope>`. It carries its wrapped DEK like any envelope value, and serde,
+  tokio-postgres and sqlx store it as bytes. Use it for columns of secrets that need no central
+  key rotation. See [Typed fields](./envelope-encryption.md#typed-fields);
 - **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the wrapped key
   versions, and values carry a 4-byte key id in Tink's wire format instead of a wrapped DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery

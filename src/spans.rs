@@ -17,13 +17,8 @@ const MODE: &str = "/kms_aead/mode";
 const ALGORITHM: &str = "/kms_aead/algorithm";
 const BACKEND: &str = "/kms_aead/backend";
 const DEK_CACHE: &str = "/kms_aead/dek_cache";
-const FORMAT: &str = "/kms_aead/format";
 const PURPOSE: &str = "/kms_aead/purpose";
 const ERROR_CODE: &str = "/kms_aead/error_code";
-#[cfg(feature = "legacy-formats")]
-const FROM_FORMAT: &str = "/kms_aead/from_format";
-#[cfg(feature = "legacy-formats")]
-const TO_FORMAT: &str = "/kms_aead/to_format";
 
 /// The `dek_cache` value of a call that unwraps through the provider although the envelope has
 /// a cache.
@@ -38,7 +33,7 @@ pub(crate) mod kms {
     use tracing::{debug_span, field, Span};
 
     use super::ERROR_CODE;
-    use crate::{EncryptedDataEncryptionKey, KekRef, KmsKeyVersion};
+    use crate::KekRef;
 
     const PROVIDER: &str = "/kms_aead/provider";
     const KEY: &str = "/kms_aead/key";
@@ -60,21 +55,16 @@ pub(crate) mod kms {
         )
     }
 
-    /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`, with the key version the
-    /// encrypted key records.
-    pub(crate) fn unwrap_span(kek: &KekRef, key_version: Option<&KmsKeyVersion>) -> Span {
-        let span = debug_span!(
+    /// `KMS unwrap`, around a provider's `decrypt_data_encryption_key`.
+    pub(crate) fn unwrap_span(kek: &KekRef) -> Span {
+        debug_span!(
             "KMS unwrap",
             { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
             { RESPONSE_TIME } = field::Empty,
             { ERROR_CODE } = field::Empty,
-        );
-        if let Some(key_version) = key_version {
-            span.record(KEY_VERSION, key_version.as_str());
-        }
-        span
+        )
     }
 
     /// `KMS random`, around a call to a KMS generator. `key` is what the request names, if
@@ -109,12 +99,10 @@ pub(crate) mod kms {
         );
     }
 
-    /// Records on the current KMS span the key version that wrapped `encrypted_key`, when the
-    /// KMS reported one.
-    pub(crate) fn record_wrap(encrypted_key: &EncryptedDataEncryptionKey) {
-        if let Some(key_version) = encrypted_key.key_version() {
-            Span::current().record(KEY_VERSION, key_version.as_str());
-        }
+    /// Records on the current KMS span the version of the KMS key that wraps or wrapped the key:
+    /// from the KMS response on wrap, from the wrapped key on unwrap.
+    pub(crate) fn record_key_version(key_version: &str) {
+        Span::current().record(KEY_VERSION, key_version);
     }
 
     /// Sends a KMS request and records on the current span how long it took, in milliseconds.
@@ -132,7 +120,7 @@ pub(crate) mod kms {
 pub(crate) fn aead_encrypt(
     mode: &str,
     algorithm: impl Display,
-    backend: impl Display,
+    backend: &str,
     dek_cache: &DekCache,
 ) -> Span {
     let span = debug_span!(
@@ -147,14 +135,12 @@ pub(crate) fn aead_encrypt(
     span
 }
 
-/// `KMS AEAD decrypt`, around the envelope's decrypt calls, with the layout of the stored value
-/// for a call that reads one: `envelope_v1` or `envelope_legacy`.
+/// `KMS AEAD decrypt`, around the envelope's decrypt calls.
 pub(crate) fn aead_decrypt(
     mode: &str,
     algorithm: impl Display,
-    backend: impl Display,
+    backend: &str,
     dek_cache: &DekCache,
-    format: Option<&str>,
 ) -> Span {
     let span = debug_span!(
         "KMS AEAD decrypt",
@@ -162,13 +148,9 @@ pub(crate) fn aead_decrypt(
         { ALGORITHM } = %algorithm,
         { BACKEND } = %backend,
         { DEK_CACHE } = field::Empty,
-        { FORMAT } = field::Empty,
         { ERROR_CODE } = field::Empty,
     );
     record_disabled_cache(&span, dek_cache);
-    if let Some(format) = format {
-        span.record(FORMAT, format);
-    }
     span
 }
 
@@ -187,7 +169,7 @@ pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
 
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
 /// `deterministic`.
-pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: impl Display) -> Span {
+pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
     debug_span!(
         "KMS AEAD generate DEK",
         { PURPOSE } = purpose,
@@ -214,38 +196,6 @@ pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display, dek_cache: &De
         span.record(DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
     span
-}
-
-/// Runs `operation`, the re-framing of a stored value, inside a `KMS AEAD upgrade` span.
-/// `from_format` is the layout of the stored value, when its first bytes name one, and
-/// `to_format` is recorded only when `operation` returns a value in it, not `None` for a value
-/// that already was current. The code of the error it returns is recorded too.
-#[cfg(feature = "legacy-formats")]
-pub(crate) fn upgrade<T>(
-    from_format: Option<&str>,
-    to_format: &str,
-    operation: impl FnOnce() -> KmsAeadResult<Option<T>>,
-) -> KmsAeadResult<Option<T>> {
-    let span = debug_span!(
-        "KMS AEAD upgrade",
-        { FROM_FORMAT } = field::Empty,
-        { TO_FORMAT } = field::Empty,
-        { ERROR_CODE } = field::Empty,
-    );
-    if let Some(from_format) = from_format {
-        span.record(FROM_FORMAT, from_format);
-    }
-    let result = span.in_scope(operation);
-    match &result {
-        Ok(Some(_)) => {
-            span.record(TO_FORMAT, to_format);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            span.record(ERROR_CODE, error.code());
-        }
-    }
-    result
 }
 
 /// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.

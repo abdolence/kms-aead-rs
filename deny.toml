@@ -30,4 +30,6 @@ allow = [
     # The OpenSSL-derived code in the AWS-LC FIPS module, aws-lc-fips-sys.
     "OpenSSL",
     "Unicode-3.0",
+    # foldhash, the default hasher of the hashbrown that sqlx-core builds.
+    "Zlib",
 ]

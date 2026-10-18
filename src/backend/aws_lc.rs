@@ -3,34 +3,35 @@ use aws_lc_rs::aead::{
     AES_256_GCM_SIV, CHACHA20_POLY1305,
 };
 
-use super::{AeadBackendOps, Failure, Nonce, Tag};
+use super::private::Sealed;
+use super::{AeadBackend, AeadBackendOps, Failure, Nonce, Tag};
 use crate::AeadAlgorithm;
 
-pub(super) struct AwsLcOps;
+/// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` or the
+/// `aws-lc-fips` feature: every [`AeadAlgorithm`].
+///
+/// With `aws-lc-fips` it runs on the AWS-LC FIPS module, and so does every other user of
+/// aws-lc-rs in the build, even when `aws-lc` is enabled too. AES-256-GCM is the algorithm for
+/// FIPS deployments.
+///
+/// aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own allocator,
+/// which overwrites every allocation with zeros before freeing it (`OPENSSL_free`). The expanded
+/// key schedule therefore does not stay in freed memory after a call, as long as the application
+/// leaves AWS-LC's allocator in place: a replacement installed through
+/// `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on its own whether freed
+/// memory is cleared. The record keys AES-256-GCM-SIV derives from the key and the nonce for each
+/// call live on the stack, and AWS-LC does not clear them.
+#[derive(Debug, Clone, Copy)]
+pub struct AwsLc;
 
-impl AwsLcOps {
-    fn algorithm(algorithm: AeadAlgorithm) -> &'static Algorithm {
-        match algorithm {
-            AeadAlgorithm::ChaCha20Poly1305 => &CHACHA20_POLY1305,
-            AeadAlgorithm::Aes128Gcm => &AES_128_GCM,
-            AeadAlgorithm::Aes256Gcm => &AES_256_GCM,
-            AeadAlgorithm::Aes256GcmSiv => &AES_256_GCM_SIV,
-        }
-    }
-
-    fn key(algorithm: AeadAlgorithm, key: &[u8]) -> Result<LessSafeKey, Failure> {
-        UnboundKey::new(Self::algorithm(algorithm), key)
-            .map(LessSafeKey::new)
-            .map_err(|_| Failure::Key)
-    }
+impl AeadBackend for AwsLc {
+    const NAME: &'static str = "aws-lc";
 }
 
-impl AeadBackendOps for AwsLcOps {
-    fn name(&self) -> &'static str {
-        "aws-lc"
-    }
+impl Sealed for AwsLc {}
 
-    fn supports(&self, algorithm: AeadAlgorithm) -> bool {
+impl AeadBackendOps for AwsLc {
+    fn supports(algorithm: AeadAlgorithm) -> bool {
         match algorithm {
             AeadAlgorithm::ChaCha20Poly1305
             | AeadAlgorithm::Aes128Gcm
@@ -39,19 +40,18 @@ impl AeadBackendOps for AwsLcOps {
         }
     }
 
-    fn fill_random(&self, out: &mut [u8]) -> Result<(), Failure> {
+    fn fill_random(out: &mut [u8]) -> Result<(), Failure> {
         aws_lc_rs::rand::fill(out).map_err(|_| Failure::Operation)
     }
 
     fn seal_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<Tag, Failure> {
-        let tag = Self::key(algorithm, key)?
+        let tag = less_safe_key(algorithm, key)?
             .seal_in_place_separate_tag(
                 AeadNonce::assume_unique_for_key(*nonce),
                 Aad::from(aad),
@@ -62,14 +62,13 @@ impl AeadBackendOps for AwsLcOps {
     }
 
     fn open_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,
         aad: &[u8],
         in_out: &mut [u8],
     ) -> Result<usize, Failure> {
-        Self::key(algorithm, key)?
+        less_safe_key(algorithm, key)?
             .open_in_place(
                 AeadNonce::assume_unique_for_key(*nonce),
                 Aad::from(aad),
@@ -78,6 +77,18 @@ impl AeadBackendOps for AwsLcOps {
             .map(|plain_text| plain_text.len())
             .map_err(|_| Failure::Operation)
     }
+}
+
+fn less_safe_key(algorithm: AeadAlgorithm, key: &[u8]) -> Result<LessSafeKey, Failure> {
+    let algorithm: &'static Algorithm = match algorithm {
+        AeadAlgorithm::ChaCha20Poly1305 => &CHACHA20_POLY1305,
+        AeadAlgorithm::Aes128Gcm => &AES_128_GCM,
+        AeadAlgorithm::Aes256Gcm => &AES_256_GCM,
+        AeadAlgorithm::Aes256GcmSiv => &AES_256_GCM_SIV,
+    };
+    UnboundKey::new(algorithm, key)
+        .map(LessSafeKey::new)
+        .map_err(|_| Failure::Key)
 }
 
 #[cfg(all(test, feature = "aws-lc-fips"))]

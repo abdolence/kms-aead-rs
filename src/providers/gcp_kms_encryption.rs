@@ -59,30 +59,22 @@ fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<toni
     Ok(request)
 }
 
-// The `N` of the `…/cryptoKeyVersions/N` name that GCP KMS returns from encrypt for `key`. It is
-// recorded for audit only: decrypt addresses the CryptoKey, and GCP finds the version in the
-// wrapped key.
-fn crypto_key_version(key: &str, name: &str) -> Option<KmsKeyVersion> {
-    let version = name
-        .strip_prefix(key)?
-        .strip_prefix("/cryptoKeyVersions/")?;
-    KmsKeyVersion::try_from(version.to_string()).ok()
+/// The `N` of the `…/cryptoKeyVersions/N` name that Cloud KMS returns from encrypt for `key`,
+/// for the span only: decrypt addresses the CryptoKey, and Cloud KMS finds the version in its
+/// ciphertext.
+fn crypto_key_version<'n>(key: &str, name: &'n str) -> Option<&'n str> {
+    name.strip_prefix(key)?.strip_prefix("/cryptoKeyVersions/")
 }
 
-/// Wraps under the primary version of the CryptoKey `key`, with `binding` as the additional
-/// authenticated data.
+/// Wraps under the primary version of the CryptoKey `key`.
 fn encrypt_request(
     key: &str,
     encryption_key: &DataEncryptionKey,
-    binding: Option<&DekBinding>,
 ) -> KmsAeadResult<tonic::Request<EncryptRequest>> {
     routed(
         EncryptRequest {
             name: key.to_string(),
             plaintext: SecretValue::new(encryption_key.value().ref_sensitive_value().clone()),
-            additional_authenticated_data: binding
-                .map(|binding| binding.as_str().as_bytes().to_vec())
-                .unwrap_or_default(),
             ..Default::default()
         },
         key,
@@ -90,20 +82,15 @@ fn encrypt_request(
     )
 }
 
-/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one, and
-/// `binding` as the additional authenticated data, which must equal the wrap's.
+/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one.
 fn decrypt_request(
     key: &str,
     encrypted_key: &EncryptedDataEncryptionKey,
-    binding: Option<&DekBinding>,
 ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
     routed(
         DecryptRequest {
             name: key.to_string(),
-            ciphertext: encrypted_key.wrapped().to_vec(),
-            additional_authenticated_data: binding
-                .map(|binding| binding.as_str().as_bytes().to_vec())
-                .unwrap_or_default(),
+            ciphertext: encrypted_key.value().clone(),
             ..Default::default()
         },
         key,
@@ -116,20 +103,22 @@ fn decrypt_request(
 #[non_exhaustive]
 pub struct GcpKmsProviderOptions {
     /// Generates data encryption keys with Cloud KMS `GenerateRandomBytes` at the HSM protection
-    /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key. Off by
-    /// default.
-    #[default = "false"]
+    /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key.
+    /// [`DEFAULT_USE_KMS_RANDOM_GEN`](Self::DEFAULT_USE_KMS_RANDOM_GEN) by default.
+    #[default = "Self::DEFAULT_USE_KMS_RANDOM_GEN"]
     pub use_kms_random_gen: bool,
+}
+
+impl GcpKmsProviderOptions {
+    /// The default [`use_kms_random_gen`](Self::use_kms_random_gen): `false`, the backend's
+    /// CSPRNG generates the keys.
+    pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
 /// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey.
 ///
 /// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
 /// is the gRPC status code, such as `PermissionDenied` or `NotFound`.
-///
-/// A [`DekBinding`] is sent as the additional authenticated data of Encrypt and Decrypt, which
-/// Cloud KMS does not write to its audit logs. An unwrap that names another binding, or none,
-/// fails with `InvalidArgument`.
 #[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
@@ -194,10 +183,9 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
-            let encrypt_request = encrypt_request(self.kek.key(), encryption_key, binding)?;
+            let encrypt_request = encrypt_request(self.kek.key(), encryption_key)?;
 
             let encrypt_response = kms::timed(self.client.get().encrypt(encrypt_request))
                 .await
@@ -206,14 +194,11 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
 
-            let key_version = crypto_key_version(self.kek.key(), &name);
-            if key_version.is_none() {
-                warn!(name, "No key version in the GCP KMS encrypt response");
+            match crypto_key_version(self.kek.key(), &name) {
+                Some(key_version) => kms::record_key_version(key_version),
+                None => warn!(name, "No key version in the GCP KMS encrypt response"),
             }
-
-            let encrypted_key = EncryptedDataEncryptionKey::new(ciphertext, key_version);
-            kms::record_wrap(&encrypted_key);
-            Ok(encrypted_key)
+            Ok(EncryptedDataEncryptionKey::new(ciphertext))
         })
         .await
     }
@@ -221,11 +206,9 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
-        spans::in_span(span, async {
-            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key, binding)?;
+        spans::in_span(kms::unwrap_span(&self.kek), async {
+            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
                 .await
                 .map_err(KmsAeadError::from_gcp_status)?;
@@ -276,6 +259,8 @@ mod tests {
     use gcloud_sdk::tonic::{Code, Status};
     use rvstruct::ValueStruct;
 
+    use crate::test_provider::{TestBackend, TinkEnvelope};
+
     const KEY_NAME: &str =
         "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key";
     const KEY_MARKER: &str = "data-key-marker-value-of-32bytes";
@@ -291,8 +276,7 @@ mod tests {
 
         let request = decrypt_request(
             &key_ref.to_google_ref(),
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec()),
         )?;
 
         assert_eq!(request.get_ref().name, KEY_NAME);
@@ -305,37 +289,13 @@ mod tests {
     }
 
     #[test]
-    fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
-        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
+    fn wrap_and_unwrap_build_the_0_29_requests() -> KmsAeadResult<()> {
         let dek = DataEncryptionKey::from(SecretValue::from(KEY_MARKER));
 
-        let encrypt = encrypt_request(KEY_NAME, &dek, Some(&binding))?;
+        let encrypt = encrypt_request(KEY_NAME, &dek)?;
         let decrypt = decrypt_request(
             KEY_NAME,
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            Some(&binding),
-        )?;
-
-        assert_eq!(
-            encrypt.get_ref().additional_authenticated_data,
-            b"tenant-42/3"
-        );
-        assert_eq!(
-            decrypt.get_ref().additional_authenticated_data,
-            b"tenant-42/3"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn an_unbound_wrap_builds_the_0_29_request() -> KmsAeadResult<()> {
-        let dek = DataEncryptionKey::from(SecretValue::from(KEY_MARKER));
-
-        let encrypt = encrypt_request(KEY_NAME, &dek, None)?;
-        let decrypt = decrypt_request(
-            KEY_NAME,
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec()),
         )?;
 
         assert_eq!(
@@ -404,7 +364,7 @@ mod tests {
                 KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
             ),
-            Some(KmsKeyVersion::try_from("18".to_string()).unwrap())
+            Some("18")
         );
         assert_eq!(
             crypto_key_version(
@@ -415,119 +375,126 @@ mod tests {
         );
     }
 
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
-    // the GCP key that the live test configures. That key stays enabled while these exist.
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
-    const ENVELOPE_V1: &str = "0102313800720a25006b8d8e5a8e86a5a08f5e037793f8ef10fa761a405a1b7671502bde6bd99bd94c5bfdeea0124900eaf42f63f2b2bfd2be52a7ba228358efc9ce15c6b1add6c4425e405ef132335b8295daf42a74967f32aa8f02a314ce02c443548ea267bfa6edc17d7cfa69d90364fe040b71513c40a0234d736eb30b4b9de8963886967adda827b982dbe37531904f4b534269e8d548446a3ccd021a";
+    /// `KmsEnvelopeAead` on the Cloud KMS key the live tests configure, which stays enabled while
+    /// these exist: Tink 1.16.1 for Python, as `tests/tink_interop.py` writes them, and for
+    /// ChaCha20-Poly1305, which Tink for Python lacks, Tink 1.24.0 for Java with
+    /// `KmsEnvelopeAead.create(ChaCha20Poly1305Parameters.create(), …)`.
+    const TINK_ENVELOPES: &[TinkEnvelope] = &[
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes128Gcm,
+            aad: "orders/gcp/aes-128-gcm",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000640a25006b8d8e5ae13bbecda31384f3912487db6049ae2ead7c2bdedf73642e92e5256921d3f393123b00eaf42f63b959f2daa01603f521ae30cad418c20f4896b3102137c302bdaa57f2b7901fad92cd0f1d4ee87d821e97b852055d7f40d3925e42dcdc69eb3595e65bbccc71c225c9a11c7340db7416aab3a8aee6f165728ec168b60319f84473b0bbcbfc16f52a825c865fa31f",
+        },
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes256Gcm,
+            aad: "orders/gcp/aes-256-gcm",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000740a25006b8d8e5ab00c118c3b606a67e34d0f7137963ae14dae0cc70cfbb9fe97e86871e0166ff8124b00eaf42f6318880810c8a2cdb5f89e59b5f6d45b8ca2dc3533159eee2360b087938fdea20aa6971e65f4d94d5879fc9b793564402be5a1918a28adde7568d1a26d797f62c33458ac7839e2fba14afad173bcffd7fbf750cd2ab4d3cddfdc2e8d3051677d0aa452474215f065eb815d35760a533c66f96460b129fd28",
+        },
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes256GcmSiv,
+            aad: "orders/gcp/aes-256-gcm-siv",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000740a25006b8d8e5ac7c2bc09ab2b5f509988c24f4bf9a74199a28059b772359f0ef1fac1e20d762b124b00eaf42f630f94956b28e0f36bfe1d46f1b6ea46adbd81af73033d37a2abdb95238ac727b6cae2dbc44f13f245d9d1155d91435651babc20456b017c30bba280ddf49d9907084e8d7994a397e0d6c67197693d0da56d6deb66b627088e5b2a762854373f88cfa319cd61277c1e5c4fef16a30e2862bc36e62d7aad4d",
+        },
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::ChaCha20Poly1305,
+            aad: "orders/gcp/chacha20-poly1305",
+            plain_text: "sealed by Tink Java 1.24.0",
+            value: "000000740a25006b8d8e5aa71290d3f41610c57a8eb343729c94e910e4b043b215195740b7f36897844f01124b00eaf42f63d18c7beacf3d46a38d13240bea3bc0c92f8280c0268c6156c749e91e736428b592e54d4448b6fbb0dd7e7be925fe9c91cf36fa2d38ae78027bc339d2b20088548f026bda2290b19a7120c26f0a32aad89f56e5d59252d5d774f8c5cea4228e13cd52c2f3249161da2e702b30169e7094bb842ca26a064dc6b5a179c6",
+        },
+    ];
 
     #[test]
-    fn envelope_v1_from_a_live_key_splits_into_key_version_and_wrapped_key() {
-        let (v1_cipher_text, v1_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap())
-                .separate()
-                .unwrap();
+    fn a_tink_envelope_of_cloud_kms_separates_into_its_wrapped_key() -> KmsAeadResult<()> {
+        for tink in TINK_ENVELOPES {
+            let (cipher_text, encrypted_dek) =
+                CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap()).separate()?;
 
-        assert_eq!(
-            v1_dek.key_version(),
-            Some(&KmsKeyVersion::try_from("18".to_string()).unwrap())
-        );
-        assert_eq!(v1_dek.wrapped().len(), 114);
-        // Nonce, the 11 bytes of `test-secret` and the tag.
-        assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[test]
-    fn envelope_from_0_28_1_splits_into_a_wrapped_key_without_key_version() {
-        let (legacy_cipher_text, legacy_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
-                .separate()
-                .unwrap();
-
-        assert_eq!(legacy_dek.key_version(), None);
-        assert_eq!(legacy_dek.wrapped().len(), 114);
-        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[test]
-    fn wrapped_key_stored_by_0_28_1_reads_as_a_bare_wrapped_key() {
-        let (_, legacy_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
-                .separate()
-                .unwrap();
-
-        assert_eq!(
-            EncryptedDataEncryptionKey::try_from(legacy_dek.wrapped()).unwrap(),
-            legacy_dek
-        );
-        assert_eq!(
-            EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(legacy_dek.wrapped()))
-                .unwrap(),
-            legacy_dek
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "ring")]
-    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
-    async fn live_key_decrypts_stored_envelopes() -> KmsAeadResult<()> {
-        let key_ref = GcpKmsKeyRef::new(
-            std::env::var("PROJECT_ID").expect("PROJECT_ID is set"),
-            std::env::var("PROJECT_LOCATION").expect("PROJECT_LOCATION is set"),
-            std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
-            std::env::var("KMS_KEY").expect("KMS_KEY is set"),
-        );
-        let encryption =
-            KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
-        let envelopes = [
-            #[cfg(feature = "legacy-formats")]
-            ENVELOPE_FROM_0_28_1,
-            ENVELOPE_V1,
-        ];
-        for envelope in envelopes {
-            let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
-            let secret = encryption.decrypt_value(b"test-aad", &envelope).await?;
-            assert_eq!(secret, SecretValue::from("test-secret"));
+            assert_eq!(encrypted_dek.value()[0], 0x0a, "{:?}", tink.algorithm);
+            assert_eq!(
+                cipher_text.value().len(),
+                12 + tink.plain_text.len() + 16,
+                "{:?}",
+                tink.algorithm
+            );
         }
         Ok(())
     }
 
+    /// Decrypts the values of the algorithms the test backend implements: every one but
+    /// AES-256-GCM-SIV on ring.
     #[tokio::test]
     #[cfg_attr(not(feature = "ci-gcp"), ignore)]
-    async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
-        let key_ref = GcpKmsKeyRef::new(
+    async fn live_key_decrypts_tink_envelopes() -> KmsAeadResult<()> {
+        let key_ref = live_key_ref();
+        for tink in TINK_ENVELOPES {
+            let envelope = match KmsAeadEnvelope::<_, TestBackend>::with_options(
+                GcpKmsProvider::new(&key_ref).await?,
+                KmsAeadEnvelopeOptions::new().with_algorithm(tink.algorithm),
+            ) {
+                Err(KmsAeadError::UnsupportedAlgorithm(_)) => {
+                    println!("{}: not on this backend", tink.algorithm);
+                    continue;
+                }
+                envelope => envelope?,
+            };
+            let value = CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap());
+
+            let decrypted = envelope.decrypt_value(tink.aad.as_bytes(), &value).await?;
+
+            assert_eq!(
+                decrypted,
+                SecretValue::from(tink.plain_text),
+                "{:?}",
+                tink.algorithm
+            );
+        }
+        Ok(())
+    }
+
+    fn live_key_ref() -> GcpKmsKeyRef {
+        GcpKmsKeyRef::new(
             std::env::var("PROJECT_ID").expect("PROJECT_ID is set"),
             std::env::var("PROJECT_LOCATION").expect("PROJECT_LOCATION is set"),
             std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
-        );
-        let provider = GcpKmsProvider::new(&key_ref).await?;
-        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
-        let wrapped = provider
-            .encrypt_data_encryption_key(
-                &DataEncryptionKey::from(SecretValue::from(KEY_MARKER)),
-                Some(&binding),
-            )
-            .await?;
+        )
+    }
 
-        let unwrapped = provider
-            .decrypt_data_encryption_key(&wrapped, Some(&binding))
-            .await?;
-        let result = provider
-            .decrypt_data_encryption_key(
-                &wrapped,
-                Some(&DekBinding::try_from("tenant-42/2".to_string())?),
-            )
-            .await;
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
+    // default ChaCha20-Poly1305 and the GCP key that the live tests configure. That key stays
+    // enabled while these exist.
+    #[cfg(feature = "legacy-formats")]
+    const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
+    #[cfg(feature = "legacy-formats")]
+    const ENVELOPE_FROM_0_29: &str = "0102313800720a25006b8d8e5a8e86a5a08f5e037793f8ef10fa761a405a1b7671502bde6bd99bd94c5bfdeea0124900eaf42f63f2b2bfd2be52a7ba228358efc9ce15c6b1add6c4425e405ef132335b8295daf42a74967f32aa8f02a314ce02c443548ea267bfa6edc17d7cfa69d90364fe040b71513c40a0234d736eb30b4b9de8963886967adda827b982dbe37531904f4b534269e8d548446a3ccd021a";
 
-        assert!(
-            matches!(&result, Err(KmsAeadError::NetworkError(e)) if e.public.code == "InvalidArgument"),
-            "{:?}",
-            result.err()
-        );
-        assert_eq!(unwrapped.value(), &SecretValue::from(KEY_MARKER));
+    #[tokio::test]
+    #[cfg(feature = "legacy-formats")]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    #[expect(deprecated, reason = "tests the deprecated upgrade")]
+    async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
+        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
+            GcpKmsProvider::new(&live_key_ref()).await?,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
+        for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
+            let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
+
+            let decrypted = encryption.decrypt_value(b"test-aad", &stored).await?;
+            let upgraded = encryption.upgrade_legacy_value(&stored).await?;
+
+            assert_eq!(decrypted, SecretValue::from("test-secret"));
+            let upgraded = upgraded.expect("a legacy value is upgraded");
+            assert_eq!(upgraded.value()[0], 0x00);
+            assert_eq!(
+                encryption.decrypt_value(b"test-aad", &upgraded).await?,
+                SecretValue::from("test-secret")
+            );
+            assert!(encryption.upgrade_legacy_value(&upgraded).await?.is_none());
+        }
         Ok(())
     }
 }

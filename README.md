@@ -11,12 +11,14 @@ encryption without a KMS:
 - KMS providers for Google Cloud KMS, AWS KMS, Azure Key Vault and Managed HSM, HashiCorp Vault
   Transit, and a local KMS for development, tests and single-host installs;
 - AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
-- Crypto backends chosen at runtime: ring, aws-lc-rs (including its FIPS module) and RustCrypto,
-  with values readable across all of them;
+- Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
+  and the library reads Tink's;
+- Crypto backends ring, aws-lc-rs (including its FIPS module) and RustCrypto, with values
+  readable across all of them;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
   keys;
 - Deterministic encryption with AES-SIV;
-- Binding a wrapped key to non-secret text the KMS authenticates;
+- Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
 - Optional KMS-side random generators for GCP and AWS;
 - Tracing spans for every operation and every KMS call;
 - No unsafe code.
@@ -40,7 +42,7 @@ Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 #[tokio::main]
@@ -51,8 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "my-key-ring".to_string(),
         "my-key".to_string(),
     );
-    let envelope =
-        KmsAeadEnvelope::new(GcpKmsProvider::new(&kms_ref).await?, AeadBackend::AwsLc)?;
+    let provider = GcpKmsProvider::new(&kms_ref).await?;
+    let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");
@@ -77,12 +79,14 @@ All examples available in the [examples](examples) directory.
 
 ## Migrating from 0.29
 
-0.30 makes ring optional and selects the crypto backend at runtime, so a provider feature needs a
-backend feature next to it, and most names changed. See the [migration guide](MIGRATION.md) and
+0.30 makes ring optional and names the crypto backend as a type parameter, so a provider feature
+needs a backend feature next to it, and most names changed. See the
+[migration guide](MIGRATION.md) and
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).
 
-Values written by 0.28.1 and earlier read only with the deprecated `legacy-formats` feature, see
-[Formats](https://kms-aead-rust.abdolence.dev/formats.html).
+0.30 writes Tink's KMS envelope format for every provider, so values written by 0.29 and earlier
+read only with the deprecated `legacy-formats` feature, which also rewrites them in the new
+format, see [Formats](https://kms-aead-rust.abdolence.dev/formats.html).
 
 ## Security
 

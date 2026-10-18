@@ -7,13 +7,12 @@ its version, and the error code.
 
 The spans are:
 
-- `KMS AEAD encrypt`: the envelope's `encrypt_value`, `encrypt_value_with_dek` and
-  `encrypt_value_with_encrypted_dek`;
-- `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_value_with_dek` and
-  `decrypt_value_with_encrypted_dek`;
+- `KMS AEAD encrypt`: the envelope's `encrypt_value`, `encrypt_field`, `encrypt_value_with_dek`
+  and `encrypt_value_with_encrypted_dek`;
+- `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_field`, `decrypt_value_with_dek`
+  and `decrypt_value_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_new_dek` and `generate_new_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
-- `KMS AEAD upgrade`: both `upgrade_legacy_layout` functions, with `legacy-formats`;
 - `KMS wrap`: each provider's wrap of a DEK;
 - `KMS unwrap`: each provider's unwrap of a DEK;
 - `KMS random`: a call to the GCP or AWS KMS generator, when the provider uses it.
@@ -29,7 +28,7 @@ the library and span close events, every span is printed with its fields when it
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -41,11 +40,8 @@ let subscriber = tracing_subscriber::fmt()
     .finish();
 tracing::subscriber::set_global_default(subscriber)?;
 
-let provider = LocalKmsProvider::ephemeral(
-    LocalKekId::try_from("example".to_string())?,
-    AeadBackend::Ring,
-)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope.encrypt_value(aad, &SecretValue::from("secret")).await?;
@@ -58,8 +54,8 @@ let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
 The decrypt prints, without timestamps:
 
 ```text
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled /kms_aead/format="envelope_v1"}:KMS unwrap{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled /kms_aead/format="envelope_v1"}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS unwrap{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 ```
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/tracing.rs),
@@ -105,13 +101,7 @@ left unrecorded, never recorded as `0` or an empty string.
 | `algorithm` | `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm` or `aes-256-gcm-siv` |
 | `backend` | `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` for a call that unwraps through an enabled cache, a failed unwrap recording `miss`; unrecorded for a call that looks nothing up |
-| `format` | decrypt only: the layout read, `envelope_v1` or `envelope_legacy`; unrecorded for the calls that take a `CipherText` |
 | `error_code` | the code of the error the call returned |
-
-`format` is recorded whether or not the build reads the layout, so in a build without
-`legacy-formats` a length-prefixed value shows `format=envelope_legacy` with
-`error_code=LEGACY_FORMAT`. Query for that pair to find the values that need the feature before
-an upgrade.
 
 ### KMS AEAD generate DEK and KMS AEAD decrypt DEK
 
@@ -119,16 +109,8 @@ an upgrade.
 |---|---|
 | `purpose` | `randomized` or `deterministic` |
 | `algorithm` | the algorithm of the key, `aes-256-siv` for deterministic keys |
-| `backend` | generate DEK only: `ring`, `aws-lc` or `rustcrypto`, and `rustcrypto` for deterministic keys |
+| `backend` | generate DEK only: the envelope's backend, `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
-| `error_code` | the code of the error the call returned |
-
-### KMS AEAD upgrade
-
-| Field | Value |
-|---|---|
-| `from_format` | the layout of the stored value: `envelope_legacy`, `envelope_v1`, `encrypted_key_bare` or `encrypted_key_v1` |
-| `to_format` | the layout written, `envelope_v1` or `encrypted_key_v1`; unrecorded when the value already was current |
 | `error_code` | the code of the error the call returned |
 
 ### KMS wrap, KMS unwrap and KMS random
@@ -137,7 +119,7 @@ an upgrade.
 |---|---|
 | `provider` | `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of an application's own provider |
 | `key` | the KEK, see below; for `KMS random` the GCP location, and unrecorded on AWS |
-| `key_version` | wrap and unwrap: from the KMS response on wrap, from the wrapped DEK on unwrap; unrecorded when neither has one |
+| `key_version` | wrap and unwrap: from the KMS response on wrap, from the wrapped DEK's bytes on unwrap for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP unwrap |
 | `len` | random only: the bytes requested from the KMS generator |
 | `response_time` | milliseconds the KMS call took |
 | `error_code` | the code of the error the call returned |
@@ -156,7 +138,8 @@ The `key` of each provider:
 Besides the spans, the library logs:
 
 - `WARN`, inside the KMS span: a GCP or Vault Transit response without a key version;
-- `WARN`, once per process and layout: the first read of a pre-0.29 layout with `legacy-formats`;
+- `WARN`, once per process and layout: the first read of a layout of 0.29 or earlier with
+  `legacy-formats`;
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `INFO`, when a local KMS provider is created: its KEK id and versions, each with where it came
