@@ -258,6 +258,9 @@ and a wrong AAD fails with `DECRYPT`. Use it to bind a value to its place, such 
 The AAD is not stored in the value, so the reader rebuilds it from the same data. It is never
 logged or put in an error, but it is not secret either: keep secrets in the value itself.
 
+The keyring takes a structured AAD instead of free bytes, built from the field and the row, see
+[Why the AAD is structured](./keyring/fields.md#why-the-aad-is-structured).
+
 ## Working with DEKs yourself
 
 The `*_with_dek` and `*_with_encrypted_dek` calls let the application keep one DEK for many

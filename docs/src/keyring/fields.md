@@ -172,14 +172,107 @@ physical one, a value moves between tables and data stores without being encrypt
 
 An `EntityId` can be personal data, so no span, event or error of the crate carries it.
 
-Other AADs:
-
-- `FieldAad::with_context(bytes)` appends `/` and any bytes, such as a schema version. A value
-  sealed with a context opens only with the same one. The context may itself hold `/`, so keep the
-  contexts of one field apart yourself;
-- `FieldAad::custom(bytes)` takes any bytes, with no structure. SQL cannot rebuild such an AAD, so
-  a field [BigQuery reads](./bigquery.md) cannot use it.
-
 Deterministic fields have an AAD without the entity id, see
 [Deterministic fields](./deterministic.md#aad), and beacons a context without it, see
 [Beacons](./beacons.md).
+
+## Why the AAD is structured
+
+kms-aead's `AeadCipher` and `KmsAeadEnvelope` take the AAD as any `impl AsRef<[u8]>`: the
+application chooses the bytes and rebuilds them itself on every read. The keyring's `encrypt` and
+`decrypt` take a `FieldAad` instead, which only a `FieldSpec` builds:
+
+- field binding: the default AAD names the kind and the field, so a value copied into another
+  field of the same row fails to open;
+- row binding: it names the entity id, so a value copied into another row fails to open. The
+  application's own id, such as a user id, is the `EntityId`;
+- deterministic fields: a deterministic AAD must not hold the row id, or equal plaintexts in
+  different rows give different values and equality lookups never match. `DeterministicAad` is a
+  separate type, with no entity id and no constructor from arbitrary bytes, see
+  [Deterministic fields](./deterministic.md#aad);
+- BigQuery: BigQuery decrypts in SQL, so the AAD has to be one SQL can rebuild from the row.
+  `<kind>/<id>/<field>` is this crate's convention, which `CONCAT('user/', u.id, '/email')`
+  rebuilds; BigQuery itself prescribes no format;
+- Tink: Tink takes any AAD bytes. The requirements of a Tink field are on the algorithm and the
+  KEK, not on the AAD;
+- the interop requirement: a `FieldAad` carries the `Interop` of its `FieldSpec`, so sealing
+  checks the field's requirements whichever way the AAD was built. Free bytes would name no field
+  and skip that check.
+
+| AAD | Built by | Field binding | Row binding | BigQuery reads it | Interop checked |
+|-----|----------|---------------|-------------|-------------------|-----------------|
+| Free bytes | kms-aead's `AeadCipher`, `KmsAeadEnvelope` | if the bytes name the field | if the bytes name the row | if SQL rebuilds the bytes | no |
+| Default | `spec.aad(&id)` | yes | yes | yes | yes |
+| With a context | `spec.aad(&id).with_context(bytes)` | yes | yes | yes, with the same bytes appended in SQL | yes |
+| Custom | `spec.custom_aad(bytes)` | if the bytes name the field | if the bytes name the row | no, refused | yes |
+| Deterministic | `spec.deterministic_aad()` | yes | no, so that equal values match | yes | yes |
+
+## The application's own context
+
+There are three ways to put the application's own data, such as a user id or a tenant, into the
+AAD:
+
+- `spec.aad(&id)` with the application's id as the `EntityId`. The id follows the `EntityId`
+  rules: 1 to 255 bytes of UTF-8 without `/`, NUL or another ASCII control character. It is
+  treated as personal data and never logged;
+- `FieldAad::with_context(bytes)` appends `/` and any bytes, such as a tenant or a schema version.
+  A value sealed with a context opens only with the same one. The context may itself hold `/`, so
+  keep the contexts of one field apart yourself. A BigQuery reader appends the same bytes in SQL,
+  `CONCAT('user/', u.id, '/email/tenant-7')`;
+- `FieldSpec::custom_aad(bytes)` takes any bytes, with no structure, in place of the default AAD.
+  It gives up field binding and row binding, unless the bytes name the field and the row
+  themselves, and BigQuery readability: on a field declared with `Interop::BigQuery` it fails with
+  `KeyringError::CustomAadUnsupported`, since SQL cannot rebuild such bytes. On a Tink field or a
+  field without interop it keeps the field's algorithm and KEK checks.
+
+```rust
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Interop, Keyring,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+};
+
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+#     MemoryKeyringStore::new(),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+#     .await?;
+let user_id: u64 = 4711;
+let id: EntityId = EntityId::try_from(user_id.to_string())?;
+let email: String = "alice@example.com".to_string();
+
+// user/4711/email
+let default_aad: FieldAad = EMAIL.aad(&id);
+// user/4711/email/tenant-7
+let with_context: FieldAad = EMAIL.aad(&id).with_context(b"tenant-7");
+// signup/4711, bound to neither the field nor the kind
+let custom: FieldAad = EMAIL.custom_aad(format!("signup/{user_id}").as_bytes())?;
+
+for aad in [default_aad, with_context, custom] {
+    let value: Encrypted<String, Randomized> = keyring.encrypt(&aad, &email).await?;
+    assert_eq!(keyring.decrypt(&aad, &value).await?, email);
+}
+
+let bigquery_email: FieldSpec = EMAIL.with_interop(Interop::BigQuery);
+assert!(matches!(
+    bigquery_email.custom_aad(b"signup/4711"),
+    Err(KeyringError::CustomAadUnsupported(Interop::BigQuery))
+));
+# registry.shutdown().await?;
+# Ok(())
+# }
+```

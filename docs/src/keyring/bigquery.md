@@ -28,8 +28,9 @@ DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
 ```
 
 `keyset` is a `KEYS.KEYSET_CHAIN` of the keyring's versions, see
-[Exporting a keyset to BigQuery](#exporting-a-keyset-to-bigquery). An AAD built with
-`FieldAad::custom` has no structure SQL can rebuild.
+[Exporting a keyset to BigQuery](#exporting-a-keyset-to-bigquery). SQL cannot rebuild an AAD of
+the application's own bytes, so `FieldSpec::custom_aad` fails on a field declared with
+`Interop::BigQuery`, see [Why the AAD is structured](./fields.md#why-the-aad-is-structured).
 
 The [plaintext encodings](./fields.md#encrypted-values) are the ones SQL reads: `String` and
 `Json<T>` with `AEAD.DECRYPT_STRING`, the integers with a `CAST` of it, and `Vec<u8>` with

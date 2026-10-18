@@ -155,7 +155,9 @@ deployment rule and the IAM roles per KMS are in
 - [Keyring stores](./keyring/stores.md): Firestore, PostgreSQL, Cloud Storage, S3 and memory;
 - [Record cache](./keyring/record-cache.md): how fast a change reaches every process;
 - [Encrypted fields and AAD](./keyring/fields.md): `Encrypted<T, Randomized>`, plaintext
-  encodings and the default AAD;
+  encodings, the default AAD and
+  [why the keyring's AAD is structured](./keyring/fields.md#why-the-aad-is-structured), unlike
+  the free bytes of kms-aead;
 - [Deterministic fields](./keyring/deterministic.md): equality queries, and what they leak;
 - [Beacons](./keyring/beacons.md): blind indexes of randomised fields, and what they leak;
 - [BigQuery and Tink interop](./keyring/bigquery.md): the BigQuery and Tink checks and the keyset
