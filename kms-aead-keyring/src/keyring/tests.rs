@@ -909,6 +909,40 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
+    let fixture = Fixture::new(no_watch()).await?;
+    let late = MemoryKeyringStore::new();
+    let opened = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+    late.compare_and_swap(&opened.record, None).await?;
+    fixture
+        .other_process()
+        .await?
+        .rotate(Purpose::Randomized)
+        .await?;
+    let rotated = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+    let store = TestStore::new(&late);
+    *store.calls.written_before_watch.lock().map_err(|_| "poisoned")? = Some(rotated.record);
+
+    let keyring = Keyring::open(
+        store,
+        fixture.provider.clone(),
+        backend(),
+        TENANT,
+        KeyringOptions::new(),
+    )
+    .await?;
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    assert_eq!(
+        keyring
+            .record()
+            .active(Purpose::Randomized)
+            .map(KeyVersion::key_id),
+        Some(key_id(2)?)
+    );
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
 async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new()).await?;
     let admin = fixture.other_process().await?;

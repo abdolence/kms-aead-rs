@@ -2,7 +2,7 @@
 //! demand.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -123,6 +123,9 @@ pub(crate) struct StoreCalls {
     pub(crate) conflicts: AtomicU32,
     /// Whether the record reads as missing.
     pub(crate) missing: AtomicBool,
+    /// A record that `watch` writes before it subscribes, as a write by another process
+    /// between a keyring's first load and its subscription would.
+    pub(crate) written_before_watch: Mutex<Option<KeyringRecord>>,
 }
 
 impl TestStore {
@@ -197,6 +200,16 @@ impl KeyringStore for TestStore {
     }
 
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
+        let written = self
+            .calls
+            .written_before_watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(record) = written {
+            let stored = self.memory.load(id).await?.map(|stored| stored.revision);
+            self.memory.compare_and_swap(&record, stored.as_ref()).await?;
+        }
         self.memory.watch(id).await
     }
 }

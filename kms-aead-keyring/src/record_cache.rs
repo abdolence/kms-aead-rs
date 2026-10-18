@@ -332,9 +332,11 @@ impl<S: KeyringStore> RecordCache<S> {
 }
 
 impl<S: KeyringStore> RecordCache<S> {
-    /// Revalidates `cache` on the change signals of `watch`, at most once per reload interval,
-    /// until the watch ends or the cache is dropped. A signal inside the interval waits for its
-    /// end, and every signal that arrived meanwhile is covered by that one revalidation.
+    /// Revalidates `cache` once at the start, then on the change signals of `watch`, at most
+    /// once per reload interval, until the watch ends or the cache is dropped. A signal inside
+    /// the interval waits for its end, and every signal that arrived meanwhile is covered by that
+    /// one revalidation. The first revalidation covers a write between the record's load and the
+    /// subscription, which no signal reports.
     pub(crate) async fn follow(
         cache: Weak<Self>,
         id: KeyringId,
@@ -342,11 +344,15 @@ impl<S: KeyringStore> RecordCache<S> {
         mut watch: KeyringWatch,
     ) {
         let mut last: Option<Instant> = None;
-        while let Some(event) = watch.next().await {
-            if !event.calls_for_revalidation(&id) {
-                continue;
-            }
+        loop {
             if let Some(last) = last {
+                loop {
+                    match watch.next().await {
+                        None => return,
+                        Some(event) if event.calls_for_revalidation(&id) => break,
+                        Some(_) => {}
+                    }
+                }
                 tokio::time::sleep_until(after(last, interval)).await;
             }
             for event in watch.pending() {
