@@ -166,7 +166,7 @@ where
             "kms": kms,
             "algorithm": algorithm.to_string(),
             "key_uri": provider.kek().tink_key_uri(),
-            "keyset": hex::encode(keyset.to_encrypted_bytes(&provider).await?),
+            "keyset": hex::encode(keyset.into_encrypted_bytes(&provider).await?),
             "wrapped_key": wrapped_key.to_hex_string(),
             "aad": hex::encode(aad),
             "plain_text": hex::encode(&message.0),
