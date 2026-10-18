@@ -32,7 +32,9 @@
 //! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal
 //! it under an algorithm or a KEK that BigQuery cannot read. With the `bigquery-export` feature,
 //! `Keyring::export_bigquery_keyset` exports the keyset that BigQuery's `KEYS.KEYSET_CHAIN` reads
-//! such fields with.
+//! such fields with. A field that Tink also decrypts is declared with [`Interop::Tink`], and
+//! [`Keyring::export_tink_keyset`] exports the encrypted keyset that Tink's keyset readers take,
+//! on a KEK in Cloud KMS, AWS KMS or Vault Transit.
 //!
 //! # Deterministic fields
 //!

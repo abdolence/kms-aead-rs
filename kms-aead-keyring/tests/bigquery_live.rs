@@ -128,12 +128,16 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let randomized_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
         randomized_keyset.key_uri(),
-        randomized_keyset.to_sql_literal()
+        randomized_keyset
+            .to_sql_literal()
+            .ok_or("not a BigQuery keyset")?
     );
     let deterministic_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
         deterministic_keyset.key_uri(),
-        deterministic_keyset.to_sql_literal()
+        deterministic_keyset
+            .to_sql_literal()
+            .ok_or("not a BigQuery keyset")?
     );
 
     let row = single_row(

@@ -13,11 +13,13 @@ Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`
     python -I tests/tink_interop.py read-keysets < kms-aead-keysets.jsonl > tink-keysets.jsonl
     cargo run --example tink_interop --features gcp-kms-encryption,aws-kms-encryption,aws-lc \\
         -- decrypt < tink-keysets.jsonl
+    cargo run -p kms-aead-keyring --example tink_export --features ci-tink,aws-lc \\
+        | python -I tests/tink_interop.py read-keysets
 
 `encrypt` and `decrypt` use Tink's KmsEnvelopeAead. `read-keysets` reads each keyset kms-aead
 exported with KeysetHandle.read and the KMS client of the key URI kms-aead gave, opens the value
-kms-aead sealed with it, and writes a value of its own sealed with the keyset; it reports on
-stderr.
+kms-aead sealed with it, and writes a value of its own sealed with the keyset for a keyset line
+with "wrapped_key"; it reports on stderr.
 
 The keys come from the variables of the live tests: PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING
 and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS, with ACCOUNT_ID for the
@@ -131,6 +133,8 @@ def read_keysets():
     else:
       print(f'{name}: another plain text', file=sys.stderr)
       failures += 1
+    if 'wrapped_key' not in case:
+      continue
     plain_text = f"sealed by Tink {metadata.version('tink')}".encode()
     print(json.dumps({
         'kms': case['kms'],

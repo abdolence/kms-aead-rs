@@ -180,6 +180,13 @@ pub enum Interop {
     /// for a randomized value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
     /// The AAD is the default one, which SQL rebuilds.
     BigQuery,
+    /// Tink decrypts the field with the keyset of
+    /// [`Keyring::export_tink_keyset`](crate::Keyring::export_tink_keyset): sealing needs an
+    /// AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomized value, an AES-SIV
+    /// version for a deterministic one, and a KEK with a Tink key URI, in Cloud KMS, in AWS KMS by
+    /// key ARN, or in Vault Transit. Tink for Python and C++ do not read ChaCha20-Poly1305 in a
+    /// keyset.
+    Tink,
 }
 
 /// An encrypted field of one kind of entity: the source of the default AAD of its values, of

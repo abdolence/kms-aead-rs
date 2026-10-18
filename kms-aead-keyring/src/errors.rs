@@ -74,10 +74,12 @@ pub enum KeyringError {
     ReservedKeyId,
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
-    /// A field's [`Interop`] requirement that sealing would break, checked before sealing.
+    /// An [`Interop`] requirement that sealing a field or exporting a keyset would break,
+    /// checked before sealing and before any KMS call of an export.
     Interop(InteropError),
-    /// A version selected for a BigQuery keyset export whose algorithm BigQuery does not read:
-    /// neither AES-256-GCM nor AES-SIV.
+    /// A version selected for a keyset export whose algorithm the keyset's reader does not
+    /// read: for BigQuery neither AES-256-GCM nor AES-SIV, for Tink ChaCha20-Poly1305 or a
+    /// beacon's.
     ExportAlgorithmUnsupported(KeyVersionError),
     /// A name that is not one a [`KeyVersionState`] displays as.
     UnknownKeyVersionState,
@@ -113,6 +115,18 @@ impl KeyringError {
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
             KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
         }
+    }
+
+    pub(crate) fn interop(
+        keyring: &KeyringId,
+        interop: Interop,
+        requirement: InteropRequirement,
+    ) -> Self {
+        KeyringError::Interop(InteropError {
+            keyring: keyring.clone(),
+            interop,
+            requirement,
+        })
     }
 
     pub(crate) fn record_invalid(keyring: &KeyringId, reason: RecordInvalidReason) -> Self {
@@ -259,12 +273,12 @@ impl Display for KeyringError {
             }
             KeyringError::Interop(error) => write!(
                 f,
-                "A field of the keyring {} that {:?} reads cannot be sealed: {}",
-                error.keyring, error.interop, error.requirement
+                "{:?} does not read the keyring {}: {}",
+                error.interop, error.keyring, error.requirement
             ),
             KeyringError::ExportAlgorithmUnsupported(error) => write!(
                 f,
-                "The key version {} of the keyring {} has an algorithm BigQuery does not read",
+                "The key version {} of the keyring {} has an algorithm the keyset's reader does not read",
                 error.key_id, error.keyring
             ),
             KeyringError::UnknownKeyVersionState => f.write_str(
@@ -657,19 +671,20 @@ pub struct InvalidTransitionError {
 pub struct InteropError {
     /// The keyring.
     pub keyring: KeyringId,
-    /// The field's requirement.
+    /// The reader whose requirement is broken: the field's, or the export's.
     pub interop: Interop,
-    /// The first part of it that sealing would break.
+    /// The first part of it that sealing or the export would break.
     pub requirement: InteropRequirement,
 }
 
-/// What a field's [`Interop`] needs and sealing would not give it.
+/// What an [`Interop`] reader needs and sealing or an export would not give it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InteropRequirement {
     /// The active version of the purpose uses an algorithm the reader does not implement.
     Algorithm(KeyAlgorithm),
-    /// The KEK is in a KMS the reader does not unwrap with.
+    /// The KEK is in a KMS the reader does not unwrap with, or has no key URI the reader
+    /// addresses it by, such as an AWS key named without its ARN.
     Kek(KekProvider),
 }
 

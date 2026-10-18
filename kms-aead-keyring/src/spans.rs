@@ -105,8 +105,7 @@ pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) 
     )
 }
 
-/// `Keyring export`, for a BigQuery keyset of `purpose`.
-#[cfg(feature = "bigquery-export")]
+/// `Keyring export`, for a keyset of `purpose`.
 pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
     debug_span!(
         "Keyring export",

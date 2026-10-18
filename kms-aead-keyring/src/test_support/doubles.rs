@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
+    KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -67,9 +68,15 @@ impl TestProvider {
         })
     }
 
-    /// The same local KMS, reporting `kek` as its KEK, such as a Cloud KMS key.
-    pub(crate) fn reporting(self, kek: KekRef) -> Self {
-        Self { kek, ..self }
+    /// A local KMS reporting a Cloud KMS key as its KEK.
+    pub(crate) fn cloud_kms() -> KmsAeadResult<Self> {
+        Ok(Self {
+            kek: KekRef::new(
+                KekProvider::Gcp,
+                "projects/p/locations/europe-north1/keyRings/r/cryptoKeys/tenant-42",
+            ),
+            ..Self::new("tenant-42-kek")?
+        })
     }
 }
 

@@ -6,7 +6,7 @@ use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Randomized;
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, CipherText, KekRef, KmsAeadResult, Plaintext, ValueStruct,
+    AeadAlgorithm, AeadCipher, CipherText, KekProvider, KmsAeadResult, Plaintext, ValueStruct,
 };
 use secret_vault_value::SecretValue;
 use serde_json::Value;
@@ -1139,17 +1139,9 @@ async fn bigquery_keyring(
     .await
 }
 
-/// The test KMS, reporting a Cloud KMS key as its KEK.
-fn cloud_kms_provider() -> KeyringResult<TestProvider> {
-    Ok(TestProvider::new("tenant-42-kek")?.reporting(KekRef::new(
-        KekProvider::Gcp,
-        "projects/p/locations/europe-north1/keyRings/r/cryptoKeys/tenant-42",
-    )))
-}
-
 #[tokio::test]
 async fn interop_bigquery_seals_under_its_algorithms_and_a_cloud_kms_kek() -> TestResult {
-    let keyring = bigquery_keyring(cloud_kms_provider()?).await?;
+    let keyring = bigquery_keyring(TestProvider::cloud_kms()?).await?;
     let aad = BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?);
     let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
@@ -1166,7 +1158,7 @@ async fn interop_bigquery_seals_under_its_algorithms_and_a_cloud_kms_kek() -> Te
 
 #[tokio::test]
 async fn interop_bigquery_refuses_a_non_gcm_version() -> TestResult {
-    let keyring = bigquery_keyring(cloud_kms_provider()?).await?;
+    let keyring = bigquery_keyring(TestProvider::cloud_kms()?).await?;
     let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
     keyring
         .promote(keyring.change_algorithm(chacha).await?)
@@ -1182,6 +1174,35 @@ async fn interop_bigquery_refuses_a_non_gcm_version() -> TestResult {
     keyring
         .encrypt(&email_of("42")?, &ALICE.to_string())
         .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn interop_tink_seals_under_the_algorithms_and_keks_every_tink_reads() -> TestResult {
+    let tink_email = BIGQUERY_EMAIL.with_interop(Interop::Tink);
+    let aad = tink_email.aad(&EntityId::try_from("42")?);
+    let local = bigquery_keyring(TestProvider::new("tenant-42-kek")?).await?;
+    let cloud_kms = bigquery_keyring(TestProvider::cloud_kms()?).await?;
+    let aes_128_gcm = KeyAlgorithm::Randomized(AeadAlgorithm::Aes128Gcm);
+    let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
+
+    assert!(matches!(
+        local.encrypt(&aad, &ALICE.to_string()).await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Kek(KekProvider::Local)
+    ));
+    cloud_kms
+        .promote(cloud_kms.change_algorithm(aes_128_gcm).await?)
+        .await?;
+    cloud_kms.encrypt(&aad, &ALICE.to_string()).await?;
+    cloud_kms
+        .promote(cloud_kms.change_algorithm(chacha).await?)
+        .await?;
+    assert!(matches!(
+        cloud_kms.encrypt(&aad, &ALICE.to_string()).await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Algorithm(chacha)
+    ));
     Ok(())
 }
 

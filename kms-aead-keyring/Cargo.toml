@@ -96,6 +96,9 @@ ci-bigquery = [
     "gcloud-sdk/google-cloud-bigquery-v2",
     "kms-aead/gcp-kms-encryption",
 ]
+# The live check of the Tink keyset export: kms-aead's Cloud KMS and AWS KMS providers, with a
+# root store and crypto provider, for the `tink_export` example.
+ci-tink = ["kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
 
 [lints]
 workspace = true
@@ -122,6 +125,11 @@ required-features = ["ring"]
 name = "migrate"
 path = "examples/migrate.rs"
 required-features = ["ring"]
+
+[[example]]
+name = "tink_export"
+path = "examples/tink_export.rs"
+required-features = ["ci-tink", "aws-lc"]
 
 [[test]]
 name = "bigquery_live"

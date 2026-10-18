@@ -45,7 +45,7 @@ The crate has no default features, and the backend features are those of kms-aea
 - `bigquery-export`: `export_bigquery_keyset`, see
   [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 
-Beacons need no feature. The KMS providers come from kms-aead and its provider features, and
+Beacons and `export_tink_keyset` need no feature. The KMS providers come from kms-aead and its provider features, and
 secret-vault-value's `SecretValue` is what an application type's `Plaintext` encodes to.
 
 ## First example
@@ -148,7 +148,8 @@ deployment rule and the IAM roles per KMS are in
   encodings and the default AAD;
 - [Deterministic fields](./keyring/deterministic.md): equality queries, and what they leak;
 - [Beacons](./keyring/beacons.md): blind indexes of randomized fields, and what they leak;
-- [BigQuery and Tink interop](./keyring/bigquery.md): the BigQuery checks and the keyset export;
+- [BigQuery and Tink interop](./keyring/bigquery.md): the BigQuery and Tink checks and the keyset
+  exports;
 - [Operations](./operations.md): rotation, sweeps, migration and the emergency runbook.
 
 The bytes of values, key ids and records are in [Formats](./formats.md).

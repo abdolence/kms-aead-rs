@@ -108,6 +108,20 @@ assert!(matches!(
 # }
 ```
 
+## Fields Tink reads
+
+A field that Tink also decrypts, with the keyset of
+[`export_tink_keyset`](#exporting-a-keyset-to-tink), is declared with
+`FieldSpec::with_interop(Interop::Tink)`. The keyring then refuses to seal it unless:
+
+- a randomized value is sealed under an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version;
+- a deterministic value is sealed under an AES-SIV version;
+- the KEK has a Tink key URI: a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault
+  Transit key.
+
+ChaCha20-Poly1305 is left out, since Tink for Python and C++ do not read it in a keyset. The check
+and its errors are the ones of `Interop::BigQuery`, with `Interop::Tink` in the error.
+
 ## Exporting a keyset to BigQuery
 
 Feature `bigquery-export`. It builds on kms-aead's GCP provider with no TLS root store, so the
@@ -118,7 +132,7 @@ BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink ke
 Cloud KMS key. `export_bigquery_keyset` builds that keyset from the keyring's versions, on a
 keyring whose provider is `GcpKmsProvider`. The bytes it returns are the Cloud KMS ciphertext of
 Tink's serialized `Keyset` message, wrapped with no associated data, without the `EncryptedKeyset`
-message Tink's own keyset readers take:
+message Tink's own keyset readers take, see [Exporting a keyset to Tink](#exporting-a-keyset-to-tink):
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
@@ -147,11 +161,10 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 let keyset: WrappedKeyset = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-let chain = format!(
-    "KEYS.KEYSET_CHAIN('{}', {})",
-    keyset.key_uri(),
-    keyset.to_sql_literal()
-);
+let literal: String = keyset
+    .to_sql_literal()
+    .ok_or("not a BigQuery keyset")?;
+let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
 # let _ = chain;
 # Ok(())
 # }
@@ -176,7 +189,8 @@ Beacon versions are never exported: a selection of the beacon purpose fails with
 The `WrappedKeyset` it returns:
 
 - `as_bytes()`: the wrapped keyset, as a `BYTES` column or query parameter holds it;
-- `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`;
+- `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`, and `None`
+  for the keyset of `export_tink_keyset`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`;
 - `key_ids()`: the versions inside, in ascending order.
@@ -243,3 +257,82 @@ The crate's live test runs the export and the queries against Cloud KMS and BigQ
   so the keys stay in the process for the call only. Its span records `dek_cache` as `bypassed`.
 
 Cloud KMS wraps at most 64 KiB of plaintext, which a keyset reaches at several hundred versions.
+
+## Exporting a keyset to Tink
+
+`export_tink_keyset` exports the same versions as Tink's encrypted keyset, which Tink for Java,
+Go and Python open with `KeysetHandle.read` and their own KMS client. It needs no feature and
+runs on a keyring with any provider whose KEK has a Tink key URI. The bytes are a
+`google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the serialized keyset, see
+[Tink keysets and the TINK prefix](../formats.md#tink-keysets-and-the-tink-prefix).
+
+`key_uri()` is the URI of Tink's KMS client:
+
+- `gcp-kms://projects/…/cryptoKeys/…` for a Cloud KMS key;
+- `aws-kms://arn:aws:kms:…` for an AWS KMS key named by its ARN;
+- `hcvault://<host>/…/keys/<name>` for a Vault Transit key, which Tink for Go reads. Tink for
+  Java and Python have no Vault Transit client.
+
+An Azure Key Vault key, a local or an application's own KEK, and an AWS key named without its
+ARN have no Tink client. The export fails on them with `KeyringError::Interop`, `Interop::Tink`
+and `InteropRequirement::Kek`, before any store or KMS call.
+
+```rust,no_run
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::Ring;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+let key_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
+    MemoryKeyringStore::new(),
+    GcpKmsProvider::new(&key_ref).await?,
+    KeyringId::try_from("tenant-42".to_string())?,
+    KeyringOptions::new(),
+)
+.await?;
+
+let keyset: WrappedKeyset = keyring
+    .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
+    .await?;
+std::fs::write("tenant-42.keyset", keyset.as_bytes())?;
+println!("{}", keyset.key_uri());
+# Ok(())
+# }
+```
+
+Tink for Python reads the keyset with the KMS client of that URI, and opens a randomized value
+with the value's default AAD as UTF-8:
+
+```python
+import tink
+from tink import aead
+from tink.integration import gcpkms
+
+aead.register()
+key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
+with open('tenant-42.keyset', 'rb') as keyset_file:
+  keyset_handle = tink.read_keyset_handle(
+      tink.BinaryKeysetReader(keyset_file.read()),
+      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
+  )
+email_aead = keyset_handle.primitive(aead.Aead)
+
+
+def decrypt_email(value: bytes, user_id: str) -> str:
+  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
+```
+
+The selection, the fresh read of the record and the rights are those of the BigQuery export. The
+algorithms are those of [Fields Tink reads](#fields-tink-reads): a selected ChaCha20-Poly1305 or
+beacon version fails with `ExportAlgorithmUnsupported`, before any KMS call. `to_sql_literal()`
+is `None`.

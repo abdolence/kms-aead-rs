@@ -6,10 +6,10 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use kms_aead::formats::{Randomized, TinkKeyType};
+use kms_aead::formats::Randomized;
 use kms_aead::{
     AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, CipherTextWithEncryptedKey,
-    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KekProvider,
+    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey,
     KmsAeadEncryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
@@ -17,8 +17,8 @@ use secret_vault_value::SecretValue;
 use tokio::task::AbortHandle;
 
 use crate::errors::{
-    InteropError, InteropRequirement, KekMismatchError, KeyVersionCompromisedError,
-    KeyVersionError, KeyringError, KeyringResult, RecordInvalidReason,
+    InteropRequirement, KekMismatchError, KeyVersionCompromisedError, KeyVersionError,
+    KeyringError, KeyringResult, RecordInvalidReason,
 };
 use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
@@ -34,9 +34,8 @@ mod beacon;
 #[cfg(feature = "deterministic")]
 mod deterministic;
 
-#[cfg(feature = "bigquery-export")]
 mod export;
-#[cfg(feature = "bigquery-export")]
+use export::KeysetEncoding;
 pub use export::{KeysetSelection, WrappedKeyset};
 
 /// Field encryption under the key versions of one keyring, whose record lives in the store `S`
@@ -599,25 +598,26 @@ where
     /// AAD requirement holds by construction: an AAD that SQL cannot rebuild carries
     /// [`Interop::None`].
     fn check_interop(&self, interop: Interop, version: &KeyVersion) -> KeyringResult<()> {
-        let unmet = match interop {
-            Interop::None => None,
-            Interop::BigQuery => {
-                let kek = self.provider.kek().provider();
-                match bigquery_key_type(version.algorithm()) {
-                    Some(_) => {
-                        (*kek != KekProvider::Gcp).then(|| InteropRequirement::Kek(kek.clone()))
-                    }
-                    None => Some(InteropRequirement::Algorithm(version.algorithm())),
-                }
-            }
+        let encoding = match interop {
+            Interop::None => return Ok(()),
+            Interop::BigQuery => KeysetEncoding::BigQuery,
+            Interop::Tink => KeysetEncoding::Tink,
         };
-        match unmet {
-            None => Ok(()),
-            Some(requirement) => Err(KeyringError::Interop(InteropError {
-                keyring: self.id().clone(),
+        let kek = self.provider.kek();
+        if encoding.key_type(version.algorithm()).is_none() {
+            return Err(KeyringError::interop(
+                self.id(),
                 interop,
-                requirement,
-            })),
+                InteropRequirement::Algorithm(version.algorithm()),
+            ));
+        }
+        match encoding.key_uri(kek) {
+            Some(_) => Ok(()),
+            None => Err(KeyringError::interop(
+                self.id(),
+                interop,
+                InteropRequirement::Kek(kek.provider().clone()),
+            )),
         }
     }
 
@@ -821,18 +821,6 @@ impl NewVersion {
             algorithm,
             dek,
         })
-    }
-}
-
-/// The Tink key type BigQuery reads values of `algorithm` with, or `None` for an algorithm it
-/// does not read: BigQuery reads AES-256-GCM and AES-SIV keys only.
-fn bigquery_key_type(algorithm: KeyAlgorithm) -> Option<TinkKeyType> {
-    match algorithm {
-        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm) => Some(TinkKeyType::AesGcm),
-        KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => Some(TinkKeyType::AesSiv),
-        KeyAlgorithm::Randomized(_) | KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Beacon(_) => {
-            None
-        }
     }
 }
 
