@@ -316,6 +316,19 @@ impl KmsAeadEncryptionError {
         )
     }
 
+    /// `INVALID_HEX`: hex that does not decode into `subject`, for the reason in `error` but
+    /// without the character that is not a hex digit, which may be a byte of a value stored in
+    /// plain text.
+    pub(crate) fn invalid_hex(subject: &str, error: hex::FromHexError) -> KmsAeadError {
+        let reason = match error {
+            hex::FromHexError::InvalidHexCharacter { index, .. } => {
+                format!("the character at position {index} is not a hex digit")
+            }
+            other => other.to_string(),
+        };
+        Self::create("INVALID_HEX", &format!("{subject} is not hex: {reason}"))
+    }
+
     /// `INVALID_PLAINTEXT` for the JSON of `T`, with serde_json's category and position of
     /// `error`, never its message, which quotes the input.
     #[cfg(feature = "serde-json")]
@@ -399,14 +412,14 @@ impl KmsAeadLegacyFormatError {
     pub(crate) fn create(format: KmsAeadLegacyFormat) -> KmsAeadError {
         let message = match format {
             KmsAeadLegacyFormat::EnvelopeV1 => {
-                "The cipher text is in the envelope layout v1 of kms-aead 0.29. KmsAeadEnvelope \
-                 decrypts it only with the deprecated legacy-formats feature, and \
-                 CipherTextWithEncryptedKey::separate never reads it"
+                "The cipher text is in the envelope layout v1 of kms-aead 0.29. It is read as an \
+                 Encrypted value and decrypted only with the deprecated legacy-formats feature, \
+                 and Encrypted::separate never reads it"
             }
             KmsAeadLegacyFormat::LengthPrefixedEnvelope => {
                 "The cipher text is in the length-prefixed layout written by kms-aead 0.28.1 and \
-                 earlier. KmsAeadEnvelope decrypts it only with the deprecated legacy-formats \
-                 feature, and CipherTextWithEncryptedKey::separate never reads it"
+                 earlier. It is read as an Encrypted value and decrypted only with the deprecated \
+                 legacy-formats feature, and Encrypted::separate never reads it"
             }
             KmsAeadLegacyFormat::EncryptedKeyV1 => {
                 "The encrypted key is in the encrypted key layout of kms-aead 0.29, which only the \
@@ -443,10 +456,11 @@ impl std::error::Error for KmsAeadLegacyFormatError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum KmsAeadLegacyFormat {
-    /// A `CipherTextWithEncryptedKey` in the envelope layout v1 of 0.29, starting with `0x01`.
+    /// An [`Envelope`](crate::formats::Envelope) value in the envelope layout v1 of 0.29,
+    /// starting with `0x01`.
     EnvelopeV1,
-    /// A `CipherTextWithEncryptedKey` with the length prefix written up to 0.28.1, starting with
-    /// four zero bytes.
+    /// An [`Envelope`](crate::formats::Envelope) value with the length prefix written up to
+    /// 0.28.1, starting with four zero bytes.
     LengthPrefixedEnvelope,
     /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted key layout of 0.29, starting
     /// with `0xFF 0x01`.

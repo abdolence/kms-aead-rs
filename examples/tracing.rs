@@ -3,8 +3,9 @@
 //!
 //! Run with `cargo run --example tracing --features ring`.
 
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -25,8 +26,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");
-    let encrypted = envelope.encrypt_value(aad, &secret).await?;
-    let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
+    let encrypted: Encrypted<SecretValue, Envelope> = envelope.encrypt(aad, &secret).await?;
+    let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
     assert_eq!(decrypted, secret);
     Ok(())
 }

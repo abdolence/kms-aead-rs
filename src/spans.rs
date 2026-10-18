@@ -116,7 +116,7 @@ pub(crate) mod kms {
 }
 
 /// `KMS AEAD encrypt`, around the envelope's encrypt calls. `mode` is `per_call` or
-/// `store_less` for `encrypt_value` and `caller_dek` for the calls that take a key.
+/// `store_less` for `encrypt` and `caller_dek` for the calls that take a key.
 pub(crate) fn aead_encrypt(
     mode: &str,
     algorithm: impl Display,
@@ -182,7 +182,11 @@ pub(crate) fn beacon(algorithm: impl Display, backend: &str, dek_cache: &DekCach
 
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
 /// `deterministic`.
-pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
+pub(crate) fn generate_encrypted_dek(
+    purpose: &str,
+    algorithm: impl Display,
+    backend: &str,
+) -> Span {
     debug_span!(
         "KMS AEAD generate DEK",
         { FIELD_PURPOSE } = purpose,

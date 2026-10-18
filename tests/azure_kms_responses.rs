@@ -213,7 +213,7 @@ async fn key_vault_encrypts_the_raw_key() -> Result<(), Box<dyn std::error::Erro
             KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
         )?;
 
-        let (dek, _) = envelope.generate_dek().await?;
+        let (dek, _) = envelope.generate_encrypted_dek().await?;
 
         let request_bodies = http_client.request_bodies.lock().unwrap();
         let [request_body] = request_bodies.as_slice() else {

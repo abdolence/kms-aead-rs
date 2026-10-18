@@ -240,6 +240,7 @@ mod tests {
     use aws_sdk_kms::types::error::IncorrectKeyException;
     use tokio::net::TcpListener;
 
+    use crate::formats::Envelope;
     use crate::test_provider::{TestBackend, TinkEnvelope};
 
     const REGION: &str = "eu-west-1";
@@ -497,9 +498,10 @@ mod tests {
                 Err(KmsAeadError::UnsupportedAlgorithm(_)) => continue,
                 envelope => envelope?,
             };
-            let value = CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap());
+            let value =
+                Encrypted::<SecretValue, Envelope>::try_from(hex::decode(tink.value).unwrap())?;
 
-            let decrypted = envelope.decrypt_value(tink.aad.as_bytes(), &value).await?;
+            let decrypted = envelope.decrypt(tink.aad.as_bytes(), &value).await?;
 
             assert_eq!(
                 decrypted,
@@ -529,9 +531,10 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
         )?;
         for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
-            let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
+            let stored =
+                Encrypted::<SecretValue, Envelope>::try_from(hex::decode(stored).unwrap())?;
 
-            let decrypted = encryption.decrypt_value(b"test-aad", &stored).await?;
+            let decrypted = encryption.decrypt(b"test-aad", &stored).await?;
             let upgraded = encryption
                 .upgrade_legacy_value(b"test-aad", &stored)
                 .await?;
@@ -540,7 +543,7 @@ mod tests {
             let upgraded = upgraded.expect("a legacy value is upgraded");
             assert_eq!(upgraded.value()[0], 0x00);
             assert_eq!(
-                encryption.decrypt_value(b"test-aad", &upgraded).await?,
+                encryption.decrypt(b"test-aad", &upgraded).await?,
                 SecretValue::from("test-secret")
             );
             assert!(encryption

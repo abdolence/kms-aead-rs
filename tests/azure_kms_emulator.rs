@@ -12,6 +12,7 @@ use azure_security_keyvault_keys::models::{
 };
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{
     AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
 };
@@ -121,10 +122,10 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
     let first_version = emulator.create_rsa_key_version(&key_name).await?;
     let aad = b"test-aad";
 
-    let cipher_text = emulator
+    let cipher_text: Encrypted<SecretValue, Envelope> = emulator
         .encryption(&key_name, first_version.clone())
         .await?
-        .encrypt_value(aad, &SecretValue::from("test-secret"))
+        .encrypt(aad, &SecretValue::from("test-secret"))
         .await?;
     let (_, encrypted_dek) = cipher_text.separate()?;
     let key_version = first_version.as_str().as_bytes();
@@ -134,10 +135,10 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
     );
 
     let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
-    let decrypted = emulator
+    let decrypted: SecretValue = emulator
         .encryption(&key_name, rotated_version)
         .await?
-        .decrypt_value(aad, &cipher_text)
+        .decrypt(aad, &cipher_text)
         .await?;
 
     assert_eq!(decrypted.as_sensitive_str(), "test-secret");
@@ -154,15 +155,15 @@ async fn value_encrypted_with_another_key_fails_to_decrypt() -> TestResult<()> {
     let other_key_version = emulator.create_rsa_key_version(&other_key_name).await?;
     let aad = b"test-aad";
 
-    let cipher_text = emulator
+    let cipher_text: Encrypted<SecretValue, Envelope> = emulator
         .encryption(&other_key_name, other_key_version)
         .await?
-        .encrypt_value(aad, &SecretValue::from("test-secret"))
+        .encrypt(aad, &SecretValue::from("test-secret"))
         .await?;
     let result = emulator
         .encryption(&key_name, key_version)
         .await?
-        .decrypt_value(aad, &cipher_text)
+        .decrypt(aad, &cipher_text)
         .await;
 
     assert!(matches!(result, Err(KmsAeadError::EncryptionError(_))));
@@ -178,14 +179,10 @@ async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResul
     let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
     let aad = b"test-aad";
 
-    let (dek, encrypted_dek) = encryption.generate_dek().await?;
-    let cipher_text =
-        encryption.encrypt_value_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
-    let decrypted = encryption
-        .decrypt_value(
-            aad,
-            &CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?,
-        )
+    let (dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
+    let bare = encryption.encrypt_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
+    let decrypted: SecretValue = encryption
+        .decrypt(aad, &Encrypted::join(&bare, &encrypted_dek)?)
         .await?;
     // The provider's bytes are `[0x01][k: u8][key version: k][Key Vault encrypted DEK]`.
     let wrapped = &encrypted_dek.value()[2 + key_version.as_str().len()..];

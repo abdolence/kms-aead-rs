@@ -40,8 +40,9 @@ mod contract;
 /// [`NAME`](Self::NAME), so code generic over the backend names this trait and nothing else:
 ///
 /// ```rust
+/// use kms_aead::formats::Envelope;
 /// use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-/// use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadResult};
+/// use kms_aead::{AeadBackend, Encrypted, KmsAeadEnvelope, KmsAeadResult};
 /// use secret_vault_value::SecretValue;
 ///
 /// struct Orders<B> {
@@ -58,8 +59,9 @@ mod contract;
 ///     }
 ///
 ///     async fn round_trip(&self, card: &SecretValue) -> KmsAeadResult<SecretValue> {
-///         let sealed = self.envelope.encrypt_value(b"orders/1042", card).await?;
-///         self.envelope.decrypt_value(b"orders/1042", &sealed).await
+///         let sealed: Encrypted<SecretValue, Envelope> =
+///             self.envelope.encrypt(b"orders/1042", card).await?;
+///         self.envelope.decrypt(b"orders/1042", &sealed).await
 ///     }
 /// }
 ///

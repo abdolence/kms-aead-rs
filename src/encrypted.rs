@@ -2,10 +2,9 @@ use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 
-use rvstruct::ValueStruct;
 use subtle::ConstantTimeEq;
 
-use crate::errors::KmsAeadError;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::{Deterministic, Format, Randomized};
 use crate::{KeyId, KmsAeadResult};
 
@@ -16,20 +15,28 @@ mod serde;
 #[cfg(feature = "sqlx")]
 mod sqlx;
 
-/// A stored value that decrypts to a `T`, a [`Plaintext`](crate::Plaintext), in the format `F`.
+/// A stored value that decrypts to a `T`, a [`Plaintext`](crate::Plaintext), in the layout of the
+/// format `F`: [`Envelope`](crate::formats::Envelope), [`Bare`](crate::formats::Bare),
+/// [`Randomized`] or [`Deterministic`].
 ///
-/// It holds the bytes to store, which `value()` and `into_value()` of [`ValueStruct`] return.
-/// Bytes read back become a value through `TryFrom<Vec<u8>>`, which checks them against the
-/// layout of `F`, so that a malformed stored value fails when it is read, before any KMS call or
-/// decrypt. The check reads the framing only: whether the bytes are authentic is known when they
-/// are decrypted.
+/// It holds the bytes to store, which [`value`](Self::value) and [`into_value`](Self::into_value)
+/// return, and [`to_hex_string`](Self::to_hex_string) as hex. Bytes read back become a value only
+/// through `TryFrom<Vec<u8>>`, or [`try_from_hex_string`](Self::try_from_hex_string) for hex,
+/// which check them against the layout of `F`, so that a malformed stored value fails when it is
+/// read, before any KMS call or decrypt. The check reads the framing only: whether the bytes are
+/// authentic is known when they are decrypted.
 ///
-/// [`KmsAeadEnvelope::encrypt_field`](crate::KmsAeadEnvelope::encrypt_field) writes an
-/// `Encrypted<T, Envelope>`, [`AeadCipher::encrypt_field`](crate::AeadCipher::encrypt_field) an
-/// `Encrypted<T, Randomized>` and `DeterministicCipher::encrypt_field` an
-/// `Encrypted<T, Deterministic>`, the layouts Tink and BigQuery read. `T` is any type that
-/// implements `Plaintext`, such as an application newtype, so a field names what it holds:
-/// `Encrypted<Email, Envelope>`.
+/// Every call that encrypts returns one: [`KmsAeadEnvelope::encrypt`](crate::KmsAeadEnvelope::encrypt)
+/// an `Encrypted<T, Envelope>`, [`AeadCipher::encrypt`](crate::AeadCipher::encrypt) an
+/// `Encrypted<T, Randomized>` and [`AeadCipher::encrypt_bare`](crate::AeadCipher::encrypt_bare) an
+/// `Encrypted<T, Bare>`, and `DeterministicCipher::encrypt` an `Encrypted<T, Deterministic>`. `T`
+/// is any type that implements `Plaintext`, such as an application newtype, so that a field names
+/// what it holds: `Encrypted<Email, Envelope>`. A value with no type of its own is a
+/// [`SecretValue`](secret_vault_value::SecretValue): `Encrypted<SecretValue, Envelope>`.
+///
+/// A `Randomized` or `Deterministic` value names the key it was sealed under, which `key_id()`
+/// returns. An `Envelope` value carries its encrypted DEK instead, and a `Bare` value names no
+/// key.
 ///
 /// Only `Encrypted<T, Deterministic>` implements `PartialEq`, `Eq` and `Hash`: values sealed
 /// under one deterministic key are equal exactly when their plaintexts and AADs are, which is
@@ -40,22 +47,29 @@ mod sqlx;
 /// `Debug` shows the length only. The `serde` feature serialises it as bytes, and deserialises it
 /// through `TryFrom<Vec<u8>>`. The `postgres` and `sqlx` features store it as `BYTEA` and read it
 /// through `TryFrom<Vec<u8>>` too.
+#[derive(Clone)]
 pub struct Encrypted<T, F: Format> {
     bytes: Vec<u8>,
     key_id: F::FramedKeyId,
-    plaintext: PhantomData<fn() -> (T, F)>,
+    /// Tags the bytes with the plaintext type and the format; holds no `T`.
+    marker: PhantomData<(T, F)>,
 }
 
 /// Reads stored bytes as a value of the format `F`.
 ///
 /// # Errors
 ///
-/// For [`Envelope`](crate::formats::Envelope), the errors of
-/// [`CipherTextWithEncryptedKey::separate`](crate::CipherTextWithEncryptedKey::separate), and
-/// `INVALID_CIPHER_TEXT_FORMAT` when the cipher text after the encrypted DEK is shorter than a
-/// nonce and a tag. For [`Randomized`](crate::formats::Randomized) and [`Deterministic`],
-/// `INVALID_CIPHER_TEXT_FORMAT` when the bytes do not start with Tink's output prefix or are
-/// shorter than the prefix and an empty value. The messages never quote the bytes.
+/// - `INVALID_CIPHER_TEXT_FORMAT` when the bytes are shorter than the layout of `F` allows: for
+///   [`Bare`](crate::formats::Bare), shorter than a nonce and a tag; for [`Randomized`] and
+///   [`Deterministic`], not Tink's output prefix followed by at least an empty value;
+/// - for [`Envelope`](crate::formats::Envelope), `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or
+///   a first byte that starts no layout, `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length
+///   outside 1 to 4,096 bytes or past the end, or a cipher text after it shorter than a nonce and
+///   a tag, and [`KmsAeadError::LegacyFormat`] on the layouts written by 0.29 and earlier. With
+///   the deprecated `legacy-formats` feature those layouts are read, and a length in their header
+///   past the end fails with `INVALID_CIPHER_TEXT_FORMAT`.
+///
+/// The messages never quote the bytes.
 impl<T, F: Format> TryFrom<Vec<u8>> for Encrypted<T, F> {
     type Error = KmsAeadError;
 
@@ -64,31 +78,38 @@ impl<T, F: Format> TryFrom<Vec<u8>> for Encrypted<T, F> {
         Ok(Self {
             bytes,
             key_id,
-            plaintext: PhantomData,
+            marker: PhantomData,
         })
     }
 }
 
-/// The bytes to store.
-impl<T, F: Format> ValueStruct for Encrypted<T, F> {
-    type ValueType = Vec<u8>;
-
-    fn value(&self) -> &Vec<u8> {
+impl<T, F: Format> Encrypted<T, F> {
+    /// The bytes to store.
+    pub fn value(&self) -> &[u8] {
         &self.bytes
     }
 
-    fn into_value(self) -> Vec<u8> {
+    /// The bytes to store, taking the value.
+    pub fn into_value(self) -> Vec<u8> {
         self.bytes
     }
-}
 
-impl<T, F: Format> Clone for Encrypted<T, F> {
-    fn clone(&self) -> Self {
-        Self {
-            bytes: self.bytes.clone(),
-            key_id: self.key_id,
-            plaintext: PhantomData,
-        }
+    /// The lowercase hex of the bytes to store.
+    pub fn to_hex_string(&self) -> String {
+        hex::encode(&self.bytes)
+    }
+
+    /// Reads the hex, in either case, that [`to_hex_string`](Self::to_hex_string) writes, and
+    /// checks the bytes as `TryFrom<Vec<u8>>` does.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_HEX` when `encoded` is not hex, and the errors of `TryFrom<Vec<u8>>`. The messages
+    /// never quote the input.
+    pub fn try_from_hex_string(encoded: &str) -> KmsAeadResult<Self> {
+        let bytes = hex::decode(encoded)
+            .map_err(|error| KmsAeadEncryptionError::invalid_hex("The encrypted value", error))?;
+        Self::try_from(bytes)
     }
 }
 
@@ -136,7 +157,7 @@ impl<T> Hash for Encrypted<T, Deterministic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::Envelope;
+    use crate::formats::{Bare, Envelope};
     use crate::test_provider::renderings;
 
     /// Tink's output prefix of the key 0x44556677 followed by `body`.
@@ -152,6 +173,7 @@ mod tests {
     #[test]
     fn the_shortest_value_of_each_format_is_read() -> KmsAeadResult<()> {
         Encrypted::<String, Envelope>::try_from(envelope(&[0xAB; 12 + 16]))?;
+        Encrypted::<String, Bare>::try_from(vec![0xAB; 12 + 16])?;
         Encrypted::<String, Randomized>::try_from(prefixed(&[0xAB; 12 + 16]))?;
         Encrypted::<String, Deterministic>::try_from(prefixed(&[0xAB; 16]))?;
         Ok(())
@@ -168,6 +190,11 @@ mod tests {
             (
                 "envelope, a cipher text shorter than a nonce and a tag",
                 Encrypted::<String, Envelope>::try_from(envelope(&[0xAB; 12 + 15])).err(),
+                "INVALID_CIPHER_TEXT_FORMAT",
+            ),
+            (
+                "bare, shorter than a nonce and a tag",
+                Encrypted::<String, Bare>::try_from(vec![0xAB; 12 + 15]).err(),
                 "INVALID_CIPHER_TEXT_FORMAT",
             ),
             (
@@ -198,6 +225,41 @@ mod tests {
                 "{case}: {error:?}"
             );
         }
+    }
+
+    #[test]
+    fn hex_reads_back_through_the_layout_check() -> KmsAeadResult<()> {
+        let value = Encrypted::<String, Randomized>::try_from(prefixed(&[0xAB; 12 + 16]))?;
+
+        let read_back = Encrypted::<String, Randomized>::try_from_hex_string(
+            &value.to_hex_string().to_uppercase(),
+        );
+        let too_short = Encrypted::<String, Bare>::try_from_hex_string(&hex::encode([0xAB; 27]));
+
+        assert!(
+            matches!(&read_back, Ok(read_back) if read_back.value() == value.value()),
+            "{read_back:?}"
+        );
+        assert!(
+            matches!(&too_short, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
+            "{too_short:?}"
+        );
+        Ok(())
+    }
+
+    #[cfg(not(feature = "legacy-formats"))]
+    #[test]
+    fn an_envelope_of_0_29_needs_legacy_formats() {
+        let envelope_v1 = hex::decode("010231380007777261707065647365616c6564").unwrap();
+
+        let result = Encrypted::<String, Envelope>::try_from(envelope_v1);
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::LegacyFormat(error))
+                if error.format == crate::errors::KmsAeadLegacyFormat::EnvelopeV1),
+            "{result:?}"
+        );
     }
 
     #[test]

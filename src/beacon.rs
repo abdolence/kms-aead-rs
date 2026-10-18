@@ -3,7 +3,6 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::str::FromStr;
 
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
@@ -109,18 +108,20 @@ impl BeaconBits {
 /// that computed it, so that a column holds beacons of several keys during a re-index. The HMAC
 /// covers the bits, the context and the plaintext; see the formats chapter of the book.
 ///
-/// It holds the bytes to store, which `value()` and `into_value()` of [`ValueStruct`] return.
-/// Bytes read back become a beacon through `TryFrom<Vec<u8>>`, which checks the prefix and the
-/// length. Equality compares the bytes, which is what a lookup by beacon does: equal beacons
+/// It holds the bytes to store, which [`value`](Self::value) and [`into_value`](Self::into_value)
+/// return. Bytes read back become a beacon through `TryFrom<Vec<u8>>`, which checks the prefix and
+/// the length. Equality compares the bytes, which is what a lookup by beacon does: equal beacons
 /// under one key and one context come from equal plaintexts, or from a collision of the
 /// truncated HMAC.
 ///
 /// `Debug` shows the key id only. The `serde` feature serialises it as bytes, and the `postgres`
 /// and `sqlx` features store it as `BYTEA`, as for [`Encrypted`](crate::Encrypted).
+#[derive(Clone)]
 pub struct Beacon<T> {
     key_id: KeyId,
     bytes: Vec<u8>,
-    plaintext: PhantomData<fn() -> T>,
+    /// Tags the bytes with the plaintext type; holds no `T`.
+    marker: PhantomData<T>,
 }
 
 impl<T> Beacon<T> {
@@ -132,6 +133,16 @@ impl<T> Beacon<T> {
     /// The id of the beacon key that computed this beacon.
     pub fn key_id(&self) -> KeyId {
         self.key_id
+    }
+
+    /// The bytes to store.
+    pub fn value(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// The bytes to store, taking the beacon.
+    pub fn into_value(self) -> Vec<u8> {
+        self.bytes
     }
 }
 
@@ -152,7 +163,7 @@ impl<T> TryFrom<Vec<u8>> for Beacon<T> {
                 Ok(Self {
                     key_id: KeyId::new(u32::from_be_bytes([a, b, c, d])),
                     bytes,
-                    plaintext: PhantomData,
+                    marker: PhantomData,
                 })
             }
             _ => Err(KmsAeadEncryptionError::create(
@@ -163,29 +174,6 @@ impl<T> TryFrom<Vec<u8>> for Beacon<T> {
                     bytes.len()
                 ),
             )),
-        }
-    }
-}
-
-/// The bytes to store.
-impl<T> ValueStruct for Beacon<T> {
-    type ValueType = Vec<u8>;
-
-    fn value(&self) -> &Vec<u8> {
-        &self.bytes
-    }
-
-    fn into_value(self) -> Vec<u8> {
-        self.bytes
-    }
-}
-
-impl<T> Clone for Beacon<T> {
-    fn clone(&self) -> Self {
-        Self {
-            key_id: self.key_id,
-            bytes: self.bytes.clone(),
-            plaintext: PhantomData,
         }
     }
 }
@@ -238,25 +226,26 @@ impl<B: AeadBackend> BeaconMac<B> {
         self.algorithm
     }
 
-    /// A new beacon key of `algorithm().key_len()` bytes from the backend's CSPRNG.
+    /// A new beacon key of `algorithm().key_len()` bytes from the backend's CSPRNG. It makes no
+    /// KMS call.
     ///
     /// # Errors
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
+    pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
         generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
     /// A new beacon key and the same key encrypted by `provider`, to store. The key comes from the
     /// KMS generator when the provider is configured to use one, and from the backend's CSPRNG
     /// otherwise. It is encrypted as a serialised Tink key with the key in `key_value`, so that
-    /// [`DekCache::with_key`](crate::cache::DekCache::with_key) decrypts it.
+    /// [`DekCache::with_dek`](crate::cache::DekCache::with_dek) decrypts it.
     ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
     /// of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub async fn generate_dek<P>(
+    pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
@@ -265,7 +254,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     {
         // Tink's `HmacPrfKey` and `AesGcmKey` both hold their key in field 3, `key_value`, so a
         // 32-byte beacon key serialises to the bytes of a 32-byte `AesGcmKey`.
-        crate::formats::generate_dek::<B, P>(
+        crate::formats::generate_encrypted_dek::<B, P>(
             TinkKeyType::AesGcm,
             self.algorithm.key_len(),
             provider,
@@ -282,15 +271,20 @@ impl<B: AeadBackend> BeaconMac<B> {
     /// `INVALID_KEY_LENGTH` when `dek` does not have `algorithm().key_len()` bytes,
     /// `INVALID_BEACON_CONTEXT` for a context longer than 2^32 - 1 bytes, `INVALID_PLAINTEXT`
     /// when the value does not encode, and `BEACON` when the backend fails.
-    pub fn compute<T: Plaintext>(
+    pub fn beacon<T: Plaintext>(
         &self,
         key_id: KeyId,
-        context: &[u8],
+        context: &(impl AsRef<[u8]> + ?Sized),
         bits: BeaconBits,
         value: &T,
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
-        let key = checked_key_bytes(dek, self.algorithm, self.algorithm.key_len())?;
+        let key = checked_key_bytes(
+            dek.value().ref_sensitive_value(),
+            self.algorithm,
+            self.algorithm.key_len(),
+        )?;
+        let context = context.as_ref();
         let context_len = u32::try_from(context.len()).map_err(|_| {
             KmsAeadEncryptionError::create(
                 "INVALID_BEACON_CONTEXT",
@@ -314,7 +308,7 @@ impl<B: AeadBackend> BeaconMac<B> {
         let hmac = match self.algorithm {
             BeaconAlgorithm::HmacSha256 => B::hmac_sha256(key, buffer),
         }
-        .map_err(|_| KmsAeadEncryptionError::create("BEACON", "Unable to compute the beacon"))?;
+        .map_err(|_| KmsAeadEncryptionError::create("BEACON", "Unable to calculate the beacon"))?;
         let kept = usize::from(bits.0.div_ceil(8));
         let mut bytes = Vec::with_capacity(5 + kept);
         bytes.push(Beacon::<T>::VERSION);
@@ -327,7 +321,7 @@ impl<B: AeadBackend> BeaconMac<B> {
         Ok(Beacon {
             key_id,
             bytes,
-            plaintext: PhantomData,
+            marker: PhantomData,
         })
     }
 }
@@ -367,7 +361,7 @@ mod tests {
     fn a_key_of_another_length_is_refused() {
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
 
-        let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256).compute(
+        let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256).beacon(
             KeyId::new(7),
             b"user/email",
             BeaconBits::DEFAULT,

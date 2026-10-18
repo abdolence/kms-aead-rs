@@ -18,7 +18,7 @@ use crate::KmsAeadResult;
 /// use kms_aead::{KmsAeadResult, Plaintext};
 /// use secret_vault_value::SecretValue;
 ///
-/// #[derive(Debug, PartialEq)]
+/// #[derive(Debug, Clone, PartialEq)]
 /// struct Email(String);
 ///
 /// impl Plaintext for Email {
@@ -169,7 +169,7 @@ impl Plaintext for u64 {
 /// serde_json grows its output buffer while it writes, so freed copies of a part of the encoding
 /// can stay in memory after `to_plaintext`.
 #[cfg(feature = "serde-json")]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Json<T>(pub T);
 
 #[cfg(feature = "serde-json")]

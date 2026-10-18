@@ -18,13 +18,13 @@ use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProv
 use kms_aead::{
     AeadAlgorithm, AeadCipher, AwsLc, Encrypted, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
-    ValueStruct,
 };
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
 /// The text each side seals for the other, an application newtype stored as the UTF-8 bytes of
 /// its string, as Tink's side writes and reads it.
+#[derive(Clone)]
 struct Message(String);
 
 impl Plaintext for Message {
@@ -132,8 +132,7 @@ where
     )?;
     let aad = format!("orders/{kms}/{algorithm}");
     let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
-    let value: Encrypted<Message, Envelope> =
-        envelope.encrypt_field(aad.as_bytes(), &message).await?;
+    let value: Encrypted<Message, Envelope> = envelope.encrypt(aad.as_bytes(), &message).await?;
     println!(
         "{}",
         json!({
@@ -141,7 +140,7 @@ where
             "algorithm": algorithm.to_string(),
             "aad": hex::encode(aad),
             "plain_text": hex::encode(&message.0),
-            "value": hex::encode(value.value()),
+            "value": value.to_hex_string(),
         })
     );
     Ok(())
@@ -154,12 +153,13 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
     let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
-    let (dek, encrypted_dek) = cipher.generate_dek(&provider).await?;
+    let (dek, encrypted_dek) = cipher.generate_encrypted_dek(&provider).await?;
     let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
     keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &dek)?;
     let aad = format!("orders/{kms}/{algorithm}");
     let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
-    let value = cipher.encrypt_field(EXPORTED_KEY_ID, aad.as_bytes(), &message, &dek)?;
+    let value: Encrypted<Message, Randomized> =
+        cipher.encrypt(EXPORTED_KEY_ID, aad.as_bytes(), &message, &dek)?;
     println!(
         "{}",
         json!({
@@ -170,7 +170,7 @@ where
             "encrypted_dek": encrypted_dek.to_hex_string(),
             "aad": hex::encode(aad),
             "plain_text": hex::encode(&message.0),
-            "value": hex::encode(value.value()),
+            "value": value.to_hex_string(),
         })
     );
     Ok(())
@@ -193,7 +193,7 @@ where
                 provider,
                 KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
             )?
-            .decrypt_field(&aad, &Encrypted::<Message, Envelope>::try_from(value)?)
+            .decrypt(&aad, &Encrypted::<Message, Envelope>::try_from(value)?)
             .await
         }
         Some(encrypted_dek) => {
@@ -201,8 +201,8 @@ where
             let value = Encrypted::<Message, Randomized>::try_from(value)?;
             let encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(encrypted_dek)?;
             let (decrypted, _) = DekCache::disabled()
-                .with_key(&provider, &encrypted_dek, |dek| {
-                    cipher.decrypt_field(&aad, &value, dek)
+                .with_dek(&provider, &encrypted_dek, |dek| {
+                    cipher.decrypt(&aad, &value, dek)
                 })
                 .await?;
             decrypted

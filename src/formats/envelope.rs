@@ -1,35 +1,13 @@
-use std::fmt::{Debug, Formatter};
-
-use rvstruct::ValueStruct;
-use subtle::ConstantTimeEq;
-
 use crate::errors::{
     KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
 };
-use crate::{CipherText, EncryptedDataEncryptionKey, KmsAeadResult};
+use rvstruct::ValueStruct;
 
-/// A value sealed under a data encryption key (DEK), with the DEK encrypted by a KMS, in Tink's
-/// KMS envelope format, as Tink's `KmsEnvelopeAead` writes and reads it:
-///
-/// ```text
-/// [w: u32 BE][encrypted DEK: w bytes][nonce: 12][ciphertext][tag: 16]
-/// ```
-///
-/// The encrypted DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
-/// DEK as Tink serialises it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink
-/// implementation reads. The rest is the [`CipherText`] of the DEK. The layout records neither the
-/// algorithm nor the KMS key version, so the writer and the reader of a value are configured with
-/// the same algorithm.
-///
-/// [`separate`](Self::separate) reads only this layout. The layouts written by 0.29 and earlier
-/// fail there with [`KmsAeadError::LegacyFormat`], and only
-/// [`KmsAeadEnvelope::decrypt_value`](crate::KmsAeadEnvelope::decrypt_value) reads them, with the
-/// deprecated `legacy-formats` feature. The formats chapter of the book tells the layouts apart.
-#[derive(Clone, ValueStruct)]
-pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
+use crate::formats::{Bare, Envelope};
+use crate::{Encrypted, EncryptedDataEncryptionKey, KmsAeadResult};
 
-/// The layout of a stored [`CipherTextWithEncryptedKey`], by its first bytes, whether or not
-/// this build reads it.
+/// The layout of a stored [`Envelope`] value, by its first bytes, whether or not this build reads
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EnvelopeLayout {
     /// `[w: u32 BE]` with `w` from 1, so the first byte is `0x00` and the first four are not
@@ -66,8 +44,19 @@ impl TryFrom<&[u8]> for EnvelopeLayout {
 /// The most bytes of an encrypted DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
 const MAX_ENCRYPTED_DEK_LEN: u32 = 4096;
 
-impl CipherTextWithEncryptedKey {
-    /// `cipher_text` and the encrypted DEK that opens it in Tink's KMS envelope format, which
+/// Tink's KMS envelope format, as Tink's `KmsEnvelopeAead` writes and reads it:
+///
+/// ```text
+/// [w: u32 BE][encrypted DEK: w bytes][nonce: 12][ciphertext][tag: 16]
+/// ```
+///
+/// The encrypted DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
+/// DEK as Tink serialises it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink
+/// implementation reads. The rest is the [`Bare`] value the DEK opens. The layout records neither
+/// the algorithm nor the KMS key version, so the writer and the reader of a value are configured
+/// with the same algorithm.
+impl<T> Encrypted<T, Envelope> {
+    /// `bare` and the encrypted DEK that opens it in Tink's KMS envelope format, which
     /// [`separate`](Self::separate) reads back.
     ///
     /// # Errors
@@ -75,10 +64,42 @@ impl CipherTextWithEncryptedKey {
     /// `INVALID_CIPHER_TEXT_FORMAT` when the encrypted DEK is empty or longer than 4,096 bytes,
     /// which Tink does not read.
     pub fn join(
-        cipher_text: &CipherText,
+        bare: &Encrypted<T, Bare>,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Self> {
-        let dek_bytes = encrypted_dek.value();
+        let mut bytes = encrypted_dek.envelope_header()?;
+        bytes.extend_from_slice(bare.value());
+        Self::try_from(bytes)
+    }
+
+    /// The bare value and the encrypted DEK of a value in Tink's KMS envelope format.
+    ///
+    /// # Errors
+    ///
+    /// [`KmsAeadError::LegacyFormat`] with [`KmsAeadLegacyFormat::EnvelopeV1`] or
+    /// [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on the envelope layouts of 0.29 and
+    /// earlier, which a value holds only with the deprecated `legacy-formats` feature, and which
+    /// `KmsAeadEnvelope::upgrade_legacy_value` rewrites. A value in Tink's format always
+    /// separates.
+    pub fn separate(&self) -> KmsAeadResult<(Encrypted<T, Bare>, EncryptedDataEncryptionKey)> {
+        let (dek_bytes, bare) = split_envelope(self.value())?;
+        Ok((
+            Encrypted::try_from(bare.to_vec())?,
+            EncryptedDataEncryptionKey::new(dek_bytes.to_vec()),
+        ))
+    }
+}
+
+impl EncryptedDataEncryptionKey {
+    /// `[w: u32 BE][encrypted DEK: w]`, the start of every value in Tink's KMS envelope format
+    /// sealed under this DEK.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_CIPHER_TEXT_FORMAT` when the encrypted DEK is empty or longer than 4,096 bytes,
+    /// which Tink does not read.
+    pub(crate) fn envelope_header(&self) -> KmsAeadResult<Vec<u8>> {
+        let dek_bytes = self.value();
         let encrypted_dek_len = u32::try_from(dek_bytes.len())
             .ok()
             .filter(|len| (1..=MAX_ENCRYPTED_DEK_LEN).contains(len))
@@ -92,54 +113,21 @@ impl CipherTextWithEncryptedKey {
                     ),
                 )
             })?;
-        let mut value = Vec::with_capacity(4 + dek_bytes.len() + cipher_text.value().len());
-        value.extend_from_slice(&encrypted_dek_len.to_be_bytes());
-        value.extend_from_slice(dek_bytes);
-        value.extend_from_slice(cipher_text.value());
-        Ok(Self(value))
-    }
-
-    /// The cipher text and the encrypted DEK of a value in Tink's KMS envelope format.
-    ///
-    /// # Errors
-    ///
-    /// - `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or a first byte that starts no layout;
-    /// - `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length outside 1 to 4,096 bytes or past
-    ///   the end of the value;
-    /// - [`KmsAeadError::LegacyFormat`] with [`KmsAeadLegacyFormat::EnvelopeV1`] on a value
-    ///   starting with `0x01`, and with [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on one
-    ///   starting with four zero bytes, with or without `legacy-formats`.
-    pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        separate_envelope(&self.0)
-    }
-
-    /// The lowercase hex of the value.
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value())
+        let mut header = Vec::with_capacity(4 + dek_bytes.len());
+        header.extend_from_slice(&encrypted_dek_len.to_be_bytes());
+        header.extend_from_slice(dek_bytes);
+        Ok(header)
     }
 }
 
-/// The cipher text and the encrypted DEK of the bytes of a value in Tink's KMS envelope format.
+/// The encrypted DEK and the bare value of `value` in Tink's KMS envelope format, borrowed from
+/// it.
 ///
 /// # Errors
 ///
-/// The errors of [`separate`](CipherTextWithEncryptedKey::separate).
-pub(crate) fn separate_envelope(
-    value: &[u8],
-) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-    let (dek_bytes, cipher_text) = split_envelope(value)?;
-    Ok((
-        CipherText(cipher_text.to_vec()),
-        EncryptedDataEncryptionKey::new(dek_bytes.to_vec()),
-    ))
-}
-
-/// The encrypted DEK and the cipher text of `value` in Tink's KMS envelope format, borrowed
-/// from it.
-///
-/// # Errors
-///
-/// The errors of [`separate`](CipherTextWithEncryptedKey::separate).
+/// `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or a first byte that starts no layout,
+/// `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length outside 1 to 4,096 bytes or past the
+/// end of the value, and [`KmsAeadError::LegacyFormat`] on the layouts of 0.29 and earlier.
 pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
     match EnvelopeLayout::try_from(value)? {
         EnvelopeLayout::Tink => {}
@@ -174,21 +162,6 @@ pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
     rest.split_at_checked(encrypted_dek_len).ok_or_else(invalid)
 }
 
-/// The length only: the value holds the encrypted data encryption key.
-impl Debug for CipherTextWithEncryptedKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CipherTextWithEncryptedKey")
-            .field("len", &self.0.len())
-            .finish()
-    }
-}
-
-impl PartialEq for CipherTextWithEncryptedKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.value().ct_eq(other.value()).into()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;
@@ -198,6 +171,8 @@ mod tests {
 
     const SEALED: &[u8] = b"sealed";
     const ENCRYPTED_DEK: &[u8] = b"wrapped";
+    /// The shortest bare value: a nonce and a tag around an empty plaintext.
+    const BARE: [u8; 28] = [0xAB; 28];
 
     /// Tink 1.16.1 for Python, `KmsEnvelopeAead(AES256_GCM, …)` on a Cloud KMS key: a 116-byte
     /// encrypted DEK and the 21 bytes of `sealed by Tink 1.16.1` with a nonce and a tag.
@@ -205,57 +180,62 @@ mod tests {
 
     #[test]
     fn tink_envelope_is_pinned() -> KmsAeadResult<()> {
-        let cipher_text = CipherText(SEALED.to_vec());
+        let bare = Encrypted::<String, Bare>::try_from(BARE.to_vec())?;
         let encrypted_dek = EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec());
 
-        let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?;
+        let envelope = Encrypted::<String, Envelope>::join(&bare, &encrypted_dek)?;
 
         assert_eq!(
             envelope.to_hex_string(),
-            "00000007777261707065647365616c6564"
+            format!("0000000777726170706564{}", hex::encode(BARE))
         );
-        assert_eq!(envelope.separate()?, (cipher_text, encrypted_dek));
+        let (separated_bare, separated_encrypted_dek) = envelope.separate()?;
+        assert_eq!(separated_bare.value(), bare.value());
+        assert_eq!(separated_encrypted_dek, encrypted_dek);
         Ok(())
     }
 
     #[test]
     fn a_tink_envelope_separates_into_the_encrypted_dek_and_the_payload() -> KmsAeadResult<()> {
-        let envelope = CipherTextWithEncryptedKey::from(hex::decode(TINK_ENVELOPE).unwrap());
+        let envelope =
+            Encrypted::<String, Envelope>::try_from(hex::decode(TINK_ENVELOPE).unwrap())?;
 
-        let (cipher_text, encrypted_dek) = envelope.separate()?;
+        let (bare, encrypted_dek) = envelope.separate()?;
 
         assert_eq!(encrypted_dek.value().len(), 116);
         assert_eq!(&encrypted_dek.value()[..4], [0x0a, 0x25, 0x00, 0x6b]);
-        assert_eq!(cipher_text.value().len(), 12 + 21 + 16);
+        assert_eq!(bare.value().len(), 12 + 21 + 16);
         Ok(())
     }
 
     proptest! {
         #[test]
         fn join_and_separate_round_trip(
-            cipher_text in prop::collection::vec(any::<u8>(), 0..256),
+            bare in prop::collection::vec(any::<u8>(), 28..256),
             dek_bytes in prop::collection::vec(any::<u8>(), 1..=4096),
         ) {
-            let cipher_text = CipherText(cipher_text);
+            let bare = Encrypted::<String, Bare>::try_from(bare).unwrap();
             let encrypted_dek = EncryptedDataEncryptionKey::new(dek_bytes);
 
-            let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).unwrap();
+            let envelope = Encrypted::<String, Envelope>::join(&bare, &encrypted_dek).unwrap();
+            let (separated_bare, separated_encrypted_dek) = envelope.separate().unwrap();
 
-            prop_assert_eq!(envelope.separate().unwrap(), (cipher_text, encrypted_dek));
+            prop_assert_eq!(separated_bare.value(), bare.value());
+            prop_assert_eq!(separated_encrypted_dek, encrypted_dek);
         }
 
         #[test]
         fn separate_returns_on_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..64)) {
-            let _ = CipherTextWithEncryptedKey::from(bytes).separate();
+            let _ = Encrypted::<String, Envelope>::try_from(bytes).and_then(|value| value.separate());
         }
     }
 
     #[test]
-    fn an_encrypted_dek_tink_does_not_read_is_refused_on_write() {
-        let cipher_text = CipherText(SEALED.to_vec());
+    fn an_encrypted_dek_tink_does_not_read_is_refused_on_write() -> KmsAeadResult<()> {
+        let bare = Encrypted::<String, Bare>::try_from(BARE.to_vec())?;
         for (len, accepted) in [(0, false), (1, true), (4096, true), (4097, false)] {
-            let result = CipherTextWithEncryptedKey::join(
-                &cipher_text,
+            let result = Encrypted::<String, Envelope>::join(
+                &bare,
                 &EncryptedDataEncryptionKey::new(vec![0xAA; len]),
             );
             assert_eq!(result.is_ok(), accepted, "{len} bytes: {result:?}");
@@ -267,6 +247,7 @@ mod tests {
                 );
             }
         }
+        Ok(())
     }
 
     #[test]
@@ -278,7 +259,7 @@ mod tests {
             &[0x00, 0x00, 0x10, 0x01, 0xAA],
         ];
         for envelope in envelopes {
-            let result = CipherTextWithEncryptedKey::from(envelope.to_vec()).separate();
+            let result = Encrypted::<String, Envelope>::try_from(envelope.to_vec());
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
@@ -289,14 +270,14 @@ mod tests {
 
     #[test]
     fn a_first_byte_that_starts_no_layout_is_refused() {
-        let empty = CipherTextWithEncryptedKey::from(Vec::new()).separate();
+        let empty = Encrypted::<String, Envelope>::try_from(Vec::new());
         assert!(
             matches!(&empty, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "UNKNOWN_CIPHER_TEXT_LAYOUT"),
             "{empty:?}"
         );
         for first in 0x02..=0xFF {
-            let result = CipherTextWithEncryptedKey::from(vec![first; 64]).separate();
+            let result = Encrypted::<String, Envelope>::try_from(vec![first; 64]);
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "UNKNOWN_CIPHER_TEXT_LAYOUT"),
@@ -305,6 +286,8 @@ mod tests {
         }
     }
 
+    /// Without `legacy-formats` a value in these layouts is refused when it is read, and with it
+    /// the value is read and refused by `separate`.
     #[test]
     fn separate_refuses_the_layouts_of_0_29_and_earlier() {
         let envelopes = [
@@ -318,27 +301,13 @@ mod tests {
             ),
         ];
         for (envelope, format) in envelopes {
-            let result = CipherTextWithEncryptedKey::from(envelope).separate();
+            let result = Encrypted::<String, Envelope>::try_from(envelope)
+                .and_then(|value| value.separate());
             assert!(
                 matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
                 "{format:?}: {result:?}"
             );
         }
-    }
-
-    #[test]
-    fn debug_shows_no_encrypted_dek_bytes() -> KmsAeadResult<()> {
-        let envelope = CipherTextWithEncryptedKey::join(
-            &CipherText(SEALED.to_vec()),
-            &EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
-        )?;
-
-        let debug = format!("{envelope:?}");
-
-        for rendering in renderings(ENCRYPTED_DEK) {
-            assert!(!debug.contains(&rendering), "{debug}");
-        }
-        Ok(())
     }
 
     #[test]
@@ -351,7 +320,7 @@ mod tests {
             vec![PLAIN_TEXT_BYTE, 0x00],
             [&[0x00, 0x00, 0x00, 0x7E][..], SEALED].concat(),
         ]
-        .map(|stored| CipherTextWithEncryptedKey::from(stored).separate());
+        .map(Encrypted::<String, Envelope>::try_from);
         for error in errors {
             let text = format!("{error:?}");
             for stored in [&[PLAIN_TEXT_BYTE][..], SEALED] {
