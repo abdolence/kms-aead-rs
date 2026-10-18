@@ -5,9 +5,22 @@ versions, the migration from envelope values, and what to do when a key leaks.
 
 ## Rotation cadence
 
-`rotate(purpose)` creates a new active version, and the previous one keeps decrypting. Nothing
-is lost while the change propagates: processes on the old record seal under the previous version
-until their record refreshes, and those values decrypt.
+A rotation is staged: `rotate(purpose)` adds a pending version, which every process decrypts under
+once its record refreshes, and `promote(key_id)` makes it active once every process has had time
+to see it, see [Staged rotation](./keyring/lifecycle.md#staged-rotation). The previous version keeps
+decrypting. Nothing is lost while the change propagates: processes on the old record seal under
+the previous version until their record refreshes, and those values decrypt.
+
+The administrative job runs a rotation in steps:
+
+1. `rotate(purpose)`;
+2. export the `Readable` BigQuery keysets again, which then hold the pending version;
+3. wait the longest time any process may run without a successful refresh of its record, counted
+   from `staged_at()`, and check that no process logged "The keyring record could not be
+   revalidated" meanwhile;
+4. `promote(key_id)`.
+
+How often:
 
 - A randomized DEK with random 96-bit nonces is good for about 2^32 values, see
   [Nonces](./security.md#nonces). The library cannot count the values a fleet seals, so estimate
@@ -17,10 +30,12 @@ until their record refreshes, and those values decrypt.
 - a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
   deterministic rotation adds a probe to each equality query until a full sweep re-seals every
   row, see [Queries across rotations](./keyring/deterministic.md#queries-across-rotations), so
-  rotate deterministic versions rarely.
+  rotate deterministic versions rarely;
+- a beacon version likewise, since every beacon rotation adds a probe to each lookup until a
+  re-index, see [Rotating beacon versions](./keyring/beacons.md#rotating-beacon-versions).
 
-After a rotation, export the BigQuery keysets again, since a keyset is a copy of the record at
-the time of the export.
+After a promotion, export the `Single` BigQuery keysets of the new deterministic version, since
+a pending version has none.
 
 Rotation does not touch values already written. To stop reading them under the old version, run a
 [sweep](#sweeps), then `retire` the version.
@@ -46,17 +61,19 @@ Each record of the application keeps a `SealMarker` beside its encrypted fields,
 an index covers:
 
 ```json
-{"format": "keyring", "randomized": 3, "deterministic": null}
+{"format": "keyring", "randomized": 3, "deterministic": null, "beacon": 1073741825}
 ```
 
 - `format` is `keyring` or `envelope`, the layout of the record's encrypted fields;
-- `randomized` and `deterministic` are the oldest key version of each purpose among them.
+- `randomized`, `deterministic` and `beacon` are the oldest key version of each purpose among its
+  values and beacons.
 
 A write that touches any encrypted field of a record re-seals all of them under the active
-versions and writes `SealMarker::keyring` of their key ids. Then one query finds every record a
-sweep still has to visit: after a randomized rotation to key id `n`, the records whose
-`seal.randomized < n`, and likewise for deterministic versions. A key id goes up to 2^32 - 1, so
-a SQL column holding one is a `BIGINT`.
+versions, computes its beacons again, and writes `SealMarker::keyring` of their key ids, which
+`KeyId::try_from(&value)` reads. Then one query finds every record a sweep still has to visit:
+after the promotion of randomized key id `n`, the records whose `seal.randomized < n`, and likewise
+for deterministic and beacon versions. A key id goes up to 2^32 - 1, so a SQL column holding one
+is a `BIGINT`.
 
 ### Running a sweep
 
@@ -70,13 +87,15 @@ use std::sync::Mutex;
 
 use futures_util::stream;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
-use kms_aead_keyring::store::MemoryKeyringStore;
-use kms_aead_keyring::sweep::{self, Outcome};
+use kms_aead::{KmsAeadResult, Ring};
+use kms_aead_keyring::sweep::{self, Outcome, SweepReport};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, KeyringResult, Purpose, SealMarker,
+    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
+    KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Purpose, Randomized, Rotation,
+    SealMarker,
 };
+use secret_vault_value::SecretValue;
 
 const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 const EMAIL: FieldSpec = FieldSpec::new(
@@ -84,9 +103,21 @@ const EMAIL: FieldSpec = FieldSpec::new(
     FieldName::from_static("email"),
 );
 
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
 #[derive(Clone)]
 struct UserRow {
-    email: Encrypted<String>,
+    email: Encrypted<Email, Randomized>,
     seal: SealMarker,
 }
 
@@ -95,7 +126,7 @@ type Table = Mutex<BTreeMap<String, UserRow>>;
 
 /// Re-seals the row of `user` under the active version.
 async fn reseal(
-    keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider>,
+    keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>,
     table: &Table,
     user: &str,
 ) -> KeyringResult<Outcome> {
@@ -103,9 +134,9 @@ async fn reseal(
         return Ok(Outcome::Skipped);
     };
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let decrypted = keyring.decrypt_with_status(&aad, &row.email).await?;
-    let email = keyring.encrypt(&aad, &decrypted.value).await?;
-    let seal = SealMarker::keyring([email.key_id()]);
+    let decrypted: Decrypted<Email> = keyring.decrypt_with_status(&aad, &row.email).await?;
+    let email: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &decrypted.value).await?;
+    let seal = SealMarker::keyring([KeyId::try_from(&email)?]);
     table
         .lock()
         .unwrap()
@@ -116,16 +147,23 @@ async fn reseal(
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-# let keyring = Keyring::open_or_create(MemoryKeyringStore::new(), provider, AeadBackend::Ring,
-#     TENANT, KeyringPolicy::new(), KeyringOptions::new()).await?;
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+#     MemoryKeyringStore::new(), provider, TENANT, KeyringPolicy::new(), KeyringOptions::new(),
+# )
+# .await?;
 # let table = Table::default();
 # for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-#     let email = keyring.encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &email.to_string()).await?;
-#     let seal = SealMarker::keyring([email.key_id()]);
+#     let email = keyring
+#         .encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &Email(email.to_string()))
+#         .await?;
+#     let seal = SealMarker::keyring([KeyId::try_from(&email)?]);
 #     table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
 # }
-let rotation = keyring.rotate(Purpose::Randomized).await?;
+let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
+// After the wait for every process to see the staged version
+let rotation: Rotation = keyring.promote(staged).await?;
 
 // The query: every row whose oldest randomized version is below the new one
 let candidates = table
@@ -134,9 +172,9 @@ let candidates = table
     .iter()
     .filter(|(_, row)| row.seal.randomized < Some(rotation.current))
     .map(|(user, _)| user.clone())
-    .collect::<Vec<_>>();
+    .collect::<Vec<String>>();
 
-let report = sweep::run(
+let report: SweepReport = sweep::run(
     &TENANT,
     stream::iter(candidates),
     NonZeroUsize::new(8).unwrap(),
@@ -207,12 +245,15 @@ five steps:
 5. once that query returns nothing, the read path drops its envelope branch.
 
 The keyring's provider unwraps the envelope values, so they must have been wrapped by the
-keyring's KEK. Values written by kms-aead 0.28.1 or earlier need the `legacy-formats` feature. The
-layout of a value is always the marker's, never guessed from its bytes.
+keyring's KEK. `decrypt_envelope_value` reads Tink's KMS envelope, the layout kms-aead 0.30 writes.
+Values written by kms-aead 0.29 or earlier are upgraded in place first, with
+`KmsAeadEnvelope::upgrade_legacy_value(aad, value)` under kms-aead's `legacy-formats` feature, see
+[Upgrading stored values](./formats.md#upgrading-stored-values). The layout of a value is always
+the marker's, never inferred from its bytes.
 
-`decrypt_envelope_value` refuses, with `EnvelopeKeyOfKeyVersion` and before any KMS call, an
-envelope value that carries the wrapped DEK of one of the keyring's versions: a version's DEK never
-opens through the envelope path, which knows no key version and so no compromised flag.
+`decrypt_envelope_value` unwraps whatever wrapped DEK an envelope value carries, under the
+keyring's KEK. It knows no key version, and so no compromised flag and no destroyed state: keep its
+branch in the read path for the migration only.
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs),
 run it with `cargo run -p kms-aead-keyring --example migrate --features ring`.
@@ -225,9 +266,14 @@ Rehearse each on a staging keyring, on a schedule, and record how long propagati
 
 Or is suspected to have.
 
-1. `mark_compromised(key_id, note)`: the version is flagged and, if active, replaced in one write.
-   When the KMS cannot wrap a new DEK, the flag lands alone and `encrypt` fails with
-   `NoActiveVersion`; run `rotate` once the KMS answers;
+1. `mark_compromised(key_id, note)`: the version is flagged and, if active, replaced in one write
+   by a version that is active at once. The replacement skips the staged wait on purpose: sealing
+   under the leaked key stops at each process's next refresh, and a process that has not seen the
+   replacement yet reloads its record once, rate-limited, when it meets a value under it. When the
+   KMS cannot wrap a new DEK, the flag lands alone and `encrypt` fails with `NoActiveVersion`;
+   once the KMS answers, `rotate` and `promote` at once, since nothing seals under the purpose
+   meanwhile, or `promote` the pending version if the purpose has one. A pending version itself
+   is never compromised: `destroy` it instead;
 2. every process stops using the key within the bound of the
    [record cache](./keyring/record-cache.md#how-late-a-change-is-seen), and its DEK is evicted from
    the DEK cache. With the default `Block` policy values under the version stop decrypting
@@ -254,14 +300,9 @@ hold values the leaked DEK opens. Treat them as exposed and revoke the secrets i
 ### A wrapped DEK or the keyring record leaked
 
 Harmless by itself, since unwrapping needs the KMS. If the attacker may also gain `Decrypt` on the
-KEK, follow the IAM over-grant steps.
-
-Every wrapped DEK is bound at the KMS to `<keyring id>/<key id>`, so a writer of the store who
-copies one into a new version, of this keyring or another, gets a version the KMS refuses to
-unwrap. That holds on every provider that binds: GCP, AWS, Vault Transit and the local KMS. It
-does not hold on Azure Key Vault, nor on any keyring opened with `bind_keys(false)`, where the
-record's integrity rests on the store's access control alone; see
-[Keyring limits](./security.md#keyring-limits).
+KEK, follow the IAM over-grant steps. If the attacker may also write the keyring store, see
+[the next case](#a-version-the-administrative-job-did-not-create) and the store-writer threat in
+[Keyring deployment](./security.md#keyring-deployment).
 
 ### A version the administrative job did not create
 
@@ -271,12 +312,13 @@ show. Either means that something other than the job wrote the record: a restore
 [the previous case](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the
 store.
 
-1. If the version is active, `rotate` its purpose, so that nothing new is sealed under it;
+1. If the version is active, `mark_compromised` it, so that nothing new is sealed under it from
+   each process's next refresh. If it is pending, `destroy` it;
 2. `retire` and then `destroy` the version, after a sweep if values were sealed under it;
 3. check the KMS audit log for the `Encrypt` call that wrapped its DEK. None means its wrapped
-   DEK was copied from another version, which every process on a binding provider refused to
-   unwrap; one from a principal other than the administrative job is an IAM over-grant, see
-   above;
+   DEK was copied or relabelled from another version, of this keyring or of another under the
+   same KEK, which the KMS unwraps as it would the original; one from a principal other than the
+   administrative job is an IAM over-grant, see above;
 4. audit who can write the keyring store: the serving principal has no write, and only the
    administrative job should.
 
@@ -285,8 +327,8 @@ store.
 Running processes keep their cached record and log a `WARN`; new processes fail at `open`.
 
 1. Restore the record from the store's backup: Firestore point-in-time recovery, a PostgreSQL
-   backup, or a noncurrent version of the Cloud Storage object. The wrapped DEKs inside are still
-   valid under the KEK;
+   backup, or a noncurrent version of the Cloud Storage or S3 object. The wrapped DEKs inside are
+   still valid under the KEK;
 2. repeat on the restored record every administrative call made after the copy was taken, from
    the administrative job's log, before starting new processes.
 

@@ -10,120 +10,159 @@ A keyring record holds:
   without escaping. It is an identifier, not a secret, and appears in spans and errors;
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
-- every key version ever created, in creation order.
+- every key version ever created, in creation order, each with its wrapped DEK and its state.
 
-Every store keeps it as the same JSON document. A keyring with a deterministic version, after one
-randomized rotation, with the wrapped DEKs shortened:
+Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
+for the document and the rules every read checks. A record that breaks one fails with
+`RecordInvalid`, naming the rule and never the bytes.
 
-```json
-{
-  "schema": 1,
-  "id": "tenant-42",
-  "kek": { "provider": "local", "key": "tenant-kek" },
-  "algorithms": { "randomized": "aes-256-gcm", "deterministic": "aes-256-siv" },
-  "versions": [
-    {
-      "key_id": 1,
-      "algorithm": "aes-256-gcm",
-      "state": "decrypt_only",
-      "compromised": null,
-      "created_at": "2026-10-18T04:47:14.882949235Z",
-      "state_changed_at": "2026-10-18T04:47:14.883340479Z",
-      "wrapped_dek": "/wEBMQEKdGVuYW50LWtlawAAAAGT/DUOrGI1..."
-    },
-    {
-      "key_id": 2147483649,
-      "algorithm": "aes-256-siv",
-      "state": "active",
-      "compromised": null,
-      "created_at": "2026-10-18T04:47:14.882949235Z",
-      "state_changed_at": "2026-10-18T04:47:14.882949235Z",
-      "wrapped_dek": "/wEBMQEKdGVuYW50LWtlawAAAAEm/upkqN/Z..."
-    },
-    {
-      "key_id": 2,
-      "algorithm": "aes-256-gcm",
-      "state": "active",
-      "compromised": null,
-      "created_at": "2026-10-18T04:47:14.883340479Z",
-      "state_changed_at": "2026-10-18T04:47:14.883340479Z",
-      "wrapped_dek": "/wEBMQEKdGVuYW50LWtlawAAAAFnfb1urGjc..."
-    }
-  ],
-  "created_at": "2026-10-18T04:47:14.882949235Z",
-  "updated_at": "2026-10-18T04:47:14.883340479Z"
-}
-```
+The `kek` field is informational: it catches a keyring opened with the wrong provider, with
+`KekMismatch`, and is no security control, since a writer of the record sets it as freely as any
+other field. What refuses a DEK wrapped under another KEK is the KMS, since every unwrap names the
+configured KEK.
 
-`wrapped_dek` is the standard base64 of the [encrypted key layout v1](../formats.md#encrypted-key-layout-v1),
-so the KEK version travels with each wrapped DEK. The `kek` field is informational: it catches a
-keyring opened with the wrong provider, with `KekMismatch`, and is no security control, since a
-writer of the record sets it as freely as any other field. What refuses a DEK wrapped under
-another KEK is the KMS, since every unwrap names the configured KEK.
-
-A record holds at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version. Every
-read checks the document and its invariants:
-
-- at most one active version per purpose, and never a compromised one;
-- a wrapped DEK on every version but the destroyed ones;
-- unique key ids of their algorithm's purpose, increasing within a purpose.
-
-A record that breaks one fails with `RecordInvalid`, naming the rule and never the bytes.
-
-`Keyring::record()` returns the cached record, to inspect versions and states.
+`Keyring::record()` returns the cached record, to inspect versions and states, such as
+`record.pending(Purpose::Randomized)` for the version a rotation staged.
 
 ## Key ids
 
-Every value carries the key id of the version that sealed it. Bit 31 of the id is the purpose,
-set for deterministic versions, and bits 0 to 30 are the ordinal, from 1, counted per purpose:
+Every value carries the key id of the version that sealed it, and the id names the version's
+purpose: randomized, deterministic or beacon. So a value of one purpose never opens under a
+version of another, and the purpose of a value is known from its bytes, see
+[Keyring key ids](../formats.md#keyring-key-ids). Ids are never reused: a destroyed version keeps
+its id in the record.
 
-- randomized versions are `1`, `2`, `3`, …;
-- deterministic versions are `2147483649`, `2147483650`, ….
-
-So a randomized value never opens under a deterministic version, and the purpose of a value is
-known from its bytes. Ids are never reused: a destroyed version keeps its id in the record.
+`KeyId::try_from(&value)` reads the key id of a stored value.
 
 ## States
 
 ```text
-                     rotate                 retire               destroy
-  (new) ──create──▶ Active ──────▶ DecryptOnly ──────▶ Retired ──────▶ Destroyed
-                      │                 ▲    │            ▲
-                      │ mark_compromised│    └─reinstate──┘
-                      └─────────────────┘
+                       promote                          retire           destroy
+  rotate ──▶ Pending ──────────▶ Active ──▶ DecryptOnly ──────▶ Retired ─────────▶ Destroyed
+                │                   ▲            ▲                 │                   ▲
+                │       create ─────┘            └────reinstate────┘                   │
+                └───────────────────────────────destroy────────────────────────────────┘
 ```
 
+- `Pending`: staged by a rotation. Decrypts, and never encrypts until it is promoted. At most one
+  per purpose;
 - `Active`: encrypts new values and decrypts. At most one per purpose;
-- `DecryptOnly`: decrypts only. Every version a rotation replaced;
+- `DecryptOnly`: decrypts only. Every version a promotion replaced;
 - `Retired`: refused on read with `KeyVersionRetired`. The wrapped DEK stays in the record, so
   `reinstate` can undo it;
 - `Destroyed`: the wrapped DEK is removed from the record, and reads fail with
   `KeyVersionDestroyed`.
 
-Any state past `Active` may also be compromised. The flag is set by `mark_compromised`, with a
-time and an optional note, and never clears. A compromised active version is moved to
-`DecryptOnly` and replaced in the same write.
+A promotion moves the previous active version to `DecryptOnly`, and so does `mark_compromised` on an
+active version. Any state right of `Active` may also be compromised. The flag is set by
+`mark_compromised`, with a time and an optional note, and never clears. `Pending` and `Active` are
+never compromised: a compromised active version moves to `DecryptOnly` in the same write that flags
+it.
+
+`create` starts each purpose with an active version. Every later version starts as pending, except
+the replacement `mark_compromised` adds for an active version, which is active at once.
 
 The calls:
 
 | Call | Does |
 |---|---|
-| `rotate(purpose)` | creates a new active version with the record's algorithm for the purpose; the previous active one becomes `DecryptOnly` |
-| `change_algorithm(algorithm)` | makes `algorithm` the one new versions of its purpose use, and rotates that purpose |
-| `mark_compromised(key_id, note)` | flags the version; for the active version also rotates in the same write |
+| `rotate(purpose)` | stages a pending version with the record's algorithm for the purpose, and returns its key id |
+| `promote(key_id)` | makes the pending version active; the previous active one becomes `DecryptOnly`. Returns a `Rotation` with both ids |
+| `change_algorithm(algorithm)` | makes `algorithm` the one new versions of its purpose use, and stages a version of it as `rotate` does |
+| `mark_compromised(key_id, note)` | flags the version; for the active version also adds an active replacement in the same write |
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
-| `destroy(key_id)` | `Retired` to `Destroyed` |
+| `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
 | `rewrap()` | unwraps and wraps again every DEK in the record, under the KEK's current version; no value changes |
 
-A call that does not apply to the version's state fails with `InvalidTransition`. Each call reads
-the record, applies the change and writes it with a compare-and-swap, reading again after a
-conflict up to `KeyringOptions::cas_retries` times, 5 by default, before `RecordConflict`.
+A call that does not apply to the version's state fails with `InvalidTransition`, which names the
+version, its state and the `Transition`:
 
-`mark_compromised` on the active version needs to wrap a new DEK. When the KMS cannot, in an
-outage or without the encrypt right, the flag is written alone, a `WARN` is logged, and the call
-returns `Ok(None)`: the purpose then has no active version, and `encrypt` fails with
-`NoActiveVersion` until `rotate` succeeds. A compromised flag is never held back by the KMS.
+- `rotate` and `change_algorithm` while the purpose has a pending version fail with
+  `Transition::Rotate`, naming that version. Promote or destroy it first;
+- `retire`, `mark_compromised` and `reinstate` refuse a pending version, which never sealed a
+  value. `destroy` it instead.
+
+Each call reads the record, applies the change and writes it with a compare-and-swap, reading
+again after a conflict up to `KeyringOptions::cas_retries` times,
+`KeyringOptions::DEFAULT_CAS_RETRIES` by default, before `RecordConflict`.
+
+States move forward only: nothing returns to `Pending`, and `Pending` moves only to `Active` or
+`Destroyed`. A running process refuses a record that moves a version backwards, see
+[Record cache](./record-cache.md#when-the-store-fails-or-misbehaves).
+
+## Staged rotation
+
+A rotation is two calls, so that no process meets a value under a version it does not know yet:
+
+1. `rotate(purpose)` stages the version. Every process decrypts under it once its record
+   refreshes, and none encrypts under it;
+2. after a wait, `promote(key_id)` makes it active. Processes seal under it from their next
+   refresh, and every process that reads those values already has the version.
+
+Promote only after the longest time any process may run without a successful refresh of its
+record, counted from `KeyVersion::staged_at()`. For a healthy process that time is at most
+`record_ttl`, `KeyringOptions::DEFAULT_RECORD_TTL` by default. A process whose revalidations fail
+keeps its cached record for as long as they fail, and logs a `WARN` on each failure: "The keyring
+record could not be revalidated; the cached record stays in use". A deployment whose instances can
+take hours to update or to reach the store waits as long. Alert on that `WARN`: an instance that
+logs it is one a promotion can leave behind. The library has no guard that holds a promotion back.
+
+An instance that has not seen the version when it reads a value under it treats the key id as
+unknown and reloads its record once, at most once per `reload_min_interval`. When the store
+answers, the read succeeds after the reload; when it does not, the read fails with
+`KeyVersionUnknown`. The wait before `promote` is what keeps that path rare.
+
+```rust
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::Ring;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    KeyId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose, Rotation,
+};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+    MemoryKeyringStore::new(),
+    provider,
+    KeyringId::from_static("tenant-42"),
+    KeyringPolicy::new(),
+    KeyringOptions::new(),
+)
+.await?;
+
+// The administrative job stages the version
+let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
+let record = keyring.record();
+let pending = record
+    .pending(Purpose::Randomized)
+    .ok_or("no pending version")?;
+assert_eq!(pending.state(), KeyVersionState::Pending);
+
+// Once the wait from `pending.staged_at()` is over, the job promotes it
+let rotation: Rotation = keyring.promote(staged).await?;
+assert_eq!(rotation.current, staged);
+assert_eq!(rotation.previous, Some(KeyId::try_from(1)?));
+# Ok(())
+# }
+```
+
+## Compromised versions
+
+`mark_compromised` on the active version replaces it with a version that is active at once, not
+pending. Sealing under a compromised key has to stop at each process's next refresh, and a wait
+before the replacement takes over would leave the leaked key sealing new values for that long. The
+cost is the one staged rotation avoids: a process that has not seen the replacement yet reloads its
+record once, rate-limited, when it meets a value under it. A pending version of the purpose stays
+pending, to be promoted or destroyed as planned.
+
+The replacement needs a new DEK wrapped. When the KMS cannot wrap it, in an outage or without the
+encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`: the
+purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version is
+promoted. A compromised flag is never held back by the KMS.
 
 `destroy` removes the wrapped DEK from this record only. A backup of the record still holds it,
 and the KMS still unwraps it as long as the KEK version that wrapped it exists, see
@@ -134,8 +173,8 @@ and the KMS still unwraps it as long as the KEK version that wrapped it exists, 
 `KeyringOptions::compromised_reads` decides what `decrypt` does with a value under a compromised
 version:
 
-- `CompromisedReadPolicy::Block`, the default: fails with `KeyVersionCompromised`, decided on the
-  cached record before any unwrap;
+- `CompromisedReadPolicy::Block`, `KeyringOptions::DEFAULT_COMPROMISED_READS`: fails with
+  `KeyVersionCompromised`, decided on the cached record before any unwrap;
 - `CompromisedReadPolicy::Allow`: decrypts, with one `WARN` event per value. Use it for the time
   of a sweep when availability matters more, and be aware the leaked DEK can forge values under
   that id meanwhile.
