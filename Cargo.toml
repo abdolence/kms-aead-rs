@@ -38,7 +38,7 @@ bench = false
 tracing = "0.1"
 secret-vault-value = { version = "1.0.4", features = ["base64"] }
 rvstruct = "0.3.4"
-rsb_derive = "0.5"
+rsb_derive = "0.5.4"
 async-trait = "0.1"
 hex = "0.4"
 ring = { version = "0.17", features = ["default", "std"], optional = true }
