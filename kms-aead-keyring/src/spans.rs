@@ -319,7 +319,7 @@ pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
 
 /// `Keyring decrypt` for an envelope value, which names no key version: `key_id`, `key_state`
 /// and `reload` stay unrecorded.
-pub(crate) fn decrypt_envelope(keyring: &KeyringId) -> Span {
+pub(crate) fn decrypt_envelope_for_migration(keyring: &KeyringId) -> Span {
     debug_span!(
         "Keyring decrypt",
         { FIELD_KEYRING } = keyring.as_str(),

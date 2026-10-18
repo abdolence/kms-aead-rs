@@ -36,7 +36,7 @@
 //! 1. the model gains `seal: SealMarker` with `#[serde(default)]`, or a column default, so that
 //!    every record without one reads as [`SealMarker::ENVELOPE`];
 //! 2. the field keeps its stored bytes, whose layout the marker names;
-//! 3. reads go through the marker: [`Keyring::decrypt_envelope`](crate::Keyring::decrypt_envelope)
+//! 3. reads go through the marker: [`Keyring::decrypt_envelope_for_migration`](crate::Keyring::decrypt_envelope_for_migration)
 //!    opens an envelope value, with the AAD the application used for it, and
 //!    [`Keyring::decrypt`](crate::Keyring::decrypt) a keyring value;
 //! 4. a sweep over `seal.format = 'envelope'` re-seals each record as keyring values and writes
@@ -665,7 +665,7 @@ mod tests {
 
             for value in &values {
                 let opened = keyring
-                    .decrypt_envelope(ENVELOPE_AAD, value, AeadAlgorithm::Aes256Gcm)
+                    .decrypt_envelope_for_migration(ENVELOPE_AAD, value, AeadAlgorithm::Aes256Gcm)
                     .await?;
                 assert_eq!(opened, ALICE);
             }

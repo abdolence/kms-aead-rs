@@ -97,7 +97,7 @@ async fn read_email(
         SealFormat::Envelope => {
             let value = Encrypted::<Email, Envelope>::try_from(row.email)?;
             Ok(keyring
-                .decrypt_envelope(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
+                .decrypt_envelope_for_migration(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
                 .await?)
         }
         SealFormat::Keyring => {
@@ -184,7 +184,7 @@ async fn reseal(
     let (email, from_compromised) = match row.seal.format {
         SealFormat::Envelope => {
             let email: Email = keyring
-                .decrypt_envelope(
+                .decrypt_envelope_for_migration(
                     &envelope_aad(user),
                     &Encrypted::<Email, Envelope>::try_from(row.email)?,
                     ENVELOPE_ALGORITHM,

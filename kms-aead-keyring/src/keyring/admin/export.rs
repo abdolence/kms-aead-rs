@@ -508,7 +508,7 @@ mod tests {
 
         for _ in 0..2 {
             let opened = keyring
-                .decrypt_envelope(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
+                .decrypt_envelope_for_migration(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
                 .await;
             assert!(matches!(
                 opened,

@@ -479,10 +479,12 @@ where
     }
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
-    /// store-less, with the `aad` the application gave it and the `algorithm` of the envelope
-    /// that wrote it: the read of a record whose [`SealMarker`](crate::sweep::SealMarker) says
-    /// [`Envelope`](crate::sweep::SealFormat::Envelope), until a sweep re-seals it. A value stored as hex
-    /// is read with `Encrypted::try_from_hex_string`.
+    /// store-less, so that a sweep can seal it again as a keyring value with `encrypt`; a keyring
+    /// never writes envelope values. The `aad` is the one the application gave it and the
+    /// `algorithm` that of the envelope that wrote it: the read of a record whose
+    /// [`SealMarker`](crate::sweep::SealMarker) says
+    /// [`Envelope`](crate::sweep::SealFormat::Envelope), until a sweep re-seals it. A value stored
+    /// as hex is read with `Encrypted::try_from_hex_string`.
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
@@ -497,13 +499,13 @@ where
     /// provider's error when the key does not decrypt, `INVALID_KEY_FORMAT` when what it decrypts
     /// is not a serialised Tink key, code `DECRYPT` when the value is not authentic under it and
     /// `aad`, and `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
-    pub async fn decrypt_envelope<T: Plaintext>(
+    pub async fn decrypt_envelope_for_migration<T: Plaintext>(
         &self,
         aad: &(impl AsRef<[u8]> + ?Sized),
         value: &Encrypted<T, Envelope>,
         algorithm: AeadAlgorithm,
     ) -> KeyringResult<T> {
-        spans::in_span(spans::decrypt_envelope(self.id()), async {
+        spans::in_span(spans::decrypt_envelope_for_migration(self.id()), async {
             let (bare, encrypted_dek) = value.separate()?;
             let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
