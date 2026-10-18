@@ -69,9 +69,6 @@ azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-fea
 # version azure_core depends on.
 reqwest = { version = "0.13.2", optional = true, default-features = false }
 
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
-
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"

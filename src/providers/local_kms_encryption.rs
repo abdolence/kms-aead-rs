@@ -146,19 +146,18 @@ impl LocalKek {
     }
 
     /// Reads the standard base64 of the 32 bytes from the file at `path`. Trailing whitespace,
-    /// such as an editor's final newline, is allowed.
+    /// such as an editor's final newline, is allowed. A symbolic link is followed.
     ///
-    /// On Unix the file is opened without blocking and the opened file is checked, so it cannot
-    /// be swapped between the check and the read: it must be a regular file, owned by the
-    /// effective user or by root, with no permission for group or others (`mode & 0o077 == 0`),
-    /// as OpenSSH requires of a private key. A symbolic link is followed, and the file it points
-    /// to is checked. On other platforms no type, owner or permission check runs.
+    /// The opened file must be a regular file of at most 256 bytes; both are checked on the
+    /// opened file before it is read, so a file swapped in after the open is never read. No
+    /// permission or ownership check runs: restricting who can read or replace the file is the
+    /// operator's job. Opening a FIFO blocks until a writer opens it.
     ///
     /// # Errors
     ///
-    /// `LOCAL_KEK_FILE_PERMISSIONS` when a check fails, `LOCAL_KEK_SOURCE` when the file cannot
-    /// be read or is not standard base64, and `LOCAL_KEK_LENGTH` when it is larger than 256
-    /// bytes or does not decode to 32 bytes. The error names the path, never the content.
+    /// `LOCAL_KEK_SOURCE` when the file cannot be read, is not a regular file or is not standard
+    /// base64, and `LOCAL_KEK_LENGTH` when it is larger than 256 bytes or does not decode to 32
+    /// bytes. The error names the path, never the content.
     pub fn from_file(version: LocalKekVersion, path: &Path) -> KmsAeadResult<Self> {
         let origin = format!("the file {}", path.display());
         let unreadable = |error: std::io::Error| {
@@ -168,22 +167,14 @@ impl LocalKek {
             )
         };
 
-        // Without `O_NONBLOCK`, opening a FIFO blocks until a writer opens it.
-        #[cfg(unix)]
-        let file = {
-            use rustix::fs::{Mode, OFlags};
-            let flags = OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC;
-            File::from(
-                rustix::fs::open(path, flags, Mode::empty())
-                    .map_err(|errno| unreadable(errno.into()))?,
-            )
-        };
-        #[cfg(not(unix))]
         let file = File::open(path).map_err(unreadable)?;
         let metadata = file.metadata().map_err(unreadable)?;
-        #[cfg(unix)]
-        check_opened_file(&metadata, path, rustix::process::geteuid().as_raw())?;
-
+        if !metadata.is_file() {
+            return Err(KmsAeadSystemError::create(
+                "LOCAL_KEK_SOURCE",
+                &format!("{origin} is not a regular file"),
+            ));
+        }
         let len = usize::try_from(metadata.len())
             .ok()
             .filter(|len| *len <= Self::MAX_FILE_LEN)
@@ -239,35 +230,6 @@ impl LocalKek {
     }
 }
 
-/// Refuses an opened KEK file that is not a regular file, is owned by neither `effective_user`
-/// nor root, or grants any permission to group or others: a file another user owns is a KEK
-/// that user wrote, and one they can write can be replaced by a key they hold.
-#[cfg(unix)]
-fn check_opened_file(
-    metadata: &std::fs::Metadata,
-    path: &Path,
-    effective_user: u32,
-) -> KmsAeadResult<()> {
-    use std::os::unix::fs::MetadataExt;
-
-    let refusal = if !metadata.is_file() {
-        Some("is not a regular file")
-    } else if metadata.uid() != effective_user && metadata.uid() != 0 {
-        Some("is owned by neither the effective user nor root")
-    } else if metadata.mode() & 0o077 != 0 {
-        Some("grants a permission to group or others")
-    } else {
-        None
-    };
-    match refusal {
-        Some(reason) => Err(KmsAeadSystemError::create(
-            "LOCAL_KEK_FILE_PERMISSIONS",
-            &format!("The file {} {reason}", path.display()),
-        )),
-        None => Ok(()),
-    }
-}
-
 impl std::fmt::Debug for LocalKek {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalKek")
@@ -302,7 +264,8 @@ impl std::fmt::Debug for LocalKek {
 /// # Limits
 ///
 /// - No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
-///   operator's job.
+///   operator's job, and so are the permissions and ownership of a KEK file:
+///   [`LocalKek::from_file`] does not check them.
 /// - Every wrap is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is
 ///   safe for about 2^32 wraps. With the per-call envelope every value costs one wrap: a host
 ///   sealing 1,000 values per second spends 2^32 wraps in 50 days. Wrap once per data
@@ -740,10 +703,8 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     mod files {
         use std::fs;
-        use std::os::unix::fs::PermissionsExt;
         use std::path::PathBuf;
 
         use super::*;
@@ -761,10 +722,9 @@ mod tests {
                 Self(path)
             }
 
-            fn file(&self, name: &str, content: &str, mode: u32) -> PathBuf {
+            fn file(&self, name: &str, content: &str) -> PathBuf {
                 let path = self.0.join(name);
                 fs::write(&path, content).unwrap();
-                fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
                 path
             }
         }
@@ -775,14 +735,10 @@ mod tests {
             }
         }
 
-        fn effective_user() -> u32 {
-            rustix::process::geteuid().as_raw()
-        }
-
         #[tokio::test]
         async fn a_kek_file_wraps_and_unwraps() {
             let dir = TestDir::new("round-trip");
-            let path = dir.file("kek", KEK_BASE64, 0o600);
+            let path = dir.file("kek", KEK_BASE64);
             let from_file = LocalKmsProvider::new(
                 kek_id("orders"),
                 vec![LocalKek::from_file(version(1), &path).unwrap()],
@@ -807,28 +763,15 @@ mod tests {
         #[test]
         fn a_trailing_newline_is_accepted() {
             let dir = TestDir::new("newline");
-            let path = dir.file("kek", &format!("{KEK_BASE64}\n"), 0o600);
+            let path = dir.file("kek", &format!("{KEK_BASE64}\n"));
 
             assert!(LocalKek::from_file(version(1), &path).is_ok());
         }
 
         #[test]
-        fn group_or_other_permissions_are_refused() {
-            let dir = TestDir::new("modes");
-            for mode in [0o640, 0o604] {
-                let path = dir.file(&format!("kek-{mode:o}"), KEK_BASE64, mode);
-                assert_eq!(
-                    error_code(LocalKek::from_file(version(1), &path)),
-                    "LOCAL_KEK_FILE_PERMISSIONS",
-                    "{mode:o}"
-                );
-            }
-        }
-
-        #[test]
         fn a_file_that_is_not_base64_is_refused() {
             let dir = TestDir::new("base64");
-            let path = dir.file("kek", "not base64!", 0o600);
+            let path = dir.file("kek", "not base64!");
 
             assert_eq!(
                 error_code(LocalKek::from_file(version(1), &path)),
@@ -839,11 +782,21 @@ mod tests {
         #[test]
         fn a_file_of_another_length_is_refused() {
             let dir = TestDir::new("length");
-            let path = dir.file("kek", "QkJCQg==", 0o600);
+            let path = dir.file("kek", "QkJCQg==");
 
             assert_eq!(
                 error_code(LocalKek::from_file(version(1), &path)),
                 "LOCAL_KEK_LENGTH"
+            );
+        }
+
+        #[test]
+        fn a_directory_is_refused() {
+            let dir = TestDir::new("directory");
+
+            assert_eq!(
+                error_code(LocalKek::from_file(version(1), &dir.0)),
+                "LOCAL_KEK_SOURCE"
             );
         }
 
@@ -861,71 +814,11 @@ mod tests {
         fn a_file_larger_than_the_cap_is_refused() {
             let dir = TestDir::new("large");
             let padded = format!("{KEK_BASE64}{}", " ".repeat(LocalKek::MAX_FILE_LEN));
-            let path = dir.file("kek", &padded, 0o600);
+            let path = dir.file("kek", &padded);
 
             assert_eq!(
                 error_code(LocalKek::from_file(version(1), &path)),
                 "LOCAL_KEK_LENGTH"
-            );
-        }
-
-        /// Opening a FIFO with no writer blocks, so the read runs on its own thread and a
-        /// regression fails on the timeout instead of hanging the suite.
-        #[test]
-        fn a_fifo_is_refused_without_blocking() {
-            let dir = TestDir::new("fifo");
-            let path = dir.0.join("kek");
-            let owner_only = rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR;
-            rustix::fs::mkfifoat(rustix::fs::CWD, &path, owner_only).unwrap();
-
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let fifo = path.clone();
-            std::thread::spawn(move || {
-                let _ = sender.send(error_code(LocalKek::from_file(version(1), &fifo)));
-            });
-
-            assert_eq!(
-                receiver
-                    .recv_timeout(std::time::Duration::from_secs(5))
-                    .expect("from_file blocked on the FIFO"),
-                "LOCAL_KEK_FILE_PERMISSIONS"
-            );
-        }
-
-        #[test]
-        fn a_symlink_to_a_group_readable_file_is_refused() {
-            let dir = TestDir::new("symlink");
-            let target = dir.file("target", KEK_BASE64, 0o640);
-            let link = dir.0.join("kek");
-            std::os::unix::fs::symlink(&target, &link).unwrap();
-
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &link)),
-                "LOCAL_KEK_FILE_PERMISSIONS"
-            );
-        }
-
-        /// The process cannot open a 0600 file another user owns unless it runs as root, so the
-        /// check is given another effective user when the tests do not run as root.
-        #[test]
-        fn a_file_owned_by_another_user_is_refused() {
-            let dir = TestDir::new("owner");
-            let path = dir.file("kek", KEK_BASE64, 0o600);
-            let effective_user = if effective_user() == 0 {
-                std::os::unix::fs::chown(&path, Some(65534), None).unwrap();
-                0
-            } else {
-                effective_user() + 1
-            };
-            let file = File::open(&path).unwrap();
-
-            assert_eq!(
-                error_code(check_opened_file(
-                    &file.metadata().unwrap(),
-                    &path,
-                    effective_user
-                )),
-                "LOCAL_KEK_FILE_PERMISSIONS"
             );
         }
     }
