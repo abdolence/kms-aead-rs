@@ -58,6 +58,15 @@ impl TinkKeyType {
         }
     }
 
+    /// Whether a key of `len` bytes is a key of this type.
+    fn takes_key_len(self, len: usize) -> bool {
+        match self {
+            TinkKeyType::AesGcm | TinkKeyType::AesGcmSiv => matches!(len, 16 | 32),
+            TinkKeyType::ChaCha20Poly1305 => len == 32,
+            TinkKeyType::AesSiv => len == 64,
+        }
+    }
+
     /// The field of `key_value` in the message, from Tink's `aes_gcm.proto`,
     /// `aes_gcm_siv.proto`, `chacha20_poly1305.proto` and `aes_siv.proto`.
     fn key_value_field(self) -> u32 {
@@ -189,7 +198,24 @@ impl TinkKeyset {
 
     /// Adds `key` as the enabled key `key_id` of `key_type`. Tink requires the ids of a keyset
     /// to be unique, and the primary id to name one of its keys.
-    pub fn add_key(&mut self, key_id: u32, key_type: TinkKeyType, key: &DataEncryptionKey) {
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_KEY_LENGTH` when `key` does not have a length of `key_type`: 16 or 32 bytes for
+    /// `AesGcm` and `AesGcmSiv`, 32 for `ChaCha20Poly1305` and 64 for `AesSiv`.
+    pub fn add_key(
+        &mut self,
+        key_id: u32,
+        key_type: TinkKeyType,
+        key: &DataEncryptionKey,
+    ) -> KmsAeadResult<()> {
+        let len = key.value().ref_sensitive_value().len();
+        if !key_type.takes_key_len(len) {
+            return Err(KmsAeadEncryptionError::create(
+                "INVALID_KEY_LENGTH",
+                &format!("A key of {len} bytes is not a {}", key_type.type_url()),
+            ));
+        }
         self.0.key.push(Key {
             key_data: Some(KeyData {
                 type_url: key_type.type_url().to_string(),
@@ -200,6 +226,7 @@ impl TinkKeyset {
             key_id,
             output_prefix_type: TINK,
         });
+        Ok(())
     }
 
     /// The serialized keyset.
@@ -496,7 +523,7 @@ mod tests {
     ];
 
     #[test]
-    fn keysets_are_the_ones_tinkey_writes() {
+    fn keysets_are_the_ones_tinkey_writes() -> KmsAeadResult<()> {
         let mut aes_gcm = TinkKeyset::new(TINKEY_AES_GCM_PRIMARY);
         for (key_id, key) in [
             (TINKEY_AES_GCM_PRIMARY, TINKEY_AES_GCM_PRIMARY_KEY),
@@ -506,14 +533,14 @@ mod tests {
                 key_id,
                 TinkKeyType::from(AeadAlgorithm::Aes256Gcm),
                 &DataEncryptionKey::from(SecretValue::new(key.to_vec())),
-            );
+            )?;
         }
         let mut aes_siv = TinkKeyset::new(TINKEY_AES_SIV);
         aes_siv.add_key(
             TINKEY_AES_SIV,
             TinkKeyType::from(DeterministicAlgorithm::Aes256Siv),
             &DataEncryptionKey::from(SecretValue::new(TINKEY_AES_SIV_KEY.to_vec())),
-        );
+        )?;
 
         assert_eq!(
             *aes_gcm.to_bytes().ref_sensitive_value(),
@@ -523,16 +550,42 @@ mod tests {
             *aes_siv.to_bytes().ref_sensitive_value(),
             TINKEY_AES_SIV_KEYSET
         );
+        Ok(())
     }
 
     #[test]
-    fn keyset_debug_shows_the_key_ids_only() {
+    fn a_key_of_another_length_than_its_type_is_refused() {
+        let cases = [
+            (TinkKeyType::AesGcm, 24),
+            (TinkKeyType::AesGcmSiv, 64),
+            (TinkKeyType::ChaCha20Poly1305, 16),
+            (TinkKeyType::AesSiv, 32),
+        ];
+        for (key_type, len) in cases {
+            let mut keyset = TinkKeyset::new(TINKEY_AES_SIV);
+
+            let result = keyset.add_key(
+                TINKEY_AES_SIV,
+                key_type,
+                &DataEncryptionKey::from(SecretValue::new(vec![0x42; len])),
+            );
+
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "INVALID_KEY_LENGTH"),
+                "{key_type:?}, {len} bytes: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn keyset_debug_shows_the_key_ids_only() -> KmsAeadResult<()> {
         let mut keyset = TinkKeyset::new(TINKEY_AES_SIV);
         keyset.add_key(
             TINKEY_AES_SIV,
             TinkKeyType::AesSiv,
             &DataEncryptionKey::from(SecretValue::new(TINKEY_AES_SIV_KEY.to_vec())),
-        );
+        )?;
 
         let debug = format!("{keyset:?}");
 
@@ -540,5 +593,6 @@ mod tests {
         for rendering in crate::test_provider::renderings(&TINKEY_AES_SIV_KEY) {
             assert!(!debug.contains(&rendering), "{debug}");
         }
+        Ok(())
     }
 }
