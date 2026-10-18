@@ -169,6 +169,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
+rustdoc-args = ["--cfg", "docsrs"]
 features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
 
 [[example]]
