@@ -76,10 +76,14 @@ pub struct KmsAeadEnvelopeOptions {
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
 /// and the first encryption after it has left the cache renews it: past the cache's TTL,
-/// whatever `max_age`, or after [`DekCache::invalidate`] with `envelope.provider().kek()` or
-/// [`DekCache::clear`]. The cache zeroizes the expired DEK at its next call or at
-/// [`DekCache::purge_expired`], so a writer that falls quiet leaves the DEK in memory until then:
-/// a process that can sit idle calls `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
+/// whatever `max_age`, after the cache evicts it for capacity, or after [`DekCache::invalidate`]
+/// with `envelope.provider().kek()` or [`DekCache::clear`]. In a cache shared with readers, size
+/// [`max_entries`](crate::cache::DekCacheOptions::max_entries) above the number of distinct DEKs
+/// read per TTL, or give the writer a cache of its own.
+///
+/// The cache zeroizes the expired DEK at its next call or at [`DekCache::purge_expired`], so a
+/// writer that falls quiet leaves the DEK in memory until then: a process that can sit idle calls
+/// `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
 /// DEK are readable by whoever reads the process's memory in that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]

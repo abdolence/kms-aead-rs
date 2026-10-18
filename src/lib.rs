@@ -62,7 +62,10 @@
 //! to renew it. Its DEK, and the DEKs of the values it reads, live in a
 //! [`cache::DekCache`], which serves each plaintext DEK for a TTL and zeroizes it as it leaves the
 //! cache: at the cache's next call after the TTL, or at
-//! [`purge_expired`](cache::DekCache::purge_expired). The per-call envelope, the default, keeps
+//! [`purge_expired`](cache::DekCache::purge_expired). The writer's DEK also leaves the cache when
+//! the cache evicts it for capacity, so in a cache shared with readers, size
+//! [`max_entries`](cache::DekCacheOptions::max_entries) above the number of distinct DEKs read
+//! per TTL, or give the writer a cache of its own. The per-call envelope, the default, keeps
 //! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
 //! plaintext DEK in request and response buffers that kms-aead cannot zeroize.
 //!
