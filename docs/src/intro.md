@@ -21,7 +21,8 @@ encryption without a KMS:
 - Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
 - Optional KMS-side random generators for GCP and AWS;
 - Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
-  Firestore, PostgreSQL or Cloud Storage, central rotation, and values in Tink's wire format;
+  Firestore, PostgreSQL, Cloud Storage or S3, central staged rotation, beacons, and values in
+  Tink's wire format;
 - Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
   in them;
 - No unsafe code.
@@ -76,7 +77,7 @@ stored value holds:
 | KMS calls on read | one unwrap per value, or per DEK cache miss | one unwrap per DEK per cache TTL | one unwrap per key version per cache TTL |
 | A value carries | its wrapped DEK | its wrapped DEK | a 4-byte key id |
 | Infrastructure | a KMS | a KMS | a KMS and a keyring store |
-| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: rotate, retire, destroy, and a compromised flag every process sees |
+| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
 | Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |
 | BigQuery and Tink readers | no | no | yes, with a Cloud KMS KEK |
 | Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or destroying a keyring's versions |

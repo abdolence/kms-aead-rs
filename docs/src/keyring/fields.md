@@ -2,14 +2,19 @@
 
 ## Encrypted values
 
-`Encrypted<T>` is a keyring value that decrypts to a `T`: the bytes to store, in
-[Tink's wire format](./bigquery.md#wire-format). `key_id()` is the version that sealed it, and
-`as_bytes()` the bytes.
+A keyring value is kms-aead's `Encrypted<T, Randomized>`, re-exported by the keyring: the bytes
+to store, which decrypt to a `T`. `T` is any type that implements `Plaintext`, usually an
+application newtype such as `Email`, so a field names what it holds. Its layout is in
+[Typed fields](../formats.md#typed-fields).
 
-A value read from storage is checked when it is made, with `Encrypted::try_from(bytes)`, by serde
-or by sqlx: bytes that are no keyring value, or a value of the other purpose, fail there with
-`ValueLayout` or `KeyPurposeMismatch`, before any store or KMS call. Its `Debug` shows the key id
-only, and its equality compares the bytes in constant time.
+- `value()` and `into_value()`, of `kms_aead::ValueStruct`, return the bytes;
+- `KeyId::try_from(&value)` returns the version that sealed it;
+- `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
+  when the value is made, and fail on bytes that are no keyring value before any decrypt;
+- `decrypt` checks the key id first, and fails with `ValueLayout` on a reserved id and with
+  `KeyPurposeMismatch` on a deterministic one, before any store or KMS call;
+- `Debug` shows the length only. A randomized value has no `==`: two values of one plaintext
+  differ.
 
 The plaintext types and how they encode, which is fixed so that other readers, such as BigQuery,
 decode them:
@@ -22,6 +27,7 @@ decode them:
 | `i32`, `i64`, `u32`, `u64` | decimal ASCII, which SQL reads with `CAST` |
 | `Json<T>`, feature `serde-json` | the compact JSON of any serde type |
 
+An application type implements `Plaintext` by mapping to one of them, as `Email` maps to `String`.
 The decrypted value belongs to the application. Only `SecretValue` as `T` is zeroized on drop;
 `String` and `Vec<u8>` take over the decrypted buffer without a copy.
 
@@ -32,13 +38,27 @@ serde_json an array of numbers.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead::{KmsAeadResult, Ring};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy,
+    KeyringPolicy, Plaintext, Randomized,
 };
+use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -48,65 +68,93 @@ const EMAIL: FieldSpec = FieldSpec::new(
 #[derive(Serialize, Deserialize)]
 struct User {
     id: String,
-    email: Encrypted<String>,
+    email: Encrypted<Email, Randomized>,
 }
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-# let keyring = Keyring::open_or_create(
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
 #     MemoryKeyringStore::new(),
 #     provider,
-#     AeadBackend::Ring,
 #     KeyringId::from_static("tenant-42"),
 #     KeyringPolicy::new(),
 #     KeyringOptions::new(),
 # )
 # .await?;
 let id = EntityId::try_from("42")?;
+let alice = Email("alice@example.com".to_string());
 let user = User {
     id: "42".to_string(),
-    email: keyring
-        .encrypt(&EMAIL.aad(&id), &"alice@example.com".to_string())
-        .await?,
+    email: keyring.encrypt(&EMAIL.aad(&id), &alice).await?,
 };
-let stored = serde_json::to_vec(&user)?;
+let stored: Vec<u8> = serde_json::to_vec(&user)?;
 
 let read: User = serde_json::from_slice(&stored)?;
-let email = keyring.decrypt(&EMAIL.aad(&id), &read.email).await?;
-assert_eq!(email, "alice@example.com");
+let email: Email = keyring.decrypt(&EMAIL.aad(&id), &read.email).await?;
+assert_eq!(email, alice);
 # Ok(())
 # }
 ```
 
 ### PostgreSQL
 
-With the `postgres` feature `Encrypted` binds and decodes as a `BYTEA`, and a slice of values as a
-`BYTEA[]` for `= ANY($1)`:
+With the `postgres` feature `Encrypted` binds and decodes in tokio-postgres as a `BYTEA`, and a
+slice of values as a `BYTEA[]` for `= ANY($1)`:
 
 ```rust,no_run
-use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring};
-use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead::providers::LocalKmsProvider;
-use sqlx::postgres::PgPool;
+use kms_aead::Ring;
+use kms_aead_keyring::store::PostgresKeyringStore;
+use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring, Randomized};
+use tokio_postgres::{Client, NoTls};
+# use kms_aead::KmsAeadResult;
+# use kms_aead_keyring::Plaintext;
+# use secret_vault_value::SecretValue;
+# struct Email(String);
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> { self.0.to_plaintext() }
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
+
+type TenantKeyring = Keyring<PostgresKeyringStore<NoTls>, LocalKmsProvider<Ring>, Ring>;
+
+async fn store_email(
+    client: &Client,
+    keyring: &TenantKeyring,
+    field: &FieldSpec,
+    id: &str,
+    email: &Email,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let value: Encrypted<Email, Randomized> =
+        keyring.encrypt(&field.aad(&EntityId::try_from(id)?), email).await?;
+    client
+        .execute("UPDATE users SET email = $1 WHERE id = $2", &[&value, &id])
+        .await?;
+    Ok(())
+}
 
 async fn email_of(
-    pool: &PgPool,
-    keyring: &Keyring<PostgresKeyringStore, LocalKmsProvider>,
-    email: &FieldSpec,
+    client: &Client,
+    keyring: &TenantKeyring,
+    field: &FieldSpec,
     id: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let value: Encrypted<String> =
-        sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-            .bind(id)
-            .fetch_one(pool)
-            .await?;
-    Ok(keyring.decrypt(&email.aad(&EntityId::try_from(id)?), &value).await?)
+) -> Result<Email, Box<dyn std::error::Error>> {
+    let row = client
+        .query_one("SELECT email FROM users WHERE id = $1", &[&id])
+        .await?;
+    let value: Encrypted<Email, Randomized> = row.try_get("email")?;
+    Ok(keyring.decrypt(&field.aad(&EntityId::try_from(id)?), &value).await?)
 }
 # fn main() {}
 ```
 
 A column holding a value that is no keyring value fails in the decode, before any decrypt.
+kms-aead's `sqlx` feature binds `Encrypted` in sqlx the same way, see
+[Storing typed fields](../envelope-encryption.md#storing-typed-fields).
 
 ## AAD
 
@@ -139,4 +187,5 @@ Other AADs:
   a field [BigQuery reads](./bigquery.md) cannot use it.
 
 Deterministic fields have an AAD without the entity id, see
-[Deterministic fields](./deterministic.md#aad).
+[Deterministic fields](./deterministic.md#aad), and beacons a context without it, see
+[Beacons](./beacons.md).

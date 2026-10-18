@@ -10,8 +10,8 @@ A deterministic column leaks to anyone who reads it, without any key:
 - **Equality**: which rows hold the same value;
 - **Frequency**: how often each value occurs.
 
-And since there is no nonce, a leaked deterministic DEK lets its holder test guesses against the
-whole column offline.
+And since there is no nonce, a leaked deterministic DEK lets its holder test candidate values
+against the whole column offline.
 
 So deterministic fields fit fields that are queried by equality and have high entropy, such as
 emails and external ids. Do not use them:
@@ -34,11 +34,26 @@ A keyring with deterministic versions names the algorithm in its policy, AES-SIV
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, DeterministicAlgorithm};
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy,
+    Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring,
+    KeyringId, KeyringOptions, KeyringPolicy, Plaintext,
 };
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -47,21 +62,21 @@ const EMAIL: FieldSpec = FieldSpec::new(
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-let keyring = Keyring::open_or_create(
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
     MemoryKeyringStore::new(),
     provider,
-    AeadBackend::Ring,
     KeyringId::from_static("tenant-42"),
     KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
     KeyringOptions::new(),
 )
 .await?;
 
-let aad = EMAIL.deterministic_aad();
-let alice = "alice@example.com".to_string();
-let first = keyring.encrypt_deterministic(&aad, &alice).await?;
-let second = keyring.encrypt_deterministic(&aad, &alice).await?;
+let aad: DeterministicAad = EMAIL.deterministic_aad();
+let alice = Email("alice@example.com".to_string());
+let first: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
+let second: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
 
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
@@ -71,7 +86,8 @@ assert_eq!(keyring.decrypt_deterministic(&aad, &first).await?, alice);
 ```
 
 A deterministic value is an `Encrypted<T, Deterministic>`, a type of its own, so it is never
-handed to `decrypt` by mistake. AES-SIV runs on the RustCrypto `aes-siv` crate whatever the
+handed to `decrypt` by mistake. Unlike a randomized value it has `==` and `Hash`, which compare
+the bytes. AES-SIV runs on the RustCrypto `aes-siv` crate whatever the
 keyring's AEAD backend.
 
 `decrypt_deterministic` applies the [compromised read policy](./lifecycle.md#reading-a-compromised-version),
@@ -97,34 +113,54 @@ So an equality query matches against every version that still decrypts, with
 
 ```rust
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadBackend, DeterministicAlgorithm};
-# use kms_aead_keyring::store::MemoryKeyringStore;
-# use kms_aead_keyring::{EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose};
+# use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+# use kms_aead_keyring::testing::MemoryKeyringStore;
+# use kms_aead_keyring::{
+#     Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId,
+#     Keyring, KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose,
+# };
+# use secret_vault_value::SecretValue;
+# #[derive(Debug, PartialEq)]
+# struct Email(String);
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> { self.0.to_plaintext() }
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
 # const EMAIL: FieldSpec = FieldSpec::new(EntityKind::from_static("user"), FieldName::from_static("email"));
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-# let keyring = Keyring::open_or_create(MemoryKeyringStore::new(), provider, AeadBackend::Ring,
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
+#     MemoryKeyringStore::new(),
+#     provider,
 #     KeyringId::from_static("tenant-42"),
 #     KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
-#     KeyringOptions::new()).await?;
-let aad = EMAIL.deterministic_aad();
-let alice = "alice@example.com".to_string();
-let before = keyring.encrypt_deterministic(&aad, &alice).await?;
+#     KeyringOptions::new(),
+# )
+# .await?;
+let aad: DeterministicAad = EMAIL.deterministic_aad();
+let alice = Email("alice@example.com".to_string());
+let before: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
 
-keyring.rotate(Purpose::Deterministic).await?;
+let staged: KeyId = keyring.rotate(Purpose::Deterministic).await?;
+keyring.promote(staged).await?;
 
 // One probe per version that still decrypts, newest first
-let probes = keyring.equality_probes(&aad, &alice).await?;
+let probes: Vec<Encrypted<Email, Deterministic>> = keyring.equality_probes(&aad, &alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&before));
 # Ok(())
 # }
 ```
 
-`equality_probes` returns one probe per active or decrypt-only deterministic version, compromised
-ones included, so a sweep finds the rows sealed under them. Retired and destroyed versions give no
-probe. The probes go into the query:
+`equality_probes` returns one probe per pending, active or decrypt-only deterministic version,
+compromised ones included, so a query finds the rows sealed under any of them, and a sweep the rows
+sealed under a compromised one. A staged version is probed before its promotion, so a process that
+has not seen the promotion yet finds the values of the processes that have. Retired and destroyed
+versions give no probe. The probes go into the query:
 
 | Store | Query |
 |---|---|
@@ -132,7 +168,7 @@ probe. The probes go into the query:
 | Firestore | an `in` filter on the field, which takes up to 30 values |
 | BigQuery | `IN` over one `DETERMINISTIC_ENCRYPT` per version, each with that version's `Single` keyset, see [Queries](./bigquery.md#queries) |
 
-After a rotation the list has two probes until a sweep re-seals every row and the old version is
+After a promotion the list has two probes until a sweep re-seals every row and the old version is
 retired. That is why deterministic versions are rotated rarely, and every rotation is followed by
 a full sweep, see [Rotation cadence](../operations.md#rotation-cadence).
 

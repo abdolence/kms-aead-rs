@@ -5,17 +5,11 @@ keyring writes, and the keyring reads theirs, given the same keys under the same
 
 ## Wire format
 
-Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id as a
-big-endian `u32`, followed by what the version's algorithm writes:
-
-| Purpose | Layout | Overhead |
-|---|---|---|
-| Randomized, AES-256-GCM | `[0x01][key id: 4][nonce: 12][ciphertext][tag: 16]` | 33 bytes |
-| Deterministic, AES-SIV | `[0x01][key id: 4][synthetic IV: 16][ciphertext]` | 21 bytes |
-
-These are the layouts of Tink's AEAD and deterministic AEAD primitives, and of BigQuery's
-`AEAD.ENCRYPT` and `DETERMINISTIC_ENCRYPT`. A randomized version with another algorithm, such as
-ChaCha20-Poly1305, writes the same prefix before its own body, which only kms-aead reads.
+Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id, followed
+by what the version's algorithm writes, see [Typed fields](../formats.md#typed-fields). These are
+the layouts of Tink's AEAD and deterministic AEAD primitives, and of BigQuery's `AEAD.ENCRYPT` and
+`DETERMINISTIC_ENCRYPT`. A randomized version with another algorithm, such as ChaCha20-Poly1305,
+writes the same prefix before its own body, which only kms-aead reads.
 
 The prefix is not authenticated. A value relabelled with another key id selects another version,
 whose key the body does not open under.
@@ -38,7 +32,8 @@ DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
 
 The [plaintext encodings](./fields.md#encrypted-values) are the ones SQL reads: `String` and
 `Json<T>` with `AEAD.DECRYPT_STRING`, the integers with a `CAST` of it, and `Vec<u8>` with
-`AEAD.DECRYPT_BYTES`.
+`AEAD.DECRYPT_BYTES`. An application type reads as the type it encodes as, such as `Email` as a
+`String`.
 
 ## Fields BigQuery reads
 
@@ -58,13 +53,26 @@ cannot read.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
+use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::errors::{InteropError, InteropRequirement};
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringError, KeyringId,
-    KeyringOptions, KeyringPolicy,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringError,
+    KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Randomized,
 };
+use secret_vault_value::SecretValue;
+
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -75,14 +83,11 @@ const EMAIL: FieldSpec = FieldSpec::new(
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 // A local KEK, which BigQuery cannot unwrap with
-let provider = LocalKmsProvider::ephemeral(
-    LocalKekId::try_from("tenant-kek".to_string())?,
-    AeadBackend::Ring,
-)?;
-let keyring = Keyring::open_or_create(
+let provider =
+    LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
     MemoryKeyringStore::new(),
     provider,
-    AeadBackend::Ring,
     KeyringId::from_static("tenant-42"),
     KeyringPolicy::new(),
     KeyringOptions::new(),
@@ -90,7 +95,8 @@ let keyring = Keyring::open_or_create(
 .await?;
 
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
-let refused = keyring.encrypt(&aad, &"alice@example.com".to_string()).await;
+let alice = Email("alice@example.com".to_string());
+let refused: KeyringResult<Encrypted<Email, Randomized>> = keyring.encrypt(&aad, &alice).await;
 assert!(matches!(
     refused,
     Err(KeyringError::Interop(InteropError {
@@ -114,9 +120,11 @@ keyring whose provider is `GcpKmsProvider`:
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::AeadBackend;
-use kms_aead_keyring::store::MemoryKeyringStore;
-use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose};
+use kms_aead::Ring;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+};
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -126,16 +134,15 @@ let key_ref = GcpKmsKeyRef::new(
     "my-key-ring".to_string(),
     "my-key".to_string(),
 );
-let keyring = Keyring::open(
+let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
     MemoryKeyringStore::new(),
     GcpKmsProvider::new(&key_ref).await?,
-    AeadBackend::Ring,
     KeyringId::try_from("tenant-42".to_string())?,
     KeyringOptions::new(),
 )
 .await?;
 
-let keyset = keyring
+let keyset: WrappedKeyset = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 let chain = format!(
@@ -151,13 +158,18 @@ let chain = format!(
 The selection:
 
 - `KeysetSelection::Readable(purpose)`: every version of the purpose that decrypts and is not
-  compromised, with the active version as the primary. BigQuery opens a value under the key its
-  prefix names, so one keyset reads a column written across rotations. It fails with
-  `NoActiveVersion` when the purpose has none;
+  compromised, the pending one included, with the active version as the primary. BigQuery opens a
+  value under the key its prefix names, so one keyset reads a column written across rotations. It
+  fails with `NoActiveVersion` when the purpose has none;
 - `KeysetSelection::Single(key_id)`: the one version as the primary, also when it is compromised.
   It is the keyset of `DETERMINISTIC_ENCRYPT`, which encrypts under the primary, for the probe of
   one version, and of a read through a compromised version. A retired, destroyed or unknown
-  version fails as a read under it does.
+  version fails as a read under it does, and a pending one with `KeyVersionPending`, since
+  BigQuery would seal under it.
+
+Beacon versions are never exported: a selection of the beacon purpose fails with
+`ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
+[Beacons](./beacons.md#bigquery).
 
 The `WrappedKeyset` it returns:
 
@@ -173,9 +185,12 @@ therefore left out of a `Readable` keyset, even before this process's cached rec
 read is checked as a revalidation is: a stored record that moves a version backwards fails the
 export with `RecordRegressed`, and a missing one with `RecordMissing`.
 
-A keyset is a copy of the record at the time of the export. After a rotation a `Readable` keyset
-does not read the new version's values until it is exported again, and after `mark_compromised`
-the compromised version stays in a keyset exported before it until it is exported again.
+A keyset is a copy of the record at the time of the export. A `Readable` keyset exported while a
+version is pending already holds it, so the order of a rotation is: `rotate`, export the
+`Readable` keysets again, wait, `promote`. Values sealed under the new version then read in
+BigQuery from the first one. After `mark_compromised`, whose replacement is active at once, the
+replacement's values do not read, and the compromised version stays in a keyset exported before
+it, until the keyset is exported again.
 
 ### Queries
 
@@ -199,6 +214,9 @@ WHERE u.email_det IN (
 );
 ```
 
+The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
+no `Single` keyset, and no value is sealed under it before its promotion.
+
 The requirements:
 
 - the keyring's KEK is a Cloud KMS key, and the query runs in the KMS key's location;
@@ -216,11 +234,10 @@ The crate's live test runs the export and the queries against Cloud KMS and BigQ
 
 - a value whose key id is not in the keyset fails to decrypt, and reads as `NULL` under
   `SAFE.AEAD.DECRYPT_STRING`;
-- the keyset is wrapped with no binding, since `KEYS.KEYSET_CHAIN` unwraps with no associated
-  data. The keyset is a Tink keyset, never a key of a version's length, so copied into a record as
-  a version's wrapped DEK it opens nothing: the bound unwrap refuses it at the KMS;
-- the export unwraps each selected version with that version's own binding, through the provider
-  and never through the DEK cache, so the keys stay in the process for the call only. Its span
-  records `dek_cache` as `bypassed`.
+- the keyset is wrapped with no associated data, since `KEYS.KEYSET_CHAIN` unwraps with none. What
+  the KMS unwraps from it is a serialized Tink keyset, which is no serialized Tink key, so copied
+  into a record as a version's wrapped DEK it opens nothing and fails with `INVALID_KEY_FORMAT`;
+- the export unwraps each selected version through the provider and never through the DEK cache,
+  so the keys stay in the process for the call only. Its span records `dek_cache` as `bypassed`.
 
 Cloud KMS wraps at most 64 KiB of plaintext, which a keyset reaches at several hundred versions.

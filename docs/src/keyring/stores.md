@@ -5,13 +5,13 @@ signals changes to it. The library provides:
 
 | Store | Type | Feature | Revision | Push |
 |---|---|---|---|---|
-| Memory | `MemoryKeyringStore` | none | a write counter | every write |
-| Firestore | `FirestoreKeyringStore` | `firestore` | the document's update time | a listener on the document |
-| PostgreSQL | `PostgresKeyringStore` | `postgres` | a `revision` column | `NOTIFY` |
-| Cloud Storage | `GcsKeyringStore` | `gcs` | the object's generation | none |
-| S3 | `S3KeyringStore` | `s3` | the object's ETag | none |
+| Memory | `testing::MemoryKeyringStore` | none | a write counter | every write |
+| Firestore | `store::FirestoreKeyringStore` | `firestore` | the document's update time | a listener on the document |
+| PostgreSQL | `store::PostgresKeyringStore` | `postgres` | a `revision` column | `NOTIFY` |
+| Cloud Storage | `store::GcsKeyringStore` | `gcs` | the object's generation | none |
+| S3 | `store::S3KeyringStore` | `s3` | the object's ETag | none |
 
-Every store keeps the record as the same [JSON document](./lifecycle.md#the-record), and every
+Every store keeps the record as the same [JSON document](../formats.md#keyring-records), and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
 
@@ -22,33 +22,38 @@ history, since values cannot be read without the wrapped DEKs in the record, see
 
 ## Memory
 
-`MemoryKeyringStore` keeps records in the process's memory. It is for tests, examples and a single
-process that creates its keyring at start. `Clone` shares the same records. A record in it is
-gone when the process exits, and so are the values sealed under it.
+`MemoryKeyringStore` loses its records when the process exits, and with them the wrapped DEK of
+every version: a value sealed under a keyring in it, and kept anywhere that outlives the process,
+never decrypts again. Use it for tests, or for values that never outlive the process.
+
+It lives in `kms_aead_keyring::testing` for that reason, and is compiled in every build. `Clone`
+shares the same records. It keeps each record as its JSON document, as the other stores do, and
+signals a watch on every write.
 
 ## Firestore
 
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
-record's JSON. `with_collection` names another collection. A create fails when the document
-exists, and an update carries the update time it read as its precondition.
+record's JSON. `with_collection` names another collection than
+`FirestoreKeyringStore::DEFAULT_COLLECTION`. A create fails when the document exists, and an
+update carries the update time it read as its precondition.
 
 ```rust,no_run
 use firestore::FirestoreDb;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
+use kms_aead::Ring;
 use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions};
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
 let db = FirestoreDb::new("my-project").await?;
 let store = FirestoreKeyringStore::new(db);
 
-let keyring = Keyring::open(
+let keyring = Keyring::<FirestoreKeyringStore, LocalKmsProvider<Ring>, Ring>::open(
     store,
     provider,
-    AeadBackend::Ring,
     KeyringId::try_from("tenant-42".to_string())?,
     KeyringOptions::new(),
 )
@@ -148,9 +153,10 @@ tokio-postgres's `ToSql` and `FromSql` as `BYTEA`, see
 ## Cloud Storage
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through the
-`google.storage.v2` gRPC API. `with_prefix` sets another prefix; one that should read as a folder
-ends with `/`. A write is conditional on the generation the writer read, and a revalidation reads
-the object only when its generation changed.
+`google.storage.v2` gRPC API. `with_prefix` sets another prefix than
+`GcsKeyringStore::DEFAULT_PREFIX`; one that should read as a folder ends with `/`. A write is
+conditional on the generation the writer read, and a revalidation reads the object only when its
+generation changed.
 
 - The serving principal needs `storage.objects.get` on the bucket, and the administrative one also
   `storage.objects.create` and `storage.objects.delete`, since a write replaces the object;
@@ -184,10 +190,10 @@ features from the application, or one of:
 ## S3
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket of Amazon S3 or of an
-S3-compatible server. `with_prefix` sets another prefix; one that should read as a folder ends
-with `/`. A create is conditional on no object existing (`If-None-Match: *`), an update on the
-ETag the writer read (`If-Match`), and a revalidation reads the object only when its ETag changed
-(`If-None-Match` on the read).
+S3-compatible server. `with_prefix` sets another prefix than `S3KeyringStore::DEFAULT_PREFIX`; one
+that should read as a folder ends with `/`. A create is conditional on no object existing
+(`If-None-Match: *`), an update on the ETag the writer read (`If-Match`), and a revalidation reads
+the object only when its ETag changed (`If-None-Match` on the read).
 
 - The serving principal needs `s3:GetObject` on the objects, and the administrative one also
   `s3:PutObject`;
@@ -216,11 +222,30 @@ The client is aws-sdk-s3's, built with the credentials, region, endpoint and HTT
 application chooses. The `s3` feature enables the SDK's default HTTPS client, rustls on
 aws-lc-rs, as kms-aead's AWS KMS provider does.
 
-An S3-compatible server works when it honours both preconditions on writes. Set its endpoint on
-the client, and `force_path_style(true)` when it serves buckets by path, as MinIO does by default:
+### S3-compatible servers
+
+A server is S3-compatible for this store when it passes the store conformance suite,
+[`kms-aead-keyring/tests/store_conformance.rs`](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/tests/store_conformance.rs).
+Its checks include the ones a compare-and-swap needs from the server: it refuses a create over an
+existing object, an update at a stale ETag, and an update of an object that does not exist. A
+server that writes the object in the last case, as some MinIO releases do, recreates a deleted
+record on the next administrative write. To run the suite against a server, with the credentials
+of the environment:
+
+```sh
+KEYRING_S3_ENDPOINT=http://minio:9000 KEYRING_S3_BUCKET=my-keyrings \
+  cargo test -p kms-aead-keyring --features s3 --test store_conformance s3:: -- --ignored
+```
+
+Set the server's endpoint on the client, and `force_path_style(true)` when it serves buckets by
+path, as MinIO does by default. aws-sdk-s3 adds a CRC checksum to every upload by default, which
+some S3-compatible servers do not accept, and every write of the record then fails there.
+`request_checksum_calculation(RequestChecksumCalculation::WhenRequired)` sends a checksum
+only where the operation requires one, which the store's `PutObject` does not:
 
 ```rust,no_run
 use aws_config::BehaviorVersion;
+use aws_sdk_s3::config::RequestChecksumCalculation;
 use kms_aead_keyring::store::{S3BucketName, S3KeyringStore};
 
 # #[tokio::main]
@@ -232,6 +257,7 @@ let config = aws_config::defaults(BehaviorVersion::latest())
 let client = aws_sdk_s3::Client::from_conf(
     aws_sdk_s3::config::Builder::from(&config)
         .force_path_style(true)
+        .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
         .build(),
 );
 let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_string())?);
@@ -239,11 +265,6 @@ let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_
 # Ok(())
 # }
 ```
-
-Be aware that a server must refuse an update whose object does not exist. MinIO
-`RELEASE.2025-07-23T15-54-02Z` writes the object instead, so an update recreates a deleted record
-there. The library's tests run on the `pgsty/minio` build of MinIO
-`RELEASE.2026-08-04T00-00-00Z`, which refuses it as S3 does.
 
 ## Your own store
 
@@ -259,4 +280,6 @@ which returns `None` for a store without push, a `Revision` type and a `KIND`, s
   wrapped DEKs.
 
 `MemoryKeyringStore` is the reference implementation, see
-[its source](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/src/store/memory.rs).
+[its source](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/src/testing.rs),
+and the [conformance suite](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/tests/store_conformance.rs)
+holds the checks every store passes.

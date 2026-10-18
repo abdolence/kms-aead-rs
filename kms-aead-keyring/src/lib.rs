@@ -9,10 +9,12 @@
 //!
 //! # Values
 //!
-//! A value is Tink's TINK-prefixed layout, `[0x01][key id: u32 BE][body]`, where the body is
+//! A value is in Tink's TINK-prefixed layout: the key id of the version that sealed it, then
 //! what kms-aead's cipher of the version's algorithm writes. Under AES-256-GCM, the default of
 //! a new keyring, the bytes are those Tink and BigQuery's `AEAD.DECRYPT_STRING` read. The key id
-//! is not authenticated: a value relabelled with another id opens under no key.
+//! is not authenticated: a value relabelled with another id opens under no key. The bytes of
+//! values, key ids and records are in the
+//! [formats chapter](https://kms-aead-rust.abdolence.dev/formats.html) of the book.
 //!
 //! A value is kms-aead's [`Encrypted<T, Randomized>`](Encrypted), re-exported here, a value that
 //! decrypts to a `T` and is checked when it is read from stored bytes. [`Plaintext`] fixes how
@@ -48,14 +50,29 @@
 //! so a value opens in any row of its kind and field, and a deterministic field never decides
 //! identity or authorization on its own.
 //!
+//! # Beacons
+//!
+//! A beacon, or blind index, is a truncated HMAC-SHA256 of a field's plaintext under a beacon
+//! version, stored beside the field's randomized value so that a data store finds rows by
+//! equality. A keyring whose policy names
+//! [`with_beacon_algorithm`](KeyringPolicy::with_beacon_algorithm) has beacon versions:
+//! [`Keyring::beacon`] computes the beacon of a value under the active one, and
+//! [`Keyring::beacon_probes`] under every version a lookup matches across a rotation. A beacon
+//! column leaks which rows are likely to hold equal values; [`FieldSpec::with_beacon_bits`] sets
+//! how much of the HMAC it keeps, and so how many rows a lookup returns to decrypt and filter.
+//! Normalising a value, such as lowercasing an email, is its `Plaintext` type's.
+//!
 //! # Lifecycle
 //!
-//! A version is `Active`, `DecryptOnly`, `Retired` or `Destroyed`, and any state past `Active`
-//! may be compromised; see [`KeyVersionState`]. [`Keyring::rotate`] creates a new active version
-//! and keeps the old one decrypting. [`Keyring::mark_compromised`] flags a version for good, and
-//! under the default [`CompromisedReadPolicy::Block`] values under it stop decrypting through
-//! [`Keyring::decrypt`]; [`Keyring::decrypt_with_status`] still opens them and reports them as
-//! untrusted.
+//! A version is `Pending`, `Active`, `DecryptOnly`, `Retired` or `Destroyed`, and any state past
+//! `Active` may be compromised; see [`KeyVersionState`]. A rotation is staged:
+//! [`Keyring::rotate`] adds a pending version, which every process decrypts under once its record
+//! refreshes, and [`Keyring::promote`] makes it active, after the longest time any process may
+//! run without a successful refresh; the old version keeps decrypting.
+//! [`Keyring::mark_compromised`] flags a version for good, and replaces an active one with a
+//! version that is active at once. Under the default [`CompromisedReadPolicy::Block`] values
+//! under a compromised version stop decrypting through [`Keyring::decrypt`];
+//! [`Keyring::decrypt_with_status`] still opens them and reports them as untrusted.
 //!
 //! The record's integrity rests on the store's access control. The processes that serve
 //! requests need the KMS's decrypt right and read access to the store; only an administrative

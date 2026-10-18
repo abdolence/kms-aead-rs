@@ -12,10 +12,12 @@ The library provides:
 - values in Tink's wire format, with a 4-byte key id instead of a wrapped key, which Tink and
   BigQuery read too;
 - no KMS call on write, and one unwrap per key version per cache TTL on read;
-- rotation, retirement, destruction and a compromised flag every process sees;
-- keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory;
-- `Encrypted<T>` fields with serde and sqlx support, and an AAD that binds a value to its row;
+- staged rotation, retirement, destruction and a compromised flag every process sees;
+- keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory for tests;
+- `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support
+  (sqlx through kms-aead's `sqlx` feature), and an AAD that binds a value to its row;
 - deterministic fields for equality queries, across rotations;
+- beacons, blind indexes for lookups of randomized fields;
 - sweeps that re-seal stored values, and the migration from kms-aead's envelope values.
 
 Documentation: the [keyring chapters](https://kms-aead-rust.abdolence.dev/keyring.html) of the
@@ -27,20 +29,36 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = "0.30"
+kms-aead = { version = "0.30", features = ["ring"] }
 kms-aead-keyring = { version = "0.30", features = ["ring"] }
+secret-vault-value = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 A keyring on the memory store with a local KEK, which needs no cloud credentials:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead::{KmsAeadResult, Ring};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Purpose,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
+    KeyringOptions, KeyringPolicy, Plaintext, Purpose, Randomized,
 };
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
 
 const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 const EMAIL: FieldSpec = FieldSpec::new(
@@ -50,14 +68,11 @@ const EMAIL: FieldSpec = FieldSpec::new(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = LocalKmsProvider::ephemeral(
-        LocalKekId::try_from("tenant-kek".to_string())?,
-        AeadBackend::Ring,
-    )?;
-    let keyring = Keyring::open_or_create(
+    let provider =
+        LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+    let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
         MemoryKeyringStore::new(),
         provider,
-        AeadBackend::Ring,
         TENANT,
         KeyringPolicy::new(),
         KeyringOptions::new(),
@@ -66,11 +81,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The AAD binds the value to user 42's email
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
-    let value = keyring.encrypt(&aad, &"alice@example.com".to_string()).await?;
+    let alice = Email("alice@example.com".to_string());
+    let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 
-    // The previous version keeps decrypting after a rotation
-    keyring.rotate(Purpose::Randomized).await?;
-    assert_eq!(keyring.decrypt(&aad, &value).await?, "alice@example.com");
+    // A rotation is staged, then promoted; the previous version keeps decrypting
+    let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
+    keyring.promote(staged).await?;
+    assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
     Ok(())
 }
