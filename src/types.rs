@@ -8,34 +8,6 @@ use subtle::ConstantTimeEq;
 use crate::errors::*;
 use crate::KmsAeadResult;
 
-/// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
-/// It holds no key, so it is not a storage form for envelope encryption without the encrypted DEK
-/// that opens it.
-#[derive(Clone, ValueStruct)]
-pub struct CipherText(pub Vec<u8>);
-
-/// The length only.
-impl Debug for CipherText {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CipherText")
-            .field("len", &self.0.len())
-            .finish()
-    }
-}
-
-impl CipherText {
-    /// The lowercase hex of the value.
-    pub fn to_hex_string(&self) -> String {
-        hex::encode(self.value())
-    }
-}
-
-impl PartialEq for CipherText {
-    fn eq(&self, other: &Self) -> bool {
-        self.value().ct_eq(other.value()).into()
-    }
-}
-
 /// A plaintext data encryption key, zeroised on drop and shown as `***` by `Debug`. Equality
 /// compares in constant time.
 ///
@@ -53,19 +25,18 @@ impl DataEncryptionKey {
     }
 }
 
-/// The bytes of `dek`, checked against `algorithm`, whose keys have `key_len` bytes, before any
-/// cipher sees them: a key of another length, such as a 64-byte deterministic key, is never cut
+/// `key`, the bytes of a key, checked against `algorithm`, whose keys have `key_len` bytes, before
+/// any cipher sees them: a key of another length, such as a 64-byte deterministic key, is never cut
 /// or padded to fit.
 ///
 /// # Errors
 ///
-/// `INVALID_KEY_LENGTH` when `dek` has another length.
+/// `INVALID_KEY_LENGTH` when `key` has another length.
 pub(crate) fn checked_key_bytes(
-    dek: &DataEncryptionKey,
+    key: &[u8],
     algorithm: impl Display,
     key_len: usize,
 ) -> KmsAeadResult<&[u8]> {
-    let key = dek.value().ref_sensitive_value();
     if key.len() == key_len {
         Ok(key)
     } else {
@@ -116,19 +87,9 @@ impl EncryptedDataEncryptionKey {
     ///
     /// `INVALID_HEX` when `encoded` is not hex.
     pub fn try_from_hex_string(encoded: &str) -> KmsAeadResult<Self> {
-        hex::decode(encoded).map(Self).map_err(|error| {
-            let reason = match error {
-                // The character may be a byte of a value stored in plain text, so it stays out.
-                hex::FromHexError::InvalidHexCharacter { index, .. } => {
-                    format!("the character at position {index} is not a hex digit")
-                }
-                other => other.to_string(),
-            };
-            KmsAeadEncryptionError::create(
-                "INVALID_HEX",
-                &format!("Encrypted key is not hex: {reason}"),
-            )
-        })
+        hex::decode(encoded)
+            .map(Self)
+            .map_err(|error| KmsAeadEncryptionError::invalid_hex("The encrypted DEK", error))
     }
 }
 
@@ -162,7 +123,6 @@ mod tests {
     use crate::test_provider::renderings;
 
     const ENCRYPTED_DEK: &[u8] = b"zq-key-marker-zq";
-    const CIPHER_TEXT: &[u8] = b"zq-cipher-marker-zq";
 
     #[test]
     fn an_encrypted_key_reads_back_from_hex() -> KmsAeadResult<()> {
@@ -190,17 +150,14 @@ mod tests {
     }
 
     #[test]
-    fn debug_shows_no_encrypted_dek_or_cipher_text_bytes() {
+    fn debug_shows_no_encrypted_dek_bytes() {
         let debug = format!(
-            "{:?} {:?}",
-            EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
-            CipherText(CIPHER_TEXT.to_vec())
+            "{:?}",
+            EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec())
         );
 
-        for stored in [ENCRYPTED_DEK, CIPHER_TEXT] {
-            for rendering in renderings(stored) {
-                assert!(!debug.contains(&rendering), "{debug}");
-            }
+        for rendering in renderings(ENCRYPTED_DEK) {
+            assert!(!debug.contains(&rendering), "{debug}");
         }
     }
 }

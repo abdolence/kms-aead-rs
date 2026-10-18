@@ -40,7 +40,6 @@ impl<'a, T, F: Format> FromSql<'a> for Encrypted<T, F> {
 mod tests {
     use super::*;
     use crate::formats::{Envelope, Randomized};
-    use crate::ValueStruct;
 
     #[test]
     fn bytea_is_read_through_the_layout_check() -> Result<(), Box<dyn Error + Sync + Send>> {

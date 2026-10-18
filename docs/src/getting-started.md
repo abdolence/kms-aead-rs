@@ -123,8 +123,8 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let aad = b"orders/1042";
 let secret = SecretValue::from("4111 1111 1111 1111");
 
-let encrypted = envelope.encrypt_value(aad, &secret).await?;
-let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
+let encrypted = envelope.encrypt(aad, &secret).await?;
+let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 
 assert_eq!(decrypted, secret);
 # Ok(())

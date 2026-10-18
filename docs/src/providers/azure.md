@@ -28,7 +28,7 @@ let provider = AzureKmsProvider::new(&kms_ref, credential)?;
 let envelope = KmsAeadEnvelope::<AzureKmsProvider, AwsLc>::new(provider)?;
 
 let cipher_text = envelope
-    .encrypt_value(b"orders/1042", &SecretValue::from("secret"))
+    .encrypt(b"orders/1042", &SecretValue::from("secret"))
     .await?;
 # let _ = cipher_text;
 # Ok(())

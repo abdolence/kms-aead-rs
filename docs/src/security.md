@@ -41,7 +41,7 @@ random 96-bit nonces, and the library applies the same bound to every algorithm:
 
 - the per-call envelope seals one value per DEK, so the bound does not apply to it;
 - a store-less envelope renews its DEK at `max_uses`, 2^24 by default and at most 2^32;
-- with `encrypt_value_with_dek` and `AeadCipher`, the application counts the values it seals
+- with `encrypt_with_dek` and `AeadCipher`, the application counts the values it seals
   under one key, and moves to a new key before 2^32;
 - the local KMS seals each DEK it encrypts with AES-256-GCM, so a KEK version is good for about 2^32
   encryptions. Add a new version before that.
@@ -54,7 +54,7 @@ Deterministic encryption with AES-SIV takes no random nonce.
 ## Key lifetime and zeroisation
 
 `DataEncryptionKey`, `LocalKek` and the Vault token are zeroised on drop and shown as `***` by
-`Debug`. The DEK cache zeroises a key when its entry leaves the cache and no `with_key` closure
+`Debug`. The DEK cache zeroises a key when its entry leaves the cache and no `with_dek` closure
 holds it.
 
 Some copies are out of the library's reach:

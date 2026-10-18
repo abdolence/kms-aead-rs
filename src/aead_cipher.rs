@@ -1,22 +1,25 @@
 use std::marker::PhantomData;
 
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 use crate::backend::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
-use crate::formats::{tink_output_prefix, Randomized, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey, Encrypted,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, DataEncryptionKey, Encrypted,
     EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
 /// the caller holds, on the backend `B` and with the algorithm it was made with, without a KMS.
 ///
-/// Values are `[nonce][ciphertext][tag]`, with a random nonce. The AAD is authenticated but not
-/// encrypted: a value opens only with the AAD it was sealed with.
+/// Every value is sealed with a random nonce, so that sealing the same input twice gives
+/// different values. [`encrypt`](Self::encrypt) writes it in Tink's layout of a key named by a
+/// [`KeyId`], an [`Encrypted<T, Randomized>`](Encrypted), and
+/// [`encrypt_bare`](Self::encrypt_bare) without the key id, an [`Encrypted<T, Bare>`](Encrypted).
+/// The AAD is authenticated but not encrypted: a value opens only with the AAD it was sealed
+/// with.
 ///
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
 #[derive(Debug, Clone)]
@@ -49,75 +52,39 @@ impl<B: AeadBackend> AeadCipher<B> {
         self.algorithm
     }
 
-    /// A new key of `algorithm().key_len()` bytes from the backend's CSPRNG.
+    /// A new data encryption key of `algorithm().key_len()` bytes from the backend's CSPRNG. It
+    /// makes no KMS call.
     ///
     /// # Errors
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
+    pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
         generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
-    /// A new key and the same key encrypted by `provider`, to store. The key comes from the KMS
-    /// generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is encrypted as Tink encrypts a data encryption key, serialised as the Tink
-    /// key of the algorithm, or raw under an Azure KEK, so it can go into a
-    /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey).
+    /// A new data encryption key and the same key encrypted by `provider`, to store. The key comes
+    /// from the KMS generator when the provider is configured to use one, and from the backend's
+    /// CSPRNG otherwise. It is encrypted as Tink encrypts a data encryption key, serialised as the
+    /// Tink key of the algorithm, or raw under an Azure KEK, so that
+    /// [`Encrypted::join`](crate::Encrypted::join) can store it with the values sealed under it.
     ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
     /// of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub async fn generate_dek<P>(
+    pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        crate::formats::generate_dek::<B, P>(
+        crate::formats::generate_encrypted_dek::<B, P>(
             self.algorithm.into(),
             self.algorithm.key_len(),
             provider,
         )
         .await
-    }
-
-    /// Seals `plain_text` with `dek` and a fresh random nonce, so that sealing the same input
-    /// twice gives different cipher texts.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_KEY_LENGTH` when the key does not have the length of the algorithm,
-    /// `RANDOM_GENERATOR` when the random nonce cannot be generated, and `ENCRYPT_KEY` or
-    /// `ENCRYPT` when the backend refuses the key or fails to seal.
-    pub fn encrypt_value(
-        &self,
-        aad: &[u8],
-        plain_text: &SecretValue,
-        dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<CipherText> {
-        self.seal(&[], aad, plain_text.ref_sensitive_value(), dek)
-            .map(CipherText)
-    }
-
-    /// Opens a value [`encrypt_value`](Self::encrypt_value) sealed with the same key and AAD,
-    /// into a buffer the returned `SecretValue` owns, so that no other copy of the plaintext
-    /// exists.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_KEY_LENGTH` when the key does not have the length of the algorithm,
-    /// `INVALID_CIPHER_TEXT_FORMAT` when the value is shorter than a nonce and a tag,
-    /// `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
-    /// authentic under the key, the nonce and the AAD.
-    pub fn decrypt_value(
-        &self,
-        aad: &[u8],
-        cipher_text: &CipherText,
-        dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<SecretValue> {
-        self.open(aad, cipher_text.value(), 0, dek)
     }
 
     /// `value`, as [`Plaintext`] encodes it, sealed under `dek` with a fresh random nonce, in
@@ -133,52 +100,109 @@ impl<B: AeadBackend> AeadCipher<B> {
     ///
     /// # Errors
     ///
-    /// The errors of [`encrypt_value`](Self::encrypt_value), and `INVALID_PLAINTEXT` when
-    /// `value` does not encode.
-    pub fn encrypt_field<T: Plaintext>(
+    /// `INVALID_PLAINTEXT` when `value` does not encode, `INVALID_KEY_LENGTH` when the key does
+    /// not have the length of the algorithm, `RANDOM_GENERATOR` when the random nonce cannot be
+    /// generated, and `ENCRYPT_KEY` or `ENCRYPT` when the backend refuses the key or fails to seal.
+    pub fn encrypt<T: Plaintext>(
         &self,
         key_id: KeyId,
-        aad: &[u8],
+        aad: &(impl AsRef<[u8]> + ?Sized),
         value: &T,
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Encrypted<T, Randomized>> {
         let plain_text = value.to_plaintext()?;
         let sealed = self.seal(
             &tink_output_prefix(key_id),
-            aad,
+            aad.as_ref(),
             plain_text.ref_sensitive_value(),
-            dek,
+            dek.value().ref_sensitive_value(),
         )?;
         Encrypted::try_from(sealed)
     }
 
-    /// Opens `value`, sealed under `dek` and `aad` by [`encrypt_field`](Self::encrypt_field) or
-    /// by Tink, and decodes the plaintext as a `T`. The caller picks `dek` by
+    /// Opens `value`, sealed under `dek` and `aad` by [`encrypt`](Self::encrypt) or by Tink, and
+    /// decodes the plaintext as a `T`. The caller picks `dek` by
     /// [`value.key_id()`](Encrypted::key_id).
     ///
     /// # Errors
     ///
-    /// The errors of [`decrypt_value`](Self::decrypt_value), and `INVALID_PLAINTEXT` when the
-    /// plaintext is not an encoding of `T`.
-    pub fn decrypt_field<T: Plaintext>(
+    /// `INVALID_KEY_LENGTH` when the key does not have the length of the algorithm, `DECRYPT_KEY`
+    /// when the backend refuses the key, `DECRYPT` when the value is not authentic under the key,
+    /// the nonce and the AAD, and `INVALID_PLAINTEXT` when the plaintext is not an encoding of
+    /// `T`.
+    pub fn decrypt<T: Plaintext>(
         &self,
-        aad: &[u8],
+        aad: &(impl AsRef<[u8]> + ?Sized),
         value: &Encrypted<T, Randomized>,
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<T> {
-        T::from_plaintext(self.open(aad, value.value(), TINK_OUTPUT_PREFIX_LEN, dek)?)
+        T::from_plaintext(self.open(
+            aad.as_ref(),
+            value.value(),
+            TINK_OUTPUT_PREFIX_LEN,
+            dek.value().ref_sensitive_value(),
+        )?)
     }
 
-    /// `prefix`, then `plain_text` sealed with `dek` and a fresh random nonce:
+    /// `value`, as [`Plaintext`] encodes it, sealed under `dek` with a fresh random nonce, with no
+    /// framing: `[nonce: 12][ciphertext][tag: 16]`, Tink's output under a key with the output
+    /// prefix RAW.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`encrypt`](Self::encrypt).
+    pub fn encrypt_bare<T: Plaintext>(
+        &self,
+        aad: &(impl AsRef<[u8]> + ?Sized),
+        value: &T,
+        dek: &DataEncryptionKey,
+    ) -> KmsAeadResult<Encrypted<T, Bare>> {
+        let plain_text = value.to_plaintext()?;
+        let sealed = self.seal(
+            &[],
+            aad.as_ref(),
+            plain_text.ref_sensitive_value(),
+            dek.value().ref_sensitive_value(),
+        )?;
+        Encrypted::try_from(sealed)
+    }
+
+    /// Opens `value`, sealed under `dek` and `aad` by [`encrypt_bare`](Self::encrypt_bare), and
+    /// decodes the plaintext as a `T`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`decrypt`](Self::decrypt).
+    pub fn decrypt_bare<T: Plaintext>(
+        &self,
+        aad: &(impl AsRef<[u8]> + ?Sized),
+        value: &Encrypted<T, Bare>,
+        dek: &DataEncryptionKey,
+    ) -> KmsAeadResult<T> {
+        T::from_plaintext(self.open(
+            aad.as_ref(),
+            value.value(),
+            0,
+            dek.value().ref_sensitive_value(),
+        )?)
+    }
+
+    /// `prefix`, then `plain_text` sealed under `key` with a fresh random nonce:
     /// `[prefix][nonce][ciphertext][tag]`.
-    fn seal(
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
+    /// `RANDOM_GENERATOR` when the random nonce cannot be generated, and `ENCRYPT_KEY` or
+    /// `ENCRYPT` when the backend refuses the key or fails to seal.
+    pub(crate) fn seal(
         &self,
         prefix: &[u8],
         aad: &[u8],
         plain_text: &[u8],
-        dek: &DataEncryptionKey,
+        key: &[u8],
     ) -> KmsAeadResult<Vec<u8>> {
-        let key = checked_key_bytes(dek, self.algorithm, self.algorithm.key_len())?;
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
 
         let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
         B::fill_random(&mut nonce).map_err(|_| {
@@ -213,15 +237,23 @@ impl<B: AeadBackend> AeadCipher<B> {
         Ok(std::mem::take(value))
     }
 
-    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value`.
-    fn open(
+    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value` under
+    /// `key`, into a buffer the returned `SecretValue` owns.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
+    /// `INVALID_CIPHER_TEXT_FORMAT` when the bytes after the prefix are shorter than a nonce and a
+    /// tag, `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
+    /// authentic under the key, the nonce and the AAD.
+    pub(crate) fn open(
         &self,
         aad: &[u8],
         value: &[u8],
         prefix_len: usize,
-        dek: &DataEncryptionKey,
+        key: &[u8],
     ) -> KmsAeadResult<SecretValue> {
-        let key = checked_key_bytes(dek, self.algorithm, self.algorithm.key_len())?;
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
         let (nonce, sealed) = value
             .get(prefix_len..)
             .and_then(|after_prefix| {
@@ -287,19 +319,17 @@ mod tests {
     #[test]
     fn a_field_is_the_key_id_prefix_and_the_aead_cipher_output() -> KmsAeadResult<()> {
         let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
-        let dek = cipher.generate_key()?;
+        let dek = cipher.generate_dek()?;
 
-        let field = cipher.encrypt_field(KEY_ID, EMAIL_AAD, &ALICE.to_string(), &dek)?;
+        let field = cipher.encrypt(KEY_ID, EMAIL_AAD, &ALICE.to_string(), &dek)?;
 
         let bytes = field.value();
         assert_eq!(bytes[..5], [0x01, 0x00, 0x00, 0x00, 0x07]);
         assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
         assert_eq!(field.key_id(), KEY_ID);
-        assert_eq!(
-            cipher.decrypt_value(EMAIL_AAD, &CipherText(bytes[5..].to_vec()), &dek)?,
-            SecretValue::from(ALICE)
-        );
-        assert_eq!(cipher.decrypt_field(EMAIL_AAD, &field, &dek)?, ALICE);
+        let bare = Encrypted::<String, Bare>::try_from(bytes[5..].to_vec())?;
+        assert_eq!(cipher.decrypt_bare(EMAIL_AAD, &bare, &dek)?, ALICE);
+        assert_eq!(cipher.decrypt(EMAIL_AAD, &field, &dek)?, ALICE);
         Ok(())
     }
 
@@ -311,18 +341,18 @@ mod tests {
         let value = Encrypted::<String, Randomized>::try_from(TINK_VALUE.to_vec())?;
 
         assert_eq!(value.key_id(), KEY_ID);
-        assert_eq!(cipher.decrypt_field(EMAIL_AAD, &value, &dek)?, ALICE);
+        assert_eq!(cipher.decrypt(EMAIL_AAD, &value, &dek)?, ALICE);
         Ok(())
     }
 
     #[test]
     fn a_plaintext_that_is_no_encoding_of_the_type_is_refused() -> KmsAeadResult<()> {
         let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
-        let dek = cipher.generate_key()?;
-        let field = cipher.encrypt_field(KEY_ID, EMAIL_AAD, &vec![0xFF_u8], &dek)?;
+        let dek = cipher.generate_dek()?;
+        let field = cipher.encrypt(KEY_ID, EMAIL_AAD, &vec![0xFF_u8], &dek)?;
 
         let as_string = Encrypted::<String, Randomized>::try_from(field.into_value())?;
-        let result = cipher.decrypt_field(EMAIL_AAD, &as_string, &dek);
+        let result = cipher.decrypt(EMAIL_AAD, &as_string, &dek);
 
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(error))

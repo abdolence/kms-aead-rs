@@ -1,9 +1,8 @@
 //! Every byte layout of kms-aead, Tink's among them. The formats chapter of the book describes
 //! each of them.
 //!
-//! kms-aead writes one envelope format for every provider, Tink's KMS envelope,
-//! [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey). Every data encryption key it
-//! encrypts, in an envelope or on its own, is the KMS ciphertext of the key as Tink serialises it,
+//! kms-aead writes one envelope format for every provider, Tink's KMS envelope, [`Envelope`]. Every
+//! data encryption key it encrypts, in an envelope or on its own, is the KMS ciphertext of the key as Tink serialises it,
 //! except under an Azure KEK: Azure has no Tink client, so its encrypted DEK is the raw key.
 //!
 //! The encrypted DEKs of two built-in providers are kms-aead's own layouts, crate-private and
@@ -16,8 +15,8 @@
 //! ```
 //!
 //! The public items here are the [`Format`] of an [`Encrypted`](crate::Encrypted) value,
-//! [`Envelope`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the last two
-//! are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery read them
+//! [`Envelope`], [`Bare`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the
+//! last two are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery read them
 //! with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
@@ -29,7 +28,7 @@ use crate::{
 pub(crate) mod envelope;
 
 mod field;
-pub use field::{Deterministic, Envelope, Format, Randomized};
+pub use field::{Bare, Deterministic, Envelope, Format, Randomized};
 
 mod tink;
 pub(crate) use tink::{
@@ -82,7 +81,7 @@ where
 ///
 /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material of
 /// another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-pub(crate) async fn generate_dek<B, P>(
+pub(crate) async fn generate_encrypted_dek<B, P>(
     key_type: TinkKeyType,
     key_len: usize,
     provider: &P,

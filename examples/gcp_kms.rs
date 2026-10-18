@@ -31,11 +31,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let secret_value = SecretValue::from("test-secret");
     let test_aad = b"test-aad";
 
-    let cipher_text = encryption.encrypt_value(test_aad, &secret_value).await?;
+    let cipher_text: Encrypted<SecretValue, formats::Envelope> =
+        encryption.encrypt(test_aad, &secret_value).await?;
 
     println!("Encrypted to {:?}", cipher_text.to_hex_string());
 
-    let secret_value = encryption.decrypt_value(test_aad, &cipher_text).await?;
+    let secret_value: SecretValue = encryption.decrypt(test_aad, &cipher_text).await?;
 
     println!(
         "We have our secret back: {}",

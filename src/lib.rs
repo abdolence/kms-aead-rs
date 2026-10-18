@@ -69,18 +69,21 @@
 //! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
 //! plaintext DEK in request and response buffers that kms-aead cannot zeroise.
 //!
-//! # Typed fields
+//! # Cipher texts
 //!
-//! [`KmsAeadEnvelope::encrypt_field`] encrypts a value of a [`Plaintext`] type, such as an
-//! application newtype, into an [`Encrypted<T, Envelope>`](Encrypted), the bytes to store, and
-//! [`KmsAeadEnvelope::decrypt_field`] reads it back as a `T`. Stored bytes become an `Encrypted`
-//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its
-//! [`Format`](formats::Format). The `serde` feature reads and writes it, and the `postgres` and
-//! `sqlx` features store it in a PostgreSQL `BYTEA` column.
+//! Every call that encrypts returns an [`Encrypted<T, F>`](Encrypted), the bytes to store: `T` is
+//! the [`Plaintext`] type the value decrypts to, such as an application newtype or
+//! `SecretValue`, and `F` the [`Format`](formats::Format), its byte layout.
+//! [`KmsAeadEnvelope::encrypt`] writes an `Encrypted<T, Envelope>`, Tink's KMS envelope, and
+//! [`KmsAeadEnvelope::decrypt`] reads it back as a `T`. Stored bytes become an `Encrypted`
+//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its format. The `serde`
+//! feature reads and writes it, and the `postgres` and `sqlx` features store it in a PostgreSQL
+//! `BYTEA` column.
 //!
-//! [`AeadCipher::encrypt_field`] and `DeterministicCipher::encrypt_field` seal a field under a key
-//! the caller holds, in Tink's layout of a key named by a [`KeyId`], so that Tink and BigQuery
-//! read it with a keyset of that key.
+//! [`AeadCipher::encrypt`] and `DeterministicCipher::encrypt` seal a value under a key the caller
+//! holds, in Tink's layout of a key named by a [`KeyId`], so that Tink and BigQuery read it with a
+//! keyset of that key. [`AeadCipher::encrypt_bare`] seals it with no framing, as an
+//! `Encrypted<T, Bare>`.
 //!
 //! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
 //! the column: a truncated HMAC-SHA256 of the value under a beacon key, which
@@ -107,8 +110,9 @@
 //! ```rust,no_run
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::formats::Envelope;
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::{KmsAeadEnvelope, Ring};
+//! use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
 //! use secret_vault_value::SecretValue;
 //!
 //! let kms_ref = AwsKmsKeyRef::new(
@@ -121,8 +125,9 @@
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
 //!
-//! let cipher_text = encryption.encrypt_value(aad, &secret_value).await?;
-//! let decrypted = encryption.decrypt_value(aad, &cipher_text).await?;
+//! let cipher_text: Encrypted<SecretValue, Envelope> =
+//!     encryption.encrypt(aad, &secret_value).await?;
+//! let decrypted: SecretValue = encryption.decrypt(aad, &cipher_text).await?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -134,17 +139,20 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, Ring, ValueStruct};
+//! use kms_aead::formats::Bare;
+//! use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
-//! let dek = cipher.generate_key()?;
+//! let dek = cipher.generate_dek()?;
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
 //!
-//! let cipher_text = cipher.encrypt_value(aad, &secret_value, &dek)?;
-//! let stored: &[u8] = cipher_text.value();
-//! let decrypted = cipher.decrypt_value(aad, &CipherText(stored.to_vec()), &dek)?;
+//! let cipher_text: Encrypted<SecretValue, Bare> =
+//!     cipher.encrypt_bare(aad, &secret_value, &dek)?;
+//! let stored: Vec<u8> = cipher_text.into_value();
+//! let read_back = Encrypted::<SecretValue, Bare>::try_from(stored)?;
+//! let decrypted: SecretValue = cipher.decrypt_bare(aad, &read_back, &dek)?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -265,7 +273,6 @@ pub use encrypted::Encrypted;
 pub mod errors;
 
 pub mod formats;
-pub use formats::envelope::CipherTextWithEncryptedKey;
 
 mod key_id;
 pub use key_id::KeyId;
@@ -281,9 +288,8 @@ mod spans;
 mod types;
 pub use types::*;
 
-/// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
-/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`], `DeterministicCipherText`
-/// and [`Encrypted`].
+/// The trait whose `value()` and `into_value()` read the bytes of an
+/// [`EncryptedDataEncryptionKey`].
 pub use rvstruct::ValueStruct;
 
 pub mod providers;

@@ -13,7 +13,7 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, DataEncryptionKey,
     EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
@@ -262,7 +262,8 @@ impl std::fmt::Debug for LocalKek {
 pub struct LocalKmsProvider<B> {
     /// Its key is the KEK id, which every encrypted DEK records.
     kek: KekRef,
-    keks: BTreeMap<LocalKekVersion, DataEncryptionKey>,
+    /// The material of each KEK version.
+    keks: BTreeMap<LocalKekVersion, SecretValue>,
     cipher: AeadCipher<B>,
 }
 
@@ -278,10 +279,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
         let mut sources = Vec::with_capacity(keks.len());
         let mut by_version = BTreeMap::new();
         for kek in keks {
-            if by_version
-                .insert(kek.version, DataEncryptionKey::from(kek.material))
-                .is_some()
-            {
+            if by_version.insert(kek.version, kek.material).is_some() {
                 return Err(KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
                     &format!("The local KEK {id} lists version {} twice", kek.version),
@@ -339,18 +337,23 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let (&version, kek) = self.keks.last_key_value().ok_or_else(|| {
+            let (&version, material) = self.keks.last_key_value().ok_or_else(|| {
                 KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
                     &format!("The local KEK {} has no version", self.kek.key()),
                 )
             })?;
             kms::record_key_version(&version.to_string());
-            let mut encrypted_dek = LocalEncryptedDek::header(self.kek.key(), version)?;
-            let sealed =
-                kms::timed(async { self.cipher.encrypt_value(&encrypted_dek, dek.value(), kek) })
-                    .await?;
-            encrypted_dek.extend_from_slice(sealed.value());
+            let header = LocalEncryptedDek::header(self.kek.key(), version)?;
+            let encrypted_dek = kms::timed(async {
+                self.cipher.seal(
+                    &header,
+                    &header,
+                    dek.value().ref_sensitive_value(),
+                    material.ref_sensitive_value(),
+                )
+            })
+            .await?;
             Ok(EncryptedDataEncryptionKey::new(encrypted_dek))
         })
         .await
@@ -378,15 +381,21 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             }
             let version = layout.kek_version;
             kms::record_key_version(&version.to_string());
-            let kek = self.keks.get(&version).ok_or_else(|| {
+            let material = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let sealed = CipherText::from(layout.sealed.to_vec());
-            let key = kms::timed(async { self.cipher.decrypt_value(layout.header, &sealed, kek) })
-                .await?;
+            let key = kms::timed(async {
+                self.cipher.open(
+                    layout.header,
+                    layout.sealed,
+                    0,
+                    material.ref_sensitive_value(),
+                )
+            })
+            .await?;
             Ok(DataEncryptionKey::from(key))
         })
         .await
@@ -397,7 +406,9 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
 #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 mod tests {
     use super::*;
+    use crate::formats::Bare;
     use crate::test_provider::{renderings, TestBackend};
+    use crate::Encrypted;
 
     const ORDERS: &str = "orders";
     const KEK_MATERIAL: [u8; 32] = [0x42; 32];
@@ -442,11 +453,12 @@ mod tests {
         let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
 
         let (header, sealed) = encrypted_dek.value().split_at(2 + ORDERS.len() + 4);
-        let opened = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?.decrypt_value(
-            header,
-            &CipherText::from(sealed.to_vec()),
-            &DataEncryptionKey::from(SecretValue::new(KEK_MATERIAL.to_vec())),
-        )?;
+        let opened: SecretValue = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
+            .decrypt_bare(
+                header,
+                &Encrypted::<SecretValue, Bare>::try_from(sealed.to_vec())?,
+                &DataEncryptionKey::from(SecretValue::new(KEK_MATERIAL.to_vec())),
+            )?;
         assert_eq!(DataEncryptionKey::from(opened), dek);
         Ok(())
     }

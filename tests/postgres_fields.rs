@@ -13,7 +13,7 @@ use std::error::Error;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring, ValueStruct};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring};
 use secret_vault_value::SecretValue;
 use sqlx::{Connection, PgConnection, Row};
 
@@ -49,17 +49,13 @@ async fn sealed_emails() -> TestResult<(LocalEnvelope, Vec<Encrypted<Email, Enve
     let envelope = LocalEnvelope::new(provider)?;
     let mut sealed = Vec::new();
     for email in EMAILS {
-        sealed.push(
-            envelope
-                .encrypt_field(AAD, &Email(email.to_string()))
-                .await?,
-        );
+        sealed.push(envelope.encrypt(AAD, &Email(email.to_string())).await?);
     }
     Ok((envelope, sealed))
 }
 
 fn stored_bytes(values: &[Encrypted<Email, Envelope>]) -> BTreeSet<Vec<u8>> {
-    values.iter().map(|value| value.value().clone()).collect()
+    values.iter().map(|value| value.value().to_vec()).collect()
 }
 
 /// The first two of `EMAILS`, the ones the probes select by `= ANY($1)`.
@@ -93,7 +89,7 @@ async fn tokio_postgres_stores_values_and_checks_them_at_decode() -> TestResult<
     assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
     let mut emails = BTreeSet::new();
     for value in &selected {
-        emails.insert(envelope.decrypt_field(AAD, value).await?);
+        emails.insert(envelope.decrypt(AAD, value).await?);
     }
     assert_eq!(emails, selected_emails());
     assert!(
@@ -133,7 +129,7 @@ async fn sqlx_stores_values_and_checks_them_at_decode() -> TestResult<()> {
     assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
     let mut emails = BTreeSet::new();
     for value in &selected {
-        emails.insert(envelope.decrypt_field(AAD, value).await?);
+        emails.insert(envelope.decrypt(AAD, value).await?);
     }
     assert_eq!(emails, selected_emails());
     assert!(

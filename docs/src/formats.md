@@ -3,22 +3,21 @@
 Every byte layout the library reads or writes is on this page.
 
 The library writes one envelope format for every provider, Tink's KMS envelope. A value encrypted
-by `encrypt_value` opens with Tink's `KmsEnvelopeAead` on the same KMS key and algorithm, and a
-value Tink encrypts opens with `decrypt_value`.
+by `KmsAeadEnvelope::encrypt` opens with Tink's `KmsEnvelopeAead` on the same KMS key and
+algorithm, and a value Tink encrypts opens with `KmsAeadEnvelope::decrypt`.
 
 | Layout | Type | Bytes | Read by | Written by |
 |---|---|---|---|---|
-| Tink KMS envelope | `CipherTextWithEncryptedKey`, `Encrypted<T, Envelope>` | `[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
-| AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink (RAW output) | every release |
+| Tink KMS envelope | `Encrypted<T, Envelope>` | `[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
+| Bare value | `Encrypted<T, Bare>` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | every release |
 | Encrypted DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Encrypted DEKs](#encrypted-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
 | Serialised DEK | the plaintext of an encrypted DEK, but Azure's | Tink's key message, see [Serialised DEKs](#serialised-deks) | kms-aead, Tink | 0.30.0 and later |
-| Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
 | TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `KeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink encrypted keyset | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][encrypted keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later, and kms-aead-keyring through it |
-| Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
+| Envelope layout v1 | `Encrypted<T, Envelope>` with `legacy-formats` | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead with `legacy-formats` | 0.29 |
-| Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
+| Length-prefixed envelope | `Encrypted<T, Envelope>` with `legacy-formats` | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
 | Raw encrypted DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead with `legacy-formats` | up to 0.29 |
 
 `k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
@@ -26,22 +25,25 @@ provider encrypts the raw DEK in every release, see [Encrypted DEKs](#encrypted-
 
 ## Tink's KMS envelope
 
-`encrypt_value` writes Tink's KMS envelope, and `CipherTextWithEncryptedKey::join` writes it from
-a cipher text and an encrypted DEK. `separate` reads it back:
+`KmsAeadEnvelope::encrypt` writes Tink's KMS envelope, and `Encrypted::join` writes it from a
+bare value and an encrypted DEK. `separate` reads it back:
 
 ```rust
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{CipherTextWithEncryptedKey, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let encrypted = envelope.encrypt_value(b"aad", &SecretValue::from("secret")).await?;
+let encrypted: Encrypted<SecretValue, Envelope> =
+    envelope.encrypt(b"aad", &SecretValue::from("secret")).await?;
 
-let (cipher_text, encrypted_dek) = encrypted.separate()?;
-assert_eq!(CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?, encrypted);
+let (bare, encrypted_dek) = encrypted.separate()?;
+let joined = Encrypted::<SecretValue, Envelope>::join(&bare, &encrypted_dek)?;
+assert_eq!(joined.value(), encrypted.value());
 # Ok(())
 # }
 ```
@@ -51,7 +53,7 @@ assert_eq!(CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?, encr
   ciphertext of the [serialised DEK](#serialised-deks), or of the raw DEK for Azure;
 - the AAD goes to the DEK's AEAD only. The KMS encryption of the DEK has no AAD, as in Tink, so
   Tink's AWS client sends no encryption context and its GCP client no additional authenticated data;
-- the rest is the `CipherText`, Tink's RAW output.
+- the rest is a [`Bare` value](#formats-of-encrypted).
 
 The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
 kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:
@@ -127,10 +129,10 @@ A beacon key of HMAC-SHA256 is serialised as `[0x1a][0x20][key: 32]`, its 32 byt
 `key_value`, field 3, as in Tink's `HmacPrfKey` without its parameters: the bytes of a 32-byte
 `AesGcmKey`. It is encrypted as a DEK is, raw under an Azure key.
 
-`generate_dek`, `generate_new_deterministic_dek` and the `generate_dek` of both
-ciphers and of `BeaconMac` encrypt their keys the same way. The message does not name its type, and
-AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides
-how the key is used, as in Tink.
+`KmsAeadEnvelope::generate_encrypted_dek`, `generate_encrypted_deterministic_dek` and the
+`generate_encrypted_dek` of both ciphers and of `BeaconMac` encrypt their keys the same way. The
+message does not name its type, and AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the
+algorithm of the reader decides how the key is used, as in Tink.
 
 A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
 `INVALID_KEY_FORMAT`. An encrypted Tink
@@ -158,24 +160,32 @@ reads it with the KMS client of `KekRef::tink_key_uri`, which Tink has for GCP a
 Tink for Go for Vault Transit keys too. A keyring exports it for its versions, see
 [Exporting a keyset to Tink](./keyring/bigquery.md#exporting-a-keyset-to-tink).
 
-## Typed fields
+## Formats of `Encrypted`
 
-`Encrypted<T, F>` holds the bytes of one layout, named by its format `F`, and
-`Encrypted::try_from` checks stored bytes against it:
+Every value the library encrypts is an `Encrypted<T, F>`: the bytes of one layout, named by its
+format `F` from `kms_aead::formats`. `Encrypted::try_from` and `Encrypted::try_from_hex_string`
+check stored bytes against it:
 
-| Format | Layout | Shortest value | Written by |
-|---|---|---|---|
-| `Envelope` | [Tink's KMS envelope](#tinks-kms-envelope) | an encrypted DEK of 1 to 4,096 bytes, then 28 bytes | `encrypt_field` |
-| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | 33 bytes | `AeadCipher::encrypt_field`, and kms-aead-keyring through it |
-| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | 21 bytes | `DeterministicCipher::encrypt_field`, and kms-aead-keyring through it |
+| Format | Layout | Shortest value | `key_id()` | Written by |
+|---|---|---|---|---|
+| `Envelope` | [Tink's KMS envelope](#tinks-kms-envelope) | an encrypted DEK of 1 to 4,096 bytes, then 28 bytes | none | `KmsAeadEnvelope::encrypt`, `Encrypted::join` |
+| `Bare` | `[nonce: 12][ciphertext][tag: 16]` | 28 bytes | none | `AeadCipher::encrypt_bare`, `KmsAeadEnvelope::encrypt_with_dek` and `encrypt_with_encrypted_dek`, `Encrypted::separate` |
+| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | 33 bytes | `KeyId` | `AeadCipher::encrypt`, and kms-aead-keyring through it |
+| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | 21 bytes | `KeyId` | `DeterministicCipher::encrypt`, and kms-aead-keyring through it |
 
-The check reads the framing only. As an `Envelope` value, the envelope layout v1 of 0.29 and the
-length-prefixed envelope fail with `LEGACY_FORMAT`, with or without `legacy-formats`: read them
-with `decrypt_value`, or rewrite them first, see [Upgrading stored
-values](#upgrading-stored-values). The layout of 32-bit targets before 0.24.0 has Tink's framing, so
-`decrypt_field` reads it as `decrypt_value` does.
+A `Bare` value is Tink's AEAD output under a key with the output prefix RAW, and the part of every
+`Envelope` value after the encrypted DEK. It names no key: the application keeps track of the key
+that opens it.
 
-The plaintext inside is the encoding of the field's `Plaintext` type: UTF-8 for `String`, the
+The check reads the framing only, and whether the bytes are authentic is known when they are
+decrypted. With `legacy-formats`, an `Envelope` value also holds the envelope layout v1 of 0.29 and
+the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
+same type until they are upgraded, see [Upgrading stored values](#upgrading-stored-values).
+Without the feature, `Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses
+them in every build. The layout of 32-bit targets before 0.24.0 has Tink's framing, so it reads as
+an `Envelope` value in every build, and `KmsAeadEnvelope::decrypt` opens it with `legacy-formats`.
+
+The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
 bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
 the integers, and compact JSON for `Json<T>`. See
 [Typed fields](./envelope-encryption.md#typed-fields).
@@ -190,7 +200,7 @@ A `Beacon<T>` is a prefix and a truncated HMAC-SHA256:
 
 - `0x01` is the version of the beacon layout. A later layout takes another first byte, so that
   beacons of both layouts can share a column during a re-index;
-- the key id names the beacon key that computed the beacon;
+- the key id names the beacon key that calculated the beacon;
 - the HMAC keeps its first `bits` bits, and the unused low bits of the last byte are zero. A
   beacon is 6 to 37 bytes.
 
@@ -336,6 +346,8 @@ A column that holds two layouts:
 - Tink envelopes and 0.28.1 envelopes: the first four bytes;
 - 0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
   outside the value, such as in another column;
+- bare values and any other layout: a bare value has no framing, and its random nonce can start
+  with any byte, so a column of bare values holds no other layout;
 - encrypted DEKs of 0.29 and of 0.30: `0xFF 0x01` starts no encrypted DEK of a built-in provider, so
   the library tells them apart for those. It never inspects the bytes of an application's own
   provider: strip the header `[0xFF][0x01][k][key version]` of its 0.29 keys before reading them.
@@ -344,12 +356,13 @@ A column that holds two layouts:
 
 The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
 
-- `decrypt_value` reads the three envelope layouts;
+- `KmsAeadEnvelope::decrypt` reads the three envelope layouts, which `Encrypted<T, Envelope>`
+  holds with the feature;
 - the `*_with_encrypted_dek` calls and the DEK cache read the encrypted key layout of 0.29 and
   raw encrypted DEKs.
 
-`CipherTextWithEncryptedKey::separate` never reads the older envelope layouts: for Azure, the
-encrypted DEK they hold needs the provider to become its bytes.
+`Encrypted::separate` never reads the older envelope layouts: for Azure, the encrypted DEK they
+hold needs the provider to become its bytes.
 
 Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the code
 `LEGACY_FORMAT`, and one of:
@@ -370,7 +383,7 @@ With `legacy-formats`, two methods of `KmsAeadEnvelope` rewrite a stored value i
 and return `None` when it already is in it, so a sweep writes only the rows that change:
 
 - `upgrade_legacy_value`, for envelope values;
-- `upgrade_legacy_encrypted_key`, for encrypted DEKs stored apart, such as the bytes of 0.29's
+- `upgrade_legacy_encrypted_dek`, for encrypted DEKs stored apart, such as the bytes of 0.29's
   `to_bytes`.
 
 Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
@@ -382,7 +395,7 @@ The envelope's algorithm is the one the values were sealed with: ChaCha20-Poly13
 0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
 encrypted DEK of the upgrade records it as a Tink key type, so `upgrade_legacy_value` takes the
 value's AAD and opens the value before it writes anything. Under another algorithm or another AAD
-it fails with `DECRYPT`. `upgrade_legacy_encrypted_key` has no value to open, so it records the
+it fails with `DECRYPT`. `upgrade_legacy_encrypted_dek` has no value to open, so it records the
 envelope's algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
 another algorithm than its values were sealed with: use `upgrade_legacy_value` wherever the values
 are at hand.
@@ -390,10 +403,11 @@ are at hand.
 A sweep over stored rows:
 
 ```rust
+use kms_aead::formats::Envelope;
 use kms_aead::{
-    AeadBackend, CipherTextWithEncryptedKey, KmsAeadEncryptionProvider, KmsAeadEnvelope,
-    KmsAeadResult, ValueStruct,
+    AeadBackend, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
 };
+use secret_vault_value::SecretValue;
 
 /// A stored envelope value and the AAD it was sealed under.
 struct Row {
@@ -413,7 +427,7 @@ where
 {
     let mut upgraded = 0;
     for row in rows.iter_mut() {
-        let stored = CipherTextWithEncryptedKey(row.value.clone());
+        let stored = Encrypted::<SecretValue, Envelope>::try_from(row.value.clone())?;
         if let Some(value) = envelope.upgrade_legacy_value(&row.aad, &stored).await? {
             row.value = value.into_value();
             upgraded += 1;
@@ -422,19 +436,18 @@ where
     Ok(upgraded)
 }
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, Ring};
-# use secret_vault_value::SecretValue;
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, Ring, ValueStruct};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # // A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
 # let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-# let dek = cipher.generate_key()?;
-# let cipher_text = cipher.encrypt_value(b"aad", &SecretValue::from("secret"), &dek)?;
+# let dek = cipher.generate_dek()?;
+# let bare = cipher.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
 # let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
 # let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
 # legacy.extend_from_slice(encrypted_dek.value());
-# legacy.extend_from_slice(cipher_text.value());
+# legacy.extend_from_slice(bare.value());
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 #     provider,
 #     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
@@ -442,8 +455,9 @@ where
 # let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);
-# let upgraded = CipherTextWithEncryptedKey(rows[0].value.clone());
-# assert_eq!(envelope.decrypt_value(b"aad", &upgraded).await?, SecretValue::from("secret"));
+# let upgraded = Encrypted::<SecretValue, Envelope>::try_from(rows[0].value.clone())?;
+# let decrypted: SecretValue = envelope.decrypt(b"aad", &upgraded).await?;
+# assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
 # }
 ```

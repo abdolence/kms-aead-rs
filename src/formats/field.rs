@@ -1,10 +1,9 @@
-use super::envelope::split_envelope;
 use super::split_tink_output_prefix;
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DeterministicAlgorithm, KeyId, KmsAeadResult};
 
 /// The format of an [`Encrypted`](crate::Encrypted) value, the byte layout its bytes are checked
-/// against when they are read: [`Envelope`], [`Randomized`] or [`Deterministic`].
+/// against when they are read: [`Envelope`], [`Bare`], [`Randomized`] or [`Deterministic`].
 ///
 /// Sealed: only the formats of this crate implement it. It has no methods, so code generic over
 /// the format names this trait and nothing else.
@@ -24,7 +23,8 @@ mod private {
 /// The layout check of a [`Format`].
 pub(crate) trait FormatLayout {
     /// The key id the framing of a value names, which the value keeps: [`KeyId`] for the
-    /// TINK-prefixed formats, and none for an envelope, which carries its encrypted DEK instead.
+    /// TINK-prefixed formats, and none for an envelope, which carries its encrypted DEK instead,
+    /// or a bare value.
     type FramedKeyId: Copy;
 
     /// Checks that `value` is framed as a value of the format, and returns the key id the framing
@@ -33,16 +33,32 @@ pub(crate) trait FormatLayout {
     fn check(value: &[u8]) -> KmsAeadResult<Self::FramedKeyId>;
 }
 
-/// Tink's KMS envelope, the bytes of a
-/// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey):
+/// Tink's KMS envelope:
 ///
 /// ```text
 /// [w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]
 /// ```
 ///
-/// [`KmsAeadEnvelope::encrypt_field`](crate::KmsAeadEnvelope::encrypt_field) writes it. The
-/// layouts written by 0.29 and earlier are not values of this format.
+/// [`KmsAeadEnvelope::encrypt`](crate::KmsAeadEnvelope::encrypt) and
+/// [`Encrypted::join`](crate::Encrypted::join) write it. With the deprecated `legacy-formats`
+/// feature, a value of this format also holds the envelope layouts written by 0.29 and earlier,
+/// which [`KmsAeadEnvelope::decrypt`](crate::KmsAeadEnvelope::decrypt) reads and
+/// [`Encrypted::separate`](crate::Encrypted::separate) refuses; without it, reading them fails.
+#[derive(Debug, Clone, Copy)]
 pub enum Envelope {}
+
+/// A value sealed by an [`AeadAlgorithm`] with no framing:
+///
+/// ```text
+/// [nonce: 12][ciphertext][tag: 16]
+/// ```
+///
+/// It is Tink's AEAD output under a key with the output prefix RAW, and the part of every
+/// [`Envelope`] value after the encrypted DEK. It names no key: the caller keeps track of the key
+/// that opens it. [`AeadCipher::encrypt_bare`](crate::AeadCipher::encrypt_bare) and
+/// [`KmsAeadEnvelope::encrypt_with_dek`](crate::KmsAeadEnvelope::encrypt_with_dek) write it.
+#[derive(Debug, Clone, Copy)]
+pub enum Bare {}
 
 /// A randomised value with Tink's output prefix of type TINK:
 ///
@@ -51,7 +67,8 @@ pub enum Envelope {}
 /// ```
 ///
 /// The layout of Tink's AEAD with a TINK-prefixed key, and of BigQuery's `AEAD.ENCRYPT` under
-/// AES-256-GCM. [`AeadCipher::encrypt_field`](crate::AeadCipher::encrypt_field) writes it.
+/// AES-256-GCM. [`AeadCipher::encrypt`](crate::AeadCipher::encrypt) writes it.
+#[derive(Debug, Clone, Copy)]
 pub enum Randomized {}
 
 /// A deterministic value with Tink's output prefix of type TINK:
@@ -61,9 +78,10 @@ pub enum Randomized {}
 /// ```
 ///
 /// The layout of Tink's deterministic AEAD with a TINK-prefixed key, and of BigQuery's
-/// `DETERMINISTIC_ENCRYPT`. `DeterministicCipher::encrypt_field` writes it. The format exists in
+/// `DETERMINISTIC_ENCRYPT`. `DeterministicCipher::encrypt` writes it. The format exists in
 /// every build, without the `deterministic` feature too, so that such values pass through a
 /// process that does not decrypt them.
+#[derive(Debug, Clone, Copy)]
 pub enum Deterministic {}
 
 impl Format for Envelope {}
@@ -71,15 +89,38 @@ impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
     type FramedKeyId = ();
 
+    /// With `legacy-formats`, the envelope layouts of 0.29 and earlier pass on their lengths
+    /// alone, so that a reader keeps decoding stored rows into its final types until they are
+    /// upgraded.
     fn check(value: &[u8]) -> KmsAeadResult<()> {
-        let (_, cipher_text) = split_envelope(value)?;
-        if cipher_text.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
+        #[cfg(feature = "legacy-formats")]
+        {
+            let stored = super::legacy::StoredEnvelope::split(value)?;
+            match stored.layout {
+                super::envelope::EnvelopeLayout::Tink => Bare::check(stored.bare),
+                _ => Ok(()),
+            }
+        }
+        #[cfg(not(feature = "legacy-formats"))]
+        {
+            let (_, bare) = super::envelope::split_envelope(value)?;
+            Bare::check(bare)
+        }
+    }
+}
+
+impl Format for Bare {}
+impl private::Sealed for Bare {}
+impl FormatLayout for Bare {
+    type FramedKeyId = ();
+
+    fn check(value: &[u8]) -> KmsAeadResult<()> {
+        if value.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 &format!(
-                    "The cipher text of {} bytes after the encrypted DEK is too short to hold a \
-                     nonce and a tag",
-                    cipher_text.len()
+                    "A cipher text of {} bytes is too short to hold a nonce and a tag",
+                    value.len()
                 ),
             ));
         }

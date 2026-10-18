@@ -87,15 +87,11 @@ pub use aes_siv_cipher::*;
 
 #[cfg(feature = "deterministic")]
 mod aes_siv_cipher {
-    use std::fmt::{Debug, Formatter};
     use std::marker::PhantomData;
 
     use aes_siv::siv::Aes256Siv;
     use aes_siv::KeyInit;
     use secret_vault_value::SecretValue;
-    use subtle::ConstantTimeEq;
-
-    use rvstruct::ValueStruct;
 
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
@@ -106,34 +102,6 @@ mod aes_siv_cipher {
         EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadEnvelope,
         KmsAeadResult, Plaintext,
     };
-
-    /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
-    /// output order of RFC 5297. Equal plaintexts and AADs under one key give equal values.
-    /// Equality compares in constant time.
-    #[derive(Clone, ValueStruct)]
-    pub struct DeterministicCipherText(Vec<u8>);
-
-    /// The length only: the bytes tell which values are equal.
-    impl Debug for DeterministicCipherText {
-        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-            f.debug_struct("DeterministicCipherText")
-                .field("len", &self.0.len())
-                .finish()
-        }
-    }
-
-    impl DeterministicCipherText {
-        /// The lowercase hex of the value.
-        pub fn to_hex_string(&self) -> String {
-            hex::encode(&self.0)
-        }
-    }
-
-    impl PartialEq for DeterministicCipherText {
-        fn eq(&self, other: &Self) -> bool {
-            self.0.ct_eq(&other.0).into()
-        }
-    }
 
     /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
     /// KMS: equal inputs under one key give equal values, so a sealed value can be compared or
@@ -169,71 +137,38 @@ mod aes_siv_cipher {
             self.algorithm
         }
 
-        /// A new key of `algorithm().key_len()` bytes from the backend's CSPRNG.
+        /// A new data encryption key of `algorithm().key_len()` bytes from the backend's CSPRNG.
+        /// It makes no KMS call.
         ///
         /// # Errors
         ///
         /// `RANDOM_GENERATOR` when the CSPRNG fails.
-        pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
+        pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
             generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
         }
 
-        /// A new key and the same key encrypted by `provider`, to store. The key comes from the
-        /// KMS generator when the provider is configured to use one, and from the backend's
-        /// CSPRNG otherwise. It is encrypted as Tink encrypts a key, serialised as Tink's
-        /// `AesSivKey`, or raw under an Azure KEK.
+        /// A new data encryption key and the same key encrypted by `provider`, to store. The key
+        /// comes from the KMS generator when the provider is configured to use one, and from the
+        /// backend's CSPRNG otherwise. It is encrypted as Tink encrypts a key, serialised as
+        /// Tink's `AesSivKey`, or raw under an Azure KEK.
         ///
         /// # Errors
         ///
         /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
         /// material of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-        pub async fn generate_dek<P>(
+        pub async fn generate_encrypted_dek<P>(
             &self,
             provider: &P,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
-            crate::formats::generate_dek::<B, P>(
+            crate::formats::generate_encrypted_dek::<B, P>(
                 self.algorithm.into(),
                 self.algorithm.key_len(),
                 provider,
             )
             .await
-        }
-
-        /// Seals `plain_text` under `dek`. `aad` is authenticated as one associated-data item,
-        /// also when it is empty, as Tink does: the value is equal to a Tink value after its
-        /// 5-byte prefix.
-        ///
-        /// # Errors
-        ///
-        /// `INVALID_KEY_LENGTH` when `dek` does not have `algorithm().key_len()` bytes.
-        pub fn encrypt_value(
-            &self,
-            aad: &[u8],
-            plain_text: &SecretValue,
-            dek: &DataEncryptionKey,
-        ) -> KmsAeadResult<DeterministicCipherText> {
-            self.seal(&[], aad, plain_text.ref_sensitive_value(), dek)
-                .map(DeterministicCipherText)
-        }
-
-        /// Opens a value [`encrypt_value`](Self::encrypt_value) sealed, into a buffer the
-        /// returned `SecretValue` owns.
-        ///
-        /// # Errors
-        ///
-        /// `INVALID_KEY_LENGTH` when `dek` does not have `algorithm().key_len()` bytes,
-        /// `INVALID_CIPHER_TEXT_FORMAT` when the value is shorter than the 16-byte synthetic IV, and
-        /// `DECRYPT` when the value, the AAD or the key is not the one it was sealed with.
-        pub fn decrypt_value(
-            &self,
-            aad: &[u8],
-            cipher_text: &DeterministicCipherText,
-            dek: &DataEncryptionKey,
-        ) -> KmsAeadResult<SecretValue> {
-            self.open(aad, cipher_text.value(), 0, dek)
         }
 
         /// `value`, as [`Plaintext`] encodes it, sealed under `dek` in Tink's layout of a key
@@ -243,84 +178,83 @@ mod aes_siv_cipher {
         /// [0x01][key id: u32 BE][synthetic IV: 16][ciphertext]
         /// ```
         ///
-        /// Equal values and AADs under one key give equal bytes. Tink's deterministic AEAD opens
-        /// it with a keyset that holds `dek` as the key `key_id`, and so does BigQuery's
+        /// Equal values and AADs under one key give equal bytes. `aad` is authenticated as one
+        /// associated-data item, also when it is empty, as Tink does. Tink's deterministic AEAD
+        /// opens it with a keyset that holds `dek` as the key `key_id`, and so does BigQuery's
         /// `DETERMINISTIC_DECRYPT_STRING` or `DETERMINISTIC_DECRYPT_BYTES`.
         ///
         /// # Errors
         ///
-        /// The errors of [`encrypt_value`](Self::encrypt_value), and `INVALID_PLAINTEXT` when
-        /// `value` does not encode.
-        pub fn encrypt_field<T: Plaintext>(
+        /// `INVALID_PLAINTEXT` when `value` does not encode, and `INVALID_KEY_LENGTH` when `dek`
+        /// does not have `algorithm().key_len()` bytes.
+        pub fn encrypt<T: Plaintext>(
             &self,
             key_id: KeyId,
-            aad: &[u8],
+            aad: &(impl AsRef<[u8]> + ?Sized),
             value: &T,
             dek: &DataEncryptionKey,
         ) -> KmsAeadResult<Encrypted<T, Deterministic>> {
             let plain_text = value.to_plaintext()?;
-            let sealed = self.seal(
-                &tink_output_prefix(key_id),
-                aad,
-                plain_text.ref_sensitive_value(),
-                dek,
-            )?;
+            let sealed = self.seal(key_id, aad.as_ref(), plain_text.ref_sensitive_value(), dek)?;
             Encrypted::try_from(sealed)
         }
 
-        /// Opens `value`, sealed under `dek` and `aad` by [`encrypt_field`](Self::encrypt_field)
-        /// or by Tink, and decodes the plaintext as a `T`. The caller picks `dek` by
+        /// Opens `value`, sealed under `dek` and `aad` by [`encrypt`](Self::encrypt) or by Tink,
+        /// and decodes the plaintext as a `T`. The caller picks `dek` by
         /// [`value.key_id()`](Encrypted::key_id).
         ///
         /// # Errors
         ///
-        /// The errors of [`decrypt_value`](Self::decrypt_value), and `INVALID_PLAINTEXT` when
-        /// the plaintext is not an encoding of `T`.
-        pub fn decrypt_field<T: Plaintext>(
+        /// `INVALID_KEY_LENGTH` when `dek` does not have `algorithm().key_len()` bytes, `DECRYPT`
+        /// when the value, the AAD or the key is not the one it was sealed with, and
+        /// `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`.
+        pub fn decrypt<T: Plaintext>(
             &self,
-            aad: &[u8],
+            aad: &(impl AsRef<[u8]> + ?Sized),
             value: &Encrypted<T, Deterministic>,
             dek: &DataEncryptionKey,
         ) -> KmsAeadResult<T> {
-            T::from_plaintext(self.open(aad, value.value(), TINK_OUTPUT_PREFIX_LEN, dek)?)
+            T::from_plaintext(self.open(aad.as_ref(), value.value(), dek)?)
         }
 
-        /// `prefix`, then `plain_text` sealed under `dek`: `[prefix][synthetic IV][ciphertext]`.
+        /// The output prefix of `key_id`, then `plain_text` sealed under `dek`:
+        /// `[prefix][synthetic IV][ciphertext]`.
         fn seal(
             &self,
-            prefix: &[u8],
+            key_id: KeyId,
             aad: &[u8],
             plain_text: &[u8],
             dek: &DataEncryptionKey,
         ) -> KmsAeadResult<Vec<u8>> {
             let mut siv = self.siv(dek)?;
-            let cipher_text_start = prefix.len() + DeterministicAlgorithm::SYNTHETIC_IV_LEN;
+            let cipher_text_start =
+                TINK_OUTPUT_PREFIX_LEN + DeterministicAlgorithm::SYNTHETIC_IV_LEN;
             // Allocated once at its final size, since growing it would leave a copy of the
             // plaintext in freed memory, and zeroised if sealing fails.
             let mut buffer =
                 SecretValue::new(Vec::with_capacity(cipher_text_start + plain_text.len()));
             let value = buffer.ref_sensitive_value_mut();
-            value.extend_from_slice(prefix);
+            value.extend_from_slice(&tink_output_prefix(key_id));
             value.extend_from_slice(&[0; DeterministicAlgorithm::SYNTHETIC_IV_LEN]);
             value.extend_from_slice(plain_text);
             let synthetic_iv = siv
                 .encrypt_inout_detached([aad], (&mut value[cipher_text_start..]).into())
                 .map_err(|_| KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data"))?;
-            value[prefix.len()..cipher_text_start].copy_from_slice(&synthetic_iv);
+            value[TINK_OUTPUT_PREFIX_LEN..cipher_text_start].copy_from_slice(&synthetic_iv);
             Ok(std::mem::take(value))
         }
 
-        /// Opens the `[synthetic IV][ciphertext]` after the first `prefix_len` bytes of `value`.
+        /// Opens the `[synthetic IV][ciphertext]` after the output prefix of `value`, which its
+        /// format has checked.
         fn open(
             &self,
             aad: &[u8],
             value: &[u8],
-            prefix_len: usize,
             dek: &DataEncryptionKey,
         ) -> KmsAeadResult<SecretValue> {
             let mut siv = self.siv(dek)?;
             let sealed = value
-                .get(prefix_len..)
+                .get(TINK_OUTPUT_PREFIX_LEN..)
                 .filter(|sealed| sealed.len() >= DeterministicAlgorithm::SYNTHETIC_IV_LEN)
                 .ok_or_else(|| {
                     KmsAeadEncryptionError::create(
@@ -339,7 +273,11 @@ mod aes_siv_cipher {
         /// The cipher keyed with `dek`: the first half keys S2V's CMAC and the second half CTR,
         /// the order of RFC 5297 and of Tink's `AesSivKey`.
         fn siv(&self, dek: &DataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
-            let key = checked_key_bytes(dek, self.algorithm, self.algorithm.key_len())?;
+            let key = checked_key_bytes(
+                dek.value().ref_sensitive_value(),
+                self.algorithm,
+                self.algorithm.key_len(),
+            )?;
             match self.algorithm {
                 DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
                     KmsAeadEncryptionError::create(
@@ -365,16 +303,17 @@ mod aes_siv_cipher {
         ///
         /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
         /// material of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-        pub async fn generate_new_deterministic_dek(
+        pub async fn generate_encrypted_deterministic_dek(
             &self,
             algorithm: DeterministicAlgorithm,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
             let cipher = DeterministicCipher::<B>::new(algorithm)?;
-            let span = spans::generate_dek("deterministic", algorithm, B::NAME);
-            spans::in_span(span, cipher.generate_dek(&self.provider)).await
+            let span = spans::generate_encrypted_dek("deterministic", algorithm, B::NAME);
+            spans::in_span(span, cipher.generate_encrypted_dek(&self.provider)).await
         }
 
-        /// Decrypts a key [`generate_new_deterministic_dek`](Self::generate_new_deterministic_dek)
+        /// Decrypts a key
+        /// [`generate_encrypted_deterministic_dek`](Self::generate_encrypted_deterministic_dek)
         /// encrypted.
         ///
         /// # Errors
@@ -389,7 +328,11 @@ mod aes_siv_cipher {
             let span = spans::decrypt_dek(algorithm, self.dek_cache());
             spans::in_span(span, async {
                 let (dek, _) = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
-                checked_key_bytes(&dek, algorithm, algorithm.key_len())?;
+                checked_key_bytes(
+                    dek.value().ref_sensitive_value(),
+                    algorithm,
+                    algorithm.key_len(),
+                )?;
                 Ok(dek)
             })
             .await
@@ -406,6 +349,7 @@ mod aes_siv_cipher {
 
         const AAD: &[u8] = b"orders/1042";
         const PLAIN_TEXT: &str = "4111 1111 1111 1111";
+        const KEY_ID: KeyId = KeyId::new(7);
 
         struct Vector {
             key: &'static str,
@@ -453,11 +397,22 @@ mod aes_siv_cipher {
                 let dek =
                     DataEncryptionKey::from(SecretValue::new(hex::decode(vector.key).unwrap()));
                 let aad = hex::decode(vector.aad).unwrap();
-                let plain_text = SecretValue::new(hex::decode(vector.plain_text).unwrap());
+                let plain_text = hex::decode(vector.plain_text).unwrap();
+                let tink_value = [
+                    tink_output_prefix(KEY_ID).to_vec(),
+                    hex::decode(vector.cipher_text).unwrap(),
+                ]
+                .concat();
 
-                let cipher_text = cipher.encrypt_value(&aad, &plain_text, &dek)?;
-                assert_eq!(cipher_text.to_hex_string(), vector.cipher_text);
-                assert_eq!(cipher.decrypt_value(&aad, &cipher_text, &dek)?, plain_text);
+                let sealed = cipher.encrypt(KEY_ID, &aad, &plain_text, &dek)?;
+                let opened = cipher.decrypt(
+                    &aad,
+                    &Encrypted::<Vec<u8>, Deterministic>::try_from(tink_value)?,
+                    &dek,
+                )?;
+
+                assert_eq!(hex::encode(&sealed.value()[5..]), vector.cipher_text);
+                assert_eq!(opened, plain_text);
             }
             Ok(())
         }
@@ -478,13 +433,13 @@ mod aes_siv_cipher {
             let dek = DataEncryptionKey::from(SecretValue::new((0u8..64).collect()));
             let key_id = KeyId::new(0x4455_6677);
 
-            let field = cipher.encrypt_field(key_id, &[0xFF], &Vec::<u8>::new(), &dek)?;
+            let field = cipher.encrypt(key_id, &[0xFF], &Vec::<u8>::new(), &dek)?;
             let tink_value = Encrypted::<Vec<u8>, Deterministic>::try_from(TINK_VALUE.to_vec())?;
 
             assert_eq!(*field.value(), TINK_VALUE);
             assert_eq!(tink_value.key_id(), key_id);
             assert_eq!(
-                cipher.decrypt_field(&[0xFF], &tink_value, &dek)?,
+                cipher.decrypt(&[0xFF], &tink_value, &dek)?,
                 Vec::<u8>::new()
             );
             Ok(())
@@ -495,11 +450,11 @@ mod aes_siv_cipher {
             let cipher =
                 DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             let plain_text = SecretValue::from(PLAIN_TEXT);
-            let sealed = cipher.encrypt_value(AAD, &plain_text, &cipher.generate_key()?)?;
+            let sealed = cipher.encrypt(KEY_ID, AAD, &plain_text, &cipher.generate_dek()?)?;
             let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
 
-            let encrypted = cipher.encrypt_value(AAD, &plain_text, &dek);
-            let decrypted = cipher.decrypt_value(AAD, &sealed, &dek);
+            let encrypted = cipher.encrypt(KEY_ID, AAD, &plain_text, &dek);
+            let decrypted = cipher.decrypt(AAD, &sealed, &dek);
 
             assert!(
                 matches!(&encrypted, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
@@ -514,44 +469,15 @@ mod aes_siv_cipher {
         }
 
         #[test]
-        fn a_value_shorter_than_the_synthetic_iv_is_invalid() -> KmsAeadResult<()> {
-            let cipher =
-                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
-            let dek = cipher.generate_key()?;
-            for len in [0, 15] {
-                let short = DeterministicCipherText::from(vec![0xAA; len]);
-
-                let result = cipher.decrypt_value(AAD, &short, &dek);
-
-                assert!(
-                    matches!(&result, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"),
-                    "{len} bytes: {result:?}"
-                );
-            }
-            Ok(())
-        }
-
-        #[test]
-        fn debug_shows_no_cipher_text_bytes() {
-            let sealed = DeterministicCipherText::from(b"zq-cipher-marker-zq".to_vec());
-
-            let debug = format!("{sealed:?}");
-
-            for rendering in crate::test_provider::renderings(b"zq-cipher-marker-zq") {
-                assert!(!debug.contains(&rendering), "{debug}");
-            }
-        }
-
-        #[test]
         fn a_different_aad_gives_a_different_value() -> KmsAeadResult<()> {
             let cipher =
                 DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
-            let dek = cipher.generate_key()?;
+            let dek = cipher.generate_dek()?;
             let plain_text = SecretValue::from(PLAIN_TEXT);
 
             assert_ne!(
-                cipher.encrypt_value(AAD, &plain_text, &dek)?,
-                cipher.encrypt_value(b"orders/1043", &plain_text, &dek)?
+                cipher.encrypt(KEY_ID, AAD, &plain_text, &dek)?,
+                cipher.encrypt(KEY_ID, b"orders/1043", &plain_text, &dek)?
             );
             Ok(())
         }
@@ -569,9 +495,12 @@ mod aes_siv_cipher {
                 let cipher = DeterministicCipher::<TestBackend>::new(algorithm)?;
                 let plain_text = SecretValue::from(PLAIN_TEXT);
 
-                let (dek, encrypted_dek) =
-                    envelope.generate_new_deterministic_dek(algorithm).await?;
-                let (other_dek, _) = envelope.generate_new_deterministic_dek(algorithm).await?;
+                let (dek, encrypted_dek) = envelope
+                    .generate_encrypted_deterministic_dek(algorithm)
+                    .await?;
+                let (other_dek, _) = envelope
+                    .generate_encrypted_deterministic_dek(algorithm)
+                    .await?;
                 let decrypted_dek = envelope
                     .decrypt_deterministic_dek(algorithm, &encrypted_dek)
                     .await?;
@@ -583,8 +512,8 @@ mod aes_siv_cipher {
                 assert_eq!(decrypted_dek.value(), dek.value());
                 assert_ne!(dek.value(), other_dek.value());
                 assert_eq!(
-                    cipher.encrypt_value(AAD, &plain_text, &decrypted_dek)?,
-                    cipher.encrypt_value(AAD, &plain_text, &dek)?
+                    cipher.encrypt(KEY_ID, AAD, &plain_text, &decrypted_dek)?,
+                    cipher.encrypt(KEY_ID, AAD, &plain_text, &dek)?
                 );
                 Ok(())
             }

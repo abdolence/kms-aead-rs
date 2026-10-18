@@ -667,6 +667,7 @@ fn trusted_roots(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::formats::Envelope;
     use crate::test_http::answer_with;
     use crate::test_provider::TestBackend;
     use tokio::net::TcpListener;
@@ -1022,28 +1023,22 @@ mod tests {
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
-        let key_version = |cipher_text: &CipherTextWithEncryptedKey| {
+        let key_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
             let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
             transit_key_version(&ciphertext).map(str::to_string)
         };
 
-        let before_rotation = encryption
-            .encrypt_value(aad.as_bytes(), &secret)
-            .await
-            .unwrap();
+        let before_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
-        let after_rotation = encryption
-            .encrypt_value(aad.as_bytes(), &secret)
-            .await
-            .unwrap();
+        let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
         assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
         assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
                 encryption
-                    .decrypt_value(aad.as_bytes(), &cipher_text)
+                    .decrypt(aad.as_bytes(), &cipher_text)
                     .await
                     .unwrap(),
                 secret
