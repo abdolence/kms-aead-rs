@@ -6,6 +6,15 @@
 //! wraps, in an envelope or on its own, is the KMS ciphertext of the key as Tink serializes it,
 //! except under an Azure KEK: Azure has no Tink client, so its wrapped key is the raw key.
 //!
+//! The wrapped keys of two built-in providers are kms-aead's own layouts, crate-private and
+//! described on the provider types, `AzureKmsProvider` and
+//! [`LocalKmsProvider`](crate::providers::LocalKmsProvider):
+//!
+//! ```text
+//! Azure: [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault wrapped key]
+//! local: [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
+//! ```
+//!
 //! The public items here are what a keyring of Tink keys needs on top of that:
 //! [`TinkOutputPrefix`], the prefix of its values, and [`TinkKeyset`], the keyset BigQuery reads,
 //! and the [`Format`] of an [`Encrypted`](crate::Encrypted) value: [`Envelope`], [`Randomized`]

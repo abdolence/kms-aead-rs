@@ -195,8 +195,8 @@ A column that holds two layouts:
 The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
 
 - `decrypt_value` reads the three envelope layouts;
-- the `*_with_encrypted_dek` calls, `decrypt_deterministic_dek` and the DEK cache read the
-  encrypted key layout of 0.29 and raw wrapped DEKs.
+- the `*_with_encrypted_dek` calls and the DEK cache read the encrypted key layout of 0.29 and
+  raw wrapped DEKs.
 
 `CipherTextWithEncryptedKey::separate` never reads the older envelope layouts: for Azure, the
 wrapped DEK they hold needs the provider to become its bytes.
