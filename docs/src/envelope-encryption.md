@@ -173,6 +173,108 @@ async fn load(pool: &PgPool, id: i64) -> sqlx::Result<Encrypted<Email, Envelope>
 }
 ```
 
+### One fixed key
+
+`AeadCipher::encrypt_field` seals a field under a key the application holds, in Tink's layout of
+a key whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an
+`Encrypted<T, Randomized>`. `DeterministicCipher::encrypt_field` does the same for an
+`Encrypted<T, Deterministic>`. The key id is a `TinkKeyId`, the application's constant, and Tink
+and BigQuery read the values with a keyset of the one key under that id:
+
+```rust,no_run
+use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::formats::{Randomized, TinkKeyId, TinkKeyType, TinkKeyset};
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, Ring,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+// The id of the one key, in every value and in the keyset
+const EMAIL_KEY: TinkKeyId = TinkKeyId::new(1);
+
+# async fn example() -> KmsAeadResult<()> {
+let key_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let provider = GcpKmsProvider::new(&key_ref).await?;
+let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
+let cache = DekCache::new(DekCacheOptions::new())?;
+
+// Once, by an administrative job: the key wrapped by Cloud KMS, stored in the settings
+let (_, wrapped_key): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+    cipher.generate_wrapped_key(&provider).await?;
+
+// On every write and read: the key unwrapped through the cache, no KMS call while it is cached
+let email = Email("alice@example.com".to_string());
+let (encrypted, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        cipher.encrypt_field(EMAIL_KEY, b"users/1042/email", &email, key)
+    })
+    .await?;
+let encrypted: Encrypted<Email, Randomized> = encrypted?;
+
+let (decrypted, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        cipher.decrypt_field(b"users/1042/email", &encrypted, key)
+    })
+    .await?;
+assert_eq!(decrypted?, email);
+
+// Once, for BigQuery: the keyset of the one key, wrapped by the same Cloud KMS key
+let mut keyset = TinkKeyset::new(EMAIL_KEY);
+let (added, _) = cache
+    .with_key(&provider, &wrapped_key, |key| {
+        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), key)
+    })
+    .await?;
+added?;
+let first_level_keyset: EncryptedDataEncryptionKey = provider
+    .encrypt_data_encryption_key(&DataEncryptionKey::from(keyset.to_bytes()))
+    .await?;
+# let _ = first_level_keyset;
+# Ok(())
+# }
+```
+
+BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the wrapped keyset, passed as a `BYTES`
+query parameter:
+
+```sql
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(
+    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
+    @first_level_keyset),
+  u.email,
+  CONCAT('users/', CAST(u.id AS STRING), '/email'))
+FROM users u;
+```
+
+- BigQuery reads AES-256-GCM values with `AEAD.DECRYPT_STRING` and `AEAD.DECRYPT_BYTES`, and
+  the AES-SIV values of `DeterministicCipher` with `DETERMINISTIC_DECRYPT_STRING` and
+  `DETERMINISTIC_DECRYPT_BYTES`. `KEYS.KEYSET_CHAIN` unwraps with Cloud KMS only;
+- `decrypt_field` reads the values Tink and BigQuery write under the same key and id. The
+  caller picks the key by `key_id()`, which the prefix names without authenticating it;
+- a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
+  kms-aead-keyring keeps those versions.
+
 ## Beacons
 
 A beacon, or blind index, finds rows by a field's value without decrypting the column: an

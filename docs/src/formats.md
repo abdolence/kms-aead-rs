@@ -13,8 +13,8 @@ value Tink encrypts opens with `decrypt_value`.
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
 | Serialized DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
-| TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
-| Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
+| TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
+| Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped DEK]` | kms-aead with `legacy-formats` | 0.29 |
 | Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][wrapped DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
@@ -137,14 +137,16 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 
 ## Tink keysets and the TINK prefix
 
-`kms_aead::formats` has the two Tink layouts of kms-aead-keyring:
+`kms_aead::formats` has the two Tink items of the TINK-prefixed values:
 
-- `TinkKeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`. It is
-  the start of every keyring value, and Tink and BigQuery pick the key of a keyset by it. It is not
-  authenticated;
+- `TinkKeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`, the
+  start of every `Randomized` and `Deterministic` value. Tink and BigQuery pick the key of a
+  keyset by it. It is not authenticated;
 - `TinkKeyset`: a serialized `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
-  keys, the bytes `tinkey` writes for the same keys. A keyring exports it wrapped by its Cloud KMS
-  key, for BigQuery's `KEYS.KEYSET_CHAIN`.
+  keys, the bytes `tinkey` writes for the same keys. Wrapped by a Cloud KMS key, it is the keyset
+  of BigQuery's `KEYS.KEYSET_CHAIN`: an application writes it for its one key, see
+  [One fixed key](./envelope-encryption.md#one-fixed-key), and a keyring exports it for its
+  versions.
 
 ## Typed fields
 
@@ -154,8 +156,8 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 | Format | Layout | Shortest value | Written by |
 |---|---|---|---|
 | `Envelope` | [Tink's KMS envelope](#tinks-kms-envelope) | a wrapped DEK of 1 to 4,096 bytes, then 28 bytes | `encrypt_field` |
-| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | 33 bytes | kms-aead-keyring |
-| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | 21 bytes | kms-aead-keyring |
+| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | 33 bytes | `AeadCipher::encrypt_field`, and kms-aead-keyring through it |
+| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | 21 bytes | `DeterministicCipher::encrypt_field`, and kms-aead-keyring through it |
 
 The check reads the framing only. As an `Envelope` value, the envelope layout v1 of 0.29 and the
 length-prefixed envelope fail with `LEGACY_FORMAT`, with or without `legacy-formats`: read them
@@ -208,10 +210,10 @@ the local KMS also starts with `0x01`, and Tink's LEGACY and CRUNCHY output pref
 
 A column that holds two layouts:
 
-- Tink envelopes and keyring values: the first byte, `0x00` or `0x01`;
+- Tink envelopes and TINK-prefixed values: the first byte, `0x00` or `0x01`;
 - Tink envelopes and 0.29 envelopes: the first byte, `0x00` or `0x01`;
 - Tink envelopes and 0.28.1 envelopes: the first four bytes;
-- 0.29 envelopes and keyring values: no byte tells them apart, so the layout is recorded outside
+- 0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded outside
   the value, such as in another column;
 - wrapped DEKs of 0.29 and of 0.30: `0xFF 0x01` starts no wrapped DEK of a built-in provider, so
   the library tells them apart for those. It never inspects the bytes of an application's own
