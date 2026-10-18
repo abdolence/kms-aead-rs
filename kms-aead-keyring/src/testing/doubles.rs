@@ -64,10 +64,6 @@ impl TestProvider {
             calls: Arc::default(),
         })
     }
-
-    pub(crate) fn unwraps(&self) -> usize {
-        self.calls.unwraps.load(Ordering::SeqCst)
-    }
 }
 
 #[async_trait]
@@ -123,28 +119,12 @@ pub(crate) struct StoreCalls {
 }
 
 impl TestStore {
-    pub(crate) fn new(memory: &MemoryKeyringStore) -> Self {
-        Self::with_delay(memory, Duration::ZERO)
-    }
-
-    pub(crate) fn with_delay(memory: &MemoryKeyringStore, delay: Duration) -> Self {
+    pub(crate) fn new(memory: &MemoryKeyringStore, delay: Duration) -> Self {
         Self {
             memory: memory.clone(),
             calls: Arc::default(),
             delay,
         }
-    }
-
-    pub(crate) fn loads(&self) -> usize {
-        self.calls.loads.load(Ordering::SeqCst)
-    }
-
-    pub(crate) fn revalidations(&self) -> usize {
-        self.calls.revalidations.load(Ordering::SeqCst)
-    }
-
-    fn missing(&self) -> bool {
-        self.calls.missing.load(Ordering::SeqCst)
     }
 }
 
@@ -155,7 +135,7 @@ impl KeyringStore for TestStore {
 
     async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<MemoryRevision>>> {
         self.calls.loads.fetch_add(1, Ordering::SeqCst);
-        match self.missing() {
+        match self.calls.missing.load(Ordering::SeqCst) {
             true => Ok(None),
             false => self.memory.load(id).await,
         }
@@ -168,7 +148,7 @@ impl KeyringStore for TestStore {
     ) -> KeyringResult<Revalidation<MemoryRevision>> {
         self.calls.revalidations.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(self.delay).await;
-        match self.missing() {
+        match self.calls.missing.load(Ordering::SeqCst) {
             true => Ok(Revalidation::Missing),
             false => self.memory.revalidate(id, known).await,
         }

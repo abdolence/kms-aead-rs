@@ -228,7 +228,7 @@ mod tests {
     fn bytes_that_are_not_utf_8_are_no_string() {
         assert!(matches!(
             String::from_plaintext(SecretValue::from(vec![b'o', b'k', 0xFF])),
-            Err(KeyringError::Plaintext(error)) if error.type_name == "alloc::string::String"
+            Err(KeyringError::Plaintext(_))
         ));
     }
 

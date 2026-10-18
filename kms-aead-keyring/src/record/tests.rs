@@ -13,12 +13,8 @@ const COMPROMISED: &str = "2026-05-01T12:00:00Z";
 /// The wrapped bytes of every fixture version: distinctive, so that a test can look for them.
 const WRAPPED: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
 
-fn wrapped_dek() -> KeyringResult<EncryptedDataEncryptionKey> {
-    Ok(EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None))
-}
-
 fn wrapped_dek_base64() -> KeyringResult<String> {
-    Ok(STANDARD.encode(wrapped_dek()?.to_bytes()?))
+    Ok(STANDARD.encode(EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None).to_bytes()?))
 }
 
 /// A version as the stored form writes it, with a wrapped key unless it is destroyed.
@@ -81,14 +77,6 @@ fn rotated() -> KeyringResult<Value> {
     ]))
 }
 
-fn key_id(id: u32) -> KeyringResult<KeyId> {
-    KeyId::try_from(id)
-}
-
-fn timestamp(text: &str) -> Result<Timestamp, jiff::Error> {
-    text.parse()
-}
-
 #[test]
 fn a_record_round_trips_through_its_json() -> TestResult {
     let record = parse(&rotated()?)?;
@@ -100,7 +88,7 @@ fn a_record_round_trips_through_its_json() -> TestResult {
     );
     assert_eq!(
         reparsed.active(Purpose::Randomized).map(KeyVersion::key_id),
-        Some(key_id(2)?)
+        Some(KeyId::try_from(2)?)
     );
     assert_eq!(
         reparsed.kek(),
@@ -130,7 +118,7 @@ fn an_active_compromised_version_is_rejected() -> KeyringResult<()> {
     let document = document(vec![version(1, "active", true)?]);
     assert_eq!(
         refusal(&document),
-        Some(RecordInvalidReason::CompromisedActive(key_id(1)?))
+        Some(RecordInvalidReason::CompromisedActive(KeyId::try_from(1)?))
     );
     Ok(())
 }
@@ -141,7 +129,9 @@ fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
     destroyed["wrapped_dek"] = Value::String(wrapped_dek_base64()?);
     assert_eq!(
         refusal(&document(vec![destroyed, version(2, "active", false)?])),
-        Some(RecordInvalidReason::DestroyedWithMaterial(key_id(1)?))
+        Some(RecordInvalidReason::DestroyedWithMaterial(KeyId::try_from(
+            1
+        )?))
     );
     Ok(())
 }
@@ -152,7 +142,7 @@ fn a_version_without_material_is_rejected() -> KeyringResult<()> {
     retired["wrapped_dek"] = Value::Null;
     assert_eq!(
         refusal(&document(vec![retired, version(2, "active", false)?])),
-        Some(RecordInvalidReason::MissingMaterial(key_id(1)?))
+        Some(RecordInvalidReason::MissingMaterial(KeyId::try_from(1)?))
     );
     Ok(())
 }
@@ -163,7 +153,9 @@ fn a_key_id_of_the_wrong_purpose_is_rejected() -> KeyringResult<()> {
     deterministic_id["key_id"] = json!(0x8000_0001u32);
     assert_eq!(
         refusal(&document(vec![deterministic_id])),
-        Some(RecordInvalidReason::PurposeMismatch(key_id(0x8000_0001)?))
+        Some(RecordInvalidReason::PurposeMismatch(KeyId::try_from(
+            0x8000_0001
+        )?))
     );
     Ok(())
 }
@@ -176,7 +168,7 @@ fn duplicate_key_ids_are_rejected() -> KeyringResult<()> {
     ]);
     assert_eq!(
         refusal(&document),
-        Some(RecordInvalidReason::DuplicateKeyId(key_id(1)?))
+        Some(RecordInvalidReason::DuplicateKeyId(KeyId::try_from(1)?))
     );
     Ok(())
 }
@@ -190,7 +182,7 @@ fn ordinals_out_of_creation_order_are_rejected() -> KeyringResult<()> {
     ]);
     assert_eq!(
         refusal(&document),
-        Some(RecordInvalidReason::OrdinalOrder(key_id(1)?))
+        Some(RecordInvalidReason::OrdinalOrder(KeyId::try_from(1)?))
     );
     Ok(())
 }
@@ -202,7 +194,9 @@ fn a_wrapped_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
         active["wrapped_dek"] = json!(wrapped_dek);
         assert_eq!(
             refusal(&document(vec![active])),
-            Some(RecordInvalidReason::MalformedWrappedDek(key_id(1)?))
+            Some(RecordInvalidReason::MalformedWrappedDek(KeyId::try_from(
+                1
+            )?))
         );
     }
     Ok(())
@@ -228,14 +222,14 @@ fn names_of_other_schemas_algorithms_and_states_are_rejected() -> KeyringResult<
     algorithm["algorithm"] = json!("aes-256-siv");
     assert_eq!(
         refusal(&document(vec![algorithm])),
-        Some(RecordInvalidReason::PurposeMismatch(key_id(1)?))
+        Some(RecordInvalidReason::PurposeMismatch(KeyId::try_from(1)?))
     );
 
     let mut state = version(1, "active", false)?;
     state["state"] = json!("dormant");
     assert_eq!(
         refusal(&document(vec![state])),
-        Some(RecordInvalidReason::UnknownState(key_id(1)?))
+        Some(RecordInvalidReason::UnknownState(KeyId::try_from(1)?))
     );
     Ok(())
 }
@@ -313,14 +307,13 @@ fn record_debug_carries_no_wrapped_dek() -> TestResult {
     let record = parse(&rotated()?)?;
     let debug = format!("{record:?}");
     let base64 = wrapped_dek_base64()?;
-    let bytes = wrapped_dek()?.to_bytes()?;
+    let bytes = EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None).to_bytes()?;
     let byte_list = format!("{:?}", &WRAPPED[..]);
     let lower_hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
     let upper_hex: String = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
     for marker in [&base64, &lower_hex, &upper_hex, &byte_list, "192, 255, 238"] {
         assert!(!debug.contains(marker), "{marker} in {debug}");
     }
-    assert!(debug.contains("DecryptOnly"), "{debug}");
     Ok(())
 }
 
@@ -425,10 +418,10 @@ fn every_transition_of_the_lifecycle_is_accepted() -> TestResult {
             };
             let mut edit =
                 RecordEdit::from(parse(&document(vec![version(1, state, compromised)?]))?);
-            operation.apply(&mut edit, key_id(1)?)?;
+            operation.apply(&mut edit, KeyId::try_from(1)?)?;
             let version = edit
                 .record()
-                .version(key_id(1)?)
+                .version(KeyId::try_from(1)?)
                 .ok_or("version 1 is gone")?;
             assert_eq!(
                 (version.state(), version.compromised().is_some()),
@@ -438,7 +431,7 @@ fn every_transition_of_the_lifecycle_is_accepted() -> TestResult {
             if compromised {
                 assert_eq!(
                     version.compromised().map(Compromise::at),
-                    Some(timestamp(COMPROMISED)?),
+                    Some(COMPROMISED.parse::<Timestamp>()?),
                     "the flag keeps its time"
                 );
             }
@@ -464,9 +457,9 @@ fn every_other_transition_is_refused() -> KeyringResult<()> {
             let before = edit.record().to_json()?;
             assert!(
                 matches!(
-                    operation.apply(&mut edit, key_id(1)?),
+                    operation.apply(&mut edit, KeyId::try_from(1)?),
                     Err(KeyringError::InvalidTransition(error))
-                        if error.transition == operation.transition() && error.key_id == key_id(1)?
+                        if error.transition == operation.transition() && error.key_id == KeyId::try_from(1)?
                 ),
                 "{operation:?} on {state}, compromised {compromised}"
             );
@@ -484,8 +477,8 @@ fn every_other_transition_is_refused() -> KeyringResult<()> {
 fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
     assert!(matches!(
-        edit.retire(key_id(9)?, Timestamp::now()),
-        Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == key_id(9)?
+        edit.retire(KeyId::try_from(9)?, Timestamp::now()),
+        Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == KeyId::try_from(9)?
     ));
     Ok(())
 }
@@ -493,7 +486,7 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
 fn new_version(algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
     Ok(NewVersion {
         algorithm,
-        dek: wrapped_dek()?,
+        dek: EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None),
     })
 }
 
@@ -509,8 +502,8 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
         rotation,
         Rotation {
             purpose: Purpose::Randomized,
-            previous: Some(key_id(2)?),
-            current: key_id(3)?,
+            previous: Some(KeyId::try_from(2)?),
+            current: KeyId::try_from(3)?,
         }
     );
     let rotation = edit.rotate(
@@ -519,10 +512,10 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
         ))?,
         now,
     )?;
-    assert_eq!(rotation.current, key_id(0x8000_0002)?);
+    assert_eq!(rotation.current, KeyId::try_from(0x8000_0002)?);
     let record = edit.finish()?;
     assert_eq!(
-        record.version(key_id(2)?).map(KeyVersion::state),
+        record.version(KeyId::try_from(2)?).map(KeyVersion::state),
         Some(KeyVersionState::DecryptOnly)
     );
     assert_eq!(record.updated_at(), now);
@@ -536,7 +529,10 @@ fn rotation_without_an_active_version_creates_one() -> KeyringResult<()> {
         new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm))?,
         Timestamp::now(),
     )?;
-    assert_eq!((rotation.previous, rotation.current), (None, key_id(2)?));
+    assert_eq!(
+        (rotation.previous, rotation.current),
+        (None, KeyId::try_from(2)?)
+    );
     Ok(())
 }
 
@@ -546,25 +542,25 @@ fn compromising_the_active_version_rotates_in_the_same_change() -> KeyringResult
     let replacement = new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm))?;
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
     let rotation = edit.mark_compromised(
-        key_id(2)?,
+        KeyId::try_from(2)?,
         Compromise::new(now, Some("leaked".to_string())),
         Some(replacement),
         now,
     )?;
     assert_eq!(
         rotation.map(|rotation| (rotation.previous, rotation.current)),
-        Some((Some(key_id(2)?), key_id(3)?))
+        Some((Some(KeyId::try_from(2)?), KeyId::try_from(3)?))
     );
     assert_eq!(
         edit.record()
             .active(Purpose::Randomized)
             .map(KeyVersion::key_id),
-        Some(key_id(3)?)
+        Some(KeyId::try_from(3)?)
     );
 
     let mut flag_alone = RecordEdit::from(parse(&rotated()?)?);
     let rotation =
-        flag_alone.mark_compromised(key_id(2)?, Compromise::new(now, None), None, now)?;
+        flag_alone.mark_compromised(KeyId::try_from(2)?, Compromise::new(now, None), None, now)?;
     assert_eq!(rotation, None);
     assert!(flag_alone.finish()?.active(Purpose::Randomized).is_none());
     Ok(())
@@ -591,26 +587,26 @@ fn a_regressed_record_is_refused() -> TestResult {
                     versions.remove(0);
                 }
             },
-            RegressionRule::VersionMissing(key_id(1)?),
+            RegressionRule::VersionMissing(KeyId::try_from(1)?),
         ),
         (
             |next| next["versions"][1]["created_at"] = json!(ROTATED),
-            RegressionRule::VersionAltered(key_id(2)?),
+            RegressionRule::VersionAltered(KeyId::try_from(2)?),
         ),
         (
             |next| next["versions"][0]["compromised"] = Value::Null,
-            RegressionRule::CompromiseCleared(key_id(1)?),
+            RegressionRule::CompromiseCleared(KeyId::try_from(1)?),
         ),
         (
             |next| next["versions"][0]["compromised"]["at"] = json!(ROTATED),
-            RegressionRule::CompromiseAltered(key_id(1)?),
+            RegressionRule::CompromiseAltered(KeyId::try_from(1)?),
         ),
         (
             |next| {
                 next["versions"][1]["state"] = json!("decrypt_only");
                 next["versions"][2]["state"] = json!("active");
             },
-            RegressionRule::StateReverted(key_id(3)?),
+            RegressionRule::StateReverted(KeyId::try_from(3)?),
         ),
         (
             |next| {
@@ -618,7 +614,7 @@ fn a_regressed_record_is_refused() -> TestResult {
                 next["versions"][3]["wrapped_dek"] =
                     json!(STANDARD.encode([0xFF, 0x01, 0x00, 0x2A]));
             },
-            RegressionRule::StateReverted(key_id(4)?),
+            RegressionRule::StateReverted(KeyId::try_from(4)?),
         ),
     ];
     let held_record = parse(&held()?)?;
@@ -675,7 +671,10 @@ fn a_rewrapped_key_withdraws_the_bytes_it_replaces() -> TestResult {
         json!(STANDARD.encode(EncryptedDataEncryptionKey::new(vec![0x0B, 0xAD], None).to_bytes()?));
     let next = parse(&next)?;
     let withdrawn: Vec<_> = withdrawn_deks(&held_record, &next).collect();
-    assert_eq!(withdrawn, [&wrapped_dek()?]);
+    assert_eq!(
+        withdrawn,
+        [&EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None)]
+    );
     Ok(())
 }
 

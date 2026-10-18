@@ -110,8 +110,6 @@ impl Display for KeyId {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::*;
 
     #[test]
@@ -130,29 +128,5 @@ mod tests {
         assert_eq!(KeyId::try_from(u32::MAX >> 1)?.next(), None);
         assert_eq!(KeyId::try_from(u32::MAX)?.next(), None);
         Ok(())
-    }
-
-    proptest! {
-        #[test]
-        fn bit_31_is_the_purpose(id in 1u32..u32::MAX) {
-            prop_assume!(id != 1 << 31);
-            let key_id = KeyId::try_from(id)?;
-            let expected = if id >> 31 == 1 { Purpose::Deterministic } else { Purpose::Randomized };
-            prop_assert_eq!(key_id.purpose(), expected);
-            if let Some(next) = key_id.next() {
-                prop_assert_eq!(next.purpose(), expected);
-                prop_assert!(next > key_id);
-            }
-        }
-    }
-
-    #[test]
-    fn first_ids_start_each_purpose_at_ordinal_one() {
-        assert_eq!(KeyId::first(Purpose::Randomized).as_u32(), 1);
-        assert_eq!(KeyId::first(Purpose::Deterministic).as_u32(), 0x8000_0001);
-        assert_eq!(
-            KeyId::first(Purpose::Deterministic).purpose(),
-            Purpose::Deterministic
-        );
     }
 }

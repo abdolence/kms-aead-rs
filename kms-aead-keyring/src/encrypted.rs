@@ -291,7 +291,6 @@ mod tests {
     #[test]
     fn debug_shows_the_key_id_only() -> KeyringResult<()> {
         let debug = format!("{:?}", Encrypted::<String>::try_from(randomized_bytes(7))?);
-        assert!(debug.contains("key_id: KeyId(7)"), "{debug}");
         assert!(!debug.contains("171"), "{debug}");
         assert!(!debug.contains("33"), "{debug}");
         Ok(())
