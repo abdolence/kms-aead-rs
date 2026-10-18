@@ -15,7 +15,6 @@ pub enum Purpose {
     Deterministic,
 }
 
-/// `randomized`, `deterministic`: the values of the `purpose` span field.
 impl Purpose {
     /// The length of a value of this purpose around an empty plaintext: the prefix, and a nonce
     /// and a tag for a randomized value, a synthetic IV for a deterministic one.
@@ -27,6 +26,7 @@ impl Purpose {
     }
 }
 
+/// `randomized`, `deterministic`: the values of the `purpose` span field.
 impl Display for Purpose {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

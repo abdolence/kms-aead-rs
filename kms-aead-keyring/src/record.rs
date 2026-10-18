@@ -417,7 +417,8 @@ pub(crate) struct NewVersion {
 /// Every record that exists holds its invariants: at most one active version per purpose, an
 /// active version never compromised, a wrapped key on every version but the destroyed ones,
 /// unique key ids of the purpose of their algorithm, increasing within a purpose in creation
-/// order, at most 10,000 versions and at most 1 MiB of JSON.
+/// order, at most 1 MiB of JSON and at most 10,000 versions. The size cap is the one that
+/// binds: at about 400 bytes per version with its wrapped key, 1 MiB holds about 2,600.
 ///
 /// `Debug` shows identifiers, states and times, never a wrapped key.
 #[derive(Debug)]

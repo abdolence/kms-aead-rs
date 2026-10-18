@@ -70,9 +70,8 @@ where
     /// # Errors
     ///
     /// The store's errors, [`KeyringError::RecordMissing`] when the store holds no record,
-    /// [`KeyringError::RecordInvalid`] when it holds an invalid one,
-    /// [`KeyringError::KekMismatch`] when the provider's KEK is not the one the record names,
-    /// and `INVALID_DEK_CACHE_TTL` from kms-aead for a [`DekCache`] option of zero.
+    /// [`KeyringError::RecordInvalid`] when it holds an invalid one, and
+    /// [`KeyringError::KekMismatch`] when the provider's KEK is not the one the record names.
     pub async fn open(
         store: S,
         provider: P,

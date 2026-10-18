@@ -41,7 +41,6 @@ const ERROR_CODE: &str = "/kms_aead_keyring/error_code";
 /// cache: `rewrap`, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
-/// `Keyring encrypt`.
 pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: AeadBackend) -> Span {
     debug_span!(
         "Keyring encrypt",
@@ -97,7 +96,6 @@ pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
     )
 }
 
-/// `Keyring mark compromised`.
 pub(crate) fn mark_compromised(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring mark compromised",
@@ -109,7 +107,6 @@ pub(crate) fn mark_compromised(keyring: &KeyringId, key_id: KeyId) -> Span {
     )
 }
 
-/// `Keyring retire`.
 pub(crate) fn retire(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring retire",
@@ -120,7 +117,6 @@ pub(crate) fn retire(keyring: &KeyringId, key_id: KeyId) -> Span {
     )
 }
 
-/// `Keyring reinstate`.
 pub(crate) fn reinstate(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring reinstate",
@@ -131,7 +127,6 @@ pub(crate) fn reinstate(keyring: &KeyringId, key_id: KeyId) -> Span {
     )
 }
 
-/// `Keyring destroy`.
 pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring destroy",
