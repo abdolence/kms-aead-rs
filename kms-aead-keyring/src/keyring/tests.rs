@@ -921,7 +921,11 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
         .await?;
     let rotated = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
     let store = TestStore::new(&late);
-    *store.calls.written_before_watch.lock().map_err(|_| "poisoned")? = Some(rotated.record);
+    *store
+        .calls
+        .written_before_watch
+        .lock()
+        .map_err(|_| "poisoned")? = Some(rotated.record);
 
     let keyring = Keyring::open(
         store,

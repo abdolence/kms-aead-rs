@@ -21,7 +21,7 @@ use crate::errors::{
     KekMismatchError, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
     RecordInvalidReason,
 };
-use crate::record::NewVersion;
+use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
 use crate::spans;
 use crate::store::{KeyringStore, Stored, Swap};
@@ -306,12 +306,13 @@ where
         spans::in_span(spans::rotate(self.id(), purpose), async {
             let (rotation, conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    let algorithm = record
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    let algorithm = edit
+                        .record()
                         .algorithms()
                         .of(purpose)
                         .ok_or_else(|| KeyringError::no_algorithm(self.id(), purpose))?;
-                    self.rotate_record(record, algorithm).await
+                    self.rotate_record(edit, algorithm).await
                 })
                 .await?;
             spans::record_cas_retries(conflicts);
@@ -331,9 +332,9 @@ where
         spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
             let (rotation, conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    record.set_algorithm(algorithm, Timestamp::now());
-                    self.rotate_record(record, algorithm).await
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.set_algorithm(algorithm, Timestamp::now());
+                    self.rotate_record(edit, algorithm).await
                 })
                 .await?;
             spans::record_cas_retries(conflicts);
@@ -365,13 +366,14 @@ where
         spans::in_span(spans::mark_compromised(self.id(), key_id), async {
             let (rotation, conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    let record = edit.record();
                     let replacement = match record.version(key_id).map(KeyVersion::state) {
                         Some(KeyVersionState::Active) => self.replacement(record, key_id).await,
                         _ => None,
                     };
                     let now = Timestamp::now();
-                    record.mark_compromised(
+                    edit.mark_compromised(
                         key_id,
                         Compromise::new(now, note.clone()),
                         replacement,
@@ -400,8 +402,8 @@ where
         spans::in_span(spans::retire(self.id(), key_id), async {
             let ((), conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    record.retire(key_id, Timestamp::now())
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.retire(key_id, Timestamp::now())
                 })
                 .await?;
             spans::record_cas_retries(conflicts);
@@ -420,8 +422,8 @@ where
         spans::in_span(spans::reinstate(self.id(), key_id), async {
             let ((), conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    record.reinstate(key_id, Timestamp::now())
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.reinstate(key_id, Timestamp::now())
                 })
                 .await?;
             spans::record_cas_retries(conflicts);
@@ -440,8 +442,8 @@ where
         spans::in_span(spans::destroy(self.id(), key_id), async {
             let ((), conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    record.destroy(key_id, Timestamp::now())
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.destroy(key_id, Timestamp::now())
                 })
                 .await?;
             spans::record_cas_retries(conflicts);
@@ -462,12 +464,12 @@ where
         spans::in_span(spans::rewrap(self.id()), async {
             let (versions, conflicts) = self
                 .cache
-                .write(self.cas_retries, async |record: &mut KeyringRecord| {
-                    let deks = record.wrapped_deks();
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    let deks = edit.record().wrapped_deks();
                     for (key_id, dek) in &deks {
                         let key = self.provider.decrypt_data_encryption_key(dek).await?;
                         let rewrapped = self.provider.encrypt_data_encryption_key(&key).await?;
-                        record.replace_dek(*key_id, rewrapped, Timestamp::now())?;
+                        edit.replace_dek(*key_id, rewrapped, Timestamp::now())?;
                     }
                     Ok(deks.len())
                 })
@@ -601,7 +603,7 @@ where
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
             if !std::ptr::eq(record, &*current)
-                && record.withdrawn_deks(&current).any(|withdrawn| withdrawn == dek)
+                && withdrawn_deks(record, &current).any(|withdrawn| withdrawn == dek)
             {
                 self.dek_cache().invalidate(&self.provider.kek(), dek);
             }
@@ -640,11 +642,11 @@ where
 
     async fn rotate_record(
         &self,
-        record: &mut KeyringRecord,
+        edit: &mut RecordEdit,
         algorithm: KeyAlgorithm,
     ) -> KeyringResult<Rotation> {
         let new = NewVersion::generate(algorithm, &self.provider, self.backend).await?;
-        record.rotate(new, Timestamp::now())
+        edit.rotate(new, Timestamp::now())
     }
 }
 
@@ -767,16 +769,16 @@ impl KeyringPolicy {
     {
         let now = Timestamp::now();
         let algorithms = Algorithms::new(self.randomized_algorithm, self.deterministic_algorithm);
-        let mut record = KeyringRecord::new(id, provider.kek(), algorithms, now);
+        let mut edit = RecordEdit::from(KeyringRecord::new(id, provider.kek(), algorithms, now));
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
             if let Some(algorithm) = algorithms.of(purpose) {
-                record.rotate(
+                edit.rotate(
                     NewVersion::generate(algorithm, provider, backend).await?,
                     now,
                 )?;
             }
         }
-        record.validated()
+        edit.finish()
     }
 }
 
@@ -868,5 +870,8 @@ pub enum KeyTrust {
     Compromised(Compromise),
 }
 
-#[cfg(all(test, any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")))]
+#[cfg(all(
+    test,
+    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+))]
 mod tests;

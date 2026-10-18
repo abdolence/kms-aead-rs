@@ -21,6 +21,7 @@ use kms_aead::KekRef;
 use tokio::time::Instant;
 
 use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
+use crate::record::{check_successor, withdrawn_deks, RecordEdit};
 use crate::spans;
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, Swap, WatchEvent};
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
@@ -177,14 +178,14 @@ impl<S: KeyringStore> RecordCache<S> {
     pub(crate) async fn write<T>(
         &self,
         cas_retries: u32,
-        mut change: impl AsyncFnMut(&mut KeyringRecord) -> KeyringResult<T>,
+        mut change: impl AsyncFnMut(&mut RecordEdit) -> KeyringResult<T>,
     ) -> KeyringResult<(T, u32)> {
         let mut refreshes = self.refresh.lock().await;
         for conflicts in 0..=cas_retries {
             let stored = self.read_for_write().await?;
-            let mut record = stored.record;
-            let outcome = change(&mut record).await?;
-            let record = record.validated()?;
+            let mut edit = RecordEdit::from(stored.record);
+            let outcome = change(&mut edit).await?;
+            let record = edit.finish()?;
             match self
                 .store
                 .compare_and_swap(&record, Some(&stored.revision))
@@ -226,7 +227,7 @@ impl<S: KeyringStore> RecordCache<S> {
             let stored = spans::timed(self.store.load(&self.id))
                 .await?
                 .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
-            match self.record().check_successor(&stored.record) {
+            match check_successor(&self.record(), &stored.record) {
                 Ok(()) => {
                     spans::record_load("false", Some(&stored.revision));
                     Ok(stored)
@@ -282,7 +283,7 @@ impl<S: KeyringStore> RecordCache<S> {
         refreshes: &mut Refreshes,
         stored: Stored<S::Revision>,
     ) -> Result<(), RegressionRule> {
-        self.record().check_successor(&stored.record)?;
+        check_successor(&self.record(), &stored.record)?;
         self.install(refreshes, stored);
         Ok(())
     }
@@ -301,7 +302,7 @@ impl<S: KeyringStore> RecordCache<S> {
             },
         )
         .record;
-        for dek in held.withdrawn_deks(&next) {
+        for dek in withdrawn_deks(&held, &next) {
             self.dek_cache.invalidate(&self.kek, dek);
         }
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
@@ -355,7 +356,12 @@ impl<S: KeyringStore> RecordCache<S> {
                 }
                 tokio::time::sleep_until(after(last, interval)).await;
             }
-            for event in watch.pending() {
+            // No more than were queued here, so that a listener that keeps sending cannot hold
+            // the task in this loop.
+            for _ in 0..watch.events.len() {
+                let Ok(event) = watch.events.try_recv() else {
+                    break;
+                };
                 event.calls_for_revalidation(&id);
             }
             let Some(cache) = cache.upgrade() else {

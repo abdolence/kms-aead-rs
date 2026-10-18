@@ -202,7 +202,9 @@ impl KeyringStore for TestStore {
             .take();
         if let Some(record) = written {
             let stored = self.memory.load(id).await?.map(|stored| stored.revision);
-            self.memory.compare_and_swap(&record, stored.as_ref()).await?;
+            self.memory
+                .compare_and_swap(&record, stored.as_ref())
+                .await?;
         }
         self.memory.watch(id).await
     }

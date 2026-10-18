@@ -113,7 +113,7 @@ pub enum Swap<R> {
 /// [`Sender::closed`](mpsc::Sender::closed) resolves or a send fails.
 #[derive(Debug)]
 pub struct KeyringWatch {
-    events: mpsc::Receiver<WatchEvent>,
+    pub(crate) events: mpsc::Receiver<WatchEvent>,
 }
 
 impl KeyringWatch {
@@ -125,14 +125,6 @@ impl KeyringWatch {
     /// The next signal, or `None` once the listener has stopped.
     pub async fn next(&mut self) -> Option<WatchEvent> {
         self.events.recv().await
-    }
-
-    /// The signals that have already arrived. Takes no more than were queued at the call, so
-    /// that a listener that keeps sending cannot hold the caller here.
-    pub(crate) fn pending(&mut self) -> Vec<WatchEvent> {
-        (0..self.events.len())
-            .map_while(|_| self.events.try_recv().ok())
-            .collect()
     }
 }
 

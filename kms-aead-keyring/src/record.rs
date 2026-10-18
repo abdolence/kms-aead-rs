@@ -503,11 +503,42 @@ impl KeyringRecord {
         self.updated_at
     }
 
+    /// The wrapped key of every version that holds one, by key id.
+    pub(crate) fn wrapped_deks(&self) -> Vec<(KeyId, EncryptedDataEncryptionKey)> {
+        self.versions
+            .iter()
+            .filter_map(|version| Some((version.key_id, version.wrapped_dek()?.clone())))
+            .collect()
+    }
+}
+
+/// A record that an administrative write is changing: the lifecycle transitions apply to it,
+/// and [`finish`](Self::finish) checks the result as a reader would, before it is written.
+pub(crate) struct RecordEdit(KeyringRecord);
+
+impl From<KeyringRecord> for RecordEdit {
+    fn from(record: KeyringRecord) -> Self {
+        Self(record)
+    }
+}
+
+impl RecordEdit {
+    /// The record as changed so far.
+    pub(crate) fn record(&self) -> &KeyringRecord {
+        &self.0
+    }
+
+    /// The changed record as a reader parses it from the store, so that a record that would
+    /// fail its invariants or caps there is never written.
+    pub(crate) fn finish(self) -> KeyringResult<KeyringRecord> {
+        KeyringRecord::from_json(&self.0.id, &self.0.to_json()?)
+    }
+
     /// Adds `new` as the active version of its purpose; the active version it replaces decrypts
     /// only.
     pub(crate) fn rotate(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<Rotation> {
         let purpose = new.algorithm.purpose();
-        let previous = self.active(purpose).map(KeyVersion::key_id);
+        let previous = self.0.active(purpose).map(KeyVersion::key_id);
         if let Some(previous) = previous {
             self.change_state(previous, Transition::Rotate, now, |state| match state {
                 VersionState::Active(dek) => Some(VersionState::DecryptOnly(RetainedDek {
@@ -536,6 +567,7 @@ impl KeyringRecord {
         now: Timestamp,
     ) -> KeyringResult<Option<Rotation>> {
         let was_active = self
+            .0
             .version(key_id)
             .is_some_and(|version| version.state() == KeyVersionState::Active);
         self.change_state(
@@ -589,13 +621,6 @@ impl KeyringRecord {
         })
     }
 
-    pub(crate) fn wrapped_deks(&self) -> Vec<(KeyId, EncryptedDataEncryptionKey)> {
-        self.versions
-            .iter()
-            .filter_map(|version| Some((version.key_id, version.wrapped_dek()?.clone())))
-            .collect()
-    }
-
     /// Puts `dek`, the same key wrapped again, in place of `key_id`'s wrapped key, in whatever
     /// state the version is.
     pub(crate) fn replace_dek(
@@ -604,94 +629,33 @@ impl KeyringRecord {
         dek: EncryptedDataEncryptionKey,
         now: Timestamp,
     ) -> KeyringResult<()> {
-        let Self {
-            id,
-            versions,
-            updated_at,
-            ..
-        } = self;
-        let version = versions
-            .iter_mut()
-            .find(|version| version.key_id == key_id)
-            .ok_or_else(|| KeyringError::key_version_unknown(id, key_id))?;
-        match &mut version.state {
+        match &mut self.version_mut(key_id)?.state {
             VersionState::Active(held) => *held = dek,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => kept.dek = dek,
             VersionState::Destroyed(_) => {
                 return Err(KeyringError::record_invalid(
-                    id,
+                    &self.0.id,
                     RecordInvalidReason::MissingMaterial(key_id),
                 ))
             }
         }
-        *updated_at = now;
+        self.0.updated_at = now;
         Ok(())
     }
 
     pub(crate) fn set_algorithm(&mut self, algorithm: KeyAlgorithm, now: Timestamp) {
+        let algorithms = &mut self.0.algorithms;
         match algorithm {
-            KeyAlgorithm::Randomized(algorithm) => self.algorithms.randomized = algorithm,
-            KeyAlgorithm::Deterministic(algorithm) => {
-                self.algorithms.deterministic = Some(algorithm)
-            }
+            KeyAlgorithm::Randomized(algorithm) => algorithms.randomized = algorithm,
+            KeyAlgorithm::Deterministic(algorithm) => algorithms.deterministic = Some(algorithm),
         }
-        self.updated_at = now;
-    }
-
-    /// The record as a reader parses it from the store, so that a record that would fail its
-    /// invariants or caps there is never written.
-    pub(crate) fn validated(self) -> KeyringResult<Self> {
-        Self::from_json(&self.id, &self.to_json()?)
-    }
-
-    /// Whether `next`, a record read from the store, moves forward from this one: every version
-    /// of this record is still there, with the same algorithm and creation time, its compromised
-    /// flag kept with its time, and its state moved along the lifecycle. New versions are free.
-    pub(crate) fn check_successor(&self, next: &KeyringRecord) -> Result<(), RegressionRule> {
-        for held in &self.versions {
-            let key_id = held.key_id;
-            let Some(version) = next.version(key_id) else {
-                return Err(RegressionRule::VersionMissing(key_id));
-            };
-            if version.algorithm != held.algorithm || version.created_at != held.created_at {
-                return Err(RegressionRule::VersionAltered(key_id));
-            }
-            match (held.compromised(), version.compromised()) {
-                (Some(_), None) => return Err(RegressionRule::CompromiseCleared(key_id)),
-                (Some(held), Some(compromise)) if held.at != compromise.at => {
-                    return Err(RegressionRule::CompromiseAltered(key_id))
-                }
-                _ => {}
-            }
-            if !held.state().reaches(version.state()) {
-                return Err(RegressionRule::StateReverted(key_id));
-            }
-        }
-        Ok(())
-    }
-
-    /// The wrapped keys this record reads under that `next` takes out of use: their version is
-    /// gone, retired or destroyed, newly flagged compromised, or holds another wrapped key, as
-    /// after a rewrap, which leaves the cached plaintext of the old bytes orphaned.
-    pub(crate) fn withdrawn_deks<'a>(
-        &'a self,
-        next: &'a KeyringRecord,
-    ) -> impl Iterator<Item = &'a EncryptedDataEncryptionKey> + 'a {
-        self.versions.iter().filter_map(move |held| {
-            let (dek, compromise) = held.readable_dek()?;
-            let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
-                None => true,
-                Some((next_dek, next_compromise)) => {
-                    next_dek != dek || (next_compromise.is_some() && compromise.is_none())
-                }
-            };
-            withdrawn.then_some(dek)
-        })
+        self.0.updated_at = now;
     }
 
     fn push_active(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
+        let record = &mut self.0;
         let purpose = new.algorithm.purpose();
-        let key_id = match self
+        let key_id = match record
             .versions
             .iter()
             .map(KeyVersion::key_id)
@@ -701,19 +665,19 @@ impl KeyringRecord {
             None => KeyId::first(purpose),
             Some(last) => last.next().ok_or_else(|| {
                 KeyringError::record_invalid(
-                    &self.id,
+                    &record.id,
                     RecordInvalidReason::KeyIdsExhausted(purpose),
                 )
             })?,
         };
-        self.versions.push(KeyVersion {
+        record.versions.push(KeyVersion {
             key_id,
             algorithm: new.algorithm,
             created_at: now,
             state_changed_at: now,
             state: VersionState::Active(new.dek),
         });
-        self.updated_at = now;
+        record.updated_at = now;
         Ok(key_id)
     }
 
@@ -726,29 +690,78 @@ impl KeyringRecord {
         now: Timestamp,
         next: impl FnOnce(&VersionState) -> Option<VersionState>,
     ) -> KeyringResult<()> {
-        let Self {
-            id,
-            versions,
-            updated_at,
-            ..
-        } = self;
-        let version = versions
-            .iter_mut()
-            .find(|version| version.key_id == key_id)
-            .ok_or_else(|| KeyringError::key_version_unknown(id, key_id))?;
-        let state = next(&version.state).ok_or_else(|| {
-            KeyringError::InvalidTransition(InvalidTransitionError {
-                keyring: id.clone(),
+        let version = self.version_mut(key_id)?;
+        let Some(state) = next(&version.state) else {
+            let from = version.state.kind();
+            return Err(KeyringError::InvalidTransition(InvalidTransitionError {
+                keyring: self.0.id.clone(),
                 key_id,
-                from: version.state.kind(),
+                from,
                 transition,
-            })
-        })?;
+            }));
+        };
         version.state = state;
         version.state_changed_at = now;
-        *updated_at = now;
+        self.0.updated_at = now;
         Ok(())
     }
+
+    /// The version `key_id`, or `KeyVersionUnknown`.
+    fn version_mut(&mut self, key_id: KeyId) -> KeyringResult<&mut KeyVersion> {
+        let KeyringRecord { id, versions, .. } = &mut self.0;
+        versions
+            .iter_mut()
+            .find(|version| version.key_id == key_id)
+            .ok_or_else(|| KeyringError::key_version_unknown(id, key_id))
+    }
+}
+
+/// Whether `next`, a record read from the store, moves forward from `held`: every version of
+/// `held` is still there, with the same algorithm and creation time, its compromised flag kept
+/// with its time, and its state moved along the lifecycle. New versions are free.
+pub(crate) fn check_successor(
+    held: &KeyringRecord,
+    next: &KeyringRecord,
+) -> Result<(), RegressionRule> {
+    for held in &held.versions {
+        let key_id = held.key_id;
+        let Some(version) = next.version(key_id) else {
+            return Err(RegressionRule::VersionMissing(key_id));
+        };
+        if version.algorithm != held.algorithm || version.created_at != held.created_at {
+            return Err(RegressionRule::VersionAltered(key_id));
+        }
+        match (held.compromised(), version.compromised()) {
+            (Some(_), None) => return Err(RegressionRule::CompromiseCleared(key_id)),
+            (Some(held), Some(compromise)) if held.at != compromise.at => {
+                return Err(RegressionRule::CompromiseAltered(key_id))
+            }
+            _ => {}
+        }
+        if !held.state().reaches(version.state()) {
+            return Err(RegressionRule::StateReverted(key_id));
+        }
+    }
+    Ok(())
+}
+
+/// The wrapped keys `held` reads under that `next` takes out of use: their version is gone,
+/// retired or destroyed, newly flagged compromised, or holds another wrapped key, as after a
+/// rewrap, which leaves the cached plaintext of the old bytes orphaned.
+pub(crate) fn withdrawn_deks<'a>(
+    held: &'a KeyringRecord,
+    next: &'a KeyringRecord,
+) -> impl Iterator<Item = &'a EncryptedDataEncryptionKey> + 'a {
+    held.versions.iter().filter_map(move |held| {
+        let (dek, compromise) = held.readable_dek()?;
+        let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
+            None => true,
+            Some((next_dek, next_compromise)) => {
+                next_dek != dek || (next_compromise.is_some() && compromise.is_none())
+            }
+        };
+        withdrawn.then_some(dek)
+    })
 }
 
 #[cfg(test)]
