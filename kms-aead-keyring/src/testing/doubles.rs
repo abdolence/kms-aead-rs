@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    AeadBackend, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -68,13 +68,14 @@ impl TestProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for TestProvider {
-    fn kek(&self) -> KekRef {
+    fn kek(&self) -> &KekRef {
         self.kms.kek()
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         if self.calls.fail_wraps.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
@@ -83,15 +84,20 @@ impl KmsAeadEncryptionProvider for TestProvider {
             ));
         }
         self.calls.wraps.fetch_add(1, Ordering::SeqCst);
-        self.kms.encrypt_data_encryption_key(encryption_key).await
+        self.kms
+            .encrypt_data_encryption_key(encryption_key, binding)
+            .await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         self.calls.unwraps.fetch_add(1, Ordering::SeqCst);
-        self.kms.decrypt_data_encryption_key(encrypted_key).await
+        self.kms
+            .decrypt_data_encryption_key(encrypted_key, binding)
+            .await
     }
 }
 

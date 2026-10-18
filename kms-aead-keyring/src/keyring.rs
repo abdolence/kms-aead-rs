@@ -1,17 +1,13 @@
 //! [`Keyring`]: field encryption under the key versions of one keyring record.
 
-use std::future::Future;
-use std::pin::pin;
 use std::sync::Arc;
-use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use kms_aead::errors::KmsAeadSystemError;
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption, CipherText, DataEncryptionKey,
-    DeterministicAlgorithm, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, DeterministicAlgorithm,
+    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -201,7 +197,7 @@ where
             let plaintext = value.to_plaintext()?;
             let sealed = self
                 .with_cached_key(&record, dek, |key| {
-                    ready(cipher.encrypt_value(&aad.bytes, &plaintext, key))
+                    cipher.encrypt_value(&aad.bytes, &plaintext, key)
                 })
                 .await??;
             Ok(Encrypted::new(version.key_id(), &sealed.0))
@@ -454,8 +450,11 @@ where
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let deks = edit.record().wrapped_deks();
                     for (key_id, dek) in &deks {
-                        let key = self.provider.decrypt_data_encryption_key(dek).await?;
-                        let rewrapped = self.provider.encrypt_data_encryption_key(&key).await?;
+                        let key = self.provider.decrypt_data_encryption_key(dek, None).await?;
+                        let rewrapped = self
+                            .provider
+                            .encrypt_data_encryption_key(&key, None)
+                            .await?;
                         edit.replace_dek(*key_id, rewrapped, Timestamp::now())?;
                     }
                     Ok(deks.len())
@@ -475,11 +474,11 @@ where
         stored: Stored<S::Revision>,
     ) -> KeyringResult<Self> {
         let kek = provider.kek();
-        if stored.record.kek() != &kek {
+        if stored.record.kek() != kek {
             return Err(KeyringError::KekMismatch(KekMismatchError {
                 keyring: stored.record.id().clone(),
                 recorded: stored.record.kek().clone(),
-                provider: kek,
+                provider: kek.clone(),
             }));
         }
         let dek_cache = match options.dek_cache {
@@ -488,7 +487,7 @@ where
         };
         let cache = Arc::new(RecordCache::new(
             store,
-            kek,
+            kek.clone(),
             dek_cache,
             options.record_ttl,
             options.reload_min_interval,
@@ -563,7 +562,7 @@ where
         let body = CipherText(value.body().to_vec());
         Ok(self
             .with_cached_key(record, dek, |key| {
-                ready(cipher.decrypt_value(&aad.bytes, &body, key))
+                cipher.decrypt_value(&aad.bytes, &body, key)
             })
             .await??)
     }
@@ -583,7 +582,7 @@ where
     ) -> KeyringResult<T> {
         let (result, outcome) = self
             .dek_cache()
-            .with_key(&self.provider, dek, use_key)
+            .with_key(&self.provider, dek, None, use_key)
             .await?;
         spans::record_dek_cache(outcome);
         if outcome == DekCacheOutcome::Miss {
@@ -591,7 +590,7 @@ where
             if !std::ptr::eq(record, &*current)
                 && withdrawn_deks(record, &current).any(|withdrawn| withdrawn == dek)
             {
-                self.dek_cache().invalidate(&self.provider.kek(), dek);
+                self.dek_cache().invalidate(self.provider.kek(), dek, None);
             }
         }
         Ok(result)
@@ -619,11 +618,9 @@ where
         value: &Encrypted<T>,
     ) -> KeyringResult<SecretValue> {
         let cipher = self.cipher(version)?;
-        let key = self.provider.decrypt_data_encryption_key(dek).await?;
+        let key = self.provider.decrypt_data_encryption_key(dek, None).await?;
         spans::record_dek_cache_bypassed();
-        Ok(cipher
-            .decrypt_value(&aad.bytes, &CipherText(value.body().to_vec()), &key)
-            .await?)
+        Ok(cipher.decrypt_value(&aad.bytes, &CipherText(value.body().to_vec()), &key)?)
     }
 
     async fn rotate_record(
@@ -633,18 +630,6 @@ where
     ) -> KeyringResult<Rotation> {
         let new = NewVersion::generate(algorithm, &self.provider, self.backend).await?;
         edit.rotate(new, Timestamp::now())
-    }
-}
-
-/// Runs a call of kms-aead's `AeadEncryption`, which seals and opens without awaiting anything,
-/// inside a synchronous [`DekCache`] closure, which holds the key intact only while it runs.
-fn ready<T>(call: impl Future<Output = KmsAeadResult<T>>) -> KmsAeadResult<T> {
-    match pin!(call).poll(&mut Context::from_waker(Waker::noop())) {
-        Poll::Ready(result) => result,
-        Poll::Pending => Err(KmsAeadSystemError::create(
-            "AEAD_PENDING",
-            "The AEAD call did not complete without waiting",
-        )),
     }
 }
 
@@ -661,10 +646,10 @@ impl NewVersion {
     {
         let dek = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
-                let key = AeadCipher::new(backend, algorithm)?
-                    .generate_data_encryption_key_with(provider)
+                let (_, dek) = AeadCipher::new(backend, algorithm)?
+                    .generate_wrapped_key(provider, None)
                     .await?;
-                provider.encrypt_data_encryption_key(&key).await?
+                dek
             }
             KeyAlgorithm::Deterministic(algorithm) => {
                 Self::wrapped_deterministic_key(algorithm, provider).await?
@@ -681,12 +666,10 @@ impl NewVersion {
     where
         P: KmsAeadEncryptionProvider + Sync,
     {
-        let key = kms_aead::DeterministicCipher::new(algorithm)?
-            .generate_key_with(provider)
+        let (_, dek) = kms_aead::DeterministicCipher::new(algorithm)?
+            .generate_wrapped_key(provider, None)
             .await?;
-        // The copy is a SecretValue, zeroized when the wrap returns.
-        let key = kms_aead::DataEncryptionKey::from(key.value().clone());
-        Ok(provider.encrypt_data_encryption_key(&key).await?)
+        Ok(dek)
     }
 
     #[cfg(not(feature = "deterministic"))]
@@ -755,7 +738,12 @@ impl KeyringPolicy {
     {
         let now = Timestamp::now();
         let algorithms = Algorithms::new(self.randomized_algorithm, self.deterministic_algorithm);
-        let mut edit = RecordEdit::from(KeyringRecord::new(id, provider.kek(), algorithms, now));
+        let mut edit = RecordEdit::from(KeyringRecord::new(
+            id,
+            provider.kek().clone(),
+            algorithms,
+            now,
+        ));
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
             if let Some(algorithm) = algorithms.of(purpose) {
                 edit.rotate(

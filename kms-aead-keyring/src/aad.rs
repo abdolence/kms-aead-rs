@@ -203,13 +203,12 @@ impl FieldSpec {
 /// `Debug` shows nothing of the bytes, not even their length: the default AAD holds an entity
 /// id.
 pub struct FieldAad {
-    /// A `Vec`, the form kms-aead's `AeadEncryption` takes.
     pub(crate) bytes: Vec<u8>,
 }
 
 impl FieldAad {
-    /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadEncryption`. SQL
-    /// cannot rebuild it, so BigQuery cannot decrypt the field.
+    /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadCipher`. SQL cannot
+    /// rebuild it, so BigQuery cannot decrypt the field.
     pub fn custom(bytes: Vec<u8>) -> Self {
         Self { bytes }
     }

@@ -2,13 +2,12 @@
 //! record is parsed from and checked against its invariants.
 
 use std::collections::HashSet;
+use std::str::FromStr;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use jiff::Timestamp;
-use kms_aead::{
-    AeadAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekProvider, KekRef,
-};
+use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -23,16 +22,6 @@ use crate::{KeyId, Purpose};
 pub(crate) const MAX_DOCUMENT_LEN: usize = 1 << 20;
 const MAX_VERSIONS: usize = 10_000;
 const SCHEMA: u32 = 1;
-
-/// Every algorithm kms-aead has, by the name the record stores, which is its `Display`. An
-/// algorithm missing here could be written to a record and not read back.
-const RANDOMIZED_ALGORITHMS: [AeadAlgorithm; 4] = [
-    AeadAlgorithm::ChaCha20Poly1305,
-    AeadAlgorithm::Aes128Gcm,
-    AeadAlgorithm::Aes256Gcm,
-    AeadAlgorithm::Aes256GcmSiv,
-];
-const DETERMINISTIC_ALGORITHMS: [DeterministicAlgorithm; 1] = [DeterministicAlgorithm::Aes256Siv];
 
 /// The JSON document of a record. Its fields are primitives, so that every rule of the record
 /// is checked once, in [`KeyringRecord::from_stored`], with a reason naming the rule.
@@ -82,9 +71,6 @@ impl TryFrom<&KeyringRecord> for StoredRecord {
     type Error = KeyringError;
 
     fn try_from(record: &KeyringRecord) -> KeyringResult<Self> {
-        let provider = provider_name(record.kek.provider()).ok_or_else(|| {
-            KeyringError::record_invalid(&record.id, RecordInvalidReason::UnknownKekProvider)
-        })?;
         let versions = record
             .versions
             .iter()
@@ -110,7 +96,7 @@ impl TryFrom<&KeyringRecord> for StoredRecord {
             schema: SCHEMA,
             id: record.id.to_string(),
             kek: StoredKek {
-                provider: provider.to_string(),
+                provider: record.kek.provider().to_string(),
                 key: record.kek.key().to_string(),
             },
             algorithms: StoredAlgorithms {
@@ -132,8 +118,8 @@ impl KeyringRecord {
     ///
     /// # Errors
     ///
-    /// [`KeyringError::RecordInvalid`] with [`RecordInvalidReason::UnknownKekProvider`] when
-    /// the KEK names a KMS this release cannot store, which no provider of kms-aead does.
+    /// [`KeyringError::Kms`] when a wrapped key does not encode, which kms-aead's wrapped keys
+    /// always do.
     pub fn to_json(&self) -> KeyringResult<Vec<u8>> {
         serde_json::to_vec(&StoredRecord::try_from(self)?)
             .map_err(|error| malformed(&self.id, &error))
@@ -190,7 +176,10 @@ impl KeyringRecord {
             .map_err(invalid)?;
         let record = Self {
             id: id.clone(),
-            kek: KekRef::new(kek_provider(stored.kek.provider), stored.kek.key),
+            kek: KekRef::new(
+                KekProvider::from_str(&stored.kek.provider).unwrap_or_else(|never| match never {}),
+                stored.kek.key,
+            ),
             algorithms,
             versions,
             created_at: stored.created_at,
@@ -299,16 +288,10 @@ fn malformed(id: &KeyringId, error: &serde_json::Error) -> KeyringError {
 }
 
 fn algorithm(name: &str) -> Option<KeyAlgorithm> {
-    RANDOMIZED_ALGORITHMS
-        .into_iter()
-        .find(|algorithm| algorithm.to_string() == name)
+    name.parse()
         .map(KeyAlgorithm::Randomized)
-        .or_else(|| {
-            DETERMINISTIC_ALGORITHMS
-                .into_iter()
-                .find(|algorithm| algorithm.to_string() == name)
-                .map(KeyAlgorithm::Deterministic)
-        })
+        .or_else(|_| name.parse().map(KeyAlgorithm::Deterministic))
+        .ok()
 }
 
 fn state(name: &str) -> Option<KeyVersionState> {
@@ -320,29 +303,4 @@ fn state(name: &str) -> Option<KeyVersionState> {
     ]
     .into_iter()
     .find(|state| state.to_string() == name)
-}
-
-/// The name a record stores for `provider`: the value of kms-aead's `provider` span field.
-fn provider_name(provider: &KekProvider) -> Option<&str> {
-    match provider {
-        KekProvider::Gcp => Some("gcp"),
-        KekProvider::Aws => Some("aws"),
-        KekProvider::Azure => Some("azure"),
-        KekProvider::HcVaultTransit => Some("hc_vault_transit"),
-        KekProvider::Local => Some("local"),
-        KekProvider::Other(name) => Some(name),
-        _ => None,
-    }
-}
-
-/// The provider a record names `name`; a name of no kms-aead provider is an application's own.
-fn kek_provider(name: String) -> KekProvider {
-    match name.as_str() {
-        "gcp" => KekProvider::Gcp,
-        "aws" => KekProvider::Aws,
-        "azure" => KekProvider::Azure,
-        "hc_vault_transit" => KekProvider::HcVaultTransit,
-        "local" => KekProvider::Local,
-        _ => KekProvider::Other(name),
-    }
 }

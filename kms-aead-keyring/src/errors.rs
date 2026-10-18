@@ -102,11 +102,7 @@ impl KeyringError {
     /// refused, and the variant name otherwise.
     pub(crate) fn event_code(&self) -> &str {
         match self {
-            KeyringError::Kms(KmsAeadError::SystemError(error)) => &error.public.code,
-            KeyringError::Kms(KmsAeadError::NetworkError(error)) => &error.public.code,
-            KeyringError::Kms(KmsAeadError::EncryptionError(error)) => &error.public.code,
-            KeyringError::Kms(KmsAeadError::UnsupportedAlgorithm(error)) => &error.public.code,
-            KeyringError::Kms(KmsAeadError::LegacyFormat(error)) => &error.public.code,
+            KeyringError::Kms(error) => error.code(),
             other => other.code(),
         }
     }
@@ -393,8 +389,6 @@ pub enum RecordInvalidReason {
     UnsupportedSchema(u32),
     /// The record names another keyring than the one it was read for.
     IdMismatch,
-    /// The record's KEK names a KMS this release does not know.
-    UnknownKekProvider,
     /// An algorithm name this release does not know: of the version with this key id, or of
     /// the record's algorithms for new versions when there is none.
     UnknownAlgorithm(Option<KeyId>),
@@ -443,7 +437,6 @@ impl Display for RecordInvalidReason {
                 write!(f, "schema {schema} is not 1")
             }
             RecordInvalidReason::IdMismatch => f.write_str("the record names another keyring"),
-            RecordInvalidReason::UnknownKekProvider => f.write_str("the KEK names an unknown KMS"),
             RecordInvalidReason::UnknownAlgorithm(Some(key_id)) => {
                 write!(f, "key version {key_id} names an unknown algorithm")
             }

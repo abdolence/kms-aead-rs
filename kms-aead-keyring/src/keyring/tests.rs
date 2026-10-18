@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use kms_aead::cache::DekCacheOutcome;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::{AeadAlgorithm, AeadCipher, AeadEncryption, CipherText, DataEncryptionKey};
+use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey};
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
@@ -82,10 +82,15 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
         .version(KeyId::try_from(1)?)
         .and_then(KeyVersion::wrapped_dek)
         .ok_or("version 1 holds no key")?;
-    let key = fixture.provider.decrypt_data_encryption_key(dek).await?;
-    let opened = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?
-        .decrypt_value(&aad.bytes, &CipherText(bytes[5..].to_vec()), &key)
+    let key = fixture
+        .provider
+        .decrypt_data_encryption_key(dek, None)
         .await?;
+    let opened = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?.decrypt_value(
+        &aad.bytes,
+        &CipherText(bytes[5..].to_vec()),
+        &key,
+    )?;
     assert_eq!(opened.as_sensitive_str(), ALICE);
     Ok(())
 }
@@ -105,7 +110,9 @@ async fn a_value_sealed_by_tink_decrypts() -> TestResult {
     let memory = MemoryKeyringStore::new();
     let provider = TestProvider::new("tink-kek")?;
     let tink_key = DataEncryptionKey::from(SecretValue::from((0u8..32).collect::<Vec<_>>()));
-    let wrapped = provider.encrypt_data_encryption_key(&tink_key).await?;
+    let wrapped = provider
+        .encrypt_data_encryption_key(&tink_key, None)
+        .await?;
     let document = json!({
         "schema": 1,
         "id": "tenant-42",
@@ -385,7 +392,7 @@ async fn open_with_the_wrong_kek_fails() -> TestResult {
     assert!(matches!(
         opened,
         Err(KeyringError::KekMismatch(error))
-            if error.recorded == fixture.provider.kek() && error.provider == other.kek()
+            if &error.recorded == fixture.provider.kek() && &error.provider == other.kek()
     ));
     Ok(())
 }
@@ -469,7 +476,7 @@ async fn a_key_unwrapped_under_a_superseded_record_is_evicted() -> TestResult {
     let ((), outcome) = fixture
         .keyring
         .dek_cache()
-        .with_key(&fixture.provider, dek, |_| ())
+        .with_key(&fixture.provider, dek, None, |_| ())
         .await?;
     assert_eq!(outcome, DekCacheOutcome::Miss);
     Ok(())
@@ -511,14 +518,15 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
         .version(KeyId::try_from(1)?)
         .and_then(KeyVersion::wrapped_dek)
         .ok_or("version 1 holds no key")?;
-    let leaked = fixture.provider.decrypt_data_encryption_key(dek).await?;
-    let body = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?
-        .encrypt_value(
-            &aad.bytes,
-            &SecretValue::from("mallory@example.com"),
-            &leaked,
-        )
+    let leaked = fixture
+        .provider
+        .decrypt_data_encryption_key(dek, None)
         .await?;
+    let body = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?.encrypt_value(
+        &aad.bytes,
+        &SecretValue::from("mallory@example.com"),
+        &leaked,
+    )?;
     let forged = Encrypted::<String>::new(KeyId::try_from(1)?, &body.0);
     fixture
         .keyring
