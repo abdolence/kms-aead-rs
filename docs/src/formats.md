@@ -118,10 +118,14 @@ Tink key type with `version` 0, which protobuf leaves out:
 | AES-256-GCM-SIV | `AesGcmSivKey` | `[0x1a][0x20][key: 32]` |
 | AES-256-SIV, deterministic | `AesSivKey` | `[0x12][0x40][key: 64]` |
 
+A beacon key of HMAC-SHA256 is wrapped as `[0x1a][0x20][key: 32]`: its 32 bytes in `key_value`,
+field 3, as in Tink's `HmacPrfKey` without its parameters, which are the bytes of a 32-byte
+`AesGcmKey`.
+
 `generate_new_dek`, `generate_new_deterministic_dek` and the `generate_wrapped_key` of both
-ciphers wrap their keys the same way. The message does not name its type, and AES-256-GCM and
-AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides how the key is
-used, as in Tink.
+ciphers and of `BeaconMac` wrap their keys the same way. The message does not name its type, and
+AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides
+how the key is used, as in Tink.
 
 An unwrapped DEK that is no serialized Tink key fails with `INVALID_KEY_FORMAT`. A wrapped Tink
 keyset unwraps under the same KEK too, and this is what keeps it out of the DEK cache.
@@ -158,6 +162,29 @@ The plaintext inside is the encoding of the field's `Plaintext` type: UTF-8 for 
 bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
 the integers, and compact JSON for `Json<T>`. See
 [Typed fields](./envelope-encryption.md#typed-fields).
+
+## Beacons
+
+A `Beacon<T>` is a prefix and a truncated HMAC-SHA256:
+
+```text
+[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
+```
+
+- `0x01` is the version of the beacon layout. A later layout takes another first byte, so that
+  beacons of both layouts can share a column during a re-index;
+- the key id names the beacon key that computed the beacon;
+- the HMAC keeps its first `bits` bits, and the unused low bits of the last byte are zero. A
+  beacon is 6 to 37 bytes.
+
+The HMAC covers the bits, the context and the plaintext, as the `Plaintext` type encodes it:
+
+```text
+HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
+```
+
+so that beacons of two fields, or of two bit counts, never match. `Beacon::try_from` checks the
+prefix and that 1 to 32 bytes of HMAC follow, and fails with `INVALID_BEACON_FORMAT` otherwise.
 
 ## Telling layouts apart
 
