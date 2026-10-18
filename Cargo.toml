@@ -13,6 +13,21 @@ keywords = ["kms", "google", "aws", "azure", "vault"]
 readme = "README.md"
 include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md"]
 
+[workspace]
+
+# The versions of the crates both members depend on, so that the two never resolve to different
+# releases. A member adds the features it needs on top.
+[workspace.dependencies]
+async-trait = "0.1"
+proptest = "1.4"
+rsb_derive = "0.5"
+secret-vault-value = { version = "1.0.4", features = ["base64"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+subtle = "2.6.1"
+tokio = { version = "1", default-features = false }
+tracing = "0.1"
+
 [badges]
 maintenance = { status = "actively-developed" }
 
@@ -22,11 +37,11 @@ path = "src/lib.rs"
 bench = false
 
 [dependencies]
-tracing = "0.1"
-secret-vault-value = { version = "1.0.4", features = ["base64"] }
+tracing = { workspace = true }
+secret-vault-value = { workspace = true }
 rvstruct = "0.3.4"
-rsb_derive = "0.5"
-async-trait = "0.1"
+rsb_derive = { workspace = true }
+async-trait = { workspace = true }
 hex = "0.4"
 ring = { version = "0.17", features = ["default", "std"], optional = true }
 # The oldest release that exports every algorithm the AwsLc backend offers, so that an
@@ -46,14 +61,14 @@ poly1305 = { version = "0.9", default-features = false, optional = true }
 polyval = { version = "0.7", default-features = false, optional = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { workspace = true, optional = true }
 gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
-subtle = "2.6.1"
+subtle = { workspace = true }
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
-tokio = { version = "1", default-features = false, features = ["sync"] }
+tokio = { workspace = true, features = ["sync"] }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1"], optional = true }
@@ -62,7 +77,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 rustls-native-certs = { version = "0.8", optional = true }
 webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
-serde_json = { version = "1", optional = true }
+serde_json = { workspace = true, optional = true }
 azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
 azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
 # Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
@@ -73,10 +88,10 @@ reqwest = { version = "0.13.2", optional = true, default-features = false }
 rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 futures = "0.3"
-serde_json = { version = "1" }
-proptest = "1.4"
+serde_json = { workspace = true }
+proptest = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 criterion = { version = "0.8", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "async_tokio"] }
 cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
