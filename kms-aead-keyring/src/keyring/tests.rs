@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use kms_aead::cache::DekCacheOutcome;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::{AeadAlgorithm, AeadCipher, AeadEncryption, CipherText, DataEncryptionKey};
 use secret_vault_value::SecretValue;
@@ -421,6 +422,31 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
     );
     fixture.keyring.decrypt(&aad, &value).await?;
     assert_eq!(fixture.unwraps(), 2, "Allow reads through the cache");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_key_unwrapped_under_a_superseded_record_is_evicted() -> TestResult {
+    let fixture = Fixture::new(no_watch()).await?;
+    let held = fixture.keyring.record();
+    let dek = held
+        .version(key_id(1)?)
+        .and_then(KeyVersion::wrapped_dek)
+        .ok_or("version 1 holds no key")?;
+    fixture
+        .other_process()
+        .await?
+        .mark_compromised(key_id(1)?, None)
+        .await?;
+    fixture.keyring.reload().await?;
+
+    fixture.keyring.with_cached_key(&held, dek, |_| ()).await?;
+    let ((), outcome) = fixture
+        .keyring
+        .dek_cache()
+        .with_key(&fixture.provider, dek, |_| ())
+        .await?;
+    assert_eq!(outcome, DekCacheOutcome::Miss);
     Ok(())
 }
 

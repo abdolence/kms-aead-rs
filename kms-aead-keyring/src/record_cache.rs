@@ -289,8 +289,7 @@ impl<S: KeyringStore> RecordCache<S> {
 
     /// Takes `stored` as the cached record, then evicts from the DEK cache the keys it takes out
     /// of use. A read that took the previous record just before can still cache such a key
-    /// again; it then stays until the DEK cache's TTL, and serves no read that the new record
-    /// refuses.
+    /// again after this eviction; the keyring evicts it once more after that read's miss.
     fn install(&self, _refreshes: &mut Refreshes, stored: Stored<S::Revision>) {
         let next = Arc::new(stored.record);
         let held = std::mem::replace(

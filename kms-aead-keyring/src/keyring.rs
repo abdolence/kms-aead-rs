@@ -7,11 +7,11 @@ use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use jiff::Timestamp;
-use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::errors::KmsAeadSystemError;
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption, CipherText, DeterministicAlgorithm,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption, CipherText, DataEncryptionKey,
+    DeterministicAlgorithm, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -200,14 +200,12 @@ where
             spans::record_sealing_version(version);
             let cipher = self.cipher(version)?;
             let plaintext = value.to_plaintext()?;
-            let (sealed, outcome) = self
-                .dek_cache()
-                .with_key(&self.provider, dek, |key| {
+            let sealed = self
+                .with_cached_key(&record, dek, |key| {
                     ready(cipher.encrypt_value(&aad.bytes, &plaintext, key))
                 })
-                .await?;
-            spans::record_dek_cache(outcome);
-            Ok(Encrypted::new(version.key_id(), &sealed?.0))
+                .await??;
+            Ok(Encrypted::new(version.key_id(), &sealed.0))
         })
         .await
     }
@@ -252,7 +250,7 @@ where
                     }
                 }
             }
-            T::from_plaintext(self.open_cached(version, dek, aad, value).await?)
+            T::from_plaintext(self.open_cached(&record, version, dek, aad, value).await?)
         })
         .await
     }
@@ -277,7 +275,7 @@ where
             let (version, dek, compromise) = self.readable(&record, value.key_id())?;
             let (plaintext, trust) = match compromise {
                 None => (
-                    self.open_cached(version, dek, aad, value).await?,
+                    self.open_cached(&record, version, dek, aad, value).await?,
                     KeyTrust::Trusted,
                 ),
                 Some(compromise) => (
@@ -563,8 +561,11 @@ where
         }
     }
 
+    /// Opens `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with
+    /// the key through the [`DekCache`].
     async fn open_cached<T>(
         &self,
+        record: &KeyringRecord,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
@@ -572,14 +573,40 @@ where
     ) -> KeyringResult<SecretValue> {
         let cipher = self.cipher(version)?;
         let body = CipherText(value.body().to_vec());
-        let (opened, outcome) = self
-            .dek_cache()
-            .with_key(&self.provider, dek, |key| {
+        Ok(self
+            .with_cached_key(record, dek, |key| {
                 ready(cipher.decrypt_value(&aad.bytes, &body, key))
             })
+            .await??)
+    }
+
+    /// Runs `use_key` with the key `dek` wraps, through the [`DekCache`], and records where the
+    /// key came from on the current span. `record` is the record `dek` was read from.
+    ///
+    /// A refresh evicts the keys it takes out of use once, when it takes the new record. A call
+    /// that read `dek` from the record before and unwraps it after that eviction caches it
+    /// again, so on a miss the key is evicted here when the cached record has since withdrawn
+    /// it.
+    async fn with_cached_key<T>(
+        &self,
+        record: &KeyringRecord,
+        dek: &EncryptedDataEncryptionKey,
+        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+    ) -> KeyringResult<T> {
+        let (result, outcome) = self
+            .dek_cache()
+            .with_key(&self.provider, dek, use_key)
             .await?;
         spans::record_dek_cache(outcome);
-        Ok(opened?)
+        if outcome == DekCacheOutcome::Miss {
+            let current = self.cache.record();
+            if !std::ptr::eq(record, &*current)
+                && record.withdrawn_deks(&current).any(|withdrawn| withdrawn == dek)
+            {
+                self.dek_cache().invalidate(&self.provider.kek(), dek);
+            }
+        }
+        Ok(result)
     }
 
     /// A new version to replace the active version `key_id` that is being flagged compromised,
