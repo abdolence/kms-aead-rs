@@ -35,7 +35,7 @@ const MAX_USES: u64 = 1 << 32;
 ///
 /// - per call, the default: a new DEK per value, one KMS wrap per value;
 /// - store-less, with a [`DekReusePolicy`] in the options: one DEK for many values, renewed by
-///   the policy, one KMS wrap per renewal and one KMS unwrap per TTL of the envelope's cache.
+///   the policy and whenever the DEK leaves the envelope's cache, one KMS wrap per renewal.
 ///
 /// `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap
 /// through the envelope's [`DekCache`], which is disabled in a per-call envelope unless the
@@ -75,12 +75,12 @@ pub struct KmsAeadEnvelopeOptions {
 /// each value carries its wrapped DEK.
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
-/// which serves it for the cache's TTL, whatever `max_age`, and the first encryption after that
-/// unwraps it again with one KMS call. The cache zeroizes the expired DEK at its next call or at
-/// [`DekCache::purge_expired`], so a writer that falls quiet leaves the DEK in memory until
-/// then: a process that can sit idle calls `purge_expired` on a timer to drop it at the TTL. The
-/// values sealed while the cache holds the DEK are readable by whoever reads the process's
-/// memory in that window.
+/// and the first encryption after it has left the cache renews it: past the cache's TTL,
+/// whatever `max_age`, or after [`DekCache::invalidate`] or [`DekCache::clear`]. The cache
+/// zeroizes the expired DEK at its next call or at [`DekCache::purge_expired`], so a writer that
+/// falls quiet leaves the DEK in memory until then: a process that can sit idle calls
+/// `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
+/// DEK are readable by whoever reads the process's memory in that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
@@ -183,6 +183,18 @@ impl DekReuse {
         }
     }
 
+    /// Ends the use of `dek`, so that the next claim renews, unless another writer renewed it
+    /// already.
+    fn retire(&self, dek: &Arc<CurrentDek>) {
+        let mut current = self.current.write().unwrap_or_else(PoisonError::into_inner);
+        if current
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, dek))
+        {
+            *current = None;
+        }
+    }
+
     /// The current DEK with one of its uses taken, or `None` when the policy renews it.
     fn claim(&self) -> Option<Arc<CurrentDek>> {
         let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
@@ -266,22 +278,39 @@ where
         spans::in_span(self.encrypt_span(self.mode()), async {
             match &self.dek_reuse {
                 Some(dek_reuse) => {
-                    // Caching the new DEK under its wrapped bytes saves the first value sealed
-                    // under it an unwrap.
-                    let dek = dek_reuse
-                        .claim_or_renew(|| async {
-                            let (dek, encrypted) = self.new_dek().await?;
-                            if let Some(shared) = &self.dek_cache.0 {
-                                shared.insert(self.provider.kek(), &encrypted, None, dek);
-                            }
-                            Ok(encrypted)
-                        })
-                        .await?;
-                    let cipher_text = self
-                        .with_dek(&dek.encrypted, |key| {
+                    // The cache holds the only plaintext copy of the DEK, so a renewal caches
+                    // it. Once it has left the cache, expired, invalidated or cleared, the writer
+                    // renews instead of unwrapping it again, so that `invalidate` and `clear`
+                    // end its use.
+                    let renew = || async {
+                        let (dek, encrypted) = self.new_dek().await?;
+                        if let Some(shared) = &self.dek_cache.0 {
+                            shared.insert(self.provider.kek(), &encrypted, None, dek);
+                        }
+                        Ok(encrypted)
+                    };
+                    let dek = dek_reuse.claim_or_renew(renew).await?;
+                    let sealed = self.dek_cache.0.as_ref().and_then(|shared| {
+                        shared.with_cached_key(self.provider.kek(), &dek.encrypted, None, |key| {
                             self.cipher.encrypt_value(aad, plain_text, key)
                         })
-                        .await?;
+                    });
+                    let (dek, cipher_text) = match sealed {
+                        Some(cipher_text) => {
+                            spans::record_dek_cache(DekCacheOutcome::Hit);
+                            (dek, cipher_text?)
+                        }
+                        None => {
+                            dek_reuse.retire(&dek);
+                            let dek = dek_reuse.claim_or_renew(renew).await?;
+                            let cipher_text = self
+                                .with_dek(&dek.encrypted, |key| {
+                                    self.cipher.encrypt_value(aad, plain_text, key)
+                                })
+                                .await?;
+                            (dek, cipher_text)
+                        }
+                    };
                     CipherTextWithEncryptedKey::join(&cipher_text, &dek.encrypted)
                 }
                 None => {
@@ -969,9 +998,45 @@ mod tests {
             .await?;
 
         assert!(zeroized);
-        assert_eq!(after_ttl.separate()?.1, writer_dek);
-        assert_eq!(envelope.provider.wraps(), 1);
-        assert_eq!(envelope.provider.unwraps(), 1);
+        assert_ne!(after_ttl.separate()?.1, writer_dek);
+        assert_eq!(envelope.provider.wraps(), 2);
+        assert_eq!(envelope.provider.unwraps(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalidate_makes_the_writer_renew() -> KmsAeadResult<()> {
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            TEST_BACKEND,
+            KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
+        )?;
+        let plain_text = SecretValue::from(PLAIN_TEXT);
+
+        let first = envelope
+            .encrypt_value(AAD, &plain_text)
+            .await?
+            .separate()?
+            .1;
+        envelope
+            .dek_cache()
+            .invalidate(envelope.provider.kek(), &first, None);
+        let after_invalidate = envelope
+            .encrypt_value(AAD, &plain_text)
+            .await?
+            .separate()?
+            .1;
+        envelope.dek_cache().clear();
+        let after_clear = envelope
+            .encrypt_value(AAD, &plain_text)
+            .await?
+            .separate()?
+            .1;
+
+        assert_ne!(after_invalidate, first);
+        assert_ne!(after_clear, after_invalidate);
+        assert_eq!(envelope.provider.wraps(), 3);
+        assert_eq!(envelope.provider.unwraps(), 0);
         Ok(())
     }
 

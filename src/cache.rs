@@ -256,6 +256,25 @@ impl Shared {
         }
     }
 
+    /// Runs `use_key` with the randomized key cached for `encrypted` under `kek` and `binding`, or
+    /// returns `None`, without calling a provider, when the cache holds no such key.
+    pub(crate) fn with_cached_key<T>(
+        &self,
+        kek: &KekRef,
+        encrypted: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
+        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+    ) -> Option<T> {
+        let now = Instant::now();
+        self.purge_expired(now);
+        let snapshot = load(&self.randomized);
+        let slot = snapshot
+            .live(encrypted.wrapped(), self.options.ttl, now)
+            .filter(|slot| slot.serves(kek, binding))?;
+        let dek = slot.dek.get()?.as_ref().ok()?;
+        Some(use_key(dek))
+    }
+
     /// Caches `key`, which `kek` has just wrapped into `encrypted` with `binding`, as an unwrap of
     /// `encrypted` would have, so that the first lookup of a new store-less DEK is a hit. Kept off
     /// the public API: a key cached under the wrong wrapped bytes would seal values that no
