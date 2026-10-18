@@ -483,8 +483,10 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
     Ok(())
 }
 
-fn new_version(algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
+/// The next version of `algorithm`'s purpose in `record`.
+fn new_version(record: &KeyringRecord, algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
     Ok(NewVersion {
+        key_id: record.next_key_id(algorithm.purpose())?,
         algorithm,
         dek: EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None),
     })
@@ -495,7 +497,10 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
     let now = Timestamp::now();
     let rotation = edit.rotate(
-        new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm))?,
+        new_version(
+            edit.record(),
+            KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
+        )?,
         now,
     )?;
     assert_eq!(
@@ -507,9 +512,10 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
         }
     );
     let rotation = edit.rotate(
-        new_version(KeyAlgorithm::Deterministic(
-            DeterministicAlgorithm::Aes256Siv,
-        ))?,
+        new_version(
+            edit.record(),
+            KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv),
+        )?,
         now,
     )?;
     assert_eq!(rotation.current, KeyId::try_from(0x8000_0002)?);
@@ -526,7 +532,10 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
 fn rotation_without_an_active_version_creates_one() -> KeyringResult<()> {
     let mut edit = RecordEdit::from(parse(&document(vec![version(1, "decrypt_only", true)?]))?);
     let rotation = edit.rotate(
-        new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm))?,
+        new_version(
+            edit.record(),
+            KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
+        )?,
         Timestamp::now(),
     )?;
     assert_eq!(
@@ -539,8 +548,11 @@ fn rotation_without_an_active_version_creates_one() -> KeyringResult<()> {
 #[test]
 fn compromising_the_active_version_rotates_in_the_same_change() -> KeyringResult<()> {
     let now = Timestamp::now();
-    let replacement = new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm))?;
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
+    let replacement = new_version(
+        edit.record(),
+        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
+    )?;
     let rotation = edit.mark_compromised(
         KeyId::try_from(2)?,
         Compromise::new(now, Some("leaked".to_string())),
@@ -673,7 +685,10 @@ fn a_rewrapped_key_withdraws_the_bytes_it_replaces() -> TestResult {
     let withdrawn: Vec<_> = withdrawn_deks(&held_record, &next).collect();
     assert_eq!(
         withdrawn,
-        [&EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None)]
+        [(
+            KeyId::try_from(2)?,
+            &EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None)
+        )]
     );
     Ok(())
 }

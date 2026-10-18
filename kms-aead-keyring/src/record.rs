@@ -5,7 +5,9 @@ use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 
 use jiff::Timestamp;
-use kms_aead::{AeadAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef};
+use kms_aead::{
+    AeadAlgorithm, DekBinding, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
+};
 
 use crate::errors::{
     Identifier, IdentifierRule, InvalidTransitionError, KeyringError, KeyringResult,
@@ -104,6 +106,16 @@ impl TryFrom<&str> for KeyringId {
 impl Display for KeyringId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+impl KeyringId {
+    /// What the KMS binds the wrapped key of version `key_id` to: `<keyring id>/<key id>`, the
+    /// key id in decimal. `/` is outside the keyring id's alphabet, so a binding names one
+    /// version of one keyring. This string is a wire format: changing it strands every wrapped
+    /// key until a rewrap that unwraps with the old form and wraps with the new.
+    pub(crate) fn dek_binding(&self, key_id: KeyId) -> KeyringResult<DekBinding> {
+        Ok(DekBinding::try_from(format!("{self}/{key_id}"))?)
     }
 }
 
@@ -404,8 +416,10 @@ impl RetainedDek {
     }
 }
 
-/// The wrapped key of a version about to be created, and the algorithm it was made for.
+/// A version about to be created: its key id, the algorithm its key was made for, and the key
+/// wrapped with the binding of that id.
 pub(crate) struct NewVersion {
+    pub(crate) key_id: KeyId,
     pub(crate) algorithm: KeyAlgorithm,
     pub(crate) dek: EncryptedDataEncryptionKey,
 }
@@ -504,6 +518,30 @@ impl KeyringRecord {
         self.updated_at
     }
 
+    /// The id the next version of `purpose` takes.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::RecordInvalid`] with `KeyIdsExhausted` once the purpose's ordinals run
+    /// out.
+    pub(crate) fn next_key_id(&self, purpose: Purpose) -> KeyringResult<KeyId> {
+        match self
+            .versions
+            .iter()
+            .map(KeyVersion::key_id)
+            .filter(|key_id| key_id.purpose() == purpose)
+            .max()
+        {
+            None => Ok(KeyId::first(purpose)),
+            Some(last) => last.next().ok_or_else(|| {
+                KeyringError::record_invalid(
+                    &self.id,
+                    RecordInvalidReason::KeyIdsExhausted(purpose),
+                )
+            }),
+        }
+    }
+
     /// The wrapped key of every version that holds one, by key id.
     pub(crate) fn wrapped_deks(&self) -> Vec<(KeyId, EncryptedDataEncryptionKey)> {
         self.versions
@@ -549,7 +587,7 @@ impl RecordEdit {
                 _ => None,
             })?;
         }
-        let current = self.push_active(new, now)?;
+        let current = self.push_active(new, now);
         Ok(Rotation {
             purpose,
             previous,
@@ -590,7 +628,7 @@ impl RecordEdit {
         match replacement {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
-                let current = self.push_active(new, now)?;
+                let current = self.push_active(new, now);
                 Ok(Some(Rotation {
                     purpose,
                     previous: Some(key_id),
@@ -653,24 +691,11 @@ impl RecordEdit {
         self.0.updated_at = now;
     }
 
-    fn push_active(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
+    /// Appends `new` as an active version. A key id that does not follow the record's, such as
+    /// one computed on an older record, fails the record's checks in [`finish`](Self::finish).
+    fn push_active(&mut self, new: NewVersion, now: Timestamp) -> KeyId {
         let record = &mut self.0;
-        let purpose = new.algorithm.purpose();
-        let key_id = match record
-            .versions
-            .iter()
-            .map(KeyVersion::key_id)
-            .filter(|key_id| key_id.purpose() == purpose)
-            .max()
-        {
-            None => KeyId::first(purpose),
-            Some(last) => last.next().ok_or_else(|| {
-                KeyringError::record_invalid(
-                    &record.id,
-                    RecordInvalidReason::KeyIdsExhausted(purpose),
-                )
-            })?,
-        };
+        let key_id = new.key_id;
         record.versions.push(KeyVersion {
             key_id,
             algorithm: new.algorithm,
@@ -679,7 +704,7 @@ impl RecordEdit {
             state: VersionState::Active(new.dek),
         });
         record.updated_at = now;
-        Ok(key_id)
+        key_id
     }
 
     /// Moves `key_id` to the state `next` returns for its current one, or fails with
@@ -720,6 +745,9 @@ impl RecordEdit {
 /// Whether `next`, a record read from the store, moves forward from `held`: every version of
 /// `held` is still there, with the same algorithm and creation time, its compromised flag kept
 /// with its time, and its state moved along the lifecycle. New versions are free.
+///
+/// The wrapped key is left out: a changed one under an unchanged id is a rewrap, and a copied or
+/// foreign one fails at the KMS, which refuses it under any binding but its own.
 pub(crate) fn check_successor(
     held: &KeyringRecord,
     next: &KeyringRecord,
@@ -746,13 +774,13 @@ pub(crate) fn check_successor(
     Ok(())
 }
 
-/// The wrapped keys `held` reads under that `next` takes out of use: their version is gone,
-/// retired or destroyed, newly flagged compromised, or holds another wrapped key, as after a
-/// rewrap, which leaves the cached plaintext of the old bytes orphaned.
+/// The wrapped keys `held` reads under that `next` takes out of use, with their key ids: their
+/// version is gone, retired or destroyed, newly flagged compromised, or holds another wrapped
+/// key, as after a rewrap, which leaves the cached plaintext of the old bytes orphaned.
 pub(crate) fn withdrawn_deks<'a>(
     held: &'a KeyringRecord,
     next: &'a KeyringRecord,
-) -> impl Iterator<Item = &'a EncryptedDataEncryptionKey> + 'a {
+) -> impl Iterator<Item = (KeyId, &'a EncryptedDataEncryptionKey)> + 'a {
     held.versions.iter().filter_map(move |held| {
         let (dek, compromise) = held.readable_dek()?;
         let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
@@ -761,7 +789,7 @@ pub(crate) fn withdrawn_deks<'a>(
                 next_dek != dek || (next_compromise.is_some() && compromise.is_none())
             }
         };
-        withdrawn.then_some(dek)
+        withdrawn.then_some((held.key_id, dek))
     })
 }
 

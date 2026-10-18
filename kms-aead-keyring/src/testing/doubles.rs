@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kms_aead::errors::KmsAeadNetworkError;
+use kms_aead::errors::{KmsAeadEncryptionError, KmsAeadNetworkError};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
     AeadBackend, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef,
@@ -38,8 +38,10 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
     Ok(EMAIL.aad(&EntityId::try_from(user)?))
 }
 
-/// A local KMS provider whose clones share counters of its calls, and whose wraps fail while
-/// [`fail_wraps`](ProviderCalls::fail_wraps) is set.
+/// A local KMS provider whose clones share counters of its calls, whose wraps fail while
+/// [`fail_wraps`](ProviderCalls::fail_wraps) is set, and which refuses every bound call with
+/// `BINDING_UNSUPPORTED` while [`refuse_bindings`](ProviderCalls::refuse_bindings) is set, as a
+/// KMS without associated data at wrap does.
 #[derive(Clone)]
 pub(crate) struct TestProvider {
     kms: Arc<LocalKmsProvider>,
@@ -51,6 +53,19 @@ pub(crate) struct ProviderCalls {
     pub(crate) unwraps: AtomicUsize,
     pub(crate) wraps: AtomicUsize,
     pub(crate) fail_wraps: AtomicBool,
+    pub(crate) refuse_bindings: AtomicBool,
+}
+
+impl ProviderCalls {
+    fn refused(&self, binding: Option<&DekBinding>) -> KmsAeadResult<()> {
+        match binding.is_some() && self.refuse_bindings.load(Ordering::SeqCst) {
+            true => Err(KmsAeadEncryptionError::create(
+                "BINDING_UNSUPPORTED",
+                "The test KMS binds nothing",
+            )),
+            false => Ok(()),
+        }
+    }
 }
 
 impl TestProvider {
@@ -83,6 +98,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
                 "The test KMS is down",
             ));
         }
+        self.calls.refused(binding)?;
         self.calls.wraps.fetch_add(1, Ordering::SeqCst);
         self.kms
             .encrypt_data_encryption_key(encryption_key, binding)
@@ -94,6 +110,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
         encrypted_key: &EncryptedDataEncryptionKey,
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        self.calls.refused(binding)?;
         self.calls.unwraps.fetch_add(1, Ordering::SeqCst);
         self.kms
             .decrypt_data_encryption_key(encrypted_key, binding)

@@ -361,6 +361,16 @@ pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
     );
 }
 
+/// A keyring opened with `bind_keys` off: a writer of its store can bring a leaked key back
+/// into use under a new id.
+pub(crate) fn keys_unbound(keyring: &KeyringId) {
+    tracing::warn!(
+        { KEYRING } = keyring.as_str(),
+        "The keyring's keys are not bound to their key ids at the KMS: its record's integrity \
+         rests on the keyring store's access control alone"
+    );
+}
+
 /// No tokio runtime to run the task that follows the store's signals.
 pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
     tracing::warn!(

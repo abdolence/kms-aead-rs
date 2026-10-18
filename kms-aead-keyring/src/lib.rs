@@ -38,6 +38,13 @@
 //! job wraps keys and writes the record. A running process takes a record from the store only
 //! if it moves every version forward from the one it holds, and logs an `ERROR` otherwise.
 //!
+//! Each version's DEK is wrapped bound to `<keyring id>/<key id>` through the KMS's associated
+//! data, and every unwrap names the same binding, so the KMS refuses a wrapped DEK copied into
+//! another version or another keyring: a writer of the store without the KMS's encrypt right
+//! cannot bring a leaked DEK back into use under a new id. A KMS without associated data at wrap,
+//! Azure Key Vault in this release, needs [`bind_keys`](KeyringOptions::bind_keys) off, and then
+//! the record's integrity rests on the store's access control alone.
+//!
 //! # Caching
 //!
 //! The record is revalidated with a conditional read once it is older than
