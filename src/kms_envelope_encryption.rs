@@ -376,8 +376,10 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and encrypts `plain_text` under it.
-    /// The caller stores the wrapped DEK beside the returned cipher text.
+    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and encrypts `plain_text`
+    /// under it. The caller stores the wrapped DEK beside the returned cipher text. A DEK
+    /// wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the KMS; it is
+    /// unwrapped through the provider or [`DekCache::with_key`] directly.
     ///
     /// # Errors
     ///
@@ -411,7 +413,9 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and opens `cipher_text` with it.
+    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and opens `cipher_text` with
+    /// it. A DEK wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the
+    /// KMS; it is unwrapped through the provider or [`DekCache::with_key`] directly.
     ///
     /// # Errors
     ///
