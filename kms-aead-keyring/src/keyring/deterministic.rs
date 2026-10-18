@@ -27,7 +27,7 @@ use crate::{
 /// have high entropy, such as emails and external ids, and never low-cardinality fields, such
 /// as a status or a country, whose values the frequencies give away. A value opens in any row of
 /// the same kind and field (see [`DeterministicAad`]), so a deterministic field never decides
-/// identity or authorization on its own.
+/// identity or authorisation on its own.
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
@@ -72,7 +72,7 @@ where
     /// # Errors
     ///
     /// As [`decrypt`](Self::decrypt), with [`KeyringError::KeyPurposeMismatch`] for a value whose
-    /// key id is randomized.
+    /// key id is randomised.
     pub async fn decrypt_deterministic<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
@@ -98,7 +98,7 @@ where
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
     /// compromised, without applying the read policy, as
-    /// [`decrypt_with_status`](Self::decrypt_with_status) does for randomized values. A
+    /// [`decrypt_with_status`](Self::decrypt_with_status) does for randomised values. A
     /// compromised version's key is unwrapped through the provider, never through the
     /// [`DekCache`](kms_aead::cache::DekCache).
     ///
@@ -252,7 +252,7 @@ mod tests {
 
     const ALICE: &str = "alice@example.com";
 
-    /// A keyring with an AES-SIV version beside the randomized one.
+    /// A keyring with an AES-SIV version beside the randomised one.
     async fn deterministic_keyring(
         provider: TestProvider,
     ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
@@ -441,7 +441,7 @@ mod tests {
     }
 
     /// The deterministic AAD holds no entity id, so a value copied from user 42's row into user 7's
-    /// opens there, where the randomized twin, bound to its row, does not.
+    /// opens there, where the randomised twin, bound to its row, does not.
     #[tokio::test]
     async fn a_deterministic_value_opens_in_another_row() -> TestResult {
         let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;

@@ -19,11 +19,11 @@ emails and external ids. Do not use them:
 - for low-cardinality fields, such as a status, a country or a yes/no answer, whose values the
   frequencies give away;
 - when equality itself is sensitive;
-- for a field that is never looked up by equality: a randomized field leaks nothing of the kind.
+- for a field that is never looked up by equality: a randomised field leaks nothing of the kind.
 
 A deterministic value also opens in any row of the same kind and field, see [AAD](#aad), so a
-deterministic field never decides identity or authorization on its own. Where identity matters,
-the check reads a randomized copy of the field, bound to the row by its AAD.
+deterministic field never decides identity or authorisation on its own. Where identity matters,
+the check reads a randomised copy of the field, bound to the row by its AAD.
 
 See also [Deterministic encryption](../deterministic.md) in kms-aead.
 
@@ -86,12 +86,12 @@ assert_eq!(keyring.decrypt_deterministic(&aad, &first).await?, alice);
 ```
 
 A deterministic value is an `Encrypted<T, Deterministic>`, a type of its own, so it is never
-handed to `decrypt` by mistake. Unlike a randomized value it has `==` and `Hash`, which compare
+handed to `decrypt` by mistake. Unlike a randomised value it has `==` and `Hash`, which compare
 the bytes. AES-SIV runs on the RustCrypto `aes-siv` crate whatever the
 keyring's AEAD backend.
 
 `decrypt_deterministic` applies the [compromised read policy](./lifecycle.md#reading-a-compromised-version),
-and `decrypt_deterministic_with_status` reports the version's trust, as their randomized
+and `decrypt_deterministic_with_status` reports the version's trust, as their randomised
 counterparts do.
 
 ## AAD

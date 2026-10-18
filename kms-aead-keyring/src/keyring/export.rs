@@ -65,13 +65,13 @@ pub(crate) trait EncodingRules {
     const ENCODING: Encoding;
 }
 
-/// The keyset of `export_bigquery_keyset`: the KMS ciphertext of the serialized `Keyset`, with no
+/// The keyset of `export_bigquery_keyset`: the KMS ciphertext of the serialised `Keyset`, with no
 /// associated data, which is the `first_level_keyset` of BigQuery's `KEYS.KEYSET_CHAIN`.
 /// BigQuery unwraps it with Cloud KMS only and reads its AES-256-GCM and AES-SIV keys only.
 pub enum BigQuery {}
 
 /// The keyset of [`export_tink_keyset`](Keyring::export_tink_keyset): Tink's `EncryptedKeyset`
-/// message around the KMS ciphertext of the serialized `Keyset`, which Tink's keyset readers take
+/// message around the KMS ciphertext of the serialised `Keyset`, which Tink's keyset readers take
 /// with the KMS client of the KEK's Tink key URI. Its keys are the ones every Tink language reads
 /// in a keyset: AES-GCM, AES-GCM-SIV and AES-SIV.
 pub enum Tink {}
@@ -221,7 +221,7 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     /// process flagged compromised is never exported as readable.
     ///
     /// The keys inside are the versions' own keys. The keyset never opens as a version's key:
-    /// what the KMS unwraps from it is a serialized keyset, which is no serialized Tink key.
+    /// what the KMS unwraps from it is a serialised keyset, which is no serialised Tink key.
     ///
     /// # Errors
     ///
@@ -307,8 +307,8 @@ where
             let bytes = match encoding {
                 Encoding::BigQuery => {
                     let plaintext = DataEncryptionKey::from(keyset.to_bytes());
-                    // Zeroizes the keys inside the keyset before the KMS round trip, so that the
-                    // serialized keyset is the one copy left while it is wrapped.
+                    // Zeroises the keys inside the keyset before the KMS round trip, so that the
+                    // serialised keyset is the one copy left while it is wrapped.
                     drop(keyset);
                     self.provider
                         .encrypt_data_encryption_key(&plaintext)
@@ -419,7 +419,7 @@ mod tests {
         Ok((keyring, provider))
     }
 
-    /// The keyset of `keyring`'s randomized versions `key_ids` with `primary` as the primary, as
+    /// The keyset of `keyring`'s randomised versions `key_ids` with `primary` as the primary, as
     /// an export of them writes it.
     async fn keyset_of(
         keyring: &TestKeyring<MemoryKeyringStore>,

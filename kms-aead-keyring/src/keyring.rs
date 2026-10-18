@@ -176,7 +176,7 @@ where
         self.cache.reload("forced").await
     }
 
-    /// Seals `value` with `aad` under the active randomized version.
+    /// Seals `value` with `aad` under the active randomised version.
     ///
     /// # Errors
     ///
@@ -479,7 +479,7 @@ where
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let deks = edit.record().wrapped_deks();
                     for (key_id, dek) in &deks {
-                        // What the KMS unwraps is the serialized Tink key it wrapped, so it is
+                        // What the KMS unwraps is the serialised Tink key it wrapped, so it is
                         // wrapped again as it is.
                         let key = self.provider.decrypt_data_encryption_key(dek).await?;
                         let rewrapped = self.provider.encrypt_data_encryption_key(&key).await?;
@@ -757,7 +757,7 @@ where
     /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
     /// value is not in Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement
     /// `algorithm`, the provider's error when the key does not unwrap, `INVALID_KEY_FORMAT` when
-    /// what it unwraps is not a serialized Tink key, and code `DECRYPT` when the value is not
+    /// what it unwraps is not a serialised Tink key, and code `DECRYPT` when the value is not
     /// authentic under it and `aad`.
     pub async fn decrypt_envelope_value(
         &self,
@@ -908,7 +908,7 @@ pub struct Rotation {
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KeyringPolicy {
-    /// The algorithm of randomized versions:
+    /// The algorithm of randomised versions:
     /// [`DEFAULT_RANDOMIZED_ALGORITHM`](Self::DEFAULT_RANDOMIZED_ALGORITHM) by default.
     #[default = "Self::DEFAULT_RANDOMIZED_ALGORITHM"]
     pub randomized_algorithm: AeadAlgorithm,

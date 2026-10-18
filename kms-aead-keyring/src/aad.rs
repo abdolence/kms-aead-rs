@@ -38,7 +38,7 @@ fn check_aad_part(part: &str, identifier: Identifier) -> KeyringResult<()> {
 pub struct EntityKind(Cow<'static, str>);
 
 impl EntityKind {
-    /// `kind`, checked at compile time when it initializes a constant.
+    /// `kind`, checked at compile time when it initialises a constant.
     ///
     /// # Panics
     ///
@@ -125,7 +125,7 @@ impl Display for EntityId {
 pub struct FieldName(Cow<'static, str>);
 
 impl FieldName {
-    /// `field`, checked at compile time when it initializes a constant.
+    /// `field`, checked at compile time when it initialises a constant.
     ///
     /// # Panics
     ///
@@ -177,12 +177,12 @@ pub enum Interop {
     None,
     /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
     /// and AES-SIV only and unwraps with Cloud KMS only: sealing needs an AES-256-GCM version
-    /// for a randomized value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
+    /// for a randomised value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
     /// The AAD is the default one, which SQL rebuilds.
     BigQuery,
     /// Tink decrypts the field with the keyset of
     /// [`Keyring::export_tink_keyset`](crate::Keyring::export_tink_keyset): sealing needs an
-    /// AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomized value, an AES-SIV
+    /// AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomised value, an AES-SIV
     /// version for a deterministic one, and a KEK with a Tink key URI, in Cloud KMS, in AWS KMS by
     /// key ARN, or in Vault Transit. Tink for Python and C++ do not read ChaCha20-Poly1305 in a
     /// keyset.
@@ -256,7 +256,7 @@ impl FieldSpec {
     }
 }
 
-/// The associated data of one randomized value. A value opens only with the AAD it was
+/// The associated data of one randomised value. A value opens only with the AAD it was
 /// sealed with.
 ///
 /// `Debug` shows nothing of the bytes, not even their length: the default AAD holds an entity
@@ -302,7 +302,7 @@ impl Debug for FieldAad {
 ///
 /// There is no constructor from arbitrary bytes: a deterministic value exists to be queried,
 /// and the query rebuilds its AAD. A value with this AAD opens in any row of the same kind and
-/// field, so a deterministic field never decides identity or authorization on its own.
+/// field, so a deterministic field never decides identity or authorisation on its own.
 ///
 /// `Debug` shows nothing of the bytes.
 pub struct DeterministicAad {

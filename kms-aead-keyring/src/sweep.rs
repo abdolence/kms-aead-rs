@@ -10,7 +10,7 @@
 //!
 //! A write that touches any encrypted field of a record re-seals all of them under the active
 //! versions and writes `SealMarker::keyring` of their key ids, so that one query finds every
-//! record a sweep still has to visit: after a randomized rotation to key id `n`, the records
+//! record a sweep still has to visit: after a randomised rotation to key id `n`, the records
 //! whose `seal.randomized < n`, and likewise for deterministic versions. Once a sweep reports
 //! `failed == 0` and that query returns nothing, the old version can be
 //! [`retire`](crate::Keyring::retire)d.
@@ -60,13 +60,13 @@ use crate::{spans, KeyId, KeyTrust, KeyringId, Purpose};
 /// fields of a map, in PostgreSQL columns or a `jsonb` with an expression index, in BigQuery
 /// columns.
 ///
-/// Serialized as `{"format": "keyring", "randomized": 3, "deterministic": null, "beacon": null}`.
+/// Serialised as `{"format": "keyring", "randomized": 3, "deterministic": null, "beacon": null}`.
 /// A key id is a number up to 2^32 - 1, so a SQL column holding one is a `BIGINT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealMarker {
     /// The layout of the record's encrypted fields.
     pub format: SealFormat,
-    /// The oldest randomized key version among the record's fields, if any.
+    /// The oldest randomised key version among the record's fields, if any.
     pub randomized: Option<KeyId>,
     /// The oldest deterministic key version among the record's fields, if any.
     pub deterministic: Option<KeyId>,
@@ -74,7 +74,7 @@ pub struct SealMarker {
     pub beacon: Option<KeyId>,
 }
 
-/// The layout of a record's encrypted fields, serialized as `"envelope"` or `"keyring"`.
+/// The layout of a record's encrypted fields, serialised as `"envelope"` or `"keyring"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]

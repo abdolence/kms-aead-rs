@@ -47,7 +47,7 @@ const RECORD: &str = "/kms_aead_keyring/record";
 /// cache: `rewrap`, a keyset export, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
-/// `Keyring encrypt`, with the name of the keyring's AEAD backend for a randomized call. A
+/// `Keyring encrypt`, with the name of the keyring's AEAD backend for a randomised call. A
 /// deterministic call leaves `backend` unrecorded: AES-SIV runs on RustCrypto whatever the
 /// keyring's backend.
 pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<&str>) -> Span {

@@ -8,7 +8,7 @@ keyring writes, and the keyring reads theirs, given the same keys under the same
 Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id, followed
 by what the version's algorithm writes, see [Typed fields](../formats.md#typed-fields). These are
 the layouts of Tink's AEAD and deterministic AEAD primitives, and of BigQuery's `AEAD.ENCRYPT` and
-`DETERMINISTIC_ENCRYPT`. A randomized version with another algorithm, such as ChaCha20-Poly1305,
+`DETERMINISTIC_ENCRYPT`. A randomised version with another algorithm, such as ChaCha20-Poly1305,
 writes the same prefix before its own body, which only kms-aead reads.
 
 The prefix is not authenticated. A value relabelled with another key id selects another version,
@@ -19,7 +19,7 @@ whose key the body does not open under.
 Both default AADs are UTF-8 text, so SQL rebuilds them from the row with no byte escaping:
 
 ```sql
--- Randomized: <kind>/<id>/<field>
+-- Randomised: <kind>/<id>/<field>
 AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
 
 -- Deterministic: <kind>/<field>
@@ -41,7 +41,7 @@ BigQuery decrypts through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM and 
 unwraps with Cloud KMS only. A field BigQuery also decrypts is declared with
 `FieldSpec::with_interop(Interop::BigQuery)`, and the keyring then refuses to seal it unless:
 
-- a randomized value is sealed under an AES-256-GCM version, the default of a new keyring;
+- a randomised value is sealed under an AES-256-GCM version, the default of a new keyring;
 - a deterministic value is sealed under an AES-SIV version;
 - the KEK is in Google Cloud KMS.
 
@@ -114,7 +114,7 @@ A field that Tink also decrypts, with the keyset of
 [`export_tink_keyset`](#exporting-a-keyset-to-tink), is declared with
 `FieldSpec::with_interop(Interop::Tink)`. The keyring then refuses to seal it unless:
 
-- a randomized value is sealed under an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version;
+- a randomised value is sealed under an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version;
 - a deterministic value is sealed under an AES-SIV version;
 - the KEK has a Tink key URI: a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault
   Transit key.
@@ -131,7 +131,7 @@ kms-aead's GCP provider.
 BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink keyset wrapped by a
 Cloud KMS key. `export_bigquery_keyset` builds that keyset from the keyring's versions, on a
 keyring whose provider is `GcpKmsProvider`. The bytes it returns are the Cloud KMS ciphertext of
-Tink's serialized `Keyset` message, wrapped with no associated data, without the `EncryptedKeyset`
+Tink's serialised `Keyset` message, wrapped with no associated data, without the `EncryptedKeyset`
 message Tink's own keyset readers take, see [Exporting a keyset to Tink](#exporting-a-keyset-to-tink):
 
 ```rust,no_run
@@ -212,7 +212,7 @@ it, until the keyset is exported again.
 With `keyset` standing for the `KEYS.KEYSET_CHAIN(…)` expression of each export:
 
 ```sql
--- Randomized values, with a Readable(Randomized) keyset
+-- Randomised values, with a Readable(Randomized) keyset
 SELECT AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
 FROM users u;
 
@@ -250,7 +250,7 @@ The crate's live test runs the export and the queries against Cloud KMS and BigQ
 - a value whose key id is not in the keyset fails to decrypt, and reads as `NULL` under
   `SAFE.AEAD.DECRYPT_STRING`;
 - the keyset is wrapped with no associated data, since `KEYS.KEYSET_CHAIN` unwraps with none. What
-  the KMS unwraps from it is a serialized Tink keyset, which is no serialized Tink key, so copied
+  the KMS unwraps from it is a serialised Tink keyset, which is no serialised Tink key, so copied
   into a record as a version's wrapped DEK it opens nothing and fails with `INVALID_KEY_FORMAT`;
 - the export unwraps each selected version through the provider and never through the DEK cache,
   so the keys stay in the process for the call only. Its span records `dek_cache` as `bypassed`.
@@ -262,7 +262,7 @@ Cloud KMS wraps at most 64 KiB of plaintext, which a keyset reaches at several h
 `export_tink_keyset` exports the same versions as Tink's encrypted keyset, which Tink for Java,
 Go and Python open with `KeysetHandle.read` and their own KMS client. It needs no feature and
 runs on a keyring with any provider whose KEK has a Tink key URI. The bytes are a
-`google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the serialized keyset, see
+`google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the serialised keyset, see
 [Tink keysets and the TINK prefix](../formats.md#tink-keysets-and-the-tink-prefix).
 
 `key_uri()` is the URI of Tink's KMS client:
@@ -309,7 +309,7 @@ println!("{}", keyset.key_uri());
 # }
 ```
 
-Tink for Python reads the keyset with the KMS client of that URI, and opens a randomized value
+Tink for Python reads the keyset with the KMS client of that URI, and opens a randomised value
 with the value's default AAD as UTF-8:
 
 ```python

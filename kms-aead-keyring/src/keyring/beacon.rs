@@ -156,7 +156,7 @@ mod tests {
     );
     const ALICE: &str = "alice@example.com";
 
-    /// A keyring with a beacon version beside the randomized one.
+    /// A keyring with a beacon version beside the randomised one.
     async fn beacon_keyring(
         provider: TestProvider,
     ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {

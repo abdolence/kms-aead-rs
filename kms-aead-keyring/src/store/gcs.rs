@@ -274,7 +274,7 @@ impl KeyringStore for GcsKeyringStore {
             _ => Err(KeyringError::Store(KeyringStoreError::new(
                 StoreKind::Gcs,
                 StoreOperation::CompareAndSwap,
-                "The write returned no finalized object".to_string(),
+                "The write returned no finalised object".to_string(),
             ))),
         }
     }

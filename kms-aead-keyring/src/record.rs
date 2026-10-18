@@ -30,7 +30,7 @@ pub struct KeyringId(Cow<'static, str>);
 impl KeyringId {
     const MAX_LEN: usize = 128;
 
-    /// `id`, checked at compile time when it initializes a constant:
+    /// `id`, checked at compile time when it initialises a constant:
     ///
     /// ```compile_fail,E0080
     /// use kms_aead_keyring::KeyringId;
@@ -131,7 +131,7 @@ impl Algorithms {
         }
     }
 
-    /// The algorithm of new randomized versions.
+    /// The algorithm of new randomised versions.
     pub fn randomized(&self) -> AeadAlgorithm {
         self.randomized
     }
@@ -160,7 +160,7 @@ impl Algorithms {
 /// versions intact when it writes the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyAlgorithm {
-    /// A randomized AEAD algorithm.
+    /// A randomised AEAD algorithm.
     Randomized(AeadAlgorithm),
     /// A deterministic AEAD algorithm.
     Deterministic(DeterministicAlgorithm),

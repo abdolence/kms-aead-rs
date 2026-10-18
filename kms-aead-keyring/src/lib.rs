@@ -50,12 +50,12 @@
 //! under every version that still decrypts, for the `IN` list of an equality query across a
 //! rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id,
 //! so a value opens in any row of its kind and field, and a deterministic field never decides
-//! identity or authorization on its own.
+//! identity or authorisation on its own.
 //!
 //! # Beacons
 //!
 //! A beacon, or blind index, is a truncated HMAC-SHA256 of a field's plaintext under a beacon
-//! version, stored beside the field's randomized value so that a data store finds rows by
+//! version, stored beside the field's randomised value so that a data store finds rows by
 //! equality. A keyring whose policy names
 //! [`with_beacon_algorithm`](KeyringPolicy::with_beacon_algorithm) has beacon versions:
 //! [`Keyring::beacon`] computes the beacon of a value under the active one, and

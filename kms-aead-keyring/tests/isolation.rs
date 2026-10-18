@@ -1,4 +1,4 @@
-//! The randomized API is the same with and without the `deterministic` feature: its types,
+//! The randomised API is the same with and without the `deterministic` feature: its types,
 //! defaults and AAD rules. The gate runs this file in both builds, so a difference between them
 //! fails one of the two runs.
 
@@ -66,7 +66,7 @@ async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
     Ok(())
 }
 
-/// A randomized value's bytes are Tink's AES-GCM layout.
+/// A randomised value's bytes are Tink's AES-GCM layout.
 #[tokio::test]
 async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
     let keyring = default_keyring().await?;

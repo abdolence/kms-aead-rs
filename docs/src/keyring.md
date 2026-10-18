@@ -12,7 +12,7 @@ Compared to an envelope, a keyring value carries a 4-byte key id instead of its 
 - central staged rotation, retirement, destruction and a compromised flag, for every process
   that uses the keyring;
 - deterministic fields that a data store finds by equality, across rotations;
-- beacons, blind indexes that a data store matches by equality beside randomized fields;
+- beacons, blind indexes that a data store matches by equality beside randomised fields;
 - values in Tink's wire format, which Tink and BigQuery read too.
 
 The price is one more piece of infrastructure, the keyring store, which holds one small JSON
@@ -147,7 +147,7 @@ deployment rule and the IAM roles per KMS are in
 - [Encrypted fields and AAD](./keyring/fields.md): `Encrypted<T, Randomized>`, plaintext
   encodings and the default AAD;
 - [Deterministic fields](./keyring/deterministic.md): equality queries, and what they leak;
-- [Beacons](./keyring/beacons.md): blind indexes of randomized fields, and what they leak;
+- [Beacons](./keyring/beacons.md): blind indexes of randomised fields, and what they leak;
 - [BigQuery and Tink interop](./keyring/bigquery.md): the BigQuery and Tink checks and the keyset
   exports;
 - [Operations](./operations.md): rotation, sweeps, migration and the emergency runbook.

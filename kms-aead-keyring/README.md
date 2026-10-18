@@ -17,7 +17,7 @@ The library provides:
 - `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support
   (sqlx through kms-aead's `sqlx` feature), and an AAD that binds a value to its row;
 - deterministic fields for equality queries, across rotations;
-- beacons, blind indexes for lookups of randomized fields;
+- beacons, blind indexes for lookups of randomised fields;
 - sweeps that re-seal stored values, and the migration from kms-aead's envelope values.
 
 Documentation: the [keyring chapters](https://kms-aead-rust.abdolence.dev/keyring.html) of the

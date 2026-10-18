@@ -1,7 +1,7 @@
 # Beacons
 
 A beacon, or blind index, finds rows by a field's value without decrypting the column: a
-truncated HMAC-SHA256 of the value, stored beside the field's randomized value, which a data store
+truncated HMAC-SHA256 of the value, stored beside the field's randomised value, which a data store
 matches by equality. The keyring computes beacons under its beacon versions, of the purpose
 `Purpose::Beacon`, which rotate like any other.
 
@@ -105,7 +105,7 @@ The probes go into the query as the probes of a deterministic field do:
 | Firestore | an `in` filter on the field, which takes up to 30 values |
 
 With the `postgres` feature, `Beacon` binds and decodes in tokio-postgres as a `BYTEA`, and with
-the `serde` feature it serializes as bytes, as `Encrypted` does.
+the `serde` feature it serialises as bytes, as `Encrypted` does.
 
 ## Bits
 

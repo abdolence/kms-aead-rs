@@ -215,7 +215,7 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 
 So the ids of each purpose are:
 
-- randomized: `1`, `2`, `3`, …;
+- randomised: `1`, `2`, `3`, …;
 - deterministic: `2147483649`, `2147483650`, …;
 - beacon: `1073741825`, `1073741826`, ….
 
@@ -228,7 +228,7 @@ a SQL column holding one is a `BIGINT`.
 ## Keyring records
 
 kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
-record with deterministic and beacon versions, after one randomized rotation and with another one
+record with deterministic and beacon versions, after one randomised rotation and with another one
 staged, with the wrapped DEKs shortened:
 
 ```json

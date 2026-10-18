@@ -15,7 +15,7 @@ application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes 
   when the value is made, and fail on bytes that are no keyring value before any decrypt;
 - `decrypt` checks the key id first, and fails with `ReservedKeyId` on a reserved id and with
   `KeyPurposeMismatch` on a deterministic one, before any store or KMS call;
-- `Debug` shows the length only. A randomized value has no `==`: two values of one plaintext
+- `Debug` shows the length only. A randomised value has no `==`: two values of one plaintext
   differ.
 
 The plaintext types and how they encode, which is fixed so that other readers, such as BigQuery,
@@ -30,12 +30,12 @@ decode them:
 | `Json<T>`, feature `serde-json` | the compact JSON of any serde type |
 
 An application type implements `Plaintext` by mapping to one of them, as `Email` maps to `String`.
-The decrypted value belongs to the application. Only `SecretValue` as `T` is zeroized on drop;
+The decrypted value belongs to the application. Only `SecretValue` as `T` is zeroised on drop;
 `String` and `Vec<u8>` take over the decrypted buffer without a copy.
 
 ## In application records
 
-With the `serde` feature `Encrypted` serializes as bytes: a Firestore `bytes` value, and in
+With the `serde` feature `Encrypted` serialises as bytes: a Firestore `bytes` value, and in
 serde_json an array of numbers.
 
 ```rust
@@ -172,7 +172,7 @@ that holds `/` is encoded by the application first, with percent-encoding for ex
 
 A `FieldSpec` names the kind and the field once, as a constant, and `FieldSpec::aad(&id)` builds
 the AAD of one row. `from_static` checks a kind or field name at compile time when it
-initializes a constant.
+initialises a constant.
 
 So a value opens only in its own row and field. A value copied into another row fails with
 `KeyringError::Kms` with code `DECRYPT`. And since the AAD names the logical place, not the

@@ -68,7 +68,7 @@ fn refusal(document: &Value) -> Option<RecordInvalidReason> {
     }
 }
 
-/// A rotated keyring: randomized 1 decrypts only, 2 is active, deterministic 2147483649 is
+/// A rotated keyring: randomised 1 decrypts only, 2 is active, deterministic 2147483649 is
 /// active.
 fn rotated() -> KeyringResult<Value> {
     Ok(document(vec![
@@ -659,7 +659,7 @@ fn a_compromise_replacement_is_active_beside_a_pending_version() -> KeyringResul
     Ok(())
 }
 
-/// The held record of the regression cases: randomized 1 compromised and decrypt-only, 2
+/// The held record of the regression cases: randomised 1 compromised and decrypt-only, 2
 /// active, 3 retired, 4 destroyed, 5 pending.
 fn held() -> KeyringResult<Value> {
     Ok(document(vec![

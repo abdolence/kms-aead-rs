@@ -14,7 +14,7 @@ use crate::errors::{
 /// What a key version is for. A key of one purpose never serves another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Purpose {
-    /// Randomized AEAD: a random nonce per value, so equal plaintexts give different values.
+    /// Randomised AEAD: a random nonce per value, so equal plaintexts give different values.
     Randomized,
     /// Deterministic AEAD with AES-SIV: under one version, equal plaintexts and AADs give equal
     /// values, which an equality query can match.
@@ -43,13 +43,13 @@ impl Display for Purpose {
 
 /// The key id of a key version, which every keyring value and beacon carries big-endian after
 /// its version byte. Bits 31 and 30 are the purpose: bit 31 set for deterministic versions, bit
-/// 30 for beacon versions, neither for randomized ones. Bits 0 to 29 are the ordinal, from 1,
-/// counted per purpose. Randomized versions are therefore `1, 2, 3, …`, deterministic ones
+/// 30 for beacon versions, neither for randomised ones. Bits 0 to 29 are the ordinal, from 1,
+/// counted per purpose. Randomised versions are therefore `1, 2, 3, …`, deterministic ones
 /// `2147483649, 2147483650, …` and beacon ones `1073741825, 1073741826, …`.
 ///
 /// Ids are never reused: a destroyed version keeps its id.
 ///
-/// It serializes as its number, and deserializes through [`TryFrom<u32>`].
+/// It serialises as its number, and deserialises through [`TryFrom<u32>`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "u32")]
 pub struct KeyId(u32);
@@ -110,13 +110,13 @@ impl KeyId {
     }
 }
 
-/// The version a randomized value names in its prefix, such as for a
+/// The version a randomised value names in its prefix, such as for a
 /// [`SealMarker`](crate::SealMarker).
 ///
 /// # Errors
 ///
 /// [`KeyringError::ReservedKeyId`] when the key id is reserved, and
-/// [`KeyringError::KeyPurposeMismatch`] when it is not a randomized key id.
+/// [`KeyringError::KeyPurposeMismatch`] when it is not a randomised key id.
 impl<T> TryFrom<&Encrypted<T, Randomized>> for KeyId {
     type Error = KeyringError;
 
@@ -129,7 +129,7 @@ impl<T> TryFrom<&Encrypted<T, Randomized>> for KeyId {
 ///
 /// # Errors
 ///
-/// As for a randomized value, with a key id that is not a deterministic one.
+/// As for a randomised value, with a key id that is not a deterministic one.
 impl<T> TryFrom<&Encrypted<T, Deterministic>> for KeyId {
     type Error = KeyringError;
 
@@ -142,7 +142,7 @@ impl<T> TryFrom<&Encrypted<T, Deterministic>> for KeyId {
 ///
 /// # Errors
 ///
-/// As for a randomized value, with a key id that is not a beacon one.
+/// As for a randomised value, with a key id that is not a beacon one.
 impl<T> TryFrom<&Beacon<T>> for KeyId {
     type Error = KeyringError;
 

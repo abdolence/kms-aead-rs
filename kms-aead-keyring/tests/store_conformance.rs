@@ -29,7 +29,7 @@ const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
 ))]
 const MARKED_WRAPPED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
 
-/// The record of `id` after `rotations` rotations: randomized versions 1 to `rotations`
+/// The record of `id` after `rotations` rotations: randomised versions 1 to `rotations`
 /// decrypt only, and the next one is active.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
     record_wrapping(id, rotations, WRAPPED_DEK)

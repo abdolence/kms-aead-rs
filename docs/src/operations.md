@@ -22,7 +22,7 @@ The administrative job runs a rotation in steps:
 
 How often:
 
-- A randomized DEK with random 96-bit nonces is good for about 2^32 values, see
+- A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
   [Nonces](./security.md#nonces). The library cannot count the values a fleet seals, so estimate
   them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
   sooner at higher rates. AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all take a 12-byte
@@ -71,7 +71,7 @@ an index covers:
 A write that touches any encrypted field of a record re-seals all of them under the active
 versions, computes its beacons again, and writes `SealMarker::keyring` of their key ids, which
 `KeyId::try_from(&value)` reads. Then one query finds every record a sweep still has to visit:
-after the promotion of randomized key id `n`, the records whose `seal.randomized < n`, and likewise
+after the promotion of randomised key id `n`, the records whose `seal.randomized < n`, and likewise
 for deterministic and beacon versions. A key id goes up to 2^32 - 1, so a SQL column holding one
 is a `BIGINT`.
 
@@ -165,7 +165,7 @@ let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 // After the wait for every process to see the staged version
 let rotation: Rotation = keyring.promote(staged).await?;
 
-// The query: every row whose oldest randomized version is below the new one
+// The query: every row whose oldest randomised version is below the new one
 let candidates = table
     .lock()
     .unwrap()

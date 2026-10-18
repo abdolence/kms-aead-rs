@@ -27,7 +27,7 @@ configured KEK.
 ## Key ids
 
 Every value carries the key id of the version that sealed it, and the id names the version's
-purpose: randomized, deterministic or beacon. So a value of one purpose never opens under a
+purpose: randomised, deterministic or beacon. So a value of one purpose never opens under a
 version of another, and the purpose of a value is known from its bytes, see
 [Keyring key ids](../formats.md#keyring-key-ids). Ids are never reused: a destroyed version keeps
 its id in the record.
