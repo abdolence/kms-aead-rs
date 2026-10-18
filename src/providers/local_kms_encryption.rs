@@ -9,12 +9,13 @@ use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
+use crate::aead_cipher::AeadKeyBytesOps;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, DataEncryptionKey,
-    EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey,
+    KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
@@ -319,7 +320,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
     pub fn ephemeral(id: LocalKekId) -> KmsAeadResult<Self> {
         let kek = LocalKek {
             version: LocalKekVersion(NonZeroU32::MIN),
-            material: generate_random_bytes::<B>(AeadAlgorithm::Aes256Gcm.key_len())?,
+            material: B::generate_random_bytes(AeadAlgorithm::Aes256Gcm.key_len())?,
             source: "ephemeral",
         };
         Self::new(id, vec![kek])

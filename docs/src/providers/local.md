@@ -40,8 +40,9 @@ An ephemeral provider has one random version-1 KEK that lives as long as the pro
 DEKs it encrypts cannot be decrypted once the process exits. It suits tests:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, Ring};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -67,7 +68,7 @@ openssl rand -base64 32
 
 ```rust,no_run
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::Ring;
+use kms_aead::backends::Ring;
 use std::num::NonZeroU32;
 
 # fn example() -> kms_aead::KmsAeadResult<()> {
@@ -99,7 +100,7 @@ systemd decrypts it into `$CREDENTIALS_DIRECTORY`, readable only by the service:
 
 ```rust,no_run
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::AwsLc;
+use kms_aead::backends::AwsLc;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 

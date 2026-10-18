@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::envelope::{split_envelope, EnvelopeLayout};
 use super::{decrypt_dek, encrypt_dek, Envelope};
+use crate::aead_cipher::AeadKeyBytesOps;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::providers::kms_key_version::read_key_version;
 use crate::providers::KmsKeyVersion;

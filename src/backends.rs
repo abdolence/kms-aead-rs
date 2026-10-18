@@ -1,6 +1,6 @@
-//! The AEAD backends: one public zero-sized type per crypto library, each implementing the sealed
-//! [`AeadBackend`], and the crate-private [`AeadBackendOps`] they run on, so that no type of a
-//! crypto library reaches the public API.
+//! The AEAD backends: one zero-sized type per crypto library, `Ring`, `AwsLc` and `RustCrypto`,
+//! each added by its feature and implementing the sealed [`AeadBackend`]. The crate root lists
+//! the features and the algorithms of each. No type of a crypto library reaches the public API.
 
 use std::fmt::Debug;
 
@@ -30,14 +30,15 @@ pub use rust_crypto::RustCrypto;
 ))]
 mod contract;
 
-/// The crypto library that runs the [`AeadAlgorithm`]s: `Ring`, `AwsLc` or `RustCrypto`, each
-/// added by its feature. A build may enable any number of them, and the backend is the `B` of
-/// [`AeadCipher<B>`](crate::AeadCipher), `DeterministicCipher<B>`,
-/// [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope) and
+/// The crypto library that runs the [`AeadAlgorithm`]s: `Ring`, `AwsLc` or `RustCrypto` of
+/// [`backends`](crate::backends), each added by its feature. A build may enable any number of
+/// them, and the backend is the `B` of [`AeadCipher<B>`](crate::AeadCipher),
+/// `DeterministicCipher<B>`, [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope) and
 /// [`LocalKmsProvider<B>`](crate::providers::LocalKmsProvider).
 ///
-/// Sealed: only the backend types of kms-aead implement it. It has no methods, only its
-/// [`NAME`](Self::NAME), so code generic over the backend names this trait and nothing else:
+/// Sealed: only the backend types of kms-aead implement it. Its items are its
+/// [`NAME`](Self::NAME) and [`generate_random_bytes`](Self::generate_random_bytes), so code generic
+/// over the backend names this trait and nothing else:
 ///
 /// ```rust
 /// use kms_aead::formats::Envelope;
@@ -67,7 +68,7 @@ mod contract;
 ///
 /// # #[cfg(feature = "ring")]
 /// # async fn example() -> KmsAeadResult<()> {
-/// let orders = Orders::<kms_aead::Ring>::new()?;
+/// let orders = Orders::<kms_aead::backends::Ring>::new()?;
 /// let card = SecretValue::from("4111 1111 1111 1111");
 /// assert_eq!(orders.round_trip(&card).await?, card);
 /// # Ok(())
@@ -88,13 +89,28 @@ pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {
     /// use kms_aead::AeadBackend;
     ///
     /// # #[cfg(feature = "ring")]
-    /// assert_eq!(kms_aead::Ring::NAME, "ring");
+    /// assert_eq!(kms_aead::backends::Ring::NAME, "ring");
     /// # #[cfg(feature = "aws-lc-rs")]
-    /// assert_eq!(kms_aead::AwsLc::NAME, "aws-lc");
+    /// assert_eq!(kms_aead::backends::AwsLc::NAME, "aws-lc");
     /// # #[cfg(feature = "rustcrypto")]
-    /// assert_eq!(kms_aead::RustCrypto::NAME, "rustcrypto");
+    /// assert_eq!(kms_aead::backends::RustCrypto::NAME, "rustcrypto");
     /// ```
     const NAME: &'static str;
+
+    /// `len` random bytes from the CSPRNG the backend draws its keys and nonces from: ring's
+    /// `SystemRandom`, AWS-LC's `RAND_bytes`, which is the FIPS module's DRBG with `aws-lc-fips`,
+    /// or `getrandom` for RustCrypto.
+    ///
+    /// # Errors
+    ///
+    /// `RANDOM_GENERATOR` when the CSPRNG fails.
+    fn generate_random_bytes(len: usize) -> KmsAeadResult<SecretValue> {
+        let mut random = SecretValue::new(vec![0; len]);
+        Self::fill_random(random.ref_sensitive_value_mut()).map_err(|_| {
+            KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate random bytes")
+        })?;
+        Ok(random)
+    }
 }
 
 mod private {
@@ -107,21 +123,6 @@ mod private {
                   outside the crate"
     )]
     pub trait Sealed: super::AeadBackendOps {}
-}
-
-/// `len` random bytes from the CSPRNG backend `B` draws its keys and nonces from: ring's
-/// `SystemRandom`, AWS-LC's `RAND_bytes`, which is the FIPS module's DRBG with `aws-lc-fips`, or
-/// `getrandom` for RustCrypto.
-///
-/// # Errors
-///
-/// `RANDOM_GENERATOR` when the CSPRNG fails.
-pub fn generate_random_bytes<B: AeadBackend>(len: usize) -> KmsAeadResult<SecretValue> {
-    let mut random = SecretValue::new(vec![0; len]);
-    B::fill_random(random.ref_sensitive_value_mut()).map_err(|_| {
-        KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate random bytes")
-    })?;
-    Ok(random)
 }
 
 pub(crate) type Nonce = [u8; AeadAlgorithm::NONCE_LEN];

@@ -9,6 +9,7 @@ use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
 use tracing::Span;
 
+use crate::aead_cipher::AeadKeyBytesOps;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::formats::{Bare, Envelope};

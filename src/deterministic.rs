@@ -98,9 +98,8 @@ mod aes_siv_cipher {
     use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
     use crate::types::checked_key_bytes;
     use crate::{
-        generate_random_bytes, spans, AeadBackend, DataEncryptionKey, Encrypted,
-        EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadEnvelope,
-        KmsAeadResult, Plaintext,
+        spans, AeadBackend, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, Plaintext,
     };
 
     /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
@@ -144,7 +143,7 @@ mod aes_siv_cipher {
         ///
         /// `RANDOM_GENERATOR` when the CSPRNG fails.
         pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
-            generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
+            B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
         }
 
         /// A new data encryption key and the same key encrypted by `provider`, to store. The key

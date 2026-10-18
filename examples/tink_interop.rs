@@ -12,11 +12,12 @@
 
 use std::io::BufRead;
 
+use kms_aead::backends::AwsLc;
 use kms_aead::cache::DekCache;
 use kms_aead::formats::{Envelope, Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, AwsLc, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    AeadAlgorithm, AeadCipher, Encrypted, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
@@ -132,7 +133,7 @@ where
     )?;
     let aad = format!("orders/{kms}/{algorithm}");
     let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
-    let value: Encrypted<Message, Envelope> = envelope.encrypt(aad.as_bytes(), &message).await?;
+    let value: Encrypted<Message, Envelope> = envelope.encrypt(&aad, &message).await?;
     println!(
         "{}",
         json!({
@@ -159,7 +160,7 @@ where
     let aad = format!("orders/{kms}/{algorithm}");
     let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
     let value: Encrypted<Message, Randomized> =
-        cipher.encrypt(EXPORTED_KEY_ID, aad.as_bytes(), &message, &dek)?;
+        cipher.encrypt(EXPORTED_KEY_ID, &aad, &message, &dek)?;
     println!(
         "{}",
         json!({

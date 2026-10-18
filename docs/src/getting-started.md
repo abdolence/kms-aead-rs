@@ -68,14 +68,16 @@ See [Typed fields](./envelope-encryption.md#typed-fields).
 
 ## Choosing a backend
 
-The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is the backend that adds
-no second crypto library to a provider build. `ring` and `rustcrypto` work with every provider
-too, and a build may enable several backends at once. Each feature adds a type, `Ring`, `AwsLc` or
-`RustCrypto`, and every type that seals or encrypts takes one as its backend type parameter:
+The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is
+the backend that adds no second crypto library to a provider build. `ring` and `rustcrypto` work
+with every provider too, and a build may enable several backends at once. Each feature adds a type
+to `kms_aead::backends`, `Ring`, `AwsLc` or `RustCrypto`, and every type that seals or encrypts
+takes one as its backend type parameter:
 
 ```rust
 # fn example() -> kms_aead::KmsAeadResult<()> {
-use kms_aead::{AeadAlgorithm, AeadCipher, AwsLc};
+use kms_aead::backends::AwsLc;
+use kms_aead::{AeadAlgorithm, AeadCipher};
 
 let cipher = AeadCipher::<AwsLc>::new(AeadAlgorithm::Aes256Gcm)?;
 # let _ = cipher;
@@ -111,8 +113,9 @@ The local KMS needs no cloud account, so it is the quickest way to try the libra
 ephemeral KEK lives as long as the process:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, Ring};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]

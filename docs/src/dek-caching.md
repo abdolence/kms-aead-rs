@@ -14,9 +14,10 @@ Without a cache, every read of a value decrypts its DEK with one KMS call, and e
 KEK and the encrypted DEK's bytes. A per-call envelope has no cache unless the options give it one:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
@@ -73,9 +74,10 @@ A disabled KMS key or a revoked IAM grant reaches the cached keys only when thei
 To drop one at once, invalidate it with the envelope's own KEK:
 
 ```rust
+# use kms_aead::backends::Ring;
 # use kms_aead::cache::{DekCache, DekCacheOptions};
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+# use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use kms_aead::KmsAeadEncryptionProvider;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -136,8 +138,9 @@ KMS encrypt call. Each value still carries its encrypted DEK in Tink's KMS envel
 stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+use kms_aead::{DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use secret_vault_value::SecretValue;
 use std::num::NonZeroU64;
 use std::time::Duration;

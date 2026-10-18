@@ -8,19 +8,20 @@ use proptest::prelude::*;
 use proptest::test_runner::TestRunner;
 use secret_vault_value::SecretValue;
 
+#[cfg(feature = "aws-lc-rs")]
+use super::AwsLc;
+#[cfg(feature = "ring")]
+use super::Ring;
+#[cfg(feature = "rustcrypto")]
+use super::RustCrypto;
+use crate::aead_cipher::AeadKeyBytesOps;
 use crate::errors::KmsAeadError;
 use crate::formats::Bare;
 #[cfg(feature = "deterministic")]
 use crate::formats::Deterministic;
-#[cfg(feature = "aws-lc-rs")]
-use crate::AwsLc;
-#[cfg(feature = "ring")]
-use crate::Ring;
-#[cfg(feature = "rustcrypto")]
-use crate::RustCrypto;
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconBits,
-    BeaconMac, DataEncryptionKey, Encrypted, KeyId, KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconBits, BeaconMac,
+    DataEncryptionKey, Encrypted, KeyId, KmsAeadResult,
 };
 #[cfg(feature = "deterministic")]
 use crate::{DeterministicAlgorithm, DeterministicCipher};
@@ -412,12 +413,12 @@ fn generated_keys_have_the_algorithm_length_and_differ() -> KmsAeadResult<()> {
 fn random_bytes_have_the_requested_length_and_differ() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         for len in [0, 33] {
-            let random = generate_random_bytes::<B>(len)?;
+            let random = B::generate_random_bytes(len)?;
             assert_eq!(random.ref_sensitive_value().len(), len, "{}", B::NAME);
         }
         assert_ne!(
-            generate_random_bytes::<B>(32)?,
-            generate_random_bytes::<B>(32)?,
+            B::generate_random_bytes(32)?,
+            B::generate_random_bytes(32)?,
             "{}",
             B::NAME
         );

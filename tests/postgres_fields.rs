@@ -10,10 +10,11 @@
 use std::collections::BTreeSet;
 use std::error::Error;
 
+use kms_aead::backends::Ring;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
 use secret_vault_value::SecretValue;
 use sqlx::{Connection, PgConnection, Row};
 

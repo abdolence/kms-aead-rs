@@ -2,13 +2,13 @@ use std::marker::PhantomData;
 
 use secret_vault_value::SecretValue;
 
-use crate::backend::{Failure, Nonce};
+use crate::backends::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, DataEncryptionKey, Encrypted,
-    EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    AeadAlgorithm, AeadBackend, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
@@ -59,7 +59,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
-        generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
+        B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
     /// A new data encryption key and the same key encrypted by `provider`, to store. The key comes
@@ -186,7 +186,12 @@ impl<B: AeadBackend> AeadCipher<B> {
             dek.value().ref_sensitive_value(),
         )?)
     }
+}
 
+/// Sealing and opening under raw key bytes, which the envelope, the local KMS and the legacy
+/// upgrades run on. Crate-private, so that the public methods of [`AeadCipher`] take typed keys
+/// only.
+pub(crate) trait AeadKeyBytesOps {
     /// `prefix`, then `plain_text` sealed under `key` with a fresh random nonce:
     /// `[prefix][nonce][ciphertext][tag]`.
     ///
@@ -195,7 +200,34 @@ impl<B: AeadBackend> AeadCipher<B> {
     /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
     /// `RANDOM_GENERATOR` when the random nonce cannot be generated, and `ENCRYPT_KEY` or
     /// `ENCRYPT` when the backend refuses the key or fails to seal.
-    pub(crate) fn seal(
+    fn seal(
+        &self,
+        prefix: &[u8],
+        aad: &[u8],
+        plain_text: &[u8],
+        key: &[u8],
+    ) -> KmsAeadResult<Vec<u8>>;
+
+    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value` under
+    /// `key`, into a buffer the returned `SecretValue` owns.
+    ///
+    /// # Errors
+    ///
+    /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
+    /// `INVALID_CIPHER_TEXT_FORMAT` when the bytes after the prefix are shorter than a nonce and a
+    /// tag, `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
+    /// authentic under the key, the nonce and the AAD.
+    fn open(
+        &self,
+        aad: &[u8],
+        value: &[u8],
+        prefix_len: usize,
+        key: &[u8],
+    ) -> KmsAeadResult<SecretValue>;
+}
+
+impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
+    fn seal(
         &self,
         prefix: &[u8],
         aad: &[u8],
@@ -237,16 +269,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         Ok(std::mem::take(value))
     }
 
-    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value` under
-    /// `key`, into a buffer the returned `SecretValue` owns.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
-    /// `INVALID_CIPHER_TEXT_FORMAT` when the bytes after the prefix are shorter than a nonce and a
-    /// tag, `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
-    /// authentic under the key, the nonce and the AAD.
-    pub(crate) fn open(
+    fn open(
         &self,
         aad: &[u8],
         value: &[u8],

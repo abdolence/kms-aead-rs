@@ -14,7 +14,7 @@ In short:
   `VaultTransit*` types are `HcVaultTransit*`;
 - `KmsAeadRingEnvelopeEncryption::new(provider).await?` is
   `KmsAeadEnvelope::<P, Ring>::new(provider)?`, and `RingAeadEncryption` is `AeadCipher<Ring>`.
-  The backend is a type parameter: `Ring`, `AwsLc` or `RustCrypto`;
+  The backend is a type parameter: `Ring`, `AwsLc` or `RustCrypto`, from `kms_aead::backends`;
 - the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods; the AAD is
   any `&(impl AsRef<[u8]> + ?Sized)`, and every cipher text is an `Encrypted<T, F>`;
 - `KmsAeadError` is `#[non_exhaustive]`, the SDK error conversions are gone, and a few error

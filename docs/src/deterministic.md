@@ -45,8 +45,9 @@ application keeps track of which key serves which algorithm, as kms-aead-keyring
 key ids.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Deterministic;
-use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, Ring};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
@@ -78,11 +79,10 @@ and its `Debug` prints only the length, since the bytes tell which values are eq
 The envelope generates and decrypts deterministic keys with its provider:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Deterministic;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{
-    DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope, Ring,
-};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]

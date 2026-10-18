@@ -22,7 +22,7 @@
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
-    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider,
+    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider,
     KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
 };
 
@@ -102,7 +102,7 @@ where
             ));
         }
         Some(material) => DataEncryptionKey::from(material),
-        None => DataEncryptionKey::from(generate_random_bytes::<B>(key_len)?),
+        None => DataEncryptionKey::from(B::generate_random_bytes(key_len)?),
     };
     let encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
     Ok((dek, encrypted_dek))

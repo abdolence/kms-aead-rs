@@ -29,9 +29,10 @@ provider encrypts the raw DEK in every release, see [Encrypted DEKs](#encrypted-
 bare value and an encrypted DEK. `separate` reads it back:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -323,8 +324,9 @@ where
     }
     Ok(upgraded)
 }
+# use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, Ring, ValueStruct};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;

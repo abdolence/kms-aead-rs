@@ -27,8 +27,9 @@ Any tracing subscriber works. With `tracing-subscriber`, an `EnvFilter` that ena
 the library and span close events, every span is printed with its fields when it ends:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, Ring};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 

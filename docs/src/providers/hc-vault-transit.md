@@ -7,8 +7,9 @@ The provider encrypts DEKs with a key of the Vault Transit secrets engine. `HcVa
 names the key, and the mount is `transit` unless set with `with_mount`.
 
 ```rust,no_run
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
-use kms_aead::{AwsLc, KmsAeadEnvelope};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {

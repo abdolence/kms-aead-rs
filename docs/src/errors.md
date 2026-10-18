@@ -21,9 +21,10 @@ The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
 such as AWS's `IncorrectKeyException`. It is also the `error_code` field of the spans.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Bare;
-use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {

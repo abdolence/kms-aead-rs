@@ -35,7 +35,7 @@ The crate declares `rust-version = "1.99"`.
 | `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<P, Ring>::with_options(provider, options)` |
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
 | `KmsAeadRingEncryptionProvider` | `KmsAeadEncryptionProvider`, see [Your own provider](#your-own-provider) |
-| module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>` at the crate root |
+| module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>`, with `AeadCipher` at the crate root and `Ring` in `kms_aead::backends` |
 | `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)` |
 | `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)` |
 | `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG, and the random nonce was the only option |
@@ -77,10 +77,12 @@ calls that make no KMS call are not `async`:
 |---|---|
 | `use kms_aead::KmsAeadEnvelopeEncryption;` `envelope.encrypt_value(&aad, &value).await?` | `envelope.encrypt(&aad, &value).await?` |
 | `envelope.encrypt_value_with_dek(&aad, &value, &dek).await?` | `envelope.encrypt_with_dek(&aad, &value, &dek)?` |
+| `envelope.decrypt_value(&aad, &cipher_text).await?` | `envelope.decrypt(&aad, &value).await?` |
 | `envelope.decrypt_value_with_dek(&aad, &cipher_text, &dek).await?` | `envelope.decrypt_with_dek(&aad, &bare, &dek)?` |
 | `encrypt_value_with_encrypted_dek`, `decrypt_value_with_encrypted_dek` | `encrypt_with_encrypted_dek`, `decrypt_with_encrypted_dek` |
 | `KmsAeadEnvelopeEncryption::<Aad>::generate_new_dek(&envelope)` | `envelope.generate_encrypted_dek()` |
 | `use kms_aead::AeadEncryption;` `cipher.encrypt_value(&aad, &value, &key).await?` | `cipher.encrypt_bare(&aad, &value, &key)?` |
+| `cipher.decrypt_value(&aad, &cipher_text, &key).await?` | `cipher.decrypt_bare(&aad, &bare, &key)?` |
 
 Every cipher text is an `Encrypted<T, F>`, see [Formats](./formats.md#formats-of-encrypted). It
 has its own `value()` and `into_value()`. Those of `EncryptedDataEncryptionKey` come from
@@ -153,8 +155,9 @@ ChaCha20-Poly1305 configured, and an envelope on the new default fails them with
 envelope that named no algorithm becomes:
 
 ```rust,no_run
+use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 
 # async fn example(key_ref: GcpKmsKeyRef) -> kms_aead::KmsAeadResult<()> {
 // 0.29: KmsAeadRingEnvelopeEncryption::new(provider).await?

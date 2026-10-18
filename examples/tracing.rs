@@ -3,9 +3,10 @@
 //!
 //! Run with `cargo run --example tracing --features ring`.
 
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
