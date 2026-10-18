@@ -5,11 +5,11 @@ use secret_vault_value::SecretValue;
 
 use crate::backend::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
-use crate::formats::{tink_output_prefix, Randomized, TinkKeyId, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::{tink_output_prefix, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
     generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey, Encrypted,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
@@ -137,7 +137,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     /// `value` does not encode.
     pub fn encrypt_field<T: Plaintext>(
         &self,
-        key_id: TinkKeyId,
+        key_id: KeyId,
         aad: &[u8],
         value: &T,
         key: &DataEncryptionKey,
@@ -272,7 +272,7 @@ mod tests {
 
     const ALICE: &str = "alice@example.com";
     const EMAIL_AAD: &[u8] = b"user/42/email";
-    const KEY_ID: TinkKeyId = TinkKeyId::new(7);
+    const KEY_ID: KeyId = KeyId::new(7);
 
     /// `alice@example.com` sealed by Tink 1.16.1 for Python with a keyset of one AES-256-GCM key
     /// with the TINK prefix: key id 7, the bytes 0 to 31 as the key, `user/42/email` as the

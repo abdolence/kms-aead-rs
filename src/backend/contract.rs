@@ -10,7 +10,6 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadError;
-use crate::formats::TinkKeyId;
 #[cfg(feature = "aws-lc-rs")]
 use crate::AwsLc;
 #[cfg(feature = "ring")]
@@ -19,7 +18,7 @@ use crate::Ring;
 use crate::RustCrypto;
 use crate::{
     generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconBits,
-    BeaconMac, CipherText, DataEncryptionKey, KmsAeadResult,
+    BeaconMac, CipherText, DataEncryptionKey, KeyId, KmsAeadResult,
 };
 #[cfg(feature = "deterministic")]
 use crate::{DeterministicAlgorithm, DeterministicCipher, DeterministicCipherText};
@@ -477,7 +476,7 @@ fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
         ] {
             let bits = BeaconBits::new(bits).unwrap();
             let computed = mac.compute(
-                TinkKeyId::new(7),
+                KeyId::new(7),
                 b"user/email",
                 bits,
                 &"alice@example.com".to_string(),
@@ -490,7 +489,7 @@ fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
                 bits.get(),
                 B::NAME
             );
-            assert_eq!(computed.key_id(), TinkKeyId::new(7));
+            assert_eq!(computed.key_id(), KeyId::new(7));
         }
         Ok(())
     }

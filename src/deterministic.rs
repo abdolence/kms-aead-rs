@@ -99,12 +99,12 @@ mod aes_siv_cipher {
 
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
-    use crate::formats::{tink_output_prefix, Deterministic, TinkKeyId, TINK_OUTPUT_PREFIX_LEN};
+    use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
     use crate::types::checked_key_bytes;
     use crate::{
         generate_random_bytes, spans, AeadBackend, DataEncryptionKey, Encrypted,
-        EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
-        Plaintext,
+        EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadEnvelope,
+        KmsAeadResult, Plaintext,
     };
 
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
@@ -253,7 +253,7 @@ mod aes_siv_cipher {
         /// `value` does not encode.
         pub fn encrypt_field<T: Plaintext>(
             &self,
-            key_id: TinkKeyId,
+            key_id: KeyId,
             aad: &[u8],
             value: &T,
             key: &DataEncryptionKey,
@@ -476,7 +476,7 @@ mod aes_siv_cipher {
             let cipher =
                 DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             let key = DataEncryptionKey::from(SecretValue::new((0u8..64).collect()));
-            let key_id = TinkKeyId::new(0x4455_6677);
+            let key_id = KeyId::new(0x4455_6677);
 
             let field = cipher.encrypt_field(key_id, &[0xFF], &Vec::<u8>::new(), &key)?;
             let tink_value = Encrypted::<Vec<u8>, Deterministic>::try_from(TINK_VALUE.to_vec())?;

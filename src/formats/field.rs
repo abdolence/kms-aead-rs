@@ -1,7 +1,7 @@
 use super::envelope::split_envelope;
-use super::{split_tink_output_prefix, TinkKeyId};
+use super::split_tink_output_prefix;
 use crate::errors::KmsAeadEncryptionError;
-use crate::{AeadAlgorithm, DeterministicAlgorithm, KmsAeadResult};
+use crate::{AeadAlgorithm, DeterministicAlgorithm, KeyId, KmsAeadResult};
 
 /// The format of an [`Encrypted`](crate::Encrypted) value, the byte layout its bytes are checked
 /// against when they are read: [`Envelope`], [`Randomized`] or [`Deterministic`].
@@ -23,14 +23,14 @@ mod private {
 
 /// The layout check of a [`Format`].
 pub(crate) trait FormatLayout {
-    /// The key id the framing of a value names, which the value keeps: [`TinkKeyId`] for the
+    /// The key id the framing of a value names, which the value keeps: [`KeyId`] for the
     /// TINK-prefixed formats, and none for an envelope, which carries its wrapped DEK instead.
-    type KeyId: Copy;
+    type FramedKeyId: Copy;
 
     /// Checks that `value` is framed as a value of the format, and returns the key id the framing
     /// names. It reads the framing only: whether the bytes are authentic is known when they are
     /// decrypted.
-    fn check(value: &[u8]) -> KmsAeadResult<Self::KeyId>;
+    fn check(value: &[u8]) -> KmsAeadResult<Self::FramedKeyId>;
 }
 
 /// Tink's KMS envelope, the bytes of a
@@ -69,7 +69,7 @@ pub enum Deterministic {}
 impl Format for Envelope {}
 impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
-    type KeyId = ();
+    type FramedKeyId = ();
 
     fn check(value: &[u8]) -> KmsAeadResult<()> {
         let (_, cipher_text) = split_envelope(value)?;
@@ -90,9 +90,9 @@ impl FormatLayout for Envelope {
 impl Format for Randomized {}
 impl private::Sealed for Randomized {}
 impl FormatLayout for Randomized {
-    type KeyId = TinkKeyId;
+    type FramedKeyId = KeyId;
 
-    fn check(value: &[u8]) -> KmsAeadResult<TinkKeyId> {
+    fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
         check_tink_prefixed(
             value,
             "a nonce and a tag",
@@ -104,9 +104,9 @@ impl FormatLayout for Randomized {
 impl Format for Deterministic {}
 impl private::Sealed for Deterministic {}
 impl FormatLayout for Deterministic {
-    type KeyId = TinkKeyId;
+    type FramedKeyId = KeyId;
 
-    fn check(value: &[u8]) -> KmsAeadResult<TinkKeyId> {
+    fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
         check_tink_prefixed(
             value,
             "a synthetic IV",
@@ -117,7 +117,7 @@ impl FormatLayout for Deterministic {
 
 /// The key id of `value`, checked to be Tink's output prefix followed by at least `min_len`
 /// bytes, the `shortest` value of the format.
-fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<TinkKeyId> {
+fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<KeyId> {
     match split_tink_output_prefix(value) {
         Some((key_id, after_prefix)) if after_prefix.len() >= min_len => Ok(key_id),
         _ => Err(KmsAeadEncryptionError::create(

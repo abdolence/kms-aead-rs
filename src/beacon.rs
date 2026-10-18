@@ -8,10 +8,10 @@ use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::formats::{TinkKeyId, TinkKeyType};
+use crate::formats::TinkKeyType;
 use crate::types::checked_key_bytes;
 use crate::{
-    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey,
+    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
@@ -118,7 +118,7 @@ impl BeaconBits {
 /// `Debug` shows the key id only. The `serde` feature serialises it as bytes, and the `postgres`
 /// and `sqlx` features store it as `BYTEA`, as for [`Encrypted`](crate::Encrypted).
 pub struct Beacon<T> {
-    key_id: TinkKeyId,
+    key_id: KeyId,
     bytes: Vec<u8>,
     plaintext: PhantomData<fn() -> T>,
 }
@@ -130,7 +130,7 @@ impl<T> Beacon<T> {
     const MAX_HMAC_LEN: usize = 32;
 
     /// The id of the beacon key that computed this beacon.
-    pub fn key_id(&self) -> TinkKeyId {
+    pub fn key_id(&self) -> KeyId {
         self.key_id
     }
 }
@@ -150,7 +150,7 @@ impl<T> TryFrom<Vec<u8>> for Beacon<T> {
                 if (1..=Self::MAX_HMAC_LEN).contains(&hmac.len()) =>
             {
                 Ok(Self {
-                    key_id: TinkKeyId::new(u32::from_be_bytes([a, b, c, d])),
+                    key_id: KeyId::new(u32::from_be_bytes([a, b, c, d])),
                     bytes,
                     plaintext: PhantomData,
                 })
@@ -284,7 +284,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     /// when the value does not encode, and `BEACON` when the backend fails.
     pub fn compute<T: Plaintext>(
         &self,
-        key_id: TinkKeyId,
+        key_id: KeyId,
         context: &[u8],
         bits: BeaconBits,
         value: &T,
@@ -345,7 +345,7 @@ mod tests {
         let prefix = [0x01, 0x00, 0x00, 0x00, 0x07];
         for hmac_len in [1, 32] {
             let beacon = Beacon::<String>::try_from([&prefix[..], &vec![0xAB; hmac_len]].concat())?;
-            assert_eq!(beacon.key_id(), TinkKeyId::new(7));
+            assert_eq!(beacon.key_id(), KeyId::new(7));
         }
         for refused in [
             Vec::new(),
@@ -368,7 +368,7 @@ mod tests {
         let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
 
         let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256).compute(
-            TinkKeyId::new(7),
+            KeyId::new(7),
             b"user/email",
             BeaconBits::DEFAULT,
             &"alice@example.com".to_string(),

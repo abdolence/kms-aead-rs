@@ -178,15 +178,15 @@ async fn load(pool: &PgPool, id: i64) -> sqlx::Result<Encrypted<Email, Envelope>
 `AeadCipher::encrypt_field` seals a field under a key the application holds, in Tink's layout of
 a key whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an
 `Encrypted<T, Randomized>`. `DeterministicCipher::encrypt_field` does the same for an
-`Encrypted<T, Deterministic>`. The key id is a `TinkKeyId`, the application's constant, and Tink
+`Encrypted<T, Deterministic>`. The key id is a `KeyId`, the application's constant, and Tink
 and BigQuery read the values with a keyset of the one key under that id:
 
 ```rust,no_run
 use kms_aead::cache::{DekCache, DekCacheOptions};
-use kms_aead::formats::{Randomized, TinkKeyId, TinkKeyType, TinkKeyset};
+use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, Ring,
 };
 use secret_vault_value::SecretValue;
@@ -205,7 +205,7 @@ impl Plaintext for Email {
 }
 
 // The id of the one key, in every value and in the keyset
-const EMAIL_KEY: TinkKeyId = TinkKeyId::new(1);
+const EMAIL_KEY: KeyId = KeyId::new(1);
 
 # async fn example() -> KmsAeadResult<()> {
 let key_ref = GcpKmsKeyRef::new(
@@ -283,11 +283,11 @@ query computes the beacon of the value it looks for and matches it by equality. 
 the bytes to store, and the beacon key is a 32-byte key wrapped by the KMS, as a DEK is:
 
 ```rust
-use kms_aead::formats::{Envelope, TinkKeyId};
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KmsAeadEnvelope, KmsAeadResult,
-    Plaintext, Ring,
+    Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KeyId, KmsAeadEnvelope,
+    KmsAeadResult, Plaintext, Ring,
 };
 use secret_vault_value::SecretValue;
 
@@ -295,7 +295,7 @@ use secret_vault_value::SecretValue;
 struct Email(String);
 
 // The application's id of its beacon key, which every beacon names
-const EMAIL_BEACON_KEY: TinkKeyId = TinkKeyId::new(1);
+const EMAIL_BEACON_KEY: KeyId = KeyId::new(1);
 
 impl Email {
     // The beacon of an email matches regardless of case
@@ -357,7 +357,7 @@ assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email
 - normalisation is the application's: the beacon of `Alice@Example.com` and of
   `alice@example.com` differ unless the type normalises the value before it is sealed, as
   `Email::new` does;
-- the key id, a `TinkKeyId`, is the application's number for the beacon key, written into every
+- the key id, a `KeyId`, is the application's number for the beacon key, written into every
   beacon so that a column can hold beacons of two keys at once;
 - the beacon key is unwrapped through the envelope's DEK cache, as a DEK is.
 

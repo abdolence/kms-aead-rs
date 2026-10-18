@@ -13,10 +13,10 @@
 use std::io::BufRead;
 
 use kms_aead::cache::DekCache;
-use kms_aead::formats::{Envelope, Randomized, TinkKeyId, TinkKeyType, TinkKeyset};
+use kms_aead::formats::{Envelope, Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, AwsLc, Encrypted, EncryptedDataEncryptionKey,
+    AeadAlgorithm, AeadCipher, AwsLc, Encrypted, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
     ValueStruct,
 };
@@ -45,7 +45,7 @@ const ALGORITHMS: [AeadAlgorithm; 4] = [
 ];
 
 /// The id of the one key of every exported keyset.
-const EXPORTED_KEY_ID: TinkKeyId = TinkKeyId::new(1042);
+const EXPORTED_KEY_ID: KeyId = KeyId::new(1042);
 
 #[tokio::main]
 async fn main() -> KmsAeadResult<()> {
