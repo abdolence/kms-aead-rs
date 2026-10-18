@@ -30,6 +30,11 @@ use crate::{
 #[cfg(feature = "deterministic")]
 mod deterministic;
 
+#[cfg(feature = "bigquery-export")]
+mod export;
+#[cfg(feature = "bigquery-export")]
+pub use export::{KeysetSelection, WrappedKeyset};
+
 /// Field encryption under the key versions of one keyring, whose record lives in a
 /// [`KeyringStore`] and is cached in the process.
 ///

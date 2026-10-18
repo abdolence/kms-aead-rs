@@ -79,6 +79,9 @@ pub enum KeyringError {
     DeterministicDisabled,
     /// A field's [`Interop`] requirement that sealing would break, checked before sealing.
     Interop(InteropError),
+    /// A version selected for a BigQuery keyset export whose algorithm BigQuery does not read:
+    /// neither AES-256-GCM nor AES-SIV.
+    ExportAlgorithmUnsupported(KeyVersionError),
 }
 
 impl KeyringError {
@@ -107,6 +110,7 @@ impl KeyringError {
             KeyringError::Plaintext(_) => "Plaintext",
             KeyringError::DeterministicDisabled => "DeterministicDisabled",
             KeyringError::Interop(_) => "Interop",
+            KeyringError::ExportAlgorithmUnsupported(_) => "ExportAlgorithmUnsupported",
         }
     }
 
@@ -277,6 +281,11 @@ impl Display for KeyringError {
                 f,
                 "A field of the keyring {} that {:?} reads cannot be sealed: {}",
                 error.keyring, error.interop, error.requirement
+            ),
+            KeyringError::ExportAlgorithmUnsupported(error) => write!(
+                f,
+                "The key version {} of the keyring {} has an algorithm BigQuery does not read",
+                error.key_id, error.keyring
             ),
         }
     }
@@ -603,7 +612,8 @@ pub struct PurposeError {
 }
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
-/// [`KeyringError::KeyVersionDestroyed`] and [`KeyringError::EnvelopeKeyOfKeyVersion`].
+/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::EnvelopeKeyOfKeyVersion`] and
+/// [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyVersionError {

@@ -38,8 +38,14 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
 tokio-stream = { version = "0.1", optional = true, default-features = false }
+# The version gcloud-sdk depends on, so that the Tink keyset messages add no crate.
+prost = { version = "0.14", optional = true }
+zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
+# BigQuery's `jobs.query` for the live test of the keyset export, and a root store and crypto
+# provider for its Cloud KMS and BigQuery clients.
+gcloud-sdk = { workspace = true, features = ["google-cloud-bigquery-v2", "tls-roots", "auth-default-crypto"] }
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
 async-trait = { workspace = true }
 proptest = { workspace = true }
@@ -75,6 +81,9 @@ postgres-tls-native = ["postgres", "sqlx/tls-native-tls"]
 gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
 gcs-tls-roots = ["gcs", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
 gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
+# `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider without a TLS root store or crypto
+# provider: the application enables kms-aead's `gcp-kms-encryption` to build it.
+bigquery-export = ["kms-aead/gcp-kms-encryption-base", "dep:prost", "dep:zeroize"]
 
 [lints]
 workspace = true
@@ -88,6 +97,7 @@ features = [
     "firestore",
     "postgres-tls-rustls",
     "gcs-tls-roots",
+    "bigquery-export",
 ]
 
 [[example]]
