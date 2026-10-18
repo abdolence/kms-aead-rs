@@ -93,10 +93,3 @@ errors for a request that got no complete response, and `VAULT_RESPONSE`,
 `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` are encryption errors for a response or a
 wrapped DEK that cannot be read. Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
 or `VAULT_TLS` when the TLS configuration cannot be built.
-
-## Binding
-
-A `DekBinding` is sent as Transit `associated_data`, which needs Vault 1.13 or later and an AEAD
-key type such as `aes256-gcm96`. A Vault that does not know the field ignores it and says so in
-its warnings, and the call then fails with `VAULT_BINDING_IGNORED`, so a bound wrap never
-succeeds unbound.

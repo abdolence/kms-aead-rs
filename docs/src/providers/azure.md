@@ -65,8 +65,3 @@ value. For the `*_with_encrypted_dek` calls, store the wrapped DEK with `to_byte
 A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
 `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
 `NetworkError`, any other status an `EncryptionError`.
-
-## Binding
-
-Key Vault's wrapKey takes no associated data, so the provider refuses a `DekBinding`: a wrap or
-an unwrap with one fails with `AZURE_BINDING_UNSUPPORTED` before any request.

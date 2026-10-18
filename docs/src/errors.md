@@ -59,7 +59,6 @@ The library's codes:
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
 | `LEGACY_FORMAT` | legacy format | a pre-0.29 layout without `legacy-formats` |
-| `INVALID_DEK_BINDING` | system | a `DekBinding` that is empty, too long or holds a control character |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 | `INVALID_LOCAL_KEK_ID`, `LOCAL_*` | system, encryption | the [local KMS](./providers/local.md#errors) |

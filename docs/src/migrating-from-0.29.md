@@ -81,8 +81,6 @@ An application's own implementation of the provider trait:
 - implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`;
 - adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other` and a key name that identifies the
   key;
-- takes `binding: Option<&DekBinding>` in `encrypt_data_encryption_key` and
-  `decrypt_data_encryption_key`, and fails on `Some` when its KMS cannot bind;
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator.

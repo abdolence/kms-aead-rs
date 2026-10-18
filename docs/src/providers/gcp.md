@@ -65,10 +65,4 @@ on the location when the KMS generator is on.
 ## Errors
 
 A failed KMS call is a `NetworkError` whose code is the gRPC status code, such as
-`PermissionDenied` or `NotFound`. An unwrap that names another binding than the wrap, or none,
-fails with `InvalidArgument`.
-
-## Binding
-
-A `DekBinding` is sent as the additional authenticated data of Encrypt and Decrypt, which Cloud
-KMS does not write to its audit logs.
+`PermissionDenied` or `NotFound`.

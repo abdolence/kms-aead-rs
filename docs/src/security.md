@@ -22,9 +22,16 @@ header of envelope layout v1, which holds the key version and the wrapped DEK's 
 is not authenticated, so a field in it is only ever an address or an audit value, never a choice of
 algorithm or mode.
 
-A `DekBinding` protects a wrapped DEK the same way at the KMS: a DEK wrapped for one tenant or
-record does not unwrap for another, see [Binding a wrapped key](./providers.md#binding-a-wrapped-key).
-On AWS the binding is logged by CloudTrail in plain text, so it holds nothing secret.
+A wrapped DEK carries no context that the KMS authenticates. Whoever can write where wrapped
+DEKs are stored, such as a database table or a keyring store, can copy a wrapped DEK to another
+record or relabel it, and the KMS unwraps it for any principal allowed to decrypt with that KEK.
+The controls for this are in the deployment:
+
+- write access to the stored keys is kept apart from the right to decrypt with the KEK;
+- each isolation boundary, such as a tenant or an environment, has a KEK of its own, so a DEK
+  copied across it fails to unwrap;
+- the KMS audit log of decrypt calls, turned on where the KMS leaves it off by default, shows
+  which principal unwrapped which key.
 
 The local KMS has no IAM, no audit log and no HSM, see its [limits](./providers/local.md#limits).
 

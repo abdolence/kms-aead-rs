@@ -16,7 +16,6 @@ encryption without a KMS:
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
   keys;
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
-- Binding a wrapped key to non-secret text the KMS authenticates;
 - Optional KMS-side random generators for GCP and AWS;
 - Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
   in them;

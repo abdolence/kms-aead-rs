@@ -144,7 +144,7 @@ A wrap fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. An unwrap 
 `LOCAL_WRAPPED_KEY_FORMAT` when the wrapped DEK is not in the local layout,
 `LOCAL_KEK_ID_MISMATCH` when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION`
 when the provider does not hold its version, and `DECRYPT` when it is not authentic under that
-version or names another binding.
+version.
 
 Creating a provider fails with `INVALID_LOCAL_KEK_ID` for an invalid id, `LOCAL_KEK_VERSIONS`
 when the versions are empty or list one version twice, and `LOCAL_KEK_SOURCE` or

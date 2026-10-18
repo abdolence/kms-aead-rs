@@ -124,10 +124,6 @@ The calls are:
 Be aware not to seal more than about 2^32 values under one DEK: every value takes a random 96-bit
 nonce, see [Security considerations](./security.md#nonces).
 
-The envelope wraps and unwraps unbound. A DEK wrapped with a `DekBinding` fails to unwrap through
-the `*_with_encrypted_dek` calls, and goes to the provider or to `DekCache::with_key` directly,
-see [Binding a wrapped key](./providers.md#binding-a-wrapped-key).
-
 ## Storing wrapped DEKs
 
 `EncryptedDataEncryptionKey` holds the wrapped DEK and the version of the KMS key that wrapped

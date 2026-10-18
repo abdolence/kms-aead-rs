@@ -90,5 +90,4 @@ assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from
 DEK cache. To cache deterministic keys, use `DekCache::with_deterministic_key`, which keeps them
 apart from randomized keys.
 
-`DeterministicCipher::generate_wrapped_key` does the same with any provider and an optional
-`DekBinding`.
+`DeterministicCipher::generate_wrapped_key` does the same with any provider.
