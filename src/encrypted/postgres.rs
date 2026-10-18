@@ -38,8 +38,6 @@ impl<'a, T, F: Format> FromSql<'a> for Encrypted<T, F> {
 
 #[cfg(test)]
 mod tests {
-    use postgres_types::{FromSql, Type};
-
     use super::*;
     use crate::formats::{Envelope, Randomized, TinkOutputPrefix};
     use crate::ValueStruct;

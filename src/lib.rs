@@ -82,13 +82,13 @@
 //!
 //! # Other features
 //!
-//! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].
-//! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated.
+//! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`];
+//! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated;
 //! - `serde`: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
 //!   [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`;
-//! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON.
+//! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON;
 //! - `postgres`: `ToSql` and `FromSql` of postgres-types for [`Encrypted`], as `BYTEA`, and
-//!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres.
+//!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres;
 //! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
 //!   PostgreSQL, as `BYTEA` and `BYTEA[]`. It depends on sqlx-core and sqlx-postgres only, with
 //!   no runtime and no TLS stack.
