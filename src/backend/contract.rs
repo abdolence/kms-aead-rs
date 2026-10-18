@@ -1,5 +1,5 @@
-//! What every backend does through `AeadCipher`, run for every enabled backend and every
-//! algorithm it implements, so that the backends cannot drift apart.
+//! What every backend does through `AeadCipher` and `DeterministicCipher`, run for every enabled
+//! backend and every algorithm it implements, so that the backends cannot drift apart.
 
 use std::collections::HashSet;
 
@@ -11,6 +11,8 @@ use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadError;
 use crate::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, KmsAeadResult};
+#[cfg(feature = "deterministic")]
+use crate::{DeterministicAlgorithm, DeterministicCipher};
 
 const BACKENDS: &[AeadBackend] = &[
     #[cfg(feature = "ring")]
@@ -103,6 +105,37 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
             let key = sealer.generate_key()?;
             let cipher_text = sealer.encrypt_value(AAD, &plain_text, &key)?;
             for opener in &ciphers {
+                assert_eq!(
+                    opener.decrypt_value(AAD, &cipher_text, &key)?,
+                    plain_text,
+                    "{algorithm} sealed by {sealer:?} and opened by {opener:?}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Every backend seals AES-SIV with the same implementation today, so a deterministic value
+/// sealed under one backend is the value every other seals, and opens there.
+#[cfg(feature = "deterministic")]
+#[test]
+fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
+    let plain_text = SecretValue::from(PLAIN_TEXT);
+    for algorithm in DeterministicAlgorithm::ALL {
+        let ciphers = BACKENDS
+            .iter()
+            .map(|&backend| DeterministicCipher::new(backend, algorithm))
+            .collect::<KmsAeadResult<Vec<_>>>()?;
+        for sealer in &ciphers {
+            let key = sealer.generate_key()?;
+            let cipher_text = sealer.encrypt_value(AAD, &plain_text, &key)?;
+            for opener in &ciphers {
+                assert_eq!(
+                    opener.encrypt_value(AAD, &plain_text, &key)?,
+                    cipher_text,
+                    "{algorithm} sealed by {sealer:?} and by {opener:?}"
+                );
                 assert_eq!(
                     opener.decrypt_value(AAD, &cipher_text, &key)?,
                     plain_text,

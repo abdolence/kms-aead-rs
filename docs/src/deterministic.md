@@ -6,9 +6,13 @@ Randomized encryption gives a different cipher text every time, even for the sam
 deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
 sealed column can be compared, joined or looked up by equality without opening it.
 
-The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`,
-on the RustCrypto `aes-siv` crate, whatever AEAD backend the build enables. Its name for
-`FromStr` and `Display` is `aes-256-siv`.
+The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`.
+Its name for `FromStr` and `Display` is `aes-256-siv`. `DeterministicCipher` takes a backend, as
+`AeadCipher` does, and draws its keys from the backend's CSPRNG. Every backend seals and opens with
+the RustCrypto `aes-siv` crate, so a value sealed under one backend opens under any other.
+
+AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
+validated boundary, also on `aws-lc-fips`, where the keys come from the FIPS module's DRBG.
 
 ## What it leaks
 
@@ -38,11 +42,11 @@ application keeps track of which key serves which algorithm, as kms-aead-keyring
 key ids.
 
 ```rust
-use kms_aead::{DeterministicAlgorithm, DeterministicCipher};
+use kms_aead::{AeadBackend, DeterministicAlgorithm, DeterministicCipher};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let cipher = DeterministicCipher::new(DeterministicAlgorithm::Aes256Siv)?;
+let cipher = DeterministicCipher::new(AeadBackend::Ring, DeterministicAlgorithm::Aes256Siv)?;
 let key = cipher.generate_key()?;
 
 let aad = b"customers/email";
@@ -81,7 +85,7 @@ let (key, encrypted_key) = envelope.generate_new_deterministic_dek(algorithm).aw
 // Later: unwrap the stored key
 let unwrapped = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
 
-let cipher = DeterministicCipher::new(algorithm)?;
+let cipher = DeterministicCipher::new(AeadBackend::Ring, algorithm)?;
 let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &key)?;
 assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from("value"));
 # Ok(())

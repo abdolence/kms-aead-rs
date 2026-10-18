@@ -119,7 +119,7 @@ an upgrade.
 |---|---|
 | `purpose` | `randomized` or `deterministic` |
 | `algorithm` | the algorithm of the key, `aes-256-siv` for deterministic keys |
-| `backend` | generate DEK only: `ring`, `aws-lc` or `rustcrypto`, and `rustcrypto` for deterministic keys |
+| `backend` | generate DEK only: the envelope's backend, `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
 | `error_code` | the code of the error the call returned |
 

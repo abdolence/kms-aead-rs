@@ -131,7 +131,6 @@ deterministic = [
     "aes/zeroize",
     "dep:cmac",
     "cmac/zeroize",
-    "dep:getrandom",
 ]
 # Deprecated: reads the layouts written up to 0.28.1. Reading them will be removed in a later
 # breaking release.

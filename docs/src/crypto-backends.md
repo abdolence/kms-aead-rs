@@ -104,7 +104,8 @@ library to a build with a cloud provider, since the providers already build aws-
 so it does not need `aws-lc`. It needs CMake and Go to build. Be aware it moves every user of
 aws-lc-rs in the build to the FIPS module, the rustls aws-lc-rs provider included. A build with
 both features compiles both C libraries, and aws-lc-rs runs on the FIPS one. AES-256-GCM is the
-algorithm for FIPS deployments.
+algorithm for FIPS deployments. AES-SIV, the deterministic algorithm, is not FIPS-approved, see
+[Deterministic encryption](./deterministic.md).
 
 aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own allocator, which
 overwrites every allocation with zeros before freeing it. The expanded key schedule does not stay
