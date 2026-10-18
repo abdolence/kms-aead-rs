@@ -335,6 +335,27 @@ async fn a_missing_record_keeps_the_cached_one() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_record_ttl_of_duration_max_opens() -> TestResult {
+    let options = KeyringOptions::new()
+        .with_watch(false)
+        .with_record_ttl(Duration::MAX)
+        .with_reload_min_interval(Duration::MAX);
+    let fixture = Fixture::new(options).await?;
+    let aad = email_of("42")?;
+    let value = fixture.keyring.encrypt(&aad, &alice()).await?;
+    let unknown = relabelled(&value, 9)?;
+    for _ in 0..2 {
+        assert!(matches!(
+            fixture.keyring.decrypt(&aad, &unknown).await,
+            Err(KeyringError::KeyVersionUnknown(_))
+        ));
+    }
+    fixture.keyring.reload().await?;
+    assert_eq!(fixture.keyring.decrypt(&aad, &value).await?, ALICE);
+    Ok(())
+}
+
+#[tokio::test]
 async fn open_with_the_wrong_kek_fails() -> TestResult {
     let fixture = Fixture::new(no_watch()).await?;
     let other = TestProvider::new("another-kek")?;

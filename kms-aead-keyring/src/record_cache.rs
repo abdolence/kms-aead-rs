@@ -74,7 +74,7 @@ impl<S: KeyringStore> RecordCache<S> {
             cached: Mutex::new(Cached {
                 record: Arc::new(stored.record),
                 revision: stored.revision,
-                revalidate_at: Instant::now() + record_ttl,
+                revalidate_at: after(Instant::now(), record_ttl),
             }),
             refresh: tokio::sync::Mutex::default(),
             unknown_id_reloads: AtomicU64::new(0),
@@ -135,7 +135,7 @@ impl<S: KeyringStore> RecordCache<S> {
         let now = Instant::now();
         if refreshes
             .last_unknown_id_reload
-            .is_some_and(|last| now < last + self.reload_min_interval)
+            .is_some_and(|last| now < after(last, self.reload_min_interval))
         {
             spans::reload_rate_limited(&self.id, key_id);
             return (record, "rate_limited");
@@ -274,7 +274,7 @@ impl<S: KeyringStore> RecordCache<S> {
                 self.reload_min_interval
             }
         };
-        self.lock().revalidate_at = Instant::now() + next;
+        self.lock().revalidate_at = after(Instant::now(), next);
     }
 
     fn accept(
@@ -298,7 +298,7 @@ impl<S: KeyringStore> RecordCache<S> {
             Cached {
                 record: Arc::clone(&next),
                 revision: stored.revision,
-                revalidate_at: Instant::now() + self.record_ttl,
+                revalidate_at: after(Instant::now(), self.record_ttl),
             },
         )
         .record;
@@ -348,7 +348,7 @@ impl<S: KeyringStore> RecordCache<S> {
                 continue;
             }
             if let Some(last) = last {
-                tokio::time::sleep_until(last + interval).await;
+                tokio::time::sleep_until(after(last, interval)).await;
             }
             for event in watch.pending() {
                 event.calls_for_revalidation(&id);
@@ -361,6 +361,16 @@ impl<S: KeyringStore> RecordCache<S> {
             cache.revalidate(&mut refreshes, "watch").await;
         }
     }
+}
+
+/// `wait` after `start`, or an instant beyond any process's lifetime when that overflows, so
+/// that a `Duration::MAX` option means never rather than a panic.
+fn after(start: Instant, wait: Duration) -> Instant {
+    const FAR_FUTURE: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+    start
+        .checked_add(wait)
+        .or_else(|| start.checked_add(FAR_FUTURE))
+        .unwrap_or(start)
 }
 
 impl WatchEvent {
