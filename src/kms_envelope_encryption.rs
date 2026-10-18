@@ -25,6 +25,11 @@ use crate::{
 /// nonces every [`AeadAlgorithm`] draws.
 const MAX_ENCRYPTIONS_PER_DEK: u64 = 1 << 32;
 
+/// The most plaintext bytes a [`DekReusePolicy`] allows under one AES-GCM DEK: 2^48 blocks of 16
+/// bytes. RFC 8452, section 9: "in order to limit the adversary's advantage to 2^-32, at most
+/// 2^48 blocks can be encrypted overall" under one key of a standard mode such as AES-GCM.
+const MAX_BYTES_PER_AES_GCM_DEK: u64 = 1 << 52;
+
 /// Envelope encryption: AEAD under data encryption keys (DEKs) on the backend `B`, and the DEKs
 /// encrypted by a key encryption key (KEK) through the provider `P`.
 ///
@@ -82,7 +87,12 @@ impl KmsAeadEnvelopeOptions {
 }
 
 /// When a store-less envelope renews the data encryption key (DEK) it encrypts under: at the
-/// first encryption past `max_age` or past `max_uses`, whichever comes first.
+/// first encryption past `max_age`, past `max_uses` or past `max_bytes`, whichever comes first.
+///
+/// `max_bytes` counts the plaintext bytes sealed under the DEK. A value that would take the count
+/// past `max_bytes` renews the DEK before it is sealed, and a value longer than `max_bytes` alone
+/// is sealed under a new DEK of its own, which encrypts that value only, as the per-call envelope
+/// does, and leaves the current DEK in use.
 ///
 /// A renewal makes one KMS encryption call, and the values under the previous DEK stay readable,
 /// since each value carries its encrypted DEK.
@@ -110,6 +120,23 @@ pub struct DekReusePolicy {
     /// which NIST SP 800-38D allows for 2^32 values under one AES-GCM key.
     #[default = "Self::DEFAULT_MAX_USES"]
     pub max_uses: NonZeroU64,
+    /// The plaintext bytes under one DEK. `None`, the default, takes the default of the
+    /// algorithm:
+    ///
+    /// - AES-128-GCM and AES-256-GCM:
+    ///   [`DEFAULT_MAX_BYTES_AES_GCM`](Self::DEFAULT_MAX_BYTES_AES_GCM), and 2^52 at most, the
+    ///   2^48 blocks RFC 8452, section 9, allows under one AES-GCM key for an adversary advantage
+    ///   of 2^-32;
+    /// - AES-256-GCM-SIV and ChaCha20-Poly1305: no limit beyond `max_uses`. RFC 8452, section 9,
+    ///   bounds AES-GCM-SIV with random nonces at 2^32 values of up to 8 GiB each for an
+    ///   advantage of 2^-32, and ChaCha20-Poly1305 has no confidentiality limit beyond the
+    ///   security of ChaCha20 itself (draft-irtf-cfrg-aead-limits, section 6.3).
+    ///
+    /// The bounds count blocks of plaintext and AAD, and one more block per value. The count of
+    /// bytes leaves those out, along with the rounding of each value up to whole 16-byte blocks:
+    /// at the default `max_uses` and an AAD of 16 bytes or less, at most 3 × 2^24 blocks beside
+    /// the 2^34 blocks of the default.
+    pub max_bytes: Option<NonZeroU64>,
 }
 
 impl DekReusePolicy {
@@ -117,12 +144,24 @@ impl DekReusePolicy {
     pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
     /// The default [`max_uses`](Self::max_uses): 2^24.
     pub const DEFAULT_MAX_USES: NonZeroU64 = NonZeroU64::new(1 << 24).expect("2^24 is not zero");
+    /// The default [`max_bytes`](Self::max_bytes) for AES-128-GCM and AES-256-GCM: 2^38 bytes,
+    /// 256 GiB, below the 2^38.5 bytes of TLS 1.3. RFC 8446, section 5.5: "For AES-GCM, up to
+    /// 2^24.5 full-size records (about 24 million) may be encrypted on a given connection while
+    /// keeping a safety margin of approximately 2^-57 for Authenticated Encryption (AE)
+    /// security", with full-size records of 2^14 bytes. Luykx and Paterson, "Limits on
+    /// Authenticated Encryption Use in TLS", table 1, give the same 2^24.5 records for a
+    /// confidentiality advantage of 2^-60.
+    pub const DEFAULT_MAX_BYTES_AES_GCM: NonZeroU64 =
+        NonZeroU64::new(1 << 38).expect("2^38 is not zero");
 }
 
 /// The DEK a store-less envelope encrypts under, renewed by its policy. Its plaintext lives in
 /// the envelope's cache, never here.
 struct DekReuse {
     policy: DekReusePolicy,
+    /// The `max_bytes` of the policy with the default of the algorithm applied, `None` for no
+    /// limit.
+    max_bytes: Option<NonZeroU64>,
     current: RwLock<Option<Arc<CurrentDek>>>,
     /// Held across a renewal's KMS calls, so that one writer renews at a time. It holds the error
     /// of the last attempt when that attempt failed.
@@ -142,18 +181,40 @@ struct CurrentDek {
     encrypted_dek: EncryptedDataEncryptionKey,
     created_at: Instant,
     uses: AtomicU64,
+    /// The plaintext bytes sealed and claimed under the DEK, counted only under a `max_bytes`.
+    bytes: AtomicU64,
 }
 
 impl DekReuse {
-    /// The reuse of `policy`, which must be in range, with its DEK in `dek_cache`, which must be
-    /// enabled.
-    fn new(policy: DekReusePolicy, dek_cache: &DekCache) -> KmsAeadResult<Self> {
-        if policy.max_age.is_zero() || policy.max_uses.get() > MAX_ENCRYPTIONS_PER_DEK {
+    /// The reuse of `policy` under `algorithm`, which must be in range for it, with its DEK in
+    /// `dek_cache`, which must be enabled.
+    fn new(
+        policy: DekReusePolicy,
+        algorithm: AeadAlgorithm,
+        dek_cache: &DekCache,
+    ) -> KmsAeadResult<Self> {
+        let (max_bytes, max_bytes_bound) = match algorithm {
+            AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256Gcm => (
+                Some(
+                    policy
+                        .max_bytes
+                        .unwrap_or(DekReusePolicy::DEFAULT_MAX_BYTES_AES_GCM),
+                ),
+                MAX_BYTES_PER_AES_GCM_DEK,
+            ),
+            AeadAlgorithm::Aes256GcmSiv | AeadAlgorithm::ChaCha20Poly1305 => {
+                (policy.max_bytes, u64::MAX)
+            }
+        };
+        if policy.max_age.is_zero()
+            || policy.max_uses.get() > MAX_ENCRYPTIONS_PER_DEK
+            || max_bytes.is_some_and(|max_bytes| max_bytes.get() > max_bytes_bound)
+        {
             return Err(KmsAeadSystemError::create(
                 "INVALID_DEK_REUSE_POLICY",
                 &format!(
-                    "A DEK reuse policy needs a max_age longer than zero and a max_uses of 2^32 at \
-                     most: {policy:?}"
+                    "A DEK reuse policy needs a max_age longer than zero, a max_uses of 2^32 at \
+                     most and, under AES-GCM, a max_bytes of 2^52 at most: {policy:?}"
                 ),
             ));
         }
@@ -165,26 +226,27 @@ impl DekReuse {
         }
         Ok(Self {
             policy,
+            max_bytes,
             current: RwLock::new(None),
             renewal: AssertUnwindSafe(tokio::sync::Mutex::new(None)),
             ended_renewals: AtomicU64::new(0),
         })
     }
 
-    /// The DEK to encrypt one value under, encrypted by `renew` when the policy renews the current
-    /// one. A writer that waited while an attempt failed returns that attempt's error rather than
-    /// calling the KMS again; a writer arriving after it retries.
-    async fn claim_or_renew<F, Fut>(&self, renew: F) -> KmsAeadResult<Arc<CurrentDek>>
+    /// The DEK to encrypt one value of `len` plaintext bytes under, `max_bytes` at most, encrypted by `renew` when the policy renews the current one. A writer that waited while an
+    /// attempt failed returns that attempt's error rather than calling the KMS again; a writer
+    /// arriving after it retries.
+    async fn claim_or_renew<F, Fut>(&self, len: u64, renew: F) -> KmsAeadResult<Arc<CurrentDek>>
     where
         F: FnOnce() -> Fut,
         Fut: Future<Output = KmsAeadResult<EncryptedDataEncryptionKey>>,
     {
-        if let Some(dek) = self.claim() {
+        if let Some(dek) = self.claim(len) {
             return Ok(dek);
         }
         let ended_on_arrival = self.ended_renewals.load(Ordering::Relaxed);
         let mut last_failure = self.renewal.lock().await;
-        if let Some(dek) = self.claim() {
+        if let Some(dek) = self.claim(len) {
             return Ok(dek);
         }
         if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival {
@@ -201,6 +263,7 @@ impl DekReuse {
                     encrypted_dek,
                     created_at: Instant::now(),
                     uses: AtomicU64::new(1),
+                    bytes: AtomicU64::new(len),
                 });
                 *self.current.write().unwrap_or_else(PoisonError::into_inner) =
                     Some(Arc::clone(&dek));
@@ -225,12 +288,19 @@ impl DekReuse {
         }
     }
 
-    /// The current DEK with one of its uses taken, or `None` when the policy renews it.
-    fn claim(&self) -> Option<Arc<CurrentDek>> {
+    /// The current DEK with one of its uses and `len` of its bytes taken, or `None` when the
+    /// policy renews it.
+    fn claim(&self, len: u64) -> Option<Arc<CurrentDek>> {
         let current = self.current.read().unwrap_or_else(PoisonError::into_inner);
         let dek = current.as_ref()?;
         let usable = dek.created_at.elapsed() < self.policy.max_age
-            && dek.uses.fetch_add(1, Ordering::Relaxed) < self.policy.max_uses.get();
+            && dek.uses.fetch_add(1, Ordering::Relaxed) < self.policy.max_uses.get()
+            && self.max_bytes.is_none_or(|max_bytes| {
+                dek.bytes
+                    .fetch_add(len, Ordering::Relaxed)
+                    .saturating_add(len)
+                    <= max_bytes.get()
+            });
         usable.then(|| Arc::clone(dek))
     }
 }
@@ -255,8 +325,8 @@ where
     /// # Errors
     ///
     /// `UNSUPPORTED_ALGORITHM` when `B` does not implement the algorithm of `options`,
-    /// `INVALID_DEK_REUSE_POLICY` for a reuse policy with a zero `max_age` or a `max_uses` over
-    /// 2^32, or beside [`DekCache::disabled`], and the errors of [`DekCache::new`] for the
+    /// `INVALID_DEK_REUSE_POLICY` for a reuse policy with a zero `max_age`, a `max_uses` over
+    /// 2^32 or a `max_bytes` over 2^52 under AES-GCM, or beside [`DekCache::disabled`], and the errors of [`DekCache::new`] for the
     /// default cache of store-less mode.
     pub fn with_options(provider: P, options: KmsAeadEnvelopeOptions) -> KmsAeadResult<Self> {
         let dek_cache = match options.dek_cache {
@@ -266,7 +336,7 @@ where
         };
         let dek_reuse = options
             .dek_reuse
-            .map(|policy| DekReuse::new(policy, &dek_cache))
+            .map(|policy| DekReuse::new(policy, options.algorithm, &dek_cache))
             .transpose()?;
         Ok(Self {
             provider,
@@ -470,8 +540,13 @@ where
         aad: &[u8],
         plain_text: &[u8],
     ) -> KmsAeadResult<Encrypted<T, Envelope>> {
+        let len = plain_text.len() as u64;
         let sealed = match &self.dek_reuse {
-            Some(dek_reuse) => {
+            Some(dek_reuse)
+                if dek_reuse
+                    .max_bytes
+                    .is_none_or(|max_bytes| len <= max_bytes.get()) =>
+            {
                 // The cache holds the only plaintext copy of the DEK, so a renewal caches it.
                 // Once it has left the cache, expired, invalidated or cleared, the writer renews
                 // instead of decrypting it again, so that `invalidate` and `clear` end its use.
@@ -483,7 +558,7 @@ where
                     }
                     Ok(encrypted_dek)
                 };
-                let current = dek_reuse.claim_or_renew(renew).await?;
+                let current = dek_reuse.claim_or_renew(len, renew).await?;
                 let sealed = self.dek_cache.0.as_ref().and_then(|enabled| {
                     enabled.with_cached_dek(self.provider.kek(), &current.encrypted_dek, |dek| {
                         self.seal_envelope(aad, plain_text, dek, &current.encrypted_dek)
@@ -496,7 +571,7 @@ where
                     }
                     None => {
                         dek_reuse.retire(&current);
-                        let current = dek_reuse.claim_or_renew(renew).await?;
+                        let current = dek_reuse.claim_or_renew(len, renew).await?;
                         self.with_dek(&current.encrypted_dek, |dek| {
                             self.seal_envelope(aad, plain_text, dek, &current.encrypted_dek)
                         })
@@ -504,7 +579,8 @@ where
                     }
                 }
             }
-            None => {
+            // Per call, and in store-less mode a value longer than `max_bytes`: a DEK of its own.
+            _ => {
                 let (dek, encrypted_dek) =
                     self.cipher.generate_encrypted_dek(&self.provider).await?;
                 self.seal_envelope(aad, plain_text, &dek, &encrypted_dek)?
@@ -1005,6 +1081,7 @@ mod tests {
         let refused = [
             DekReusePolicy::new().with_max_age(Duration::ZERO),
             DekReusePolicy::new().with_max_uses(NonZeroU64::new((1 << 32) + 1).unwrap()),
+            DekReusePolicy::new().with_max_bytes(NonZeroU64::new((1 << 52) + 1).unwrap()),
         ];
         for policy in refused {
             let result = CountingEnvelope::with_options(
@@ -1022,7 +1099,9 @@ mod tests {
         CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             KmsAeadEnvelopeOptions::new().with_dek_reuse(
-                DekReusePolicy::new().with_max_uses(NonZeroU64::new(1 << 32).unwrap()),
+                DekReusePolicy::new()
+                    .with_max_uses(NonZeroU64::new(1 << 32).unwrap())
+                    .with_max_bytes(NonZeroU64::new(1 << 52).unwrap()),
             ),
         )?;
         Ok(())
@@ -1070,6 +1149,79 @@ mod tests {
             .collect();
         assert_eq!(renewals, [false, false, true, false, false, true]);
         assert_eq!(envelope.provider.encryptions(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reuse_renews_by_bytes() -> KmsAeadResult<()> {
+        let max_bytes = NonZeroU64::new(3 * PLAIN_TEXT.len() as u64).unwrap();
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new()
+                .with_dek_reuse(DekReusePolicy::new().with_max_bytes(max_bytes)),
+        )?;
+
+        let mut encrypted_deks = Vec::new();
+        for _ in 0..7 {
+            let value = envelope
+                .encrypt(AAD, &SecretValue::from(PLAIN_TEXT))
+                .await?;
+            encrypted_deks.push(value.separate()?.1);
+        }
+
+        let renewals: Vec<_> = encrypted_deks
+            .windows(2)
+            .map(|pair| pair[0] != pair[1])
+            .collect();
+        assert_eq!(renewals, [false, false, true, false, false, true]);
+        assert_eq!(envelope.provider.encryptions(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_value_over_the_remaining_bytes_renews_first() -> KmsAeadResult<()> {
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new()
+                .with_dek_reuse(DekReusePolicy::new().with_max_bytes(NonZeroU64::new(10).unwrap())),
+        )?;
+
+        let mut encrypted_deks = Vec::new();
+        for plain_text in ["six b.", "six b.", "four"] {
+            let value = envelope
+                .encrypt(AAD, &SecretValue::from(plain_text))
+                .await?;
+            encrypted_deks.push(value.separate()?.1);
+        }
+
+        let renewals: Vec<_> = encrypted_deks
+            .windows(2)
+            .map(|pair| pair[0] != pair[1])
+            .collect();
+        assert_eq!(renewals, [true, false]);
+        assert_eq!(envelope.provider.encryptions(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_value_over_max_bytes_has_a_dek_of_its_own() -> KmsAeadResult<()> {
+        let envelope = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new()
+                .with_dek_reuse(DekReusePolicy::new().with_max_bytes(NonZeroU64::new(10).unwrap())),
+        )?;
+
+        let mut encrypted_deks = Vec::new();
+        for plain_text in ["four", "eleven byte", "four"] {
+            let value = envelope
+                .encrypt(AAD, &SecretValue::from(plain_text))
+                .await?;
+            encrypted_deks.push(value.separate()?.1);
+        }
+
+        assert_ne!(encrypted_deks[1], encrypted_deks[0]);
+        assert_eq!(encrypted_deks[2], encrypted_deks[0]);
+        assert_eq!(envelope.provider.encryptions(), 2);
         Ok(())
     }
 
