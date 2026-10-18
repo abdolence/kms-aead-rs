@@ -24,13 +24,13 @@ use crate::AeadAlgorithm;
 #[derive(Debug, Clone, Copy)]
 pub struct AwsLc;
 
-impl AeadBackend for AwsLc {}
+impl AeadBackend for AwsLc {
+    const NAME: &'static str = "aws-lc";
+}
 
 impl Sealed for AwsLc {}
 
 impl AeadBackendOps for AwsLc {
-    const NAME: &'static str = "aws-lc";
-
     fn supports(algorithm: AeadAlgorithm) -> bool {
         match algorithm {
             AeadAlgorithm::ChaCha20Poly1305

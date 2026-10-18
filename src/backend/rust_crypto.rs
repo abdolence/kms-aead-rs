@@ -14,13 +14,13 @@ use crate::AeadAlgorithm;
 #[derive(Debug, Clone, Copy)]
 pub struct RustCrypto;
 
-impl AeadBackend for RustCrypto {}
+impl AeadBackend for RustCrypto {
+    const NAME: &'static str = "rustcrypto";
+}
 
 impl Sealed for RustCrypto {}
 
 impl AeadBackendOps for RustCrypto {
-    const NAME: &'static str = "rustcrypto";
-
     fn supports(algorithm: AeadAlgorithm) -> bool {
         match algorithm {
             AeadAlgorithm::ChaCha20Poly1305

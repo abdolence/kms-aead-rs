@@ -36,8 +36,8 @@ mod contract;
 /// [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope) and
 /// [`LocalKmsProvider<B>`](crate::providers::LocalKmsProvider).
 ///
-/// Sealed: only the backend types of this crate implement it. It has no methods, so code generic
-/// over the backend names this trait and nothing else:
+/// Sealed: only the backend types of this crate implement it. It has no methods, only its
+/// [`NAME`](Self::NAME), so code generic over the backend names this trait and nothing else:
 ///
 /// ```rust
 /// use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -78,7 +78,22 @@ mod contract;
 ///
 /// A build without a backend feature has no type that implements it, so nothing that seals or
 /// wraps can be constructed.
-pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {}
+pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {
+    /// The backend's name in spans and logs, the value of the `/kms_aead/backend` span field:
+    /// `ring`, `aws-lc` or `rustcrypto`. `aws-lc-fips` runs the `aws-lc` backend.
+    ///
+    /// ```rust
+    /// use kms_aead::AeadBackend;
+    ///
+    /// # #[cfg(feature = "ring")]
+    /// assert_eq!(kms_aead::Ring::NAME, "ring");
+    /// # #[cfg(feature = "aws-lc-rs")]
+    /// assert_eq!(kms_aead::AwsLc::NAME, "aws-lc");
+    /// # #[cfg(feature = "rustcrypto")]
+    /// assert_eq!(kms_aead::RustCrypto::NAME, "rustcrypto");
+    /// ```
+    const NAME: &'static str;
+}
 
 mod private {
     /// Seals [`AeadBackend`](super::AeadBackend). Its supertrait is how the crate reaches a
@@ -130,9 +145,6 @@ pub(crate) enum Failure {
 /// The operations of one backend. `AeadCipher` checks the key length and the support of the
 /// algorithm before it calls a backend, so an implementation may rely on both.
 pub(crate) trait AeadBackendOps {
-    /// `ring`, `aws-lc` or `rustcrypto`: the value of the `/kms_aead/backend` span field.
-    const NAME: &'static str;
-
     fn supports(algorithm: AeadAlgorithm) -> bool;
 
     /// Fills `out` from the backend's system CSPRNG.

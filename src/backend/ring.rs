@@ -14,13 +14,13 @@ use crate::AeadAlgorithm;
 #[derive(Debug, Clone, Copy)]
 pub struct Ring;
 
-impl AeadBackend for Ring {}
+impl AeadBackend for Ring {
+    const NAME: &'static str = "ring";
+}
 
 impl Sealed for Ring {}
 
 impl AeadBackendOps for Ring {
-    const NAME: &'static str = "ring";
-
     fn supports(algorithm: AeadAlgorithm) -> bool {
         ring_algorithm(algorithm).is_some()
     }

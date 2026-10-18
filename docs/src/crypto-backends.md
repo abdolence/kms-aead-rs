@@ -17,8 +17,9 @@ for every crate in a build when one crate enables another backend.
 
 ## Code generic over the backend
 
-The backend types implement `AeadBackend`, a sealed trait without methods. Code that works with
-any backend bounds its type parameter with `AeadBackend` and nothing else:
+The backend types implement `AeadBackend`, a sealed trait without methods. Its one item is the
+constant `NAME`, the backend's name in spans and logs: `ring`, `aws-lc` or `rustcrypto`. Code
+that works with any backend bounds its type parameter with `AeadBackend` and nothing else:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
