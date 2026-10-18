@@ -50,6 +50,9 @@ uuid = { version = "1", features = ["v7"] }
 # The S3 client of the S3 store's examples.
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 # The TLS connector of the PostgreSQL store's examples, with the platform's root certificates.
+# tokio-postgres-rustls builds only on tokio-postgres's `runtime`, which a build without the
+# `postgres` feature does not turn on.
+tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
 tokio-postgres-rustls = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 rustls-native-certs = "0.8"
