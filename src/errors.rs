@@ -1,15 +1,14 @@
 //! The error type of every fallible operation, [`KmsAeadError`].
 //!
-//! Each error carries a code in [`KmsAeadErrorPublicGenericDetails::code`]: one of the crate's
-//! own codes, such as `INVALID_KEY_LENGTH` or `DECRYPT`, or the error code a KMS returned, such as
-//! AWS's `IncorrectKeyException` or `VAULT_STATUS_403` for an HTTP status from Vault.
+//! Each error carries a code, which [`KmsAeadError::code`] returns: one of the crate's own codes,
+//! such as `INVALID_KEY_LENGTH` or `DECRYPT`, or the error code a KMS returned, such as AWS's
+//! `IncorrectKeyException` or `VAULT_STATUS_403` for an HTTP status from Vault.
 
 use rsb_derive::Builder;
 use std::error::Error;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::Arc;
-use std::time::SystemTimeError;
 
 use crate::{AeadAlgorithm, AeadBackend};
 
@@ -21,8 +20,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KmsAeadError {
-    /// The configuration or the environment: invalid provider options, a KMS client that cannot
-    /// be built, or a system clock error.
+    /// The configuration or the environment: invalid provider options or a KMS client that
+    /// cannot be built.
     SystemError(KmsAeadSystemError),
     /// A KMS that could not be reached or did not answer in time, a server error or a rate limit
     /// from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS.
@@ -37,8 +36,9 @@ pub enum KmsAeadError {
 }
 
 impl KmsAeadError {
-    /// The value of the `error_code` span field.
-    pub(crate) fn code(&self) -> &str {
+    /// The code to match on: one of the crate's codes, such as `DECRYPT`, or the code the KMS
+    /// returned, such as `IncorrectKeyException`. It is the value of the `error_code` span field.
+    pub fn code(&self) -> &str {
         match self {
             KmsAeadError::SystemError(err) => &err.public.code,
             KmsAeadError::NetworkError(err) => &err.public.code,
@@ -232,7 +232,14 @@ impl KmsAeadSystemError {
     }
 }
 
-impl std::error::Error for KmsAeadSystemError {}
+/// The root cause, when there is one.
+impl std::error::Error for KmsAeadSystemError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.root_cause
+            .as_deref()
+            .map(|cause| cause as &(dyn Error + 'static))
+    }
+}
 
 /// See [`KmsAeadError::NetworkError`].
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
@@ -317,7 +324,14 @@ impl Display for KmsAeadEncryptionError {
     }
 }
 
-impl std::error::Error for KmsAeadEncryptionError {}
+/// The root cause, when there is one.
+impl std::error::Error for KmsAeadEncryptionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.root_cause
+            .as_deref()
+            .map(|cause| cause as &(dyn Error + 'static))
+    }
+}
 
 /// See [`KmsAeadError::UnsupportedAlgorithm`]. Its code is `UNSUPPORTED_ALGORITHM`.
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
@@ -411,14 +425,36 @@ pub enum KmsAeadLegacyFormat {
     BareEncryptedKey,
 }
 
-impl From<SystemTimeError> for KmsAeadError {
-    fn from(e: SystemTimeError) -> Self {
-        KmsAeadError::SystemError(
-            KmsAeadSystemError::new(
-                KmsAeadErrorPublicGenericDetails::new("SYSTEM_TIME_ERROR".to_string()),
-                format!("System time error: {e}"),
-            )
-            .with_root_cause(Arc::new(e)),
-        )
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_root_cause_is_the_source_of_the_inner_error() {
+        let root_cause = || Arc::new(std::io::Error::other("connection reset"));
+        let errors = [
+            KmsAeadError::EncryptionError(
+                KmsAeadEncryptionError::new(
+                    KmsAeadErrorPublicGenericDetails::new("ENCRYPT".to_string()),
+                    "Unable to wrap".to_string(),
+                )
+                .with_root_cause(root_cause()),
+            ),
+            KmsAeadError::SystemError(
+                KmsAeadSystemError::new(
+                    KmsAeadErrorPublicGenericDetails::new("AZURE_VAULT_URL".to_string()),
+                    "Invalid vault URL".to_string(),
+                )
+                .with_root_cause(root_cause()),
+            ),
+        ];
+
+        for error in errors {
+            let source = error.source().and_then(Error::source);
+            assert!(
+                source.is_some_and(|source| source.is::<std::io::Error>()),
+                "{error:?}"
+            );
+        }
     }
 }
