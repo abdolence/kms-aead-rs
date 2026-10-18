@@ -319,9 +319,8 @@ mod firestore_store {
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let misaligned = FirestoreTimestamp(
-            jiff::Timestamp::now().checked_add(jiff::SignedDuration::from_nanos(1))?,
-        );
+        let misaligned =
+            FirestoreTimestamp(jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 1)?);
         super::a_store_error_carries_no_record_bytes(store().await?, Some(&misaligned)).await
     }
 }
