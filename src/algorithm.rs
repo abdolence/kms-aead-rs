@@ -90,12 +90,7 @@ mod tests {
 
     #[test]
     fn every_name_parses_back_and_another_name_is_refused() -> KmsAeadResult<()> {
-        for algorithm in [
-            AeadAlgorithm::ChaCha20Poly1305,
-            AeadAlgorithm::Aes128Gcm,
-            AeadAlgorithm::Aes256Gcm,
-            AeadAlgorithm::Aes256GcmSiv,
-        ] {
+        for algorithm in AeadAlgorithm::ALL {
             assert_eq!(algorithm.to_string().parse::<AeadAlgorithm>()?, algorithm);
         }
         let unknown = "aes-512-gcm".parse::<AeadAlgorithm>();
