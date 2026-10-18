@@ -45,37 +45,44 @@ application keeps track of which key serves which algorithm, as kms-aead-keyring
 key ids.
 
 ```rust
-use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Ring};
+use kms_aead::formats::Deterministic;
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = DeterministicCipher::<Ring>::new(DeterministicAlgorithm::Aes256Siv)?;
-let dek = cipher.generate_key()?;
+let dek = cipher.generate_dek()?;
 
 let aad = b"customers/email";
-let first = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &dek)?;
-let second = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &dek)?;
+let first: Encrypted<SecretValue, Deterministic> =
+    cipher.encrypt(KeyId::new(1), aad, &SecretValue::from("user@example.com"), &dek)?;
+let second: Encrypted<SecretValue, Deterministic> =
+    cipher.encrypt(KeyId::new(1), aad, &SecretValue::from("user@example.com"), &dek)?;
 
 // Equal values give equal cipher texts, to look up by
 assert_eq!(first, second);
-assert_eq!(cipher.decrypt_value(aad, &first, &dek)?, SecretValue::from("user@example.com"));
+let decrypted: SecretValue = cipher.decrypt(aad, &first, &dek)?;
+assert_eq!(decrypted, SecretValue::from("user@example.com"));
 # Ok(())
 # }
 ```
 
-`DeterministicCipherText` is `[synthetic IV: 16][ciphertext]`, the output order of RFC 5297. Its
-equality compares in constant time, and its `Debug` prints only the length, since the bytes tell
-which values are equal. Its value is equal to a Tink AES-SIV value after Tink's 5-byte prefix.
-`encrypt_field` writes a typed field with that prefix, an `Encrypted<T, Deterministic>`, see
-[One fixed key](./envelope-encryption.md#one-fixed-key).
+An `Encrypted<T, Deterministic>` is `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]`: Tink's
+5-byte TINK prefix that names the key by its `KeyId`, then the output of RFC 5297, so Tink and
+BigQuery read it with a keyset of that key, see
+[One fixed key](./envelope-encryption.md#one-fixed-key). Its equality compares in constant time,
+and its `Debug` prints only the length, since the bytes tell which values are equal.
 
 ## Keys encrypted by a KMS
 
 The envelope generates and decrypts deterministic keys with its provider:
 
 ```rust
+use kms_aead::formats::Deterministic;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{DeterministicAlgorithm, DeterministicCipher, KmsAeadEnvelope, Ring};
+use kms_aead::{
+    DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope, Ring,
+};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -85,20 +92,22 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key encrypted, to store
-let (dek, encrypted_dek) = envelope.generate_new_deterministic_dek(algorithm).await?;
+let (dek, encrypted_dek) = envelope.generate_encrypted_deterministic_dek(algorithm).await?;
 
 // Later: decrypt the stored key
 let decrypted_dek = envelope.decrypt_deterministic_dek(algorithm, &encrypted_dek).await?;
 
 let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
-let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &dek)?;
-assert_eq!(cipher.decrypt_value(b"aad", &sealed, &decrypted_dek)?, SecretValue::from("value"));
+let sealed: Encrypted<SecretValue, Deterministic> =
+    cipher.encrypt(KeyId::new(1), b"aad", &SecretValue::from("value"), &dek)?;
+let decrypted: SecretValue = cipher.decrypt(b"aad", &sealed, &decrypted_dek)?;
+assert_eq!(decrypted, SecretValue::from("value"));
 # Ok(())
 # }
 ```
 
 `decrypt_deterministic_dek` calls the provider every time and does not go through the envelope's
-DEK cache. To cache deterministic keys, use `DekCache::with_key`, which holds the keys of both
+DEK cache. To cache deterministic keys, use `DekCache::with_dek`, which holds the keys of both
 kinds of algorithm.
 
-`DeterministicCipher::generate_dek` does the same with any provider.
+`DeterministicCipher::generate_encrypted_dek` does the same with any provider.

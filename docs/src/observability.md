@@ -7,11 +7,11 @@ its version, and the error code.
 
 The spans are:
 
-- `KMS AEAD encrypt`: the envelope's `encrypt_value`, `encrypt_field`, `encrypt_value_with_dek`
-  and `encrypt_value_with_encrypted_dek`;
-- `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_field`, `decrypt_value_with_dek`
-  and `decrypt_value_with_encrypted_dek`;
-- `KMS AEAD generate DEK`: `generate_dek` and `generate_new_deterministic_dek`;
+- `KMS AEAD encrypt`: the envelope's `encrypt`, `encrypt_with_dek` and
+  `encrypt_with_encrypted_dek`;
+- `KMS AEAD decrypt`: the envelope's `decrypt`, `decrypt_with_dek` and
+  `decrypt_with_encrypted_dek`;
+- `KMS AEAD generate DEK`: `generate_encrypted_dek` and `generate_encrypted_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
 - `KMS encrypt DEK`: each provider's encryption of a DEK;
 - `KMS decrypt DEK`: each provider's decryption of a DEK;
@@ -44,8 +44,8 @@ let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
-let encrypted = envelope.encrypt_value(aad, &SecretValue::from("secret")).await?;
-let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
+let encrypted = envelope.encrypt(aad, &SecretValue::from("secret")).await?;
+let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 # assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
 # }
@@ -97,7 +97,7 @@ left unrecorded, never recorded as `0` or an empty string.
 
 | Field | Value |
 |---|---|
-| `mode` | `per_call` for `encrypt_value` and `decrypt_value`, `store_less` for both on a store-less envelope, `caller_dek` for the `*_with_dek` and `*_with_encrypted_dek` calls |
+| `mode` | `per_call` for `encrypt` and `decrypt`, `store_less` for both on a store-less envelope, `caller_dek` for the `*_with_dek` and `*_with_encrypted_dek` calls |
 | `algorithm` | `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm` or `aes-256-gcm-siv` |
 | `backend` | `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` for a call that decrypts through an enabled cache, a failed decryption recording `miss`; unrecorded for a call that looks nothing up |

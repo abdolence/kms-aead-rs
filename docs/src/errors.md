@@ -22,22 +22,24 @@ such as AWS's `IncorrectKeyException`. It is also the `error_code` field of the 
 
 ```rust
 use kms_aead::errors::KmsAeadError;
-use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, Ring};
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
-let dek = cipher.generate_key()?;
-let cipher_text = cipher.encrypt_value(b"orders/1042", &SecretValue::from("secret"), &dek)?;
+let dek = cipher.generate_dek()?;
+let cipher_text: Encrypted<SecretValue, Bare> =
+    cipher.encrypt_bare(b"orders/1042", &SecretValue::from("secret"), &dek)?;
 
-match cipher.decrypt_value(b"orders/1043", &cipher_text, &dek) {
+match cipher.decrypt_bare(b"orders/1043", &cipher_text, &dek) {
     Err(KmsAeadError::EncryptionError(error)) if error.public.code == "DECRYPT" => {
         // Not authentic under this key and AAD
     }
     other => panic!("{other:?}"),
 }
 
-let too_short = cipher.decrypt_value(b"orders/1042", &CipherText(vec![0; 8]), &dek);
+let too_short = Encrypted::<SecretValue, Bare>::try_from(vec![0; 8]);
 assert!(matches!(&too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"));
 # Ok(())
 # }
@@ -53,14 +55,14 @@ The library's codes:
 | `INVALID_KEY_LENGTH` | encryption | a key that does not fit the algorithm, or a KMS generator that returned another length |
 | `UNSUPPORTED_ALGORITHM` | unsupported algorithm | the backend does not implement the algorithm |
 | `UNKNOWN_ALGORITHM` | encryption | `FromStr` of an algorithm name it does not know |
-| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, a length past its end, or a typed field without Tink's output prefix |
+| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, a length past its end, or a `Randomized` or `Deterministic` value without Tink's output prefix |
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
-| `INVALID_PLAINTEXT` | encryption | a decrypted field that is not an encoding of its type, or a `Json` value that does not serialise |
+| `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `Json` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
 | `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted key layout of 0.29 that cannot be read, with `legacy-formats` |
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
-| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, and the envelope layouts of 0.29 and earlier in `separate` |
+| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 | `INVALID_LOCAL_KEK_ID`, `LOCAL_*` | system, encryption | the [local KMS](./providers/local.md#errors) |

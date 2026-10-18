@@ -29,7 +29,7 @@ let envelope = KmsAeadEnvelope::<AwsKmsProvider, AwsLc>::new(
 )?;
 
 let cipher_text = envelope
-    .encrypt_value(b"orders/1042", &SecretValue::from("secret"))
+    .encrypt(b"orders/1042", &SecretValue::from("secret"))
     .await?;
 # let _ = cipher_text;
 # Ok(())

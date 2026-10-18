@@ -39,8 +39,8 @@ impl<B: AeadBackend> Orders<B> {
     }
 
     async fn round_trip(&self, card: &SecretValue) -> KmsAeadResult<SecretValue> {
-        let sealed = self.envelope.encrypt_value(b"orders/1042", card).await?;
-        self.envelope.decrypt_value(b"orders/1042", &sealed).await
+        let sealed = self.envelope.encrypt(b"orders/1042", card).await?;
+        self.envelope.decrypt(b"orders/1042", &sealed).await
     }
 }
 
@@ -81,19 +81,22 @@ assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
 
 ## AEAD without a KMS
 
-`AeadCipher` seals and opens values with a key the application holds:
+`AeadCipher` seals and opens values with a key the application holds. `encrypt_bare` writes the
+AEAD output alone, an `Encrypted<T, Bare>`:
 
 ```rust
-use kms_aead::{AeadAlgorithm, AeadCipher, Ring};
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-let dek = cipher.generate_key()?;
+let dek = cipher.generate_dek()?;
 
 let aad = b"orders/1042";
-let cipher_text = cipher.encrypt_value(aad, &SecretValue::from("secret"), &dek)?;
-let decrypted = cipher.decrypt_value(aad, &cipher_text, &dek)?;
+let cipher_text: Encrypted<SecretValue, Bare> =
+    cipher.encrypt_bare(aad, &SecretValue::from("secret"), &dek)?;
+let decrypted: SecretValue = cipher.decrypt_bare(aad, &cipher_text, &dek)?;
 
 assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
@@ -102,8 +105,12 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs).
 
-`generate_dek` makes a dek and encrypts it with a provider in one call, for an application
-that stores the encrypted DEK itself. `AeadCipher` makes no KMS call and opens no span.
+`encrypt` writes an `Encrypted<T, Randomized>`: the same output after Tink's TINK prefix, which
+names the key by a `KeyId`, see [One fixed key](./envelope-encryption.md#one-fixed-key).
+
+`generate_dek` makes a DEK without a KMS. `generate_encrypted_dek` makes a DEK and encrypts it with
+a provider in one call, for an application that stores the encrypted DEK itself. The other calls
+of `AeadCipher` make no KMS call and open no span.
 
 ## Cross-backend compatibility
 
@@ -113,20 +120,20 @@ work together, and moving an application from one backend to another needs no mi
 data:
 
 ```rust
-use kms_aead::{AeadAlgorithm, AeadCipher, Ring, RustCrypto};
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring, RustCrypto};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let writer = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 let reader = AeadCipher::<RustCrypto>::new(AeadAlgorithm::Aes256Gcm)?;
 
-let dek = writer.generate_key()?;
-let cipher_text = writer.encrypt_value(b"aad", &SecretValue::from("secret"), &dek)?;
+let dek = writer.generate_dek()?;
+let cipher_text: Encrypted<SecretValue, Bare> =
+    writer.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
 
-assert_eq!(
-    reader.decrypt_value(b"aad", &cipher_text, &dek)?,
-    SecretValue::from("secret")
-);
+let decrypted: SecretValue = reader.decrypt_bare(b"aad", &cipher_text, &dek)?;
+assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
 # }
 ```

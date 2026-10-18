@@ -50,12 +50,10 @@ let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tests".
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let encrypted = envelope
-    .encrypt_value(b"orders/1042", &SecretValue::from("secret"))
+    .encrypt(b"orders/1042", &SecretValue::from("secret"))
     .await?;
-assert_eq!(
-    envelope.decrypt_value(b"orders/1042", &encrypted).await?,
-    SecretValue::from("secret")
-);
+let decrypted: SecretValue = envelope.decrypt(b"orders/1042", &encrypted).await?;
+assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
 # }
 ```

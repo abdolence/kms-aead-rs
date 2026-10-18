@@ -15,8 +15,8 @@ In short:
 - `KmsAeadRingEnvelopeEncryption::new(provider).await?` is
   `KmsAeadEnvelope::<P, Ring>::new(provider)?`, and `RingAeadEncryption` is `AeadCipher<Ring>`.
   The backend is a type parameter: `Ring`, `AwsLc` or `RustCrypto`;
-- the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods taking
-  `aad: &[u8]`;
+- the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods; the AAD is
+  any `&(impl AsRef<[u8]> + ?Sized)`, and every cipher text is an `Encrypted<T, F>`;
 - `KmsAeadError` is `#[non_exhaustive]`, the SDK error conversions are gone, and a few error
   codes changed;
 - the default algorithm of `KmsAeadEnvelope` is AES-256-GCM; the default of 0.29 was
@@ -28,7 +28,7 @@ In short:
   read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`;
 - to move stored values to the new format, upgrade every reader to 0.30 with `legacy-formats`,
   rewrite the values with `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD
-  and opens the value before it writes, and `upgrade_legacy_encrypted_key`, then turn the
+  and opens the value before it writes, and `upgrade_legacy_encrypted_dek`, then turn the
   feature off.
 
 The full list of changes, with the old and new names, is in

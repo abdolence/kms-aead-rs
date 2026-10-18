@@ -1,7 +1,7 @@
 # DEK caching and reuse
 
 Without a cache, every read of a value decrypts its DEK with one KMS call, and every
-`encrypt_value` encrypts a new DEK with another. The library has two ways to make fewer KMS calls:
+`encrypt` encrypts a new DEK with another. The library has two ways to make fewer KMS calls:
 
 - `DekCache`, a cache of decrypted DEKs, which serves repeated reads of values under the same
   DEK without the KMS;
@@ -37,8 +37,8 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 # }
 ```
 
-`decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` decrypt through
-the envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
+`decrypt`, the `*_with_encrypted_dek` calls and a store-less `encrypt` decrypt through the
+envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
 several KEKs: an entry serves only a lookup that names the same KEK, and a key decrypted under
 one KEK never reaches a caller with the provider of another.
 
@@ -83,7 +83,7 @@ use kms_aead::KmsAeadEncryptionProvider;
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
-let (_dek, encrypted_dek) = envelope.generate_dek().await?;
+let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
 
 // One encrypted DEK
 envelope
@@ -124,7 +124,7 @@ tokio::spawn(async move {
 # }
 ```
 
-A key reaches the caller only inside the closure of `DekCache::with_key`, and stays intact until
+A key reaches the caller only inside the closure of `DekCache::with_dek`, and stays intact until
 the closure returns, whatever leaves the cache meanwhile. The closure must not keep a copy of the
 key: a copy taken out of it outlives the cache's control of its lifetime.
 
@@ -155,14 +155,12 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 )?;
 
 // One KMS encryption for both values
-let first = envelope.encrypt_value(b"events/1", &SecretValue::from("first")).await?;
-let second = envelope.encrypt_value(b"events/2", &SecretValue::from("second")).await?;
+let first = envelope.encrypt(b"events/1", &SecretValue::from("first")).await?;
+let second = envelope.encrypt(b"events/2", &SecretValue::from("second")).await?;
 
 // Read with any envelope over the same KEK and algorithm
-assert_eq!(
-    envelope.decrypt_value(b"events/2", &second).await?,
-    SecretValue::from("second")
-);
+let decrypted: SecretValue = envelope.decrypt(b"events/2", &second).await?;
+assert_eq!(decrypted, SecretValue::from("second"));
 # let _ = first;
 # Ok(())
 # }

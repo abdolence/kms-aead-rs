@@ -60,9 +60,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let secret = SecretValue::from("4111 1111 1111 1111");
 
     // The cipher text with its encrypted data encryption key, to store
-    let encrypted = envelope.encrypt_value(aad, &secret).await?;
+    let encrypted = envelope.encrypt(aad, &secret).await?;
 
-    let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
+    let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
     assert_eq!(decrypted, secret);
 
     Ok(())
