@@ -1,6 +1,9 @@
 //! Deterministic encryption with AES-SIV (RFC 5297), beside the randomized path.
 
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 
 /// A deterministic AEAD algorithm: equal inputs under one key give equal values. It exists in
 /// every build, so that a keyring record names the algorithm of every version even in a process
@@ -28,6 +31,46 @@ impl Display for DeterministicAlgorithm {
         f.write_str(match self {
             DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
         })
+    }
+}
+
+/// Reads what `Display` writes.
+///
+/// # Errors
+///
+/// `UNKNOWN_ALGORITHM` for any other name.
+impl FromStr for DeterministicAlgorithm {
+    type Err = KmsAeadError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "aes-256-siv" => Ok(DeterministicAlgorithm::Aes256Siv),
+            _ => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ALGORITHM",
+                "Not the name of a deterministic algorithm: the name is aes-256-siv",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::KmsAeadResult;
+
+    #[test]
+    fn every_name_parses_back_and_another_name_is_refused() -> KmsAeadResult<()> {
+        let algorithm = DeterministicAlgorithm::Aes256Siv;
+        assert_eq!(
+            algorithm.to_string().parse::<DeterministicAlgorithm>()?,
+            algorithm
+        );
+        let unknown = "aes-128-siv".parse::<DeterministicAlgorithm>();
+        assert!(
+            matches!(&unknown, Err(e) if e.code() == "UNKNOWN_ALGORITHM"),
+            "{unknown:?}"
+        );
+        Ok(())
     }
 }
 

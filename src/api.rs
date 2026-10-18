@@ -2,7 +2,9 @@ use crate::errors::KmsAeadEncryptionError;
 use crate::*;
 use async_trait::*;
 use secret_vault_value::SecretValue;
+use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
 /// Authenticated encryption with associated data (AEAD) under a data encryption key the caller
 /// holds, implemented by [`AeadCipher`].
@@ -256,7 +258,7 @@ impl KekRef {
 /// `<provider>:<key>`.
 impl Display for KekRef {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.provider.name(), self.key)
+        write!(f, "{}:{}", self.provider, self.key)
     }
 }
 
@@ -278,16 +280,53 @@ pub enum KekProvider {
     Other(String),
 }
 
-impl KekProvider {
-    /// The value of the `provider` span field.
-    pub(crate) fn name(&self) -> &str {
-        match self {
+/// `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of [`KekProvider::Other`]: the
+/// values of the `/kms_aead/provider` span field.
+impl Display for KekProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             KekProvider::Gcp => "gcp",
             KekProvider::Aws => "aws",
             KekProvider::Azure => "azure",
             KekProvider::HcVaultTransit => "hc_vault_transit",
             KekProvider::Local => "local",
             KekProvider::Other(name) => name,
+        })
+    }
+}
+
+/// Reads what `Display` writes: a built-in name is its variant, and any other name is
+/// [`KekProvider::Other`].
+impl FromStr for KekProvider {
+    type Err = Infallible;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Ok(match name {
+            "gcp" => KekProvider::Gcp,
+            "aws" => KekProvider::Aws,
+            "azure" => KekProvider::Azure,
+            "hc_vault_transit" => KekProvider::HcVaultTransit,
+            "local" => KekProvider::Local,
+            other => KekProvider::Other(other.to_string()),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_name_parses_back_and_another_name_is_other() {
+        for provider in [
+            KekProvider::Gcp,
+            KekProvider::Aws,
+            KekProvider::Azure,
+            KekProvider::HcVaultTransit,
+            KekProvider::Local,
+            KekProvider::Other("orders-hsm".to_string()),
+        ] {
+            assert_eq!(provider.to_string().parse(), Ok(provider));
         }
     }
 }
