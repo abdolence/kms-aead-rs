@@ -195,7 +195,7 @@ filter beside `kms_aead=debug`.
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
 | `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap`, the export, and a compromised version read past the cache |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, or an application store's name |
-| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `admin` for the read before a write |
+| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
 | `revision` | the store's revision of the record read, as text |
 | `response_time` | milliseconds the store call took |

@@ -167,9 +167,15 @@ The `WrappedKeyset` it returns:
   `KEYS.KEYSET_CHAIN`;
 - `key_ids()`: the versions inside, in ascending order.
 
+The export selects its versions from the record in the store, read at the time of the call, not
+from the record the process has cached. A version another process flagged compromised is
+therefore left out of a `Readable` keyset, even before this process's cached record refreshes. The
+read is checked as a revalidation is: a stored record that moves a version backwards fails the
+export with `RecordRegressed`, and a missing one with `RecordMissing`.
+
 A keyset is a copy of the record at the time of the export. After a rotation a `Readable` keyset
 does not read the new version's values until it is exported again, and after `mark_compromised`
-the compromised version stays in it until then.
+the compromised version stays in a keyset exported before it until it is exported again.
 
 ### Queries
 

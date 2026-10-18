@@ -75,7 +75,7 @@ pub(crate) fn decrypt(keyring: &KeyringId, key_id: KeyId) -> Span {
 }
 
 /// `Keyring load`, around one store read. `reason` is `open`, `ttl`, `watch`,
-/// `unknown_key_id`, `forced` or `admin`.
+/// `unknown_key_id`, `forced`, `export` or `admin`.
 pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) -> Span {
     debug_span!(
         "Keyring load",

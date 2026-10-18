@@ -1,7 +1,7 @@
 //! The BigQuery keyset export: a keyring's versions as a Tink keyset that BigQuery's
 //! `KEYS.KEYSET_CHAIN` reads, wrapped by the keyring's Cloud KMS key.
 
-use std::fmt::{Debug, Formatter};
+use std::fmt::{Debug, Formatter, Write};
 
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{
@@ -46,7 +46,9 @@ impl KeysetSelection {
 /// which a principal that queries with them needs anyway. A keyset is a copy of the record at the
 /// time of the export: after a rotation, a `Readable` keyset does not read the values of the new
 /// version until it is exported again.
-#[derive(Debug, Clone)]
+///
+/// `Debug` shows the KMS key and the key ids, never the wrapped keyset.
+#[derive(Clone)]
 pub struct WrappedKeyset {
     bytes: Vec<u8>,
     kek: KekRef,
@@ -70,7 +72,8 @@ impl WrappedKeyset {
         let mut literal = String::with_capacity(3 + 4 * self.bytes.len());
         literal.push_str("b'");
         for byte in &self.bytes {
-            literal.push_str(&format!("\\x{byte:02x}"));
+            // Writing to a `String` cannot fail.
+            let _ = write!(literal, "\\x{byte:02x}");
         }
         literal.push('\'');
         literal
@@ -80,6 +83,15 @@ impl WrappedKeyset {
     /// argument of `KEYS.KEYSET_CHAIN` names it.
     pub fn kms_resource_name(&self) -> String {
         format!("gcp-kms://{}", self.kek.key())
+    }
+}
+
+impl Debug for WrappedKeyset {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WrappedKeyset")
+            .field("kek", &self.kek)
+            .field("key_ids", &self.key_ids)
+            .finish_non_exhaustive()
     }
 }
 
@@ -93,12 +105,18 @@ impl<S: KeyringStore> Keyring<S, GcpKmsProvider> {
     /// encrypt and decrypt rights, and the process holds the selected keys for the duration of
     /// the call only.
     ///
+    /// The versions are selected from the record read from the store for this call, checked
+    /// forward-only as a revalidation is, and taken as the cached record: a version another
+    /// process flagged compromised is never exported as readable.
+    ///
     /// The keys inside are the versions' own keys. Their wrapped forms in the record are bound
     /// to their keyring and key ids; the keyset is wrapped unbound, since BigQuery unwraps it with
     /// no additional authenticated data, so it never opens as a version's key.
     ///
     /// # Errors
     ///
+    /// - the store's errors, [`KeyringError::RecordMissing`], [`KeyringError::RecordInvalid`]
+    ///   and [`KeyringError::RecordRegressed`], from the read of the record;
     /// - [`KeyringError::NoActiveVersion`] for `Readable` of a purpose with no active version;
     /// - [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`] and
     ///   [`KeyringError::KeyVersionDestroyed`] for `Single` of a version that does not decrypt;
@@ -126,7 +144,9 @@ where
         selection: KeysetSelection,
     ) -> KeyringResult<WrappedKeyset> {
         spans::in_span(spans::export(self.id(), selection.purpose()), async {
-            let record = self.cache.current().await;
+            // The store's record rather than the cached one, so that a version another process
+            // flagged compromised since this process last refreshed is never exported.
+            let record = self.cache.reload("export").await?;
             let (primary, versions) = self.exported_versions(&record, selection)?;
             let mut keys = Vec::with_capacity(versions.len());
             for (key_id, key_type, dek) in &versions {
@@ -183,7 +203,12 @@ where
                 (primary.key_id(), versions)
             }
             KeysetSelection::Single(key_id) => {
-                let (version, dek, _) = self.readable(record, key_id)?;
+                let version = record
+                    .version(key_id)
+                    .ok_or_else(|| KeyringError::key_version_unknown(self.id(), key_id))?;
+                let (dek, _) = version
+                    .readable_dek()
+                    .ok_or_else(|| self.unreadable(version))?;
                 (key_id, vec![(version, dek)])
             }
         };
@@ -443,10 +468,6 @@ mod tests {
         0xc8, 0x32, 0xc7, 0xfd,
     ];
 
-    fn key(bytes: &[u8]) -> DataEncryptionKey {
-        DataEncryptionKey::from(SecretValue::from(bytes.to_vec()))
-    }
-
     /// A keyring on a local KMS with one version of each purpose the policy names.
     async fn keyring(
         policy: KeyringPolicy,
@@ -472,12 +493,14 @@ mod tests {
                 Key::new(
                     KeyId::try_from(TINKEY_AES_GCM_PRIMARY)?,
                     TinkKeyType::AesGcm,
-                    &key(&TINKEY_AES_GCM_PRIMARY_KEY),
+                    &DataEncryptionKey::from(SecretValue::from(
+                        TINKEY_AES_GCM_PRIMARY_KEY.to_vec(),
+                    )),
                 ),
                 Key::new(
                     KeyId::try_from(TINKEY_AES_GCM_SECOND)?,
                     TinkKeyType::AesGcm,
-                    &key(&TINKEY_AES_GCM_SECOND_KEY),
+                    &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_SECOND_KEY.to_vec())),
                 ),
             ],
         };
@@ -486,7 +509,7 @@ mod tests {
             key: vec![Key::new(
                 KeyId::try_from(TINKEY_AES_SIV)?,
                 TinkKeyType::AesSiv,
-                &key(&TINKEY_AES_SIV_KEY),
+                &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_SIV_KEY.to_vec())),
             )],
         };
 
@@ -545,6 +568,54 @@ mod tests {
             keyset.key.iter().map(|key| key.key_id).collect::<Vec<_>>(),
             [1, 3]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn debug_leaves_out_the_wrapped_keyset() -> TestResult {
+        let marker = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
+        let keyset = WrappedKeyset {
+            bytes: marker.to_vec(),
+            kek: KekRef::new(
+                kms_aead::KekProvider::Gcp,
+                "projects/p/cryptoKeys/k".to_string(),
+            ),
+            key_ids: vec![KeyId::try_from(1)?],
+        };
+
+        let debug = format!("{keyset:?}");
+
+        assert!(!debug.contains("192, 255, 238"), "{debug}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn readable_follows_a_compromise_by_another_process() -> TestResult {
+        let (exporter, provider) = keyring(KeyringPolicy::new()).await?;
+        let administrator = Keyring::open(
+            exporter.cache.store().clone(),
+            provider.clone(),
+            TEST_BACKEND,
+            TENANT,
+            KeyringOptions::new().with_watch(false),
+        )
+        .await?;
+        let leaked = KeyId::try_from(1)?;
+        administrator.mark_compromised(leaked, None).await?;
+
+        let wrapped = exporter
+            .export_keyset(KeysetSelection::Readable(Purpose::Randomized))
+            .await?;
+        let keyset = provider
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec(), None),
+                None,
+            )
+            .await?;
+        let keyset = Keyset::decode(keyset.value().ref_sensitive_value().as_slice())?;
+
+        assert_eq!(wrapped.key_ids(), [KeyId::try_from(2)?]);
+        assert_eq!(keyset.primary_key_id, 2);
         Ok(())
     }
 

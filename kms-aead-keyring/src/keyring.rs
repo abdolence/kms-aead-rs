@@ -183,7 +183,7 @@ where
     /// record moves a version backwards from the cached one. The cached record stays in use in
     /// every case.
     pub async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
-        self.cache.reload().await
+        self.cache.reload("forced").await
     }
 
     /// Seals `value` with `aad` under the active randomized version.
@@ -538,16 +538,22 @@ where
         spans::record_key_state(version);
         let Some((dek, compromise)) = version.readable_dek() else {
             spans::read_refused(self.id(), version);
-            let error = KeyVersionError {
-                keyring: self.id().clone(),
-                key_id,
-            };
-            return Err(match version.state() {
-                KeyVersionState::Destroyed => KeyringError::KeyVersionDestroyed(error),
-                _ => KeyringError::KeyVersionRetired(error),
-            });
+            return Err(self.unreadable(version));
         };
         Ok((version, dek, compromise))
+    }
+
+    /// The error of a read under `version`, which holds no readable key: `KeyVersionDestroyed`
+    /// or `KeyVersionRetired`.
+    fn unreadable(&self, version: &KeyVersion) -> KeyringError {
+        let error = KeyVersionError {
+            keyring: self.id().clone(),
+            key_id: version.key_id(),
+        };
+        match version.state() {
+            KeyVersionState::Destroyed => KeyringError::KeyVersionDestroyed(error),
+            _ => KeyringError::KeyVersionRetired(error),
+        }
     }
 
     /// Fails with `KeyVersionCompromised` for a compromised version under

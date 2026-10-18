@@ -153,10 +153,11 @@ impl<S: KeyringStore> RecordCache<S> {
     }
 
     /// Reads the record from the store, past the TTL and the rate limit, and takes it unless it
-    /// moves backwards. The cached record stays when the read fails.
-    pub(crate) async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
+    /// moves backwards. The cached record stays when the read fails. `reason` is the `reason`
+    /// span value.
+    pub(crate) async fn reload(&self, reason: &'static str) -> KeyringResult<Arc<KeyringRecord>> {
         let mut refresh = self.refresh.lock().await;
-        let span = spans::load(&self.id, S::KIND, "forced");
+        let span = spans::load(&self.id, S::KIND, reason);
         spans::in_span(span, async {
             let stored = spans::timed(self.store.load(&self.id))
                 .await?
