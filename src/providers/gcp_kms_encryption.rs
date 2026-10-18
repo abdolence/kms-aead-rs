@@ -113,6 +113,7 @@ fn decrypt_request(
 
 /// Options for [`GcpKmsProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct GcpKmsProviderOptions {
     /// Generates data encryption keys with Cloud KMS `GenerateRandomBytes` at the HSM protection
     /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key. Off by

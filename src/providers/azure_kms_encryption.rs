@@ -31,6 +31,7 @@ pub struct AzureKmsKeyRef {
 
 /// Options for [`AzureKmsProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct AzureKmsProviderOptions {
     /// Wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys, `A256Kw` for
     /// Managed HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and

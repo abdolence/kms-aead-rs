@@ -90,6 +90,7 @@ pub struct HcVaultTransitKeyRef {
 
 /// Options for [`HcVaultTransitProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitProviderOptions {
     /// Address of the Vault server, such as `https://vault.example.com:8200`.
     pub address: String,

@@ -53,6 +53,7 @@ impl AwsKmsKeyRef {
 
 /// Options for [`AwsKmsProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct AwsKmsProviderOptions {
     /// Generates data encryption keys with AWS KMS `GenerateRandom` instead of the backend's
     /// CSPRNG, at the cost of one more KMS request per key. Off by default.
