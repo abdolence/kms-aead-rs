@@ -9,8 +9,12 @@ use crate::errors::KmsAeadError;
 use crate::formats::{Deterministic, Format};
 use crate::KmsAeadResult;
 
+#[cfg(feature = "postgres")]
+mod postgres;
 #[cfg(feature = "serde")]
 mod serde;
+#[cfg(feature = "sqlx")]
+mod sqlx;
 
 /// A stored value that decrypts to a `T`, a [`Plaintext`](crate::Plaintext), in the format `F`.
 ///
@@ -32,7 +36,8 @@ mod serde;
 /// whether two values are the same stored bytes.
 ///
 /// `Debug` shows the length only. The `serde` feature serializes it as bytes, and deserializes it
-/// through `TryFrom<Vec<u8>>`.
+/// through `TryFrom<Vec<u8>>`. The `postgres` and `sqlx` features store it as `BYTEA` and read it
+/// through `TryFrom<Vec<u8>>` too.
 pub struct Encrypted<T, F> {
     bytes: Vec<u8>,
     plaintext: PhantomData<fn() -> (T, F)>,

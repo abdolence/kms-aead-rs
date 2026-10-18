@@ -77,7 +77,8 @@
 //! application newtype, into an [`Encrypted<T, Envelope>`](Encrypted), the bytes to store, and
 //! [`KmsAeadEnvelope::decrypt_field`] reads it back as a `T`. Stored bytes become an `Encrypted`
 //! through `TryFrom<Vec<u8>>`, which checks them against the layout of its
-//! [`Format`](formats::Format), and the `serde` feature reads and writes it.
+//! [`Format`](formats::Format). The `serde` feature reads and writes it, and the `postgres` and
+//! `sqlx` features store it in a PostgreSQL `BYTEA` column.
 //!
 //! # Other features
 //!
@@ -86,6 +87,11 @@
 //! - `serde`: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
 //!   [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`;
 //! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON.
+//! - `postgres`: `ToSql` and `FromSql` of postgres-types for [`Encrypted`], as `BYTEA`, and
+//!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres.
+//! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
+//!   PostgreSQL, as `BYTEA` and `BYTEA[]`. It depends on sqlx-core and sqlx-postgres only, with
+//!   no runtime and no TLS stack.
 //!
 //! # Examples
 //!
@@ -279,6 +285,9 @@ pub mod providers;
     feature = "deterministic",
     feature = "legacy-formats",
     feature = "serde",
+    feature = "serde-json",
+    feature = "postgres",
+    feature = "sqlx",
     feature = "gcp-kms-encryption",
     feature = "aws-kms-encryption",
     feature = "azure-kms-encryption",
