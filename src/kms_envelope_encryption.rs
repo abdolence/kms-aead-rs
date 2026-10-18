@@ -48,7 +48,7 @@ const MAX_USES: u64 = 1 << 32;
 /// Every call opens one `DEBUG` span, with the KMS call as a child span when it makes one.
 pub struct KmsAeadEnvelope<P, B> {
     pub(crate) provider: P,
-    cipher: AeadCipher<B>,
+    pub(crate) cipher: AeadCipher<B>,
     dek_cache: DekCache,
     dek_reuse: Option<DekReuse>,
 }
@@ -853,7 +853,7 @@ mod tests {
             let legacy = CipherTextWithEncryptedKey::from(hex::decode(envelope_hex).unwrap());
 
             let upgraded = encryption
-                .upgrade_legacy_value(&legacy)
+                .upgrade_legacy_value(FIXTURE_AAD, &legacy)
                 .await?
                 .expect("a legacy value is upgraded");
 
@@ -868,9 +868,46 @@ mod tests {
                 encryption.decrypt_value(FIXTURE_AAD, &upgraded).await?,
                 SecretValue::from(FIXTURE_SECRET)
             );
-            assert_eq!(encryption.upgrade_legacy_value(&upgraded).await?, None);
+            assert_eq!(
+                encryption
+                    .upgrade_legacy_value(FIXTURE_AAD, &upgraded)
+                    .await?,
+                None
+            );
         }
         assert_eq!(encryption.provider.wraps(), 3);
+        Ok(())
+    }
+
+    #[cfg(feature = "legacy-formats")]
+    #[tokio::test]
+    #[expect(deprecated, reason = "tests the deprecated upgrade")]
+    async fn a_value_that_does_not_open_is_not_upgraded() -> KmsAeadResult<()> {
+        let legacy = CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_29).unwrap());
+        let aes_256_gcm = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
+        )?;
+        let chacha20_poly1305 = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
+
+        let under_another_algorithm = aes_256_gcm.upgrade_legacy_value(FIXTURE_AAD, &legacy).await;
+        let under_another_aad = chacha20_poly1305
+            .upgrade_legacy_value(b"another-aad", &legacy)
+            .await;
+
+        assert!(
+            matches!(&under_another_algorithm, Err(e) if e.code() == "DECRYPT"),
+            "{under_another_algorithm:?}"
+        );
+        assert!(
+            matches!(&under_another_aad, Err(e) if e.code() == "DECRYPT"),
+            "{under_another_aad:?}"
+        );
+        assert_eq!(aes_256_gcm.provider.wraps(), 0);
+        assert_eq!(chacha20_poly1305.provider.wraps(), 0);
         Ok(())
     }
 

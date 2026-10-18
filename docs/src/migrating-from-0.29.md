@@ -177,7 +177,9 @@ To move stored values to the new format:
    cannot read Tink's format, so no process writes it before every reader has the upgrade;
 2. rewrite the stored values with `upgrade_legacy_value` and `upgrade_legacy_encrypted_key` of
    `KmsAeadEnvelope`, one or two KMS calls per value, see
-   [Upgrading stored values](./formats.md#upgrading-stored-values);
+   [Upgrading stored values](./formats.md#upgrading-stored-values). `upgrade_legacy_value` takes
+   the value's AAD, and fails with `DECRYPT` on a value that does not open under the envelope's
+   algorithm and that AAD;
 3. turn the feature off.
 
 `CipherTextWithEncryptedKey::separate` reads Tink's format only, with or without the feature, so

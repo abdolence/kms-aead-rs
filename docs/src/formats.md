@@ -224,9 +224,13 @@ value in Tink's framing needs the unwrap to be told from the 32-bit layout befor
 bytes stay as they are.
 
 The envelope's algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
-0.29 and earlier sealed under their default. The upgrade does not open the value, so under another
-algorithm with a key of the same length it succeeds and records that algorithm's Tink key type in
-the wrapped DEK.
+0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
+wrapped DEK of the upgrade records it as a Tink key type, so `upgrade_legacy_value` takes the
+value's AAD and opens the value before it writes anything. Under another algorithm or another AAD
+it fails with `DECRYPT`. `upgrade_legacy_encrypted_key` has no value to open, so it records the
+envelope's algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
+another algorithm than its values were sealed with: use `upgrade_legacy_value` wherever the values
+are at hand.
 
 A sweep over stored rows:
 
@@ -236,11 +240,17 @@ use kms_aead::{
     KmsAeadResult, ValueStruct,
 };
 
+/// A stored envelope value and the AAD it was sealed under.
+struct Row {
+    aad: Vec<u8>,
+    value: Vec<u8>,
+}
+
 /// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
 #[allow(deprecated)]
 async fn upgrade_values<P, B>(
     envelope: &KmsAeadEnvelope<P, B>,
-    rows: &mut [Vec<u8>],
+    rows: &mut [Row],
 ) -> KmsAeadResult<usize>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
@@ -248,9 +258,9 @@ where
 {
     let mut upgraded = 0;
     for row in rows.iter_mut() {
-        let stored = CipherTextWithEncryptedKey(row.clone());
-        if let Some(value) = envelope.upgrade_legacy_value(&stored).await? {
-            *row = value.into_value();
+        let stored = CipherTextWithEncryptedKey(row.value.clone());
+        if let Some(value) = envelope.upgrade_legacy_value(&row.aad, &stored).await? {
+            row.value = value.into_value();
             upgraded += 1;
         }
     }
@@ -274,10 +284,10 @@ where
 #     provider,
 #     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
 # )?;
-# let mut rows = vec![legacy];
+# let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
 # assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);
-# let upgraded = CipherTextWithEncryptedKey(rows[0].clone());
+# let upgraded = CipherTextWithEncryptedKey(rows[0].value.clone());
 # assert_eq!(envelope.decrypt_value(b"aad", &upgraded).await?, SecretValue::from("secret"));
 # Ok(())
 # }

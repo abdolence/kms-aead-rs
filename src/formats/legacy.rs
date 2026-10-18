@@ -174,43 +174,50 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
     B: AeadBackend,
 {
-    /// `value` in Tink's KMS envelope format, or `None` when it already is in it, so that a
-    /// sweep over stored rows writes only the ones that change.
+    /// `value`, sealed under `aad`, in Tink's KMS envelope format, or `None` when it already is
+    /// in it, so that a sweep over stored rows writes only the ones that change.
     ///
     /// It unwraps the value's DEK with the provider, never through the DEK cache, since only the
     /// key tells a value of 0.30 from one of a 32-bit target before 0.24.0, and for a value in a
-    /// legacy layout wraps the DEK again as Tink does, a second KMS call. The AEAD bytes stay as
-    /// they are: every release seals them in Tink's layout. The envelope's algorithm is the one
-    /// the value was sealed with, as for [`decrypt_value`](Self::decrypt_value).
+    /// legacy layout opens it under the envelope's algorithm and `aad` and wraps the DEK again as
+    /// Tink does, a second KMS call. The opening only verifies the value: the AEAD bytes stay as
+    /// they are, since every release seals them in Tink's layout, and a value that does not open
+    /// is never rewritten with the Tink key type of the envelope's algorithm. The envelope's
+    /// algorithm is the one the value was sealed with, as for
+    /// [`decrypt_value`](Self::decrypt_value).
     ///
     /// # Errors
     ///
-    /// The errors of [`decrypt_value`](Self::decrypt_value) before the AEAD step, the provider's
-    /// errors for the new wrap, and `INVALID_KEY_LENGTH` when the unwrapped key does not fit the
-    /// envelope's algorithm.
+    /// The errors of [`decrypt_value`](Self::decrypt_value), among them `DECRYPT` when the value
+    /// was sealed under another algorithm or another AAD, and the provider's errors for the new
+    /// wrap.
     #[deprecated(
         since = "0.30.0",
         note = "reading the layouts written by 0.29 and earlier will be removed in a later breaking release"
     )]
     pub async fn upgrade_legacy_value(
         &self,
+        aad: &[u8],
         value: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<Option<CipherTextWithEncryptedKey>> {
         let layout = EnvelopeLayout::try_from(value.0.as_slice())?;
         let (cipher_text, encrypted_dek) =
             value.separate_any_layout(self.provider.kek().provider())?;
-        #[expect(
-            deprecated,
-            reason = "the value upgrade is the key upgrade with a new frame"
-        )]
-        let upgraded_dek = self.upgrade_legacy_encrypted_key(&encrypted_dek).await?;
-        match (upgraded_dek, layout) {
-            (Some(upgraded_dek), _) => {
-                CipherTextWithEncryptedKey::join(&cipher_text, &upgraded_dek).map(Some)
-            }
-            (None, EnvelopeLayout::Tink) => Ok(None),
-            (None, _) => CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).map(Some),
+        let (key, legacy_key) = encrypted_dek.unwrap_with(&self.provider).await?;
+        if legacy_key.is_none() && layout == EnvelopeLayout::Tink {
+            return Ok(None);
         }
+        // A raw key records no algorithm, and every algorithm with its length takes it, so only
+        // opening the value shows that the Tink key type written below is the right one.
+        self.cipher.decrypt_value(aad, &cipher_text, &key)?;
+        let upgraded_dek = match legacy_key {
+            Some(_) => {
+                key.wrap_with(self.algorithm().into(), &self.provider)
+                    .await?
+            }
+            None => encrypted_dek,
+        };
+        CipherTextWithEncryptedKey::join(&cipher_text, &upgraded_dek).map(Some)
     }
 
     /// `encrypted`, an encrypted key stored by 0.29 or earlier, wrapped again as Tink wraps a
@@ -220,7 +227,10 @@ where
     ///
     /// It unwraps the key with the provider, never through the DEK cache, and for a key in a
     /// legacy layout wraps it again, a second KMS call. The envelope's algorithm is the one the
-    /// key was made for.
+    /// key was made for: with no value to open, the upgrade cannot check it, and records the
+    /// envelope's algorithm in the Tink key type for any key of its length. Where the values
+    /// sealed under the key are at hand, [`upgrade_legacy_value`](Self::upgrade_legacy_value)
+    /// opens them and refuses a key of another algorithm.
     ///
     /// # Errors
     ///
