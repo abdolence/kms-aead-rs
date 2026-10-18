@@ -85,7 +85,7 @@ impl From<&KeyringRecord> for StoredRecord {
                 state_changed_at: version.state_changed_at,
                 encrypted_dek: version
                     .encrypted_dek()
-                    .map(|dek| STANDARD.encode(dek.value())),
+                    .map(|encrypted_dek| STANDARD.encode(encrypted_dek.value())),
             })
             .collect();
         Self {
@@ -244,7 +244,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
             .algorithm
             .parse()
             .map_err(|_| RecordInvalidReason::UnknownAlgorithm(Some(key_id)))?;
-        let dek = stored
+        let encrypted_dek = stored
             .encrypted_dek
             .map(|encoded| {
                 STANDARD
@@ -262,7 +262,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
             .state
             .parse()
             .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
-        let state = match (kind, dek) {
+        let state = match (kind, encrypted_dek) {
             (KeyVersionState::Destroyed, None) => VersionState::Destroyed(compromised),
             (KeyVersionState::Destroyed, Some(_)) => {
                 return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
@@ -271,17 +271,21 @@ impl TryFrom<StoredVersion> for KeyVersion {
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedActive(key_id))
             }
-            (KeyVersionState::Active, Some(dek)) => VersionState::Active(dek),
+            (KeyVersionState::Active, Some(encrypted_dek)) => VersionState::Active(encrypted_dek),
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedPending(key_id))
             }
-            (KeyVersionState::Pending, Some(dek)) => VersionState::Pending(dek),
-            (KeyVersionState::DecryptOnly, Some(dek)) => {
-                VersionState::DecryptOnly(RetainedDek { dek, compromised })
+            (KeyVersionState::Pending, Some(encrypted_dek)) => VersionState::Pending(encrypted_dek),
+            (KeyVersionState::DecryptOnly, Some(encrypted_dek)) => {
+                VersionState::DecryptOnly(RetainedDek {
+                    encrypted_dek,
+                    compromised,
+                })
             }
-            (KeyVersionState::Retired, Some(dek)) => {
-                VersionState::Retired(RetainedDek { dek, compromised })
-            }
+            (KeyVersionState::Retired, Some(encrypted_dek)) => VersionState::Retired(RetainedDek {
+                encrypted_dek,
+                compromised,
+            }),
         };
         Ok(Self {
             key_id,

@@ -298,8 +298,8 @@ impl<S: KeyringStore> RecordCache<S> {
             },
         )
         .record;
-        for (_, dek) in withdrawn_deks(&held, &next) {
-            self.dek_cache.invalidate(&self.kek, dek);
+        for (_, encrypted_dek) in withdrawn_deks(&held, &next) {
+            self.dek_cache.invalidate(&self.kek, encrypted_dek);
         }
         for purpose in Purpose::ALL {
             let before = held.active(purpose).map(KeyVersion::id);

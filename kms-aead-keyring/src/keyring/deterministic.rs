@@ -54,12 +54,15 @@ where
         let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
         spans::in_span(span, async {
             let record = self.cache.current().await;
-            let (version, dek) = record.active_dek(Purpose::Deterministic).ok_or_else(|| {
-                KeyringError::no_active_version(self.id(), Purpose::Deterministic)
-            })?;
+            let (version, encrypted_dek) =
+                record.active_dek(Purpose::Deterministic).ok_or_else(|| {
+                    KeyringError::no_active_version(self.id(), Purpose::Deterministic)
+                })?;
             spans::record_sealing_version(version);
             self.check_interop(aad.interop, version)?;
-            let (sealed, outcome) = self.seal_cached(&record, version, dek, aad, value).await?;
+            let (sealed, outcome) = self
+                .seal_cached(&record, version, encrypted_dek, aad, value)
+                .await?;
             spans::record_dek_cache(outcome);
             Ok(sealed)
         })
@@ -84,12 +87,12 @@ where
             async {
                 let (record, reload) = self.cache.find(key_id).await;
                 spans::record_reload(reload);
-                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 self.apply_read_policy(version, compromise)?;
                 let cipher = self.deterministic_cipher(version)?;
                 let (opened, outcome) = self
-                    .with_cached_key(&record, key_id, dek, |key| {
-                        cipher.decrypt_field(&aad.bytes, value, key)
+                    .with_cached_key(&record, key_id, encrypted_dek, |dek| {
+                        cipher.decrypt_field(&aad.bytes, value, dek)
                     })
                     .await?;
                 spans::record_dek_cache(outcome);
@@ -120,18 +123,19 @@ where
             async {
                 let (record, reload) = self.cache.find(key_id).await;
                 spans::record_reload(reload);
-                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 let cipher = self.deterministic_cipher(version)?;
-                let open = |key: &_| cipher.decrypt_field(&aad.bytes, value, key);
+                let open = |dek: &_| cipher.decrypt_field(&aad.bytes, value, dek);
                 let (opened, trust) = match compromise {
                     None => {
-                        let (opened, outcome) =
-                            self.with_cached_key(&record, key_id, dek, open).await?;
+                        let (opened, outcome) = self
+                            .with_cached_key(&record, key_id, encrypted_dek, open)
+                            .await?;
                         spans::record_dek_cache(outcome);
                         (opened?, KeyTrust::Trusted)
                     }
                     Some(compromise) => (
-                        self.with_uncached_key(dek, open).await??,
+                        self.with_uncached_key(encrypted_dek, open).await??,
                         KeyTrust::Compromised(compromise.clone()),
                     ),
                 };
@@ -175,22 +179,26 @@ where
                 .iter()
                 .filter(|version| version.algorithm().purpose() == Purpose::Deterministic)
                 .filter_map(|version| {
-                    let (dek, compromise) = version.readable_dek()?;
+                    let (encrypted_dek, compromise) = version.readable_dek()?;
                     Some(
                         self.check_interop(aad.interop, version)
-                            .map(|()| (version, dek, compromise)),
+                            .map(|()| (version, encrypted_dek, compromise)),
                     )
                 })
                 .collect::<KeyringResult<Vec<_>>>()?;
             versions.sort_by_key(|(version, ..)| Reverse(version.id().as_u32()));
             let mut probes = Vec::with_capacity(versions.len());
-            for (version, dek, compromise) in versions {
+            for (version, encrypted_dek, compromise) in versions {
                 probes.push(match compromise {
-                    None => self.seal_cached(&record, version, dek, aad, value).await?.0,
+                    None => {
+                        self.seal_cached(&record, version, encrypted_dek, aad, value)
+                            .await?
+                            .0
+                    }
                     Some(_) => {
                         let cipher = self.deterministic_cipher(version)?;
-                        self.with_uncached_key(dek, |key| {
-                            cipher.encrypt_field(version.id(), &aad.bytes, value, key)
+                        self.with_uncached_key(encrypted_dek, |dek| {
+                            cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
                         })
                         .await??
                     }
@@ -213,21 +221,21 @@ where
         }
     }
 
-    /// Seals `value` with `aad` under `version` of `record`, whose encrypted DEK is `dek`, with the
-    /// key through the [`DekCache`](kms_aead::cache::DekCache), and returns where the key came
-    /// from.
+    /// Seals `value` with `aad` under `version` of `record`, whose encrypted DEK is
+    /// `encrypted_dek`, with the key through the [`DekCache`](kms_aead::cache::DekCache), and
+    /// returns where the key came from.
     async fn seal_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
-        dek: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         aad: &DeterministicAad,
         value: &T,
     ) -> KeyringResult<(Encrypted<T, Deterministic>, DekCacheOutcome)> {
         let cipher = self.deterministic_cipher(version)?;
         let (sealed, outcome) = self
-            .with_cached_key(record, version.id(), dek, |key| {
-                cipher.encrypt_field(version.id(), &aad.bytes, value, key)
+            .with_cached_key(record, version.id(), encrypted_dek, |dek| {
+                cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
             })
             .await?;
         Ok((sealed?, outcome))

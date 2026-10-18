@@ -405,8 +405,12 @@ impl KeyVersion {
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
         match &self.state {
-            VersionState::Pending(dek) | VersionState::Active(dek) => Some((dek, None)),
-            VersionState::DecryptOnly(kept) => Some((&kept.dek, kept.compromised.as_ref())),
+            VersionState::Pending(encrypted_dek) | VersionState::Active(encrypted_dek) => {
+                Some((encrypted_dek, None))
+            }
+            VersionState::DecryptOnly(kept) => {
+                Some((&kept.encrypted_dek, kept.compromised.as_ref()))
+            }
             VersionState::Retired(_) | VersionState::Destroyed(_) => None,
         }
     }
@@ -459,8 +463,12 @@ impl VersionState {
 
     fn dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         match self {
-            VersionState::Pending(dek) | VersionState::Active(dek) => Some(dek),
-            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => Some(&kept.dek),
+            VersionState::Pending(encrypted_dek) | VersionState::Active(encrypted_dek) => {
+                Some(encrypted_dek)
+            }
+            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
+                Some(&kept.encrypted_dek)
+            }
             VersionState::Destroyed(_) => None,
         }
     }
@@ -469,7 +477,7 @@ impl VersionState {
 /// The encrypted DEK of a version past `Active`, which may be compromised.
 #[derive(Clone)]
 struct RetainedDek {
-    dek: EncryptedDataEncryptionKey,
+    encrypted_dek: EncryptedDataEncryptionKey,
     compromised: Option<Compromise>,
 }
 
@@ -478,7 +486,7 @@ impl RetainedDek {
     /// time never change once set.
     fn flagged(&self, compromise: &Compromise) -> Option<Self> {
         self.compromised.is_none().then(|| Self {
-            dek: self.dek.clone(),
+            encrypted_dek: self.encrypted_dek.clone(),
             compromised: Some(compromise.clone()),
         })
     }
@@ -489,7 +497,7 @@ impl RetainedDek {
 pub(crate) struct NewVersion {
     pub(crate) key_id: KeyId,
     pub(crate) algorithm: KeyAlgorithm,
-    pub(crate) dek: EncryptedDataEncryptionKey,
+    pub(crate) encrypted_dek: EncryptedDataEncryptionKey,
 }
 
 /// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new
@@ -577,8 +585,8 @@ impl KeyringRecord {
         self.versions
             .iter()
             .find_map(|version| match &version.state {
-                VersionState::Active(dek) if version.algorithm.purpose() == purpose => {
-                    Some((version, dek))
+                VersionState::Active(encrypted_dek) if version.algorithm.purpose() == purpose => {
+                    Some((version, encrypted_dek))
                 }
                 _ => None,
             })
@@ -675,15 +683,19 @@ impl RecordEdit {
         let purpose = self.version_mut(key_id)?.algorithm.purpose();
         let previous = self.0.active(purpose).map(KeyVersion::id);
         self.change_state(key_id, Transition::Promote, now, |state| match state {
-            VersionState::Pending(dek) => Some(VersionState::Active(dek.clone())),
+            VersionState::Pending(encrypted_dek) => {
+                Some(VersionState::Active(encrypted_dek.clone()))
+            }
             _ => None,
         })?;
         if let Some(previous) = previous {
             self.change_state(previous, Transition::Promote, now, |state| match state {
-                VersionState::Active(dek) => Some(VersionState::DecryptOnly(RetainedDek {
-                    dek: dek.clone(),
-                    compromised: None,
-                })),
+                VersionState::Active(encrypted_dek) => {
+                    Some(VersionState::DecryptOnly(RetainedDek {
+                        encrypted_dek: encrypted_dek.clone(),
+                        compromised: None,
+                    }))
+                }
                 _ => None,
             })?;
         }
@@ -714,10 +726,12 @@ impl RecordEdit {
             now,
             |state| match state {
                 VersionState::Pending(_) => None,
-                VersionState::Active(dek) => Some(VersionState::DecryptOnly(RetainedDek {
-                    dek: dek.clone(),
-                    compromised: Some(compromise.clone()),
-                })),
+                VersionState::Active(encrypted_dek) => {
+                    Some(VersionState::DecryptOnly(RetainedDek {
+                        encrypted_dek: encrypted_dek.clone(),
+                        compromised: Some(compromise.clone()),
+                    }))
+                }
                 VersionState::DecryptOnly(kept) => {
                     kept.flagged(&compromise).map(VersionState::DecryptOnly)
                 }
@@ -762,17 +776,20 @@ impl RecordEdit {
         })
     }
 
-    /// Puts `dek`, the same key encrypted again, in place of `key_id`'s encrypted DEK, in whatever
-    /// state the version is.
+    /// Puts `encrypted_dek`, the same key encrypted again, in place of `key_id`'s encrypted DEK, in
+    /// whatever state the version is.
     pub(crate) fn replace_dek(
         &mut self,
         key_id: KeyId,
-        dek: EncryptedDataEncryptionKey,
+        encrypted_dek: EncryptedDataEncryptionKey,
         now: Timestamp,
     ) -> KeyringResult<()> {
         match &mut self.version_mut(key_id)?.state {
-            VersionState::Pending(held) | VersionState::Active(held) => *held = dek,
-            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => kept.dek = dek,
+            VersionState::Pending(held_encrypted_dek)
+            | VersionState::Active(held_encrypted_dek) => *held_encrypted_dek = encrypted_dek,
+            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
+                kept.encrypted_dek = encrypted_dek
+            }
             VersionState::Destroyed(_) => {
                 return Err(KeyringError::record_invalid(
                     &self.0.id,
@@ -809,7 +826,7 @@ impl RecordEdit {
             algorithm: new.algorithm,
             created_at: now,
             state_changed_at: now,
-            state: state(new.dek),
+            state: state(new.encrypted_dek),
         });
         record.updated_at = now;
     }
@@ -888,14 +905,15 @@ pub(crate) fn withdrawn_deks<'a>(
     next: &'a KeyringRecord,
 ) -> impl Iterator<Item = (KeyId, &'a EncryptedDataEncryptionKey)> + 'a {
     held.versions.iter().filter_map(move |held| {
-        let (dek, compromise) = held.readable_dek()?;
+        let (encrypted_dek, compromise) = held.readable_dek()?;
         let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
             None => true,
-            Some((next_dek, next_compromise)) => {
-                next_dek != dek || (next_compromise.is_some() && compromise.is_none())
+            Some((next_encrypted_dek, next_compromise)) => {
+                next_encrypted_dek != encrypted_dek
+                    || (next_compromise.is_some() && compromise.is_none())
             }
         };
-        withdrawn.then_some((held.key_id, dek))
+        withdrawn.then_some((held.key_id, encrypted_dek))
     })
 }
 

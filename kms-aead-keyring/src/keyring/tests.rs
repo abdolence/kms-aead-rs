@@ -83,14 +83,14 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
     assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
 
     let record = fixture.keyring.record();
-    let dek = record
+    let encrypted_dek = record
         .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let (opened, _) = DekCache::disabled()
-        .with_key(&fixture.provider, dek, |key| {
-            cipher.decrypt_value(&aad.bytes, &CipherText(bytes[5..].to_vec()), key)
+        .with_key(&fixture.provider, encrypted_dek, |dek| {
+            cipher.decrypt_value(&aad.bytes, &CipherText(bytes[5..].to_vec()), dek)
         })
         .await?;
     assert_eq!(opened?.as_sensitive_str(), ALICE);
@@ -498,7 +498,7 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
-    let dek = held
+    let encrypted_dek = held
         .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
@@ -511,12 +511,12 @@ async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
 
     fixture
         .keyring
-        .with_cached_key(&held, KeyId::new(1), dek, |_| ())
+        .with_cached_key(&held, KeyId::new(1), encrypted_dek, |_| ())
         .await?;
     let ((), outcome) = fixture
         .keyring
         .dek_cache()
-        .with_key(&fixture.provider, dek, |_| ())
+        .with_key(&fixture.provider, encrypted_dek, |_| ())
         .await?;
     assert_eq!(outcome, DekCacheOutcome::Miss);
     Ok(())
@@ -554,19 +554,19 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let record = fixture.keyring.record();
-    let dek = record
+    let encrypted_dek = record
         .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let first = KeyId::new(1);
     let (forged, _) = DekCache::disabled()
-        .with_key(&fixture.provider, dek, |leaked| {
+        .with_key(&fixture.provider, encrypted_dek, |leaked_dek| {
             cipher.encrypt_field(
                 first,
                 &aad.bytes,
                 &"mallory@example.com".to_string(),
-                leaked,
+                leaked_dek,
             )
         })
         .await?;
@@ -788,7 +788,7 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     keyring.rotate(Purpose::Randomized).await?;
-    let before = keyring.record().encrypted_deks();
+    let previous_encrypted_deks = keyring.record().encrypted_deks();
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     assert_eq!(keyring.reencrypt_deks().await?, 2);
@@ -796,10 +796,12 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         decryptions + 2
     );
-    let after = keyring.record().encrypted_deks();
-    for ((key_id, encrypted), (reencrypted_id, reencrypted)) in before.iter().zip(&after) {
+    let current_encrypted_deks = keyring.record().encrypted_deks();
+    for ((key_id, previous_encrypted_dek), (reencrypted_id, current_encrypted_dek)) in
+        previous_encrypted_deks.iter().zip(&current_encrypted_deks)
+    {
         assert_eq!(key_id, reencrypted_id);
-        assert_ne!(encrypted, reencrypted);
+        assert_ne!(previous_encrypted_dek, current_encrypted_dek);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     Ok(())

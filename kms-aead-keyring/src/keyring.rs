@@ -194,15 +194,15 @@ where
         let span = spans::encrypt(self.id(), Purpose::Randomized, Some(B::NAME));
         spans::in_span(span, async {
             let record = self.cache.current().await;
-            let (version, dek) = record
+            let (version, encrypted_dek) = record
                 .active_dek(Purpose::Randomized)
                 .ok_or_else(|| KeyringError::no_active_version(self.id(), Purpose::Randomized))?;
             spans::record_sealing_version(version);
             self.check_interop(aad.interop, version)?;
             let cipher = self.cipher(version)?;
             let (sealed, outcome) = self
-                .with_cached_key(&record, version.id(), dek, |key| {
-                    cipher.encrypt_field(version.id(), &aad.bytes, value, key)
+                .with_cached_key(&record, version.id(), encrypted_dek, |dek| {
+                    cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -238,9 +238,10 @@ where
             async {
                 let (record, reload) = self.cache.find(key_id).await;
                 spans::record_reload(reload);
-                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 self.apply_read_policy(version, compromise)?;
-                self.open_cached(&record, version, dek, aad, value).await
+                self.open_cached(&record, version, encrypted_dek, aad, value)
+                    .await
             },
         )
         .await
@@ -265,14 +266,16 @@ where
             async {
                 let (record, reload) = self.cache.find(key_id).await;
                 spans::record_reload(reload);
-                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 let (opened, trust) = match compromise {
                     None => (
-                        self.open_cached(&record, version, dek, aad, value).await?,
+                        self.open_cached(&record, version, encrypted_dek, aad, value)
+                            .await?,
                         KeyTrust::Trusted,
                     ),
                     Some(compromise) => (
-                        self.open_uncached(version, dek, aad, value).await?,
+                        self.open_uncached(version, encrypted_dek, aad, value)
+                            .await?,
                         KeyTrust::Compromised(compromise.clone()),
                     ),
                 };
@@ -494,15 +497,19 @@ where
             let versions = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
-                    let deks = edit.record().encrypted_deks();
-                    for (key_id, dek) in &deks {
+                    let encrypted_deks = edit.record().encrypted_deks();
+                    for (key_id, encrypted_dek) in &encrypted_deks {
                         // What the KMS decrypts is the serialised Tink key it encrypted, so it is
                         // encrypted again as it is.
-                        let key = self.provider.decrypt_data_encryption_key(dek).await?;
-                        let reencrypted = self.provider.encrypt_data_encryption_key(&key).await?;
-                        edit.replace_dek(*key_id, reencrypted, Timestamp::now())?;
+                        let dek = self
+                            .provider
+                            .decrypt_data_encryption_key(encrypted_dek)
+                            .await?;
+                        let new_encrypted_dek =
+                            self.provider.encrypt_data_encryption_key(&dek).await?;
+                        edit.replace_dek(*key_id, new_encrypted_dek, Timestamp::now())?;
                     }
-                    Ok(deks.len())
+                    Ok(encrypted_deks.len())
                 })
                 .await?;
             spans::record_versions(versions);
@@ -568,11 +575,11 @@ where
             return Err(KeyringError::key_version_unknown(self.id(), key_id));
         };
         spans::record_key_state(version);
-        let Some((dek, compromise)) = version.readable_dek() else {
+        let Some((encrypted_dek, compromise)) = version.readable_dek() else {
             spans::read_refused(self.id(), version);
             return Err(self.unreadable(version));
         };
-        Ok((version, dek, compromise))
+        Ok((version, encrypted_dek, compromise))
     }
 
     /// The error of a read under `version`, which holds no readable key: `KeyVersionDestroyed`
@@ -650,65 +657,67 @@ where
         }
     }
 
-    /// Opens `value` with `aad` under `version` of `record`, whose encrypted DEK is `dek`, with the
-    /// key through the [`DekCache`].
+    /// Opens `value` with `aad` under `version` of `record`, whose encrypted DEK is
+    /// `encrypted_dek`, with the key through the [`DekCache`].
     async fn open_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
-        dek: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
         let (opened, outcome) = self
-            .with_cached_key(record, version.id(), dek, |key| {
-                cipher.decrypt_field(&aad.bytes, value, key)
+            .with_cached_key(record, version.id(), encrypted_dek, |dek| {
+                cipher.decrypt_field(&aad.bytes, value, dek)
             })
             .await?;
         spans::record_dek_cache(outcome);
         Ok(opened?)
     }
 
-    /// Runs `use_key` with the key that `dek` holds, through the [`DekCache`], and returns its
-    /// result and where the key came from, for the caller to record. `record` is the record `dek`
-    /// was read from, as the encrypted DEK of `key_id`.
+    /// Runs `use_key` with the key that `encrypted_dek` holds, through the [`DekCache`], and
+    /// returns its result and where the key came from, for the caller to record. `record` is the
+    /// record `encrypted_dek` was read from, as the encrypted DEK of `key_id`.
     ///
     /// A refresh evicts the keys it takes out of use once, when it takes the new record. A call
-    /// that read `dek` from the record before and decrypts it after that eviction caches it
-    /// again, so on a miss the key is evicted here when the cached record has since withdrawn
+    /// that read `encrypted_dek` from the record before and decrypts it after that eviction caches
+    /// it again, so on a miss the key is evicted here when the cached record has since withdrawn
     /// it.
     async fn with_cached_key<T>(
         &self,
         record: &KeyringRecord,
         key_id: KeyId,
-        dek: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<(T, DekCacheOutcome)> {
         let (result, outcome) = self
             .dek_cache()
-            .with_key(&self.provider, dek, use_key)
+            .with_key(&self.provider, encrypted_dek, use_key)
             .await?;
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
             if !std::ptr::eq(record, &*current)
-                && withdrawn_deks(record, &current).any(|withdrawn| withdrawn == (key_id, dek))
+                && withdrawn_deks(record, &current)
+                    .any(|withdrawn| withdrawn == (key_id, encrypted_dek))
             {
-                self.dek_cache().invalidate(self.provider.kek(), dek);
+                self.dek_cache()
+                    .invalidate(self.provider.kek(), encrypted_dek);
             }
         }
         Ok((result, outcome))
     }
 
-    /// Runs `use_key` with the key that `dek` holds, which the provider decrypts for this call only
-    /// and which never enters the [`DekCache`].
+    /// Runs `use_key` with the key that `encrypted_dek` holds, which the provider decrypts for this
+    /// call only and which never enters the [`DekCache`].
     async fn with_uncached_key<T>(
         &self,
-        dek: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<T> {
         let (result, _) = DekCache::disabled()
-            .with_key(&self.provider, dek, use_key)
+            .with_key(&self.provider, encrypted_dek, use_key)
             .await?;
         spans::record_dek_cache_bypassed();
         Ok(result)
@@ -737,13 +746,15 @@ where
     async fn open_uncached<T: Plaintext>(
         &self,
         version: &KeyVersion,
-        dek: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
         Ok(self
-            .with_uncached_key(dek, |key| cipher.decrypt_field(&aad.bytes, value, key))
+            .with_uncached_key(encrypted_dek, |dek| {
+                cipher.decrypt_field(&aad.bytes, value, dek)
+            })
             .await??)
     }
 
@@ -789,12 +800,12 @@ where
         algorithm: AeadAlgorithm,
     ) -> KeyringResult<SecretValue> {
         spans::in_span(spans::decrypt_envelope(self.id()), async {
-            let (cipher_text, dek) = value.separate()?;
+            let (cipher_text, encrypted_dek) = value.separate()?;
             let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
                 .dek_cache()
-                .with_key(&self.provider, &dek, |key| {
-                    cipher.decrypt_value(aad, &cipher_text, key)
+                .with_key(&self.provider, &encrypted_dek, |dek| {
+                    cipher.decrypt_value(aad, &cipher_text, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -816,33 +827,33 @@ impl NewVersion {
         P: KmsAeadEncryptionProvider + Sync,
         B: AeadBackend,
     {
-        let dek = match algorithm {
+        let encrypted_dek = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
-                let (_, dek) = AeadCipher::<B>::new(algorithm)?
+                let (_, encrypted_dek) = AeadCipher::<B>::new(algorithm)?
                     .generate_dek(provider)
                     .await?;
-                dek
+                encrypted_dek
             }
             #[cfg(feature = "deterministic")]
             KeyAlgorithm::Deterministic(algorithm) => {
-                let (_, dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
+                let (_, encrypted_dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
                     .generate_dek(provider)
                     .await?;
-                dek
+                encrypted_dek
             }
             #[cfg(not(feature = "deterministic"))]
             KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
             KeyAlgorithm::Beacon(algorithm) => {
-                let (_, dek) = BeaconMac::<B>::new(algorithm)
+                let (_, encrypted_dek) = BeaconMac::<B>::new(algorithm)
                     .generate_dek(provider)
                     .await?;
-                dek
+                encrypted_dek
             }
         };
         Ok(Self {
             key_id,
             algorithm,
-            dek,
+            encrypted_dek,
         })
     }
 }

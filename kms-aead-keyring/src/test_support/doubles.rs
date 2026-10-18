@@ -88,7 +88,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         if self.calls.fail_encryptions.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
@@ -97,15 +97,15 @@ impl KmsAeadEncryptionProvider for TestProvider {
             ));
         }
         self.calls.encryptions.fetch_add(1, Ordering::SeqCst);
-        self.kms.encrypt_data_encryption_key(encryption_key).await
+        self.kms.encrypt_data_encryption_key(dek).await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         self.calls.decryptions.fetch_add(1, Ordering::SeqCst);
-        self.kms.decrypt_data_encryption_key(encrypted_key).await
+        self.kms.decrypt_data_encryption_key(encrypted_dek).await
     }
 }
 

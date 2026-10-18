@@ -41,15 +41,15 @@ where
     ) -> KeyringResult<Beacon<T>> {
         spans::in_span(spans::beacon(self.id()), async {
             let record = self.cache.current().await;
-            let (version, dek) = record
+            let (version, encrypted_dek) = record
                 .active_dek(Purpose::Beacon)
                 .ok_or_else(|| KeyringError::no_active_version(self.id(), Purpose::Beacon))?;
             spans::record_sealing_version(version);
             let mac = self.beacon_mac(version)?;
             let context = field.context();
             let (beacon, outcome) = self
-                .with_cached_key(&record, version.id(), dek, |key| {
-                    mac.compute(version.id(), &context, field.beacon_bits(), value, key)
+                .with_cached_key(&record, version.id(), encrypted_dek, |dek| {
+                    mac.compute(version.id(), &context, field.beacon_bits(), value, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -82,23 +82,23 @@ where
                 .iter()
                 .filter(|version| version.algorithm().purpose() == Purpose::Beacon)
                 .filter_map(|version| {
-                    let (dek, compromise) = version.readable_dek()?;
-                    Some((version, dek, compromise))
+                    let (encrypted_dek, compromise) = version.readable_dek()?;
+                    Some((version, encrypted_dek, compromise))
                 })
                 .collect::<Vec<_>>();
             versions.sort_by_key(|(version, ..)| Reverse(version.id().as_u32()));
             let mut probes = Vec::with_capacity(versions.len());
-            for (version, dek, compromise) in versions {
+            for (version, encrypted_dek, compromise) in versions {
                 let mac = self.beacon_mac(version)?;
                 let compute =
-                    |key: &_| mac.compute(version.id(), &context, field.beacon_bits(), value, key);
+                    |dek: &_| mac.compute(version.id(), &context, field.beacon_bits(), value, dek);
                 let probe = match compromise {
                     None => {
-                        self.with_cached_key(&record, version.id(), dek, compute)
+                        self.with_cached_key(&record, version.id(), encrypted_dek, compute)
                             .await?
                             .0
                     }
-                    Some(_) => self.with_uncached_key(dek, compute).await?,
+                    Some(_) => self.with_uncached_key(encrypted_dek, compute).await?,
                 };
                 probes.push(probe?);
             }
@@ -167,14 +167,14 @@ mod tests {
         let beacon = keyring.beacon(&EMAIL, &alice).await?;
 
         let record = keyring.record();
-        let dek = record
+        let encrypted_dek = record
             .version(first)
             .and_then(KeyVersion::encrypted_dek)
             .ok_or("the first beacon version holds no key")?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (expected, _) = DekCache::disabled()
-            .with_key(&provider, dek, |key| {
-                mac.compute(first, b"user/email", BeaconBits::DEFAULT, &alice, key)
+            .with_key(&provider, encrypted_dek, |dek| {
+                mac.compute(first, b"user/email", BeaconBits::DEFAULT, &alice, dek)
             })
             .await?;
         assert_eq!(beacon, expected?);

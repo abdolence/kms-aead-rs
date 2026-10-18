@@ -210,24 +210,24 @@ where
             let record = self.cache.reload("export").await?;
             let (primary, versions) = self.exported_versions(&record, selection, encoding)?;
             let mut keyset = TinkKeyset::new(primary);
-            for (key_id, key_type, dek) in &versions {
+            for (key_id, key_type, encrypted_dek) in &versions {
                 // Uncached, so that the export leaves no key in the cache of a process that
                 // serves no reads under it.
                 let (added, _) = DekCache::disabled()
-                    .with_key(&self.provider, dek, |key| {
-                        keyset.add_key(*key_id, *key_type, key)
+                    .with_key(&self.provider, encrypted_dek, |dek| {
+                        keyset.add_key(*key_id, *key_type, dek)
                     })
                     .await?;
                 added?;
             }
             let bytes = match encoding {
                 Encoding::BigQuery => {
-                    let plaintext = DataEncryptionKey::from(keyset.to_bytes());
+                    let keyset_dek = DataEncryptionKey::from(keyset.to_bytes());
                     // Zeroises the keys inside the keyset before the KMS round trip, so that the
                     // serialised keyset is the one copy left while it is encrypted.
                     drop(keyset);
                     self.provider
-                        .encrypt_data_encryption_key(&plaintext)
+                        .encrypt_data_encryption_key(&keyset_dek)
                         .await?
                         .into_value()
                 }
@@ -262,7 +262,7 @@ where
                     .iter()
                     .filter(|version| version.algorithm().purpose() == purpose)
                     .filter_map(|version| match version.readable_dek() {
-                        Some((dek, None)) => Some((version, dek)),
+                        Some((encrypted_dek, None)) => Some((version, encrypted_dek)),
                         _ => None,
                     })
                     .collect();
@@ -278,22 +278,22 @@ where
                         key_id,
                     }));
                 }
-                let (dek, _) = version
+                let (encrypted_dek, _) = version
                     .readable_dek()
                     .ok_or_else(|| self.unreadable(version))?;
-                (key_id, vec![(version, dek)])
+                (key_id, vec![(version, encrypted_dek)])
             }
         };
         let versions = versions
             .into_iter()
-            .map(|(version, dek)| {
+            .map(|(version, encrypted_dek)| {
                 let key_type = encoding.key_type(version.algorithm()).ok_or_else(|| {
                     KeyringError::ExportAlgorithmUnsupported(KeyVersionError {
                         keyring: self.id().clone(),
                         key_id: version.id(),
                     })
                 })?;
-                Ok((version.id(), key_type, dek))
+                Ok((version.id(), key_type, encrypted_dek))
             })
             .collect::<KeyringResult<_>>()?;
         Ok((primary, versions))
@@ -349,13 +349,13 @@ mod tests {
         let mut keyset = TinkKeyset::new(KeyId::new(primary));
         for key_id in key_ids {
             let key_id = KeyId::new(*key_id);
-            let dek = record
+            let encrypted_dek = record
                 .version(key_id)
                 .and_then(KeyVersion::encrypted_dek)
                 .ok_or("the version holds no key")?;
             let (added, _) = DekCache::disabled()
-                .with_key(provider, dek, |key| {
-                    keyset.add_key(key_id, TinkKeyType::AesGcm, key)
+                .with_key(provider, encrypted_dek, |dek| {
+                    keyset.add_key(key_id, TinkKeyType::AesGcm, dek)
                 })
                 .await?;
             added?;

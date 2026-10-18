@@ -518,7 +518,7 @@ fn new_version(record: &KeyringRecord, algorithm: KeyAlgorithm) -> KeyringResult
     Ok(NewVersion {
         key_id: record.next_key_id(algorithm.purpose())?,
         algorithm,
-        dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
+        encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
     })
 }
 
