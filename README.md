@@ -11,6 +11,8 @@ encryption without a KMS:
 - KMS providers for Google Cloud KMS, AWS KMS, Azure Key Vault and Managed HSM, HashiCorp Vault
   Transit, and a local KMS for development, tests and single-host installs;
 - AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
+- Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
+  and the library reads Tink's;
 - Crypto backends ring, aws-lc-rs (including its FIPS module) and RustCrypto, with values
   readable across all of them;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
@@ -80,8 +82,9 @@ needs a backend feature next to it, and most names changed. See the
 [migration guide](MIGRATION.md) and
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).
 
-Values written by 0.28.1 and earlier read only with the deprecated `legacy-formats` feature, see
-[Formats](https://kms-aead-rust.abdolence.dev/formats.html).
+0.30 writes Tink's KMS envelope format for every provider, so values written by 0.29 and earlier
+read only with the deprecated `legacy-formats` feature, which also rewrites them in the new
+format, see [Formats](https://kms-aead-rust.abdolence.dev/formats.html).
 
 ## Security
 

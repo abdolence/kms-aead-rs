@@ -1,24 +1,31 @@
 # Formats
 
-Every byte layout the library reads or writes:
+Every byte layout the library reads or writes is on this page.
 
-| Layout | Type | Bytes | Written by |
-|---|---|---|---|
-| AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | every release |
-| Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped key: w][cipher text]` | 0.29.0 and later |
-| Encrypted key layout v1 | `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped key]` | 0.29.0 and later |
-| Local KMS wrapped key | `EncryptedDataEncryptionKey::wrapped()` | `[0x01][i: u8][KEK id: i][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]` | 0.30.0 and later |
-| Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | 0.30.0 and later |
-| Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][wrapped key: w][cipher text]`, and a 4-byte `w` from 32-bit targets before 0.24.0 | 0.8.0 to 0.28.1, read with `legacy-formats` only |
-| Bare encrypted key | `EncryptedDataEncryptionKey` | the wrapped key as the KMS returned it | up to 0.28.1, read with `legacy-formats` only |
+The library writes one envelope format for every provider, Tink's KMS envelope. A value encrypted
+by `encrypt_value` opens with Tink's `KmsEnvelopeAead` on the same KMS key and algorithm, and a
+value Tink encrypts opens with `decrypt_value`.
 
-`k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters, such as
-the `N` of a GCP `cryptoKeyVersions/N`.
+| Layout | Type | Bytes | Read by | Written by |
+|---|---|---|---|---|
+| Tink KMS envelope | `CipherTextWithEncryptedKey` | `[w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
+| AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink (RAW output) | every release |
+| Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
+| Serialized DEK | the plaintext of a wrapped DEK | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
+| Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
+| TINK-prefixed value | `TinkOutputPrefix` and the value | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
+| Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
+| Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
+| Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped DEK]` | kms-aead with `legacy-formats` | 0.29 |
+| Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][wrapped DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
+| Raw wrapped DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead with `legacy-formats` | up to 0.29 |
 
-## Envelope layout v1
+`k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters.
 
-`encrypt_value` writes envelope layout v1, and `CipherTextWithEncryptedKey::join` writes it from a
-cipher text and a wrapped DEK. `separate` reads it back:
+## Tink's KMS envelope
+
+`encrypt_value` writes Tink's KMS envelope, and `CipherTextWithEncryptedKey::join` writes it from
+a cipher text and a wrapped DEK. `separate` reads it back:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -37,103 +44,219 @@ assert_eq!(CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?, encr
 # }
 ```
 
-The header is not authenticated, so a header field is only ever an address or an audit value,
-such as the key version. The layout does not record the AEAD algorithm.
+- `w` is 1 to 4,096 bytes, the limit of every Tink implementation, on write and on read;
+- the wrapped DEK is the provider's [`EncryptedDataEncryptionKey`](#wrapped-deks), the KMS
+  ciphertext of the [serialized DEK](#serialized-deks);
+- the AAD goes to the DEK's AEAD only. The KMS wrap has no AAD, as in Tink, so Tink's AWS client
+  sends no encryption context and its GCP client no additional authenticated data;
+- the rest is the `CipherText`, Tink's RAW output.
 
-The key version comes from the provider: GCP, Azure, Vault Transit and the local KMS record one,
-AWS records none and needs none to unwrap.
+The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:
 
-## Encrypted key layout v1
+| Algorithm | Tink key type | Tink for Java and Go | Tink for C++ and Python |
+|---|---|---|---|
+| ChaCha20-Poly1305 | `ChaCha20Poly1305Key` | reads and writes | no |
+| AES-128-GCM, AES-256-GCM | `AesGcmKey` | reads and writes | reads and writes |
+| AES-256-GCM-SIV | `AesGcmSivKey` | reads and writes | reads and writes |
 
-`EncryptedDataEncryptionKey::to_bytes` and `to_hex_string` write the wrapped DEK with its key
-version, for the `*_with_encrypted_dek` calls. `TryFrom<&[u8]>` and `try_from_hex_string` read it,
-see [Storing wrapped DEKs](./envelope-encryption.md#storing-wrapped-deks). `0xFF` marks the layout,
-and `0x01` is its version.
+ChaCha20-Poly1305 stays the default of `KmsAeadEnvelope::new`, the algorithm of every earlier
+release. Configure AES-256-GCM for values that every Tink implementation reads.
 
-## Values written by 0.28.1 and earlier
+Tink for Python reads a kms-aead value with the key URI of the provider's key:
 
-Two layouts written up to 0.28.1 are read only with the `legacy-formats` feature:
+```python
+from tink import aead
+from tink.integration import gcpkms
 
-- the length-prefixed envelope, whose first byte is `0x00`;
-- the bare encrypted key, stored with `value()` or `to_hex_string()` up to 0.28.1. Those keys come
-  only from GCP, starting with `0x0a`, and from AWS, starting with `0x01`.
+aead.register()
+key_uri = 'gcp-kms://projects/p/locations/l/keyRings/r/cryptoKeys/k'
+remote = gcpkms.GcpKmsClient(key_uri).get_aead(key_uri)
+envelope = aead.KmsEnvelopeAead(aead.aead_key_templates.AES256_GCM, remote)
+plain_text = envelope.decrypt(value, aad)
+```
 
-Without the feature, reading them fails with `KmsAeadError::LegacyFormat` and the code
-`LEGACY_FORMAT`, with `KmsAeadLegacyFormat::LengthPrefixedEnvelope` or
-`KmsAeadLegacyFormat::BareEncryptedKey`. The error never echoes the bytes read. An envelope or a
-kms-aead-keyring value handed to the encrypted key reader by mistake also starts with `0x01`, so
-`BareEncryptedKey` may mean that too.
+Checked on a Cloud KMS key and an AWS KMS key, both ways: AES-128-GCM, AES-256-GCM and
+AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.24.0 for Java on
+the Cloud KMS key. `tests/tink_interop.py` and `examples/tink_interop.rs` repeat the Python check.
 
-With the feature, both read as they did in 0.29, and the first read of each legacy layout in a
-process logs one `WARN` event that names the upgrade function to use.
+## Wrapped DEKs
 
-In a build without `legacy-formats`, the `KMS AEAD decrypt` spans of such rows record
-`error_code=LEGACY_FORMAT`, see [Observability](./observability.md).
+`EncryptedDataEncryptionKey` is the bytes the provider returned from a wrap, which are also the
+bytes to store and the bytes it unwraps. Each provider's bytes name the KMS key version that
+wrapped the DEK where the KMS needs one to unwrap:
+
+| Provider | Bytes | Key version |
+|---|---|---|
+| GCP | the Cloud KMS ciphertext, starting with `0x0a` | inside the ciphertext |
+| AWS | the AWS KMS ciphertext blob, starting with `0x01` | not exposed |
+| Azure | `[0x01][k: u8][key version: k][Key Vault wrapped key]` | in the layout |
+| Vault Transit | the Transit ciphertext, `vault:vN:…` | the `N` |
+| local | `[0x01][i: u8][KEK id: i][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]` | in the layout |
+| an application's own | whatever it returns | |
+
+The Azure layout is the library's own: Key Vault unwraps only with the key version that wrapped,
+and no Tink client exists for Azure. The local KMS seals the DEK with AES-256-GCM under the KEK
+version, with its header up to the version as the AAD, so neither the id nor the version can be
+changed without the unwrap failing.
+
+Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncryptionKey::from`
+or `try_from_hex_string`, see
+[Storing wrapped DEKs](./envelope-encryption.md#storing-wrapped-deks).
+
+## Serialized DEKs
+
+The plaintext a provider wraps is the DEK serialized as Tink serializes a key, the message of its
+Tink key type with `version` 0, which protobuf leaves out:
+
+| Algorithm | Message | Bytes |
+|---|---|---|
+| ChaCha20-Poly1305 | `ChaCha20Poly1305Key` | `[0x12][0x20][key: 32]` |
+| AES-128-GCM | `AesGcmKey` | `[0x1a][0x10][key: 16]` |
+| AES-256-GCM | `AesGcmKey` | `[0x1a][0x20][key: 32]` |
+| AES-256-GCM-SIV | `AesGcmSivKey` | `[0x1a][0x20][key: 32]` |
+| AES-256-SIV, deterministic | `AesSivKey` | `[0x12][0x40][key: 64]` |
+
+`generate_new_dek`, `generate_new_deterministic_dek` and the `generate_wrapped_key` of both
+ciphers wrap their keys the same way. The message does not name its type, and AES-256-GCM and
+AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides how the key is
+used, as in Tink.
+
+An unwrapped DEK that is no serialized Tink key fails with `INVALID_KEY_FORMAT`. A wrapped Tink
+keyset unwraps under the same KEK too, and this is what keeps it out of the DEK cache.
+
+## Tink keysets and the TINK prefix
+
+`kms_aead::formats` has the two Tink layouts of kms-aead-keyring:
+
+- `TinkOutputPrefix`: `[0x01][key id: u32 BE]`, Tink's output prefix of type TINK. It is the start
+  of every keyring value, and Tink and BigQuery pick the key of a keyset by it. It is not
+  authenticated;
+- `TinkKeyset`: a serialized `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
+  keys, the bytes `tinkey` writes for the same keys. A keyring exports it wrapped by its Cloud KMS
+  key, for BigQuery's `KEYS.KEYSET_CHAIN`.
+
+## Telling layouts apart
+
+The first bytes of a stored value:
+
+| First bytes | Layout |
+|---|---|
+| `00 00 00 00` | the length-prefixed envelope of 0.28.1 and earlier |
+| `00`, then a length of 1 to 4,096 | Tink's KMS envelope, or the 4-byte length prefix of 32-bit targets before 0.24.0 |
+| `01` | envelope layout v1 of 0.29, or a TINK-prefixed value |
+| `FF 01` | encrypted key layout v1 of 0.29 |
+
+Only the unwrapped DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
+16 or 32 bytes against a serialized Tink key, whose lengths differ. A wrapped DEK of AWS, Azure or
+the local KMS also starts with `0x01`, and Tink's LEGACY and CRUNCHY output prefixes with `0x00`.
+
+A column that holds two layouts:
+
+- Tink envelopes and keyring values: the first byte, `0x00` or `0x01`;
+- Tink envelopes and 0.29 envelopes: the first byte, `0x00` or `0x01`;
+- Tink envelopes and 0.28.1 envelopes: the first four bytes;
+- 0.29 envelopes and keyring values: no byte tells them apart, so the layout is recorded outside
+  the value, such as in another column;
+- wrapped DEKs of 0.29 and of 0.30: `0xFF 0x01` starts no wrapped DEK of a built-in provider, so
+  the library tells them apart for those. It never inspects the bytes of an application's own
+  provider: strip the header `[0xFF][0x01][k][key version]` of its 0.29 keys before reading them.
+
+## Values written by 0.29 and earlier
+
+The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
+
+- `decrypt_value` reads the three envelope layouts;
+- the `*_with_encrypted_dek` calls, `decrypt_deterministic_dek` and the DEK cache read the
+  encrypted key layout of 0.29 and raw wrapped DEKs.
+
+`CipherTextWithEncryptedKey::separate` never reads the older envelope layouts: for Azure, the
+wrapped DEK they hold needs the provider to become its bytes.
+
+Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the code
+`LEGACY_FORMAT`, and one of:
+
+- `KmsAeadLegacyFormat::EnvelopeV1`;
+- `KmsAeadLegacyFormat::LengthPrefixedEnvelope`;
+- `KmsAeadLegacyFormat::EncryptedKeyV1`;
+- `KmsAeadLegacyFormat::RawWrappedKey`, for a wrapped DEK that unwraps to the raw key. The values
+  of 32-bit targets before 0.24.0 fail with it, since their framing is Tink's.
+
+The error never echoes the bytes read. With the feature, the first read of each layout in a
+process logs one `WARN` event that names the upgrade methods. Without it, the `KMS AEAD decrypt`
+spans of such values record `error_code=LEGACY_FORMAT`, see [Observability](./observability.md).
 
 ## Upgrading stored values
 
-With `legacy-formats`, two functions rewrite a stored value in the current layout, and return
-`None` when it already is in it, so a sweep can skip the rows that need no write:
+With `legacy-formats`, two methods of `KmsAeadEnvelope` rewrite a stored value in Tink's format,
+and return `None` when it already is in it, so a sweep writes only the rows that change:
 
-- `CipherTextWithEncryptedKey::upgrade_legacy_layout`, for envelope values;
-- `EncryptedDataEncryptionKey::upgrade_legacy_layout`, which takes the stored bytes, since a parsed
-  key does not record the layout it was read from. A caller that stores hex decodes before and
-  encodes after.
+- `upgrade_legacy_value`, for envelope values;
+- `upgrade_legacy_encrypted_key`, for wrapped DEKs stored apart, such as the bytes of 0.29's
+  `to_bytes`.
 
-Both are local re-framing: the wrapped DEK and the AEAD bytes stay as they are, and no KMS is
-called. The upgraded value records no key version, and the GCP and AWS providers, the only ones
-before 0.29, unwrap without one.
+Each unwraps the DEK with the provider, without the DEK cache, and wraps it again as a serialized
+Tink key when it was in an older layout: one KMS call for a current value, two for an old one. A
+value in Tink's framing needs the unwrap to be told from the 32-bit layout before 0.24.0. The AEAD
+bytes stay as they are. The envelope's algorithm is the one the values were sealed with.
 
 A sweep over stored rows:
 
 ```rust
-use kms_aead::{CipherTextWithEncryptedKey, EncryptedDataEncryptionKey, KmsAeadResult, ValueStruct};
+use kms_aead::{
+    AeadBackend, CipherTextWithEncryptedKey, KmsAeadEncryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult, ValueStruct,
+};
 
-/// Rewrites the envelope values of `rows` in layout v1, and returns how many changed.
+/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
 #[allow(deprecated)]
-fn upgrade_values(rows: &mut [Vec<u8>]) -> KmsAeadResult<usize> {
+async fn upgrade_values<P, B>(
+    envelope: &KmsAeadEnvelope<P, B>,
+    rows: &mut [Vec<u8>],
+) -> KmsAeadResult<usize>
+where
+    P: KmsAeadEncryptionProvider + Send + Sync,
+    B: AeadBackend,
+{
     let mut upgraded = 0;
     for row in rows.iter_mut() {
-        if let Some(value) = CipherTextWithEncryptedKey(row.clone()).upgrade_legacy_layout()? {
+        let stored = CipherTextWithEncryptedKey(row.clone());
+        if let Some(value) = envelope.upgrade_legacy_value(&stored).await? {
             *row = value.into_value();
             upgraded += 1;
         }
     }
     Ok(upgraded)
 }
-
-/// Rewrites stored wrapped DEKs in encrypted key layout v1.
-#[allow(deprecated)]
-fn upgrade_keys(rows: &mut [Vec<u8>]) -> KmsAeadResult<()> {
-    for row in rows.iter_mut() {
-        if let Some(bytes) = EncryptedDataEncryptionKey::upgrade_legacy_layout(row)? {
-            *row = bytes;
-        }
-    }
-    Ok(())
-}
-# fn main() -> KmsAeadResult<()> {
-# // A length-prefixed value as 0.28.1 wrote it: [w: u64 BE][wrapped key][cipher text]
-# let mut legacy = 3u64.to_be_bytes().to_vec();
-# legacy.extend_from_slice(&[0x0a, 0x01, 0x02]);
-# legacy.extend_from_slice(&[0u8; 28]);
-# let mut values = vec![legacy];
-# assert_eq!(upgrade_values(&mut values)?, 1);
-# assert_eq!(upgrade_values(&mut values)?, 0);
-# let mut keys = vec![vec![0x0a, 0x01, 0x02]];
-# upgrade_keys(&mut keys)?;
-# assert_eq!(keys[0][0], 0xFF);
+# use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+# use kms_aead::{AeadAlgorithm, AeadCipher, Ring};
+# use secret_vault_value::SecretValue;
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> KmsAeadResult<()> {
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# // A value as 0.28.1 wrote it: [w: u64 BE][wrapped raw key][cipher text]
+# let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
+# let key = cipher.generate_key()?;
+# let cipher_text = cipher.encrypt_value(b"aad", &SecretValue::from("secret"), &key)?;
+# let wrapped = provider.encrypt_data_encryption_key(&key).await?;
+# let mut legacy = u64::try_from(wrapped.value().len()).unwrap().to_be_bytes().to_vec();
+# legacy.extend_from_slice(wrapped.value());
+# legacy.extend_from_slice(cipher_text.value());
+# let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+# let mut rows = vec![legacy];
+# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
+# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);
+# let upgraded = CipherTextWithEncryptedKey(rows[0].clone());
+# assert_eq!(envelope.decrypt_value(b"aad", &upgraded).await?, SecretValue::from("secret"));
 # Ok(())
 # }
 ```
 
-Upgrade every reader to 0.29 or later before the sweep writes: 0.28.1 and earlier cannot read the
-current layouts.
+Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink's format.
 
 ## Deprecation
 
-Reading the pre-0.29 layouts is deprecated since 0.30.0 and will be removed in a later breaking
-release, together with the `legacy-formats` feature and the upgrade functions, which carry
-`#[deprecated]` from their first release, so every call site warns.
-
-Envelope layout v1 and encrypted key layout v1 are current and not deprecated.
+Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
+breaking release, together with the `legacy-formats` feature and the upgrade methods, which carry
+`#[deprecated]` from their first release, so every call site warns. Without the feature, the
+older layouts keep failing with `LEGACY_FORMAT`.

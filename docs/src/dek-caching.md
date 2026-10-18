@@ -132,7 +132,7 @@ key: a copy taken out of it outlives the cache's control of its lifetime.
 
 A `KmsAeadEnvelope` with a `DekReusePolicy` encrypts many values under one DEK and renews it at
 the first encryption past `max_age` or past `max_uses`, whichever comes first. A renewal makes one
-KMS wrap call. Each value still carries its wrapped DEK in envelope layout v1, so nothing is
+KMS wrap call. Each value still carries its wrapped DEK in Tink's KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust

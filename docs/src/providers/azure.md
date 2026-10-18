@@ -50,15 +50,17 @@ and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 - `client_options`: settings passed to the Azure SDK, such as a custom HTTP transport or retry
   policy.
 
-## Storing wrapped DEKs
+## Wrapped DEKs
 
-Unwrapping needs the key version the wrapped DEK records. `encrypt_value` keeps it inside the
-value. For the `*_with_encrypted_dek` calls, store the wrapped DEK with `to_bytes` or
-`to_hex_string`, and read it back with `TryFrom<&[u8]>` or `try_from_hex_string`, see
+Key Vault unwraps only with the key version that wrapped, so the provider's wrapped DEK carries
+it before Key Vault's wrapped key, in the library's own layout, see
+[Formats](../formats.md#wrapped-deks). No Tink client exists for Azure, so Tink does not read the
+values of this provider. Store the wrapped DEK as it is, see
 [Envelope encryption](../envelope-encryption.md#storing-wrapped-deks).
 
 ## Errors
 
 A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
 `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
-`NetworkError`, any other status an `EncryptionError`.
+`NetworkError`, any other status an `EncryptionError`. An unwrap of a wrapped DEK in another
+layout fails with `AZURE_WRAPPED_KEY_FORMAT`, before any request.

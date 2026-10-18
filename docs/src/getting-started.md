@@ -54,7 +54,7 @@ Other features:
 
 - `deterministic`: deterministic encryption with AES-SIV, see
   [Deterministic encryption](./deterministic.md);
-- `legacy-formats`: reads the layouts written by 0.28.1 and earlier. Deprecated, see
+- `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated, see
   [Formats](./formats.md);
 - `serde`: `Serialize` and `Deserialize` for `KmsAeadErrorPublicGenericDetails` and for
   `SecretValue`.

@@ -10,8 +10,8 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
   could not be read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault
   refused;
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
-- `LegacyFormat`: a stored value in a layout that only the `legacy-formats` feature reads, see
-  [Formats](./formats.md).
+- `LegacyFormat`: a stored value in a layout of 0.29 or earlier, which only the
+  `legacy-formats` feature reads, see [Formats](./formats.md#values-written-by-029-and-earlier).
 
 The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
 
@@ -54,11 +54,12 @@ The library's codes:
 | `UNSUPPORTED_ALGORITHM` | unsupported algorithm | the backend does not implement the algorithm |
 | `UNKNOWN_ALGORITHM` | encryption | `FromStr` of an algorithm name it does not know |
 | `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, or a length past its end |
-| `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value or an unknown layout tag |
-| `INVALID_ENCRYPTED_KEY_FORMAT`, `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | encryption | stored wrapped DEK bytes that cannot be read |
-| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric |
+| `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
+| `INVALID_KEY_FORMAT` | encryption | an unwrapped DEK that is not a serialized Tink key, such as a wrapped keyset |
+| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted key layout of 0.29 that cannot be read, with `legacy-formats` |
+| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure wrapped DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
-| `LEGACY_FORMAT` | legacy format | a pre-0.29 layout without `legacy-formats` |
+| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, and the envelope layouts of 0.29 and earlier in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 | `INVALID_LOCAL_KEK_ID`, `LOCAL_*` | system, encryption | the [local KMS](./providers/local.md#errors) |

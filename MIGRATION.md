@@ -2,9 +2,9 @@
 
 ## 0.30
 
-v0.30.0 replaces the ring-only API with a choice of crypto backends and makes ring optional.
-Stored values need no migration, except the values written by 0.28.1 and earlier, which need the
-deprecated `legacy-formats` feature.
+v0.30.0 replaces the ring-only API with a choice of crypto backends, makes ring optional, and
+writes Tink's KMS envelope format for every provider. Values written by 0.29 and earlier read only
+with the deprecated `legacy-formats` feature, which also rewrites them in the new format.
 
 In short:
 
@@ -19,7 +19,12 @@ In short:
   `aad: &[u8]`;
 - `KmsAeadError` is `#[non_exhaustive]`, the SDK error conversions are gone, and a few error
   codes changed;
-- the AWS provider names the configured key on every unwrap.
+- the AWS provider names the configured key on every unwrap;
+- `EncryptedDataEncryptionKey` is the provider's bytes: store `value()` or `to_hex_string()`, and
+  read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`;
+- to move stored values to the new format, upgrade every reader to 0.30 with `legacy-formats`,
+  rewrite the values with `KmsAeadEnvelope::upgrade_legacy_value` and
+  `upgrade_legacy_encrypted_key`, then turn the feature off.
 
 The full list of changes, with the old and new names, is in
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).

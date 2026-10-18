@@ -119,7 +119,7 @@ left unrecorded, never recorded as `0` or an empty string.
 |---|---|
 | `provider` | `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of an application's own provider |
 | `key` | the KEK, see below; for `KMS random` the GCP location, and unrecorded on AWS |
-| `key_version` | wrap and unwrap: from the KMS response on wrap, from the wrapped DEK on unwrap; unrecorded when neither has one |
+| `key_version` | wrap and unwrap: from the KMS response on wrap, from the wrapped DEK's bytes on unwrap for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP unwrap |
 | `len` | random only: the bytes requested from the KMS generator |
 | `response_time` | milliseconds the KMS call took |
 | `error_code` | the code of the error the call returned |
@@ -138,7 +138,8 @@ The `key` of each provider:
 Besides the spans, the library logs:
 
 - `WARN`, inside the KMS span: a GCP or Vault Transit response without a key version;
-- `WARN`, once per process and layout: the first read of a pre-0.29 layout with `legacy-formats`;
+- `WARN`, once per process and layout: the first read of a layout of 0.29 or earlier with
+  `legacy-formats`;
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `INFO`, when a local KMS provider is created: its KEK id and versions, each with where it came

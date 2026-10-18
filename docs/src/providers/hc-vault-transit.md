@@ -80,8 +80,7 @@ The token needs `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`.
 ## Key versions and rotation
 
 The wrapped DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
-it still unwraps after the key is rotated. That version is also recorded as the wrapped DEK's
-key version, for audit only: the unwrap sends the ciphertext and never the recorded version.
+it still unwraps after the key is rotated. The KMS spans record that version as `key_version`.
 
 The unwrap names the configured key in its URL, so Vault refuses a ciphertext of another key.
 

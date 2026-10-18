@@ -18,9 +18,7 @@ It does not protect values from:
 
 The AAD protects a value from being moved: a value copied into another row or column, with an AAD
 that names its place, fails to open there. The AAD itself is not encrypted, and neither is the
-header of envelope layout v1, which holds the key version and the wrapped DEK's length. The header
-is not authenticated, so a field in it is only ever an address or an audit value, never a choice of
-algorithm or mode.
+length of the wrapped DEK at the start of Tink's KMS envelope, which is not authenticated either.
 
 A wrapped DEK carries no context that the KMS authenticates. Whoever can write where wrapped
 DEKs are stored, such as a database table or a keyring store, can copy a wrapped DEK to another

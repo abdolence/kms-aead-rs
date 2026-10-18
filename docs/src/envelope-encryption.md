@@ -28,7 +28,8 @@ let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
 
 The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-[Crypto backends](./crypto-backends.md).
+[Crypto backends](./crypto-backends.md). For values that every Tink implementation reads too,
+configure AES-256-GCM, see [Formats](./formats.md#tinks-kms-envelope).
 
 ## Encrypting values
 
@@ -62,8 +63,11 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 ```
 
 `ValueStruct` is re-exported by the crate: its `value()` and `into_value()` read the bytes of
-`CipherText`, `CipherTextWithEncryptedKey` and `DeterministicCipherText`. `to_hex_string()`
-returns them as lowercase hex.
+`CipherText`, `CipherTextWithEncryptedKey`, `EncryptedDataEncryptionKey` and
+`DeterministicCipherText`. `to_hex_string()` returns them as lowercase hex.
+
+The value is in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads
+it with the same KMS key and algorithm, see [Formats](./formats.md#tinks-kms-envelope).
 
 A new DEK comes from the backend's CSPRNG, or from the KMS generator when the provider is
 configured to use one, see [KMS random generators](./providers.md#kms-random-generators).
@@ -125,13 +129,13 @@ nonce, see [Security considerations](./security.md#nonces).
 
 ## Storing wrapped DEKs
 
-`EncryptedDataEncryptionKey` holds the wrapped DEK and the version of the KMS key that wrapped
-it, when the provider reports one. Store both with `to_bytes()` or `to_hex_string()`, and read
-them back with `TryFrom<&[u8]>` or `try_from_hex_string()`:
+`EncryptedDataEncryptionKey` holds the bytes the provider returned, which also name the KMS key
+version where the KMS needs one to unwrap after a rotation. Store `value()` or `to_hex_string()`,
+and read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string()`:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
@@ -139,10 +143,10 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring};
 # let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
-let stored: Vec<u8> = encrypted_dek.to_bytes()?;
-let read_back = EncryptedDataEncryptionKey::try_from(stored.as_slice())?;
+let stored: Vec<u8> = encrypted_dek.value().clone();
+let read_back = EncryptedDataEncryptionKey::from(stored);
 
-let stored_hex: String = encrypted_dek.to_hex_string()?;
+let stored_hex: String = encrypted_dek.to_hex_string();
 let read_back_hex = EncryptedDataEncryptionKey::try_from_hex_string(&stored_hex)?;
 
 assert_eq!(read_back, read_back_hex);
@@ -150,6 +154,6 @@ assert_eq!(read_back, read_back_hex);
 # }
 ```
 
-Be aware not to store `wrapped()`, which drops the key version, and not to read stored keys with
-`EncryptedDataEncryptionKey::new`, which takes the bytes a KMS returned. Azure needs the key
-version to unwrap after a key rotation. See [Formats](./formats.md) for the layout.
+The wrapped DEK is the one Tink stores in its KMS envelope, so `CipherTextWithEncryptedKey::join`
+of a value and its wrapped DEK is a value Tink reads. See [Formats](./formats.md#wrapped-deks) for
+each provider's bytes.
