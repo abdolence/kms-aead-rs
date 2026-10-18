@@ -114,8 +114,9 @@ ephemeral KEK lives as long as the process:
 
 ```rust
 use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadEnvelope;
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -126,7 +127,7 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let aad = b"orders/1042";
 let secret = SecretValue::from("4111 1111 1111 1111");
 
-let encrypted = envelope.encrypt(aad, &secret).await?;
+let encrypted: Encrypted<SecretValue, Envelope> = envelope.encrypt(aad, &secret).await?;
 let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 
 assert_eq!(decrypted, secret);

@@ -57,11 +57,6 @@ stored value holds:
   still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
   the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
   [DEK caching and reuse](./dek-caching.md);
-- **Typed fields without a store**, `encrypt` and `decrypt` of either envelope above:
-  a value of a Rust type, such as an application newtype, sealed into an
-  `Encrypted<T, Envelope>`. It carries its encrypted DEK like any envelope value, and serde,
-  tokio-postgres and sqlx store it as bytes. Use it for columns of secrets that need no central
-  key rotation. See [Typed fields](./envelope-encryption.md#typed-fields);
 - **One fixed key**, `encrypt` of `AeadCipher` or `DeterministicCipher` with one key that
   the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink's wire
   format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
@@ -71,6 +66,11 @@ stored value holds:
   versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery
   and Tink read across rotations. See [kms-aead-keyring](https://crates.io/crates/kms-aead-keyring).
+
+Both envelope modes seal a value of a Rust type, such as an application newtype, into an
+`Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
+it as bytes, so a column of secrets needs no store of its own. See
+[Typed fields](./envelope-encryption.md#typed-fields).
 
 `AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
 holds.

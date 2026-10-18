@@ -139,8 +139,9 @@ stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
 use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{DekReusePolicy, Encrypted, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use secret_vault_value::SecretValue;
 use std::num::NonZeroU64;
 use std::time::Duration;
@@ -158,13 +159,16 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 )?;
 
 // One KMS encryption for both values
-let first = envelope.encrypt(b"events/1", &SecretValue::from("first")).await?;
-let second = envelope.encrypt(b"events/2", &SecretValue::from("second")).await?;
+let first: Encrypted<SecretValue, Envelope> =
+    envelope.encrypt(b"events/1", &SecretValue::from("first")).await?;
+let second: Encrypted<SecretValue, Envelope> =
+    envelope.encrypt(b"events/2", &SecretValue::from("second")).await?;
 
 // Read with any envelope over the same KEK and algorithm
-let decrypted: SecretValue = envelope.decrypt(b"events/2", &second).await?;
-assert_eq!(decrypted, SecretValue::from("second"));
-# let _ = first;
+let decrypted_first: SecretValue = envelope.decrypt(b"events/1", &first).await?;
+let decrypted_second: SecretValue = envelope.decrypt(b"events/2", &second).await?;
+assert_eq!(decrypted_first, SecretValue::from("first"));
+assert_eq!(decrypted_second, SecretValue::from("second"));
 # Ok(())
 # }
 ```

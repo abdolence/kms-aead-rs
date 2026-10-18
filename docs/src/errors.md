@@ -63,6 +63,9 @@ The library's codes:
 | `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted DEK layout v1 of 0.29 that cannot be read, with `legacy-formats` |
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
+| `INVALID_BEACON_FORMAT` | encryption | stored bytes that are not `[0x01][key id: u32 BE]` and 1 to 32 bytes of HMAC, at `Beacon::try_from` |
+| `INVALID_BEACON_CONTEXT` | encryption | a beacon context longer than 2^32 - 1 bytes |
+| `BEACON` | encryption | the backend failed to calculate a beacon's HMAC |
 | `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |

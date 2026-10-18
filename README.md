@@ -42,8 +42,9 @@ Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::KmsAeadEnvelope;
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 #[tokio::main]
@@ -61,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let secret = SecretValue::from("4111 1111 1111 1111");
 
     // The cipher text with its encrypted data encryption key, to store
-    let encrypted = envelope.encrypt(aad, &secret).await?;
+    let encrypted: Encrypted<SecretValue, Envelope> = envelope.encrypt(aad, &secret).await?;
 
     let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
     assert_eq!(decrypted, secret);
