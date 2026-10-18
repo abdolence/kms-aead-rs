@@ -1,0 +1,582 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Formats - KMS envelope encryption for Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-0fe3c487.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-8f8bc823.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="formats"><a class="header" href="#formats">Formats</a></h1>
+<p>Every byte layout the library reads or writes is on this page.</p>
+<p>The library writes one envelope format for every provider, Tink’s KMS envelope. A value encrypted
+by <code>KmsAeadEnvelope::encrypt</code> opens with Tink’s <code>KmsEnvelopeAead</code> on the same KMS key and
+algorithm, and a value Tink encrypts opens with <code>KmsAeadEnvelope::decrypt</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Read by</th><th>Written by</th></tr>
+</thead>
+<tbody>
+<tr><td>Tink KMS envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td>Bare value</td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>every release</td></tr>
+<tr><td>Encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes, see <a href="#encrypted-deks">Encrypted DEKs</a></td><td>kms-aead, Tink for GCP and AWS keys</td><td>0.30.0 and later</td></tr>
+<tr><td>Serialised DEK</td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message, see <a href="#serialised-deks">Serialised DEKs</a></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td>TINK-prefixed value</td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td>Tink keyset</td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td>Tink encrypted keyset</td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later</td></tr>
+<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
+<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
+<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets before 0.24.0</td><td>kms-aead with <code>legacy-formats</code></td><td>0.8.0 to 0.28.1</td></tr>
+<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>up to 0.29</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
+provider encrypts the raw DEK in every release, see <a href="#encrypted-deks">Encrypted DEKs</a>.</p>
+<h2 id="tinks-kms-envelope"><a class="header" href="#tinks-kms-envelope">Tink’s KMS envelope</a></h2>
+<p><code>KmsAeadEnvelope::encrypt</code> writes Tink’s KMS envelope, and <code>Encrypted::join</code> writes it from a
+bare value and an encrypted DEK. <code>separate</code> reads it back:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(b"aad", &amp;SecretValue::from("secret")).await?;
+
+let (bare, encrypted_dek) = encrypted.separate()?;
+let joined = Encrypted::&lt;SecretValue, Envelope&gt;::join(&amp;bare, &amp;encrypted_dek)?;
+assert_eq!(joined.value(), encrypted.value());
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<ul>
+<li><code>w</code> is 1 to 4,096 bytes, the limit of every Tink implementation, on write and on read;</li>
+<li>the encrypted DEK is the provider’s <a href="#encrypted-deks"><code>EncryptedDataEncryptionKey</code></a>, the KMS
+ciphertext of the <a href="#serialised-deks">serialised DEK</a>, or of the raw DEK for Azure;</li>
+<li>the AAD goes to the DEK’s AEAD only. The KMS encryption of the DEK has no AAD, as in Tink, so
+Tink’s AWS client sends no encryption context and its GCP client no additional authenticated data;</li>
+<li>the rest is a <a href="#formats-of-encrypted"><code>Bare</code> value</a>.</li>
+</ul>
+<p>The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Tink key type</th><th>Tink for Java and Go</th><th>Tink for C++ and Python</th></tr>
+</thead>
+<tbody>
+<tr><td>ChaCha20-Poly1305</td><td><code>ChaCha20Poly1305Key</code></td><td>reads and writes</td><td>no</td></tr>
+<tr><td>AES-128-GCM, AES-256-GCM</td><td><code>AesGcmKey</code></td><td>reads and writes</td><td>reads and writes</td></tr>
+<tr><td>AES-256-GCM-SIV</td><td><code>AesGcmSivKey</code></td><td>reads and writes</td><td>reads and writes</td></tr>
+</tbody>
+</table>
+</div>
+<p>AES-256-GCM is the default of <code>KmsAeadEnvelope::new</code>, so every Tink implementation reads the
+values of an envelope that names no algorithm. The default of 0.29 and earlier was
+ChaCha20-Poly1305, see <a href="./migrating-from-0.29.html#default-algorithm">Migrating from 0.29</a>.</p>
+<p>Tink for Python reads a kms-aead value with the key URI of the provider’s key:</p>
+<pre><code class="language-python">from tink import aead
+from tink.integration import gcpkms
+
+aead.register()
+key_uri = 'gcp-kms://projects/p/locations/l/keyRings/r/cryptoKeys/k'
+remote = gcpkms.GcpKmsClient(key_uri).get_aead(key_uri)
+envelope = aead.KmsEnvelopeAead(aead.aead_key_templates.AES256_GCM, remote)
+plain_text = envelope.decrypt(value, aad)
+</code></pre>
+<p>Checked on a Cloud KMS key and an AWS KMS key, both ways: AES-128-GCM, AES-256-GCM and
+AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.24.0 for Java on
+the Cloud KMS key. <code>tests/tink_interop.py</code> and <code>examples/tink_interop.rs</code> repeat the Python check.</p>
+<h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
+<p><code>EncryptedDataEncryptionKey</code> is the bytes the provider returned from an encryption, which are also
+the bytes to store and the bytes it decrypts. Each provider’s bytes name the KMS key version that
+encrypted the DEK where the KMS needs one to decrypt:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Provider</th><th>Bytes</th><th>Key version</th></tr>
+</thead>
+<tbody>
+<tr><td>GCP</td><td>the Cloud KMS ciphertext, starting with <code>0x0a</code></td><td>inside the ciphertext</td></tr>
+<tr><td>AWS</td><td>the AWS KMS ciphertext blob, starting with <code>0x01</code></td><td>not exposed</td></tr>
+<tr><td>Azure</td><td><code>[0x01][k: u8][key version: k][Key Vault encrypted DEK]</code></td><td>in the layout</td></tr>
+<tr><td>Vault Transit</td><td>the Transit ciphertext, <code>vault:vN:…</code></td><td>the <code>N</code></td></tr>
+<tr><td>local</td><td><code>[0x01][i: u8][KEK id: i][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]</code></td><td>in the layout</td></tr>
+<tr><td>an application’s own</td><td>whatever it returns</td><td></td></tr>
+</tbody>
+</table>
+</div>
+<p>The Azure layout is the library’s own: Key Vault decrypts only with the key version that encrypted,
+and no Tink client exists for Azure. For the same reason, the Key Vault encrypted DEK is the KMS
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialised DEK: AES key
+wrap, <code>A128KW</code> to <code>A256KW</code>, takes only multiples of 8 bytes, which no serialised DEK is. The local
+KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to the version as the
+AAD, so neither the id nor the version can be changed without the decryption failing.</p>
+<p>Store <code>value()</code> or <code>to_hex_string()</code>, and read them back with <code>EncryptedDataEncryptionKey::from</code>
+or <code>try_from_hex_string</code>, see
+<a href="./envelope-encryption.html#storing-encrypted-deks">Storing encrypted DEKs</a>.</p>
+<h2 id="serialised-deks"><a class="header" href="#serialised-deks">Serialised DEKs</a></h2>
+<p>The plaintext a provider encrypts is the DEK serialised as Tink serialises a key, the message of its
+Tink key type with <code>version</code> 0, which protobuf leaves out. The Azure provider encrypts the raw DEK
+instead, see <a href="#encrypted-deks">Encrypted DEKs</a>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Message</th><th>Bytes</th></tr>
+</thead>
+<tbody>
+<tr><td>ChaCha20-Poly1305</td><td><code>ChaCha20Poly1305Key</code></td><td><code>[0x12][0x20][key: 32]</code></td></tr>
+<tr><td>AES-128-GCM</td><td><code>AesGcmKey</code></td><td><code>[0x1a][0x10][key: 16]</code></td></tr>
+<tr><td>AES-256-GCM</td><td><code>AesGcmKey</code></td><td><code>[0x1a][0x20][key: 32]</code></td></tr>
+<tr><td>AES-256-GCM-SIV</td><td><code>AesGcmSivKey</code></td><td><code>[0x1a][0x20][key: 32]</code></td></tr>
+<tr><td>AES-256-SIV, deterministic</td><td><code>AesSivKey</code></td><td><code>[0x12][0x40][key: 64]</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A beacon key of HMAC-SHA256 is serialised as <code>[0x1a][0x20][key: 32]</code>, its 32 bytes in
+<code>key_value</code>, field 3, as in Tink’s <code>HmacPrfKey</code> without its parameters: the bytes of a 32-byte
+<code>AesGcmKey</code>. It is encrypted as a DEK is, raw under an Azure key.</p>
+<p><code>KmsAeadEnvelope::generate_encrypted_dek</code>, <code>generate_encrypted_deterministic_dek</code> and the
+<code>generate_encrypted_dek</code> of both ciphers and of <code>BeaconMac</code> encrypt their keys the same way. The
+message does not name its type, and AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the
+algorithm of the reader decides how the key is used, as in Tink.</p>
+<p>A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
+<code>INVALID_KEY_FORMAT</code>. An encrypted Tink
+keyset decrypts under the same KEK too, and this is what keeps it out of the DEK cache.</p>
+<h2 id="tink-keysets-and-the-tink-prefix"><a class="header" href="#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a></h2>
+<p>Two items describe the TINK-prefixed values:</p>
+<ul>
+<li><code>kms_aead::KeyId</code>: the key id of Tink’s output prefix of type TINK, <code>[0x01][key id: u32 BE]</code>,
+the start of every <code>Randomized</code> and <code>Deterministic</code> value and of every beacon. It picks the key
+that opens the value, and Tink and BigQuery pick the key of a keyset by it. It is not
+authenticated;</li>
+<li><code>kms_aead::formats::TinkKeyset</code>: a serialised <code>google.crypto.tink.Keyset</code> of enabled, symmetric,
+TINK-prefixed keys, the bytes <code>tinkey</code> writes for the same keys. Encrypted by a Cloud KMS key, it
+is the keyset of BigQuery’s <code>KEYS.KEYSET_CHAIN</code>: an application writes it for its one key, see
+<a href="./envelope-encryption.html#one-fixed-key">One fixed key</a>, and a keyring exports it for its
+versions.</li>
+</ul>
+<p><code>TinkKeyset::into_encrypted_bytes</code> writes the keyset encrypted by a KMS key, as Tink writes an
+encrypted keyset: a <code>google.crypto.tink.EncryptedKeyset</code> whose <code>encrypted_keyset</code>, field 2, is the
+KMS ciphertext of the serialised keyset, encrypted with no associated data. Tink’s binary keyset
+writers leave out <code>keyset_info</code>, field 3, and so does the library. Tink’s <code>KeysetHandle.read</code>
+reads it with the KMS client of <code>KekRef::tink_key_uri</code>, which Tink has for GCP and AWS keys, and
+Tink for Go for Vault Transit keys too.</p>
+<h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
+<p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
+format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
+check stored bytes against it:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Format</th><th>Layout</th><th>Shortest value</th><th><code>key_id()</code></th><th>Written by</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Envelope</code></td><td><a href="#tinks-kms-envelope">Tink’s KMS envelope</a></td><td>an encrypted DEK of 1 to 4,096 bytes, then 28 bytes</td><td>none</td><td><code>KmsAeadEnvelope::encrypt</code>, <code>Encrypted::join</code></td></tr>
+<tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>28 bytes</td><td>none</td><td><code>AeadCipher::encrypt_bare</code>, <code>KmsAeadEnvelope::encrypt_with_dek</code> and <code>encrypt_with_encrypted_dek</code>, <code>Encrypted::separate</code></td></tr>
+<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td>33 bytes</td><td><code>KeyId</code></td><td><code>AeadCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td>21 bytes</td><td><code>KeyId</code></td><td><code>DeterministicCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>Bare</code> value is Tink’s AEAD output under a key with the output prefix RAW, and the part of every
+<code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
+that opens it.</p>
+<p>The check reads the framing only, and whether the bytes are authentic is known when they are
+decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the envelope layout v1 of 0.29 and
+the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
+same type until they are upgraded, see <a href="#upgrading-stored-values">Upgrading stored values</a>.
+Without the feature, <code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses
+them in every build. The layout of 32-bit targets before 0.24.0 has Tink’s framing, so it reads as
+an <code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decrypt</code> opens it with <code>legacy-formats</code>.</p>
+<p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
+bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
+the integers, and compact JSON for <code>Json&lt;T&gt;</code>. See
+<a href="./envelope-encryption.html#typed-fields">Typed fields</a>.</p>
+<h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
+<p>A <code>Beacon&lt;T&gt;</code> is a prefix and a truncated HMAC-SHA256:</p>
+<pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
+</code></pre>
+<ul>
+<li><code>0x01</code> is the version of the beacon layout. A later layout takes another first byte, so that
+beacons of both layouts can share a column during a re-index;</li>
+<li>the key id names the beacon key that calculated the beacon;</li>
+<li>the HMAC keeps its first <code>bits</code> bits, and the unused low bits of the last byte are zero. A
+beacon is 6 to 37 bytes.</li>
+</ul>
+<p>The HMAC covers the bits, the context and the plaintext, as the <code>Plaintext</code> type encodes it:</p>
+<pre><code class="language-text">HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
+</code></pre>
+<p>so that beacons of two fields, or of two bit counts, never match. <code>Beacon::try_from</code> checks the
+prefix and that 1 to 32 bytes of HMAC follow, and fails with <code>INVALID_BEACON_FORMAT</code> otherwise.</p>
+<h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
+<p>The first bytes of a stored value:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>First bytes</th><th>Layout</th></tr>
+</thead>
+<tbody>
+<tr><td><code>00 00 00 00</code></td><td>the length-prefixed envelope of 0.28.1 and earlier</td></tr>
+<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, or the 4-byte length prefix of 32-bit targets before 0.24.0</td></tr>
+<tr><td><code>01</code></td><td>envelope layout v1 of 0.29, or a TINK-prefixed value</td></tr>
+<tr><td><code>FF 01</code></td><td>encrypted DEK layout v1 of 0.29</td></tr>
+</tbody>
+</table>
+</div>
+<p>Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
+16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
+or the local KMS also starts with <code>0x01</code>, and Tink’s LEGACY and CRUNCHY output prefixes with <code>0x00</code>.</p>
+<p>A column that holds two layouts:</p>
+<ul>
+<li>Tink envelopes and TINK-prefixed values: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.29 envelopes: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.28.1 envelopes: the first four bytes;</li>
+<li>0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
+outside the value, such as in another column;</li>
+<li>bare values and any other layout: a bare value has no framing, and its random nonce can start
+with any byte, so a column of bare values holds no other layout;</li>
+<li>encrypted DEKs of 0.29 and of 0.30: <code>0xFF 0x01</code> starts no encrypted DEK of a built-in provider, so
+the library tells them apart for those. It never inspects the bytes of an application’s own
+provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its 0.29 keys before reading them.</li>
+</ul>
+<h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
+<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
+<ul>
+<li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
+holds with the feature;</li>
+<li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
+raw encrypted DEKs.</li>
+</ul>
+<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
+hold needs the provider to become its bytes.</p>
+<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
+<code>LEGACY_FORMAT</code>, and one of:</p>
+<ul>
+<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
+<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
+values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
+</ul>
+<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
+process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
+spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="./observability.html">Observability</a>.</p>
+<h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
+<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
+and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
+<ul>
+<li><code>upgrade_legacy_value</code>, for envelope values;</li>
+<li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
+<code>to_bytes</code>.</li>
+</ul>
+<p>Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
+serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
+one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
+The AEAD bytes stay as they are.</p>
+<p>The envelope’s algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
+0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
+encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the
+value’s AAD and opens the value before it writes anything. Under another algorithm or another AAD
+it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> has no value to open, so it records the
+envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
+another algorithm than its values were sealed with: use <code>upgrade_legacy_value</code> wherever the values
+are at hand.</p>
+<p>A sweep over stored rows:</p>
+<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult};
+use secret_vault_value::SecretValue;
+
+/// A stored envelope value and the AAD it was sealed under.
+struct Row {
+    aad: Vec&lt;u8&gt;,
+    value: Vec&lt;u8&gt;,
+}
+
+/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
+#[allow(deprecated)]
+async fn upgrade_values&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;mut [Row],
+) -&gt; KmsAeadResult&lt;usize&gt;
+where
+    P: KmsAeadEncryptionProvider + Send + Sync,
+    B: AeadBackend,
+{
+    let mut upgraded = 0;
+    for row in rows.iter_mut() {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.value.clone())?;
+        if let Some(value) = envelope.upgrade_legacy_value(&amp;row.aad, &amp;stored).await? {
+            row.value = value.into_value();
+            upgraded += 1;
+        }
+    }
+    Ok(upgraded)
+}
+<span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
+</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
+</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
+</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
+</span><span class="boring">legacy.extend_from_slice(bare.value());
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+</span><span class="boring">    provider,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+</span><span class="boring">)?;
+</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
+</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
+</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
+</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
+<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
+<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
+breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
+<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
+older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="deterministic.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="errors.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="deterministic.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="errors.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

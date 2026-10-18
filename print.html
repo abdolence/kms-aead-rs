@@ -1,0 +1,2610 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>KMS envelope encryption for Rust</title>
+        <meta name="robots" content="noindex">
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-0fe3c487.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-8f8bc823.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="kms-envelope-encryption-for-rust"><a class="header" href="#kms-envelope-encryption-for-rust">KMS envelope encryption for Rust</a></h1>
+<p>Library provides envelope encryption with a key encryption key held by a KMS, and AEAD
+encryption without a KMS:</p>
+<ul>
+<li>KMS providers for:
+<ul>
+<li>Google Cloud KMS;</li>
+<li>AWS KMS;</li>
+<li>Azure Key Vault and Managed HSM;</li>
+<li>HashiCorp Vault Transit;</li>
+<li>A local KMS with a key the application holds, for development, tests and single-host
+installs;</li>
+</ul>
+</li>
+<li>AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;</li>
+<li>Tink’s KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
+and the library reads Tink’s, see <a href="#formats">Formats</a>;</li>
+<li>Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
+crates. A value sealed by one backend opens with any other;</li>
+<li>Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
+keys;</li>
+<li>Deterministic encryption with AES-SIV, for values that are looked up by equality;</li>
+<li>Typed fields, <code>Encrypted&lt;T, F&gt;</code>, stored with serde, tokio-postgres or sqlx;</li>
+<li>Optional KMS-side random generators for GCP and AWS;</li>
+<li>Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
+in them;</li>
+<li>No unsafe code.</li>
+</ul>
+<p>To start using the library, see <a href="#getting-started">Getting started</a>.</p>
+<h2 id="envelope-encryption"><a class="header" href="#envelope-encryption">Envelope encryption</a></h2>
+<p>A value is sealed with an AEAD algorithm under a data encryption key (DEK). The DEK is then
+encrypted by a key encryption key (KEK) that never leaves the KMS, and the encrypted DEK is stored
+next to the cipher text. KMS documentation, and Azure Key Vault’s <code>wrapKey</code> and <code>unwrapKey</code>
+operations, call this wrapping the DEK. To read the value, the KMS decrypts the DEK, and the DEK
+opens the value locally.</p>
+<p>So the KMS sees only DEKs, never the data, and a KMS call is needed only to encrypt or decrypt a
+DEK. Access to the data is controlled by access to the KEK: revoke the KMS permission, or
+destroy the key, and the stored values cannot be opened.</p>
+<p>The additional authenticated data (AAD) is authenticated but not encrypted: a value opens only
+with the AAD it was sealed with. Use it to tie a value to where it is stored, such as a table
+and a row id, so that a value copied to another row fails to open.</p>
+<h2 id="choosing-a-mode"><a class="header" href="#choosing-a-mode">Choosing a mode</a></h2>
+<p>The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
+stored value holds:</p>
+<ul>
+<li><strong>Per-call envelope</strong>, the default of <code>KmsAeadEnvelope</code>: a new DEK for every value, encrypted
+with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
+more KMS call, unless the envelope has a DEK cache. Use it when values are written rarely,
+such as secrets and configuration, or when one DEK per value is a requirement. See
+<a href="#envelope-encryption-1">Envelope encryption</a>;</li>
+<li><strong>Store-less DEK reuse</strong>, a <code>KmsAeadEnvelope</code> with a <code>DekReusePolicy</code>: one DEK seals many
+values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
+still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
+the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
+<a href="#dek-caching-and-reuse">DEK caching and reuse</a>;</li>
+<li><strong>One fixed key</strong>, <code>encrypt</code> of <code>AeadCipher</code> or <code>DeterministicCipher</code> with one key that
+the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink’s wire
+format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
+it for a column that BigQuery reads, with no key rotation. See
+<a href="#one-fixed-key">One fixed key</a>;</li>
+<li><strong>Keyring</strong>, the <code>kms-aead-keyring</code> crate: a keyring record per scope holds the encrypted DEK
+versions, and values carry a 4-byte key id in Tink’s wire format instead of an encrypted DEK. The
+record is the place for central rotation and retirement of keys, and for values that BigQuery
+and Tink read across rotations. See <a href="https://crates.io/crates/kms-aead-keyring">kms-aead-keyring</a>.</li>
+</ul>
+<p>Both envelope modes seal a value of a Rust type, such as an application newtype, into an
+<code>Encrypted&lt;T, Envelope&gt;</code> that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
+it as bytes, so a column of secrets needs no store of its own. See
+<a href="#typed-fields">Typed fields</a>.</p>
+<p><code>AeadCipher</code> and <code>DeterministicCipher</code> work without a KMS at all, with keys the application
+holds.</p>
+<h2 id="licence"><a class="header" href="#licence">Licence</a></h2>
+<p>Apache Software License (ASL)</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h1>
+<p>Cargo.toml:</p>
+<pre><code class="language-toml">[dependencies]
+kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "aws-lc"] }
+</code></pre>
+<p>The crate has no default features. A build makes three choices, and they do not constrain each
+other:</p>
+<ol>
+<li>the KMS providers, any number of them, or none for AEAD without a KMS;</li>
+<li>the TLS root store and the TLS crypto provider of each provider that has a choice;</li>
+<li>the crypto backends that run the AEAD algorithms, one or more.</li>
+</ol>
+<h2 id="features"><a class="header" href="#features">Features</a></h2>
+<p>KMS providers:</p>
+<ul>
+<li><code>gcp-kms-encryption</code>: Google Cloud KMS, with the native TLS roots of the system. Be aware it
+also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls
+whatever its TLS feature;</li>
+<li><code>gcp-kms-encryption-webpki</code>: Google Cloud KMS with the bundled WebPKI roots;</li>
+<li><code>gcp-kms-encryption-base</code>: Google Cloud KMS without a TLS root store or crypto provider. The
+application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or
+<code>tls-webpki-roots</code>, and the crate does not build without one;</li>
+<li><code>aws-kms-encryption</code>: AWS KMS;</li>
+<li><code>azure-kms-encryption</code>: Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto
+provider. Other TLS variants, choose one:
+<ul>
+<li><code>azure-kms-encryption-tls-aws-lc-rs</code>, the same as <code>azure-kms-encryption</code>;</li>
+<li><code>azure-kms-encryption-tls-no-provider</code>, rustls with the crypto provider the application
+installs. The application must install a process-default rustls <code>CryptoProvider</code> before
+creating the provider, otherwise rustls panics;</li>
+<li><code>azure-kms-encryption-native-tls</code>, the platform TLS library;</li>
+</ul>
+</li>
+<li><code>hashicorp-vault-transit-kms-encryption</code>: HashiCorp Vault Transit, with the system root
+certificates and the aws-lc-rs crypto provider. To choose them, enable one root store and one
+crypto provider instead:
+<ul>
+<li><code>hashicorp-vault-transit-kms-encryption-tls-roots</code> or
+<code>hashicorp-vault-transit-kms-encryption-tls-webpki</code>;</li>
+<li><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code> or
+<code>hashicorp-vault-transit-kms-encryption-tls-ring</code>.</li>
+</ul>
+</li>
+</ul>
+<p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
+<p>Crypto backends, see <a href="#crypto-backends">Crypto backends</a>:</p>
+<ul>
+<li><code>ring</code>: the ring library;</li>
+<li><code>aws-lc</code>: the aws-lc-rs library;</li>
+<li><code>aws-lc-fips</code>: the aws-lc-rs library on the AWS-LC FIPS module. Needs CMake and Go to build;</li>
+<li><code>rustcrypto</code>: the pure Rust RustCrypto crates, no C compiler needed.</li>
+</ul>
+<p>Other features:</p>
+<ul>
+<li><code>deterministic</code>: deterministic encryption with AES-SIV, see
+<a href="#deterministic-encryption">Deterministic encryption</a>;</li>
+<li><code>legacy-formats</code>: reads the layouts written by 0.29 and earlier. Deprecated, see
+<a href="#formats">Formats</a>;</li>
+<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for
+<code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>;</li>
+<li><code>serde-json</code>: <code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON;</li>
+<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for
+tokio-postgres;</li>
+<li><code>sqlx</code>: sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS
+stack.</li>
+</ul>
+<p>See <a href="#typed-fields">Typed fields</a>.</p>
+<h2 id="choosing-a-backend"><a class="header" href="#choosing-a-backend">Choosing a backend</a></h2>
+<p>The default features of the four cloud providers already build aws-lc-rs for TLS, so <code>aws-lc</code> is
+the backend that adds no second crypto library to a provider build. <code>ring</code> and <code>rustcrypto</code> work
+with every provider too, and a build may enable several backends at once. Each feature adds a type
+to <code>kms_aead::backends</code>, <code>Ring</code>, <code>AwsLc</code> or <code>RustCrypto</code>, and every type that seals or encrypts
+takes one as its backend type parameter:</p>
+<pre><code class="language-rust"><span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>use kms_aead::backends::AwsLc;
+use kms_aead::{AeadAlgorithm, AeadCipher};
+
+let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+<span class="boring">let _ = cipher;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
+nothing else, see <a href="#code-generic-over-the-backend">Crypto backends</a>.</p>
+<h2 id="feature-rules"><a class="header" href="#feature-rules">Feature rules</a></h2>
+<p>The crate refuses some feature combinations at compile time with <code>compile_error!</code>:</p>
+<ul>
+<li>a provider feature without a backend feature fails with “kms-aead needs a crypto backend for
+its KMS providers: enable “ring”, “aws-lc”, “aws-lc-fips” or “rustcrypto”“;</li>
+<li>HashiCorp Vault Transit needs exactly one of <code>-tls-roots</code> and <code>-tls-webpki</code>, and exactly one
+of <code>-tls-aws-lc-rs</code> and <code>-tls-ring</code>. <code>hashicorp-vault-transit-kms-encryption</code> already enables
+<code>-tls-roots</code> and <code>-tls-aws-lc-rs</code>, so combine the other variants with
+<code>hashicorp-vault-transit-kms-encryption-base</code> instead;</li>
+<li>Azure needs exactly one of <code>azure-kms-encryption-tls-aws-lc-rs</code> (or <code>azure-kms-encryption</code>),
+<code>azure-kms-encryption-tls-no-provider</code> and <code>azure-kms-encryption-native-tls</code>.</li>
+</ul>
+<p>The <code>aws-lc-rs</code> feature that <code>aws-lc</code> and <code>aws-lc-fips</code> enable is not a backend choice: enabled
+alone, the aws-lc-rs build fails. Use <code>aws-lc</code> or <code>aws-lc-fips</code>.</p>
+<p>A build without any backend feature compiles, and <code>LocalKmsProvider</code> is in it, but nothing that
+seals or encrypts can be constructed, since no type implements <code>AeadBackend</code>.</p>
+<h2 id="first-example"><a class="header" href="#first-example">First example</a></h2>
+<p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
+ephemeral KEK lives as long as the process:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let aad = b"orders/1042";
+let secret = SecretValue::from("4111 1111 1111 1111");
+
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; = envelope.encrypt(aad, &amp;secret).await?;
+let decrypted: SecretValue = envelope.decrypt(aad, &amp;encrypted).await?;
+
+assert_eq!(decrypted, secret);
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>To move to a cloud KMS, replace the provider, see <a href="#kms-providers">KMS providers</a>. The rest of
+the code stays the same.</p>
+<h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
+<p>The minimum supported Rust version is 1.99, for every feature.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="kms-providers"><a class="header" href="#kms-providers">KMS providers</a></h1>
+<p>A provider encrypts and decrypts data encryption keys with one key encryption key (KEK). Each one is
+a type in <code>kms_aead::providers</code>, enabled by its feature:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KMS</th><th>Type</th><th>Feature</th></tr>
+</thead>
+<tbody>
+<tr><td>Google Cloud KMS</td><td><code>GcpKmsProvider</code></td><td><code>gcp-kms-encryption</code></td></tr>
+<tr><td>AWS KMS</td><td><code>AwsKmsProvider</code></td><td><code>aws-kms-encryption</code></td></tr>
+<tr><td>Azure Key Vault and Managed HSM</td><td><code>AzureKmsProvider</code></td><td><code>azure-kms-encryption</code></td></tr>
+<tr><td>HashiCorp Vault Transit</td><td><code>HcVaultTransitProvider</code></td><td><code>hashicorp-vault-transit-kms-encryption</code></td></tr>
+<tr><td>A KEK the process holds</td><td><code>LocalKmsProvider</code></td><td>none, in every build</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every provider implements <code>KmsAeadEncryptionProvider</code>, and <code>KmsAeadEnvelope</code> takes any of them:</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::KmsAeadEnvelope;
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let kms_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let provider = GcpKmsProvider::new(&amp;kms_ref).await?;
+let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, AwsLc&gt;::new(provider)?;
+<span class="boring">let _ = envelope;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
+fails at the KMS and never opens a value. <code>provider.kek()</code> returns that KEK as a <code>KekRef</code>: the KMS
+and the key name. It is also the <code>provider</code> and <code>key</code> field of the <a href="#observability">KMS spans</a>
+and the key of the <a href="#dek-caching-and-reuse">DEK cache</a>. Nothing else is checked: an encrypted DEK carries
+no context that the KMS authenticates, see <a href="#threat-model">Security considerations</a>.</p>
+<h2 id="kms-random-generators"><a class="header" href="#kms-random-generators">KMS random generators</a></h2>
+<p>By default a DEK comes from the CSPRNG of the crypto backend. The GCP and AWS providers can take
+it from the KMS instead, at the cost of one more KMS request per new DEK:</p>
+<ul>
+<li>GCP: <code>GcpKmsProviderOptions::new().with_use_kms_random_gen(true)</code>, Cloud KMS
+<code>GenerateRandomBytes</code> at the HSM protection level;</li>
+<li>AWS: <code>AwsKmsProviderOptions::new().with_use_kms_random_gen(true)</code>, AWS KMS <code>GenerateRandom</code>.</li>
+</ul>
+<p>Azure, Vault Transit and the local KMS always use the backend’s CSPRNG. Nonces always come from
+the backend’s CSPRNG.</p>
+<h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
+<p>An application can implement <code>KmsAeadEncryptionProvider</code> for a KMS of its own, or as a wrapper
+around another provider. The implementation:</p>
+<ul>
+<li>returns from <code>kek()</code> a <code>KekRef</code> with <code>KekProvider::Other</code> and a key name that identifies the
+key across every KMS instance it may address. A wrapper returns the inner provider’s <code>kek()</code>;</li>
+<li>names that KEK to the KMS on every decryption;</li>
+<li>keeps key material, plaintext or encrypted, out of its errors’ <code>Display</code> and <code>Debug</code>.</li>
+</ul>
+<p><code>generate_key_material</code> has a default implementation that returns <code>Ok(None)</code>, so the backend
+generates the key.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="google-cloud-kms"><a class="header" href="#google-cloud-kms">Google Cloud KMS</a></h1>
+<p>Feature <code>gcp-kms-encryption</code>, or <code>gcp-kms-encryption-webpki</code> for the bundled WebPKI roots.</p>
+<p><code>GcpKmsKeyRef</code> names a CryptoKey by its project, location, key ring and key. The provider encrypts
+under the primary version of the key, and each encrypted DEK records the version that encrypted it,
+so DEKs encrypted before a rotation still decrypt afterwards.</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};
+use kms_aead::KmsAeadEnvelope;
+use secret_vault_value::SecretValue;
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let kms_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+
+let provider = GcpKmsProvider::new(&amp;kms_ref).await?;
+let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, AwsLc&gt;::new(provider)?;
+
+// Or with DEKs from the Cloud KMS generator at the HSM protection level
+let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, AwsLc&gt;::new(
+    GcpKmsProvider::with_options(
+        &amp;kms_ref,
+        GcpKmsProviderOptions::new().with_use_kms_random_gen(true),
+    )
+    .await?,
+)?;
+
+let cipher_text = envelope
+    .encrypt(b"orders/1042", &amp;SecretValue::from("secret"))
+    .await?;
+<span class="boring">let _ = cipher_text;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/gcp_kms.rs">here</a>.</p>
+<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<p><code>GcpKmsProvider::new</code> and <code>with_options</code> build a Cloud KMS client with the application default
+credentials. They look for credentials in the following places, preferring the first location
+found:</p>
+<ul>
+<li>A JSON file whose path is specified by the <code>GOOGLE_APPLICATION_CREDENTIALS</code> environment variable;</li>
+<li>A JSON file in a location known to the gcloud command-line tool using
+<code>gcloud auth application-default login</code>;</li>
+<li>On Google Compute Engine, Cloud Run, GKE, etc., the metadata server.</li>
+</ul>
+<p>For local development don’t confuse <code>gcloud auth login</code> with <code>gcloud auth application-default login</code>,
+since the first one authorises only the <code>gcloud</code> tool to access the Cloud Platform.</p>
+<p><code>GcpKmsProvider::with_client</code> takes a client the application built itself, for other
+credentials.</p>
+<p>The principal needs <code>cloudkms.cryptoKeyVersions.useToEncrypt</code> and <code>useToDecrypt</code> on the key, as
+in the <code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code> role, and <code>cloudkms.locations.generateRandomBytes</code>
+on the location when the KMS generator is on.</p>
+<h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
+<p>A failed KMS call is a <code>NetworkError</code> whose code is the gRPC status code, such as
+<code>PermissionDenied</code> or <code>NotFound</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="aws-kms"><a class="header" href="#aws-kms">AWS KMS</a></h1>
+<p>Feature <code>aws-kms-encryption</code>.</p>
+<p><code>AwsKmsKeyRef</code> names the key by the AWS account and the key id, which is anything AWS KMS
+accepts: a key id, a key ARN, an alias name such as <code>alias/orders</code>, or an alias ARN.</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, AwsKmsProviderOptions};
+use kms_aead::KmsAeadEnvelope;
+use secret_vault_value::SecretValue;
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let kms_ref = AwsKmsKeyRef::new(
+    "123456789012".to_string(),
+    "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".to_string(),
+);
+
+let provider = AwsKmsProvider::new(&amp;kms_ref).await?;
+let envelope = KmsAeadEnvelope::&lt;AwsKmsProvider, AwsLc&gt;::new(provider)?;
+
+// Or with DEKs from AWS KMS GenerateRandom
+let envelope = KmsAeadEnvelope::&lt;AwsKmsProvider, AwsLc&gt;::new(
+    AwsKmsProvider::with_options(
+        &amp;kms_ref,
+        AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
+    )
+    .await?,
+)?;
+
+let cipher_text = envelope
+    .encrypt(b"orders/1042", &amp;SecretValue::from("secret"))
+    .await?;
+<span class="boring">let _ = cipher_text;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/aws_kms.rs">here</a>.</p>
+<h2 id="authentication-and-region"><a class="header" href="#authentication-and-region">Authentication and region</a></h2>
+<p><code>AwsKmsProvider::new</code> loads the AWS configuration from the environment, as the AWS SDK does:
+environment variables, the shared config and credentials files, the instance or container
+role, etc. It sends no request, so missing credentials or an unreachable endpoint fail the first
+encryption or decryption.</p>
+<p>Without <code>aws_region</code> in the key reference, the provider takes the region of the AWS
+configuration it loads. Set one with <code>AwsKmsKeyRef::new(..).with_aws_region(region)</code>.</p>
+<p>The principal needs <code>kms:Encrypt</code> and <code>kms:Decrypt</code> on the key, and <code>kms:GenerateRandom</code> when
+the KMS generator is on.</p>
+<h2 id="key-arn-and-aliases"><a class="header" href="#key-arn-and-aliases">Key ARN and aliases</a></h2>
+<p>A decryption names the configured key to AWS KMS, so a DEK encrypted under another key fails with
+<code>IncorrectKeyException</code>, even when the principal may decrypt with that key.</p>
+<p>Configure the key ARN rather than an alias: a DEK encrypted under an alias that later moves to
+another key fails to decrypt with <code>IncorrectKeyException</code>.</p>
+<p>The provider turns the key id into an ARN with the region and the account: an alias name into
+an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN always starts with
+<code>arn:aws:</code>, so outside the <code>aws</code> partition, such as in GovCloud or China, give the full ARN.</p>
+<h2 id="errors-1"><a class="header" href="#errors-1">Errors</a></h2>
+<p>Every error is an <code>EncryptionError</code> whose code is the AWS error code, such as
+<code>IncorrectKeyException</code> or <code>NotFoundException</code>, and whose message is the one AWS KMS returned.
+Its root cause is the SDK error.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="azure-key-vault"><a class="header" href="#azure-key-vault">Azure Key Vault</a></h1>
+<p>Feature <code>azure-kms-encryption</code>, or one of the TLS variants in
+<a href="#features">Getting started</a>.</p>
+<p><code>AzureKmsKeyRef</code> names the key by the vault URL and the key name. Without a key version, the
+latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the
+decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards.</p>
+<p>The provider takes any Azure credential, for example one from <code>azure_identity</code>:</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider};
+use kms_aead::KmsAeadEnvelope;
+use secret_vault_value::SecretValue;
+
+<span class="boring">async fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let kms_ref = AzureKmsKeyRef::new(
+    "https://my-vault.vault.azure.net".to_string(),
+    "my-key".to_string(),
+);
+
+// Azure CLI or Azure Developer CLI credentials for local runs;
+// use `azure_identity::ManagedIdentityCredential` in Azure deployments
+let credential = azure_identity::DeveloperToolsCredential::new(None)?;
+
+let provider = AzureKmsProvider::new(&amp;kms_ref, credential)?;
+let envelope = KmsAeadEnvelope::&lt;AzureKmsProvider, AwsLc&gt;::new(provider)?;
+
+let cipher_text = envelope
+    .encrypt(b"orders/1042", &amp;SecretValue::from("secret"))
+    .await?;
+<span class="boring">let _ = cipher_text;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs">here</a>.</p>
+<p>The provider sends no request until the first encryption or decryption. The principal needs the
+wrapKey and unwrapKey key operations, as in the “Key Vault Crypto User” role.</p>
+<h2 id="options"><a class="header" href="#options">Options</a></h2>
+<p><code>AzureKmsProviderOptions</code> has:</p>
+<ul>
+<li><code>algorithm</code>: the wrap algorithm, <code>RsaOaep256</code> by default for RSA keys, <code>A256Kw</code> for Managed
+HSM AES keys. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code> and unknown
+algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
+life of the key;</li>
+<li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
+policy.</li>
+</ul>
+<h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
+<p>Key Vault decrypts only with the key version that encrypted, so the provider’s encrypted DEK carries
+it before Key Vault’s encrypted DEK, in the library’s own layout, see
+<a href="#encrypted-deks-1">Formats</a>. No Tink client exists for Azure, so Tink does not read the
+values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
+as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, <code>A256Kw</code> too,
+which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+<a href="#storing-encrypted-deks">Envelope encryption</a>.</p>
+<h2 id="errors-2"><a class="header" href="#errors-2">Errors</a></h2>
+<p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
+<code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. A server error or a rate limit is a
+<code>NetworkError</code>, any other status an <code>EncryptionError</code>. A decryption of an encrypted DEK in another
+layout fails with <code>AZURE_ENCRYPTED_DEK_FORMAT</code>, before any request.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="hashicorp-vault-transit"><a class="header" href="#hashicorp-vault-transit">HashiCorp Vault Transit</a></h1>
+<p>Feature <code>hashicorp-vault-transit-kms-encryption</code>, or one root store and one crypto provider
+variant, see <a href="#features">Getting started</a>.</p>
+<p>The provider encrypts DEKs with a key of the Vault Transit secrets engine. <code>HcVaultTransitKeyRef</code>
+names the key, and the mount is <code>transit</code> unless set with <code>with_mount</code>.</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
+use kms_aead::KmsAeadEnvelope;
+use secret_vault_value::SecretValue;
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>// VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE, VAULT_CACERT and VAULT_CLIENT_TIMEOUT are read by
+// the provider
+let key_ref = HcVaultTransitKeyRef::new("orders".to_string());
+
+let provider = HcVaultTransitProvider::new(&amp;key_ref)?;
+let envelope = KmsAeadEnvelope::&lt;HcVaultTransitProvider, AwsLc&gt;::new(provider)?;
+
+let cipher_text = envelope
+    .encrypt(b"orders/1042", &amp;SecretValue::from("secret"))
+    .await?;
+<span class="boring">let _ = cipher_text;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/hc_vault_transit_kms.rs">here</a>.</p>
+<h2 id="options-1"><a class="header" href="#options-1">Options</a></h2>
+<p><code>HcVaultTransitProvider::new</code> reads its options from the variables the Vault CLI reads, with
+<code>HcVaultTransitProviderOptions::from_env</code>: <code>VAULT_ADDR</code> (required), <code>VAULT_TOKEN</code>,
+<code>VAULT_NAMESPACE</code>, <code>VAULT_CACERT</code> and <code>VAULT_CLIENT_TIMEOUT</code>. An empty variable counts as unset.
+<code>VAULT_CLIENT_TIMEOUT</code> takes the formats the Vault CLI takes: whole seconds (<code>30</code>), whole days
+(<code>2d</code>) or a Go duration (<code>30s</code>, <code>1h30m</code>). Zero, which the Vault CLI reads as no time limit, is
+refused, as is a value in any other format.
+<code>HcVaultTransitProvider::with_options</code> takes them from the application:</p>
+<pre><code class="language-rust no_run">use kms_aead::providers::{
+    HcVaultTransitKeyRef, HcVaultTransitProvider, HcVaultTransitProviderOptions,
+    HcVaultTransitToken,
+};
+use secret_vault_value::SecretValue;
+use std::time::Duration;
+
+<span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let options = HcVaultTransitProviderOptions::new("https://vault.example.com:8200".to_string())
+    .with_token(HcVaultTransitToken::try_from(SecretValue::from("hvs.example"))?)
+    .with_namespace("team-a".to_string())
+    .with_timeout(Duration::from_secs(10));
+
+let provider = HcVaultTransitProvider::with_options(
+    &amp;HcVaultTransitKeyRef::new("orders".to_string()).with_mount("transit-eu".to_string()),
+    options,
+)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The options are:</p>
+<ul>
+<li><code>address</code>: the Vault server, such as <code>https://vault.example.com:8200</code>;</li>
+<li><code>token</code>: sent with every request. Without one the requests carry no token, which is what a
+Vault Agent or Vault Proxy with <code>use_auto_auth_token</code> expects;</li>
+<li><code>namespace</code>: the Vault Enterprise namespace of the mount;</li>
+<li><code>ca_certificate</code>: a PEM file with CA certificates for a server whose certificate comes from a
+private CA. The file adds to the root store and does not replace it, unlike <code>VAULT_CACERT</code> in
+the Vault CLI, so a server with a certificate from any public CA in the root store is trusted
+as well;</li>
+<li><code>timeout</code>: the time limit for one request, from opening the connection to the last byte of the
+response, 60 seconds by default.</li>
+</ul>
+<p>The provider sends no request when it is created, so a wrong token or an unreachable server
+fail the first encryption or decryption. An <code>http</code> address to a host other than <code>localhost</code> or a
+loopback address logs a <code>WARN</code> event at creation, since the token and the DEKs then cross the
+network unencrypted.</p>
+<p>The token needs <code>update</code> on <code>&lt;mount&gt;/encrypt/&lt;key&gt;</code> and <code>&lt;mount&gt;/decrypt/&lt;key&gt;</code>.</p>
+<h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
+<p>The encrypted DEK is the Transit ciphertext, such as <code>vault:v1:...</code>. It names the key version, so
+it still decrypts after the key is rotated. The KMS spans record that version as <code>key_version</code>.</p>
+<p>The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.</p>
+<h2 id="errors-3"><a class="header" href="#errors-3">Errors</a></h2>
+<p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>: a <code>NetworkError</code> for a server error
+or a rate limit, an <code>EncryptionError</code> otherwise. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are network
+errors for a request that got no complete response, and <code>VAULT_RESPONSE</code>,
+<code>VAULT_RESPONSE_TOO_LARGE</code> and <code>VAULT_CIPHERTEXT</code> are encryption errors for a response or a
+encrypted DEK that cannot be read. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
+or <code>VAULT_TLS</code> when the TLS configuration cannot be built.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="local-kms"><a class="header" href="#local-kms">Local KMS</a></h1>
+<p><code>LocalKmsProvider</code> encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
+the backend it is built with. It is in every build, with no feature, for:</p>
+<ul>
+<li>development and tests without a cloud KMS;</li>
+<li>single-host installs where the operator protects the KEK.</li>
+</ul>
+<p>kms-aead builds one only when the application calls one of its constructors; no provider falls
+back to it. Each constructor logs one <code>INFO</code> event naming the KEK id, its versions and where
+each version came from (<code>ephemeral</code>, <code>file</code>, <code>env</code> or <code>secret</code>), never the key.</p>
+<h2 id="kek-ids-and-versions"><a class="header" href="#kek-ids-and-versions">KEK ids and versions</a></h2>
+<p>A <code>LocalKekId</code> names the KEK: 1 to 255 bytes of ASCII alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>. Every
+encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
+the key of the <a href="#dek-caching-and-reuse">DEK cache</a>, so one id must name one set of KEK material: two
+providers with the same id and different keys share cache entries.</p>
+<p>A provider holds one or more <code>LocalKek</code> versions of 32 bytes each. The highest version encrypts new
+DEKs, and every version it holds decrypts. Each encrypted DEK records its version, so adding a new
+version keeps the DEKs encrypted under older ones readable.</p>
+<p>A KEK comes from one of:</p>
+<ul>
+<li><code>LocalKek::from_secret</code>: bytes the application already holds, such as a key an operator
+unseals with their own tool (systemd-creds, a TPM, sops, age);</li>
+<li><code>LocalKek::from_file</code>: the standard base64 of the 32 bytes in a file, trailing whitespace
+allowed. The file must be a regular file of at most 256 bytes. No permission or ownership
+check runs: restricting who can read or replace the file is the operator’s job;</li>
+<li><code>LocalKek::from_env</code>: the standard base64 of the 32 bytes in an environment variable. Be aware
+the variable stays in the process environment for the life of the process: the same user can
+read it through <code>/proc/&lt;pid&gt;/environ</code>, and every child process inherits it.</li>
+</ul>
+<p>Errors name the file or the variable, never its content.</p>
+<h2 id="tests-and-development"><a class="header" href="#tests-and-development">Tests and development</a></h2>
+<p>An ephemeral provider has one random version-1 KEK that lives as long as the provider, so the
+DEKs it encrypts cannot be decrypted once the process exits. It suits tests:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::KmsAeadEnvelope;
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tests".to_string())?)?;
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let encrypted = envelope
+    .encrypt(b"orders/1042", &amp;SecretValue::from("secret"))
+    .await?;
+let decrypted: SecretValue = envelope.decrypt(b"orders/1042", &amp;encrypted).await?;
+assert_eq!(decrypted, SecretValue::from("secret"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>For a development environment whose data outlives a run, keep a KEK in a variable or a file.
+Generate one with:</p>
+<pre><code class="language-bash">openssl rand -base64 32
+</code></pre>
+<pre><code class="language-rust no_run">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use kms_aead::backends::Ring;
+use std::num::NonZeroU32;
+
+<span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let version = LocalKekVersion::from(NonZeroU32::MIN);
+let provider = LocalKmsProvider::&lt;Ring&gt;::new(
+    LocalKekId::try_from("dev".to_string())?,
+    vec![LocalKek::from_env(version, "APP_DEV_KEK")?],
+)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<h2 id="a-vm-or-a-single-host"><a class="header" href="#a-vm-or-a-single-host">A VM or a single host</a></h2>
+<p>On a host, keep the KEK out of the environment. With systemd, encrypt it with <code>systemd-creds</code>,
+bound to the host’s TPM where it has one, and let systemd pass it to the service as a credential:</p>
+<pre><code class="language-bash">openssl rand -base64 32 | systemd-creds encrypt --name=kek-v1 - /etc/credstore.encrypted/kek-v1
+</code></pre>
+<pre><code class="language-ini">[Service]
+LoadCredentialEncrypted=kek-v1:/etc/credstore.encrypted/kek-v1
+</code></pre>
+<p>systemd decrypts it into <code>$CREDENTIALS_DIRECTORY</code>, readable only by the service:</p>
+<pre><code class="language-rust no_run">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use kms_aead::backends::AwsLc;
+use std::num::NonZeroU32;
+use std::path::PathBuf;
+
+<span class="boring">fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let credentials = PathBuf::from(std::env::var("CREDENTIALS_DIRECTORY")?);
+let version = LocalKekVersion::from(NonZeroU32::MIN);
+
+let provider = LocalKmsProvider::&lt;AwsLc&gt;::new(
+    LocalKekId::try_from("orders-host-1".to_string())?,
+    vec![LocalKek::from_file(version, &amp;credentials.join("kek-v1"))?],
+)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>To rotate, add <code>kek-v2</code> the same way and list both versions. Version 2 encrypts new DEKs, and the
+DEKs encrypted under version 1 still decrypt. Version 1 can be dropped once nothing encrypted under
+it is left.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
+operator’s job;</li>
+<li>Every DEK encryption is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is
+safe for about 2^32 encryptions. With the per-call envelope every value costs one encryption: a
+host sealing 1,000 values per second spends 2^32 encryptions in 50 days. Use <a href="#dek-caching-and-reuse">DEK
+reuse</a> so that one encryption serves many values, and add a new KEK version
+before the budget is spent;</li>
+<li>Crypto-shredding means destroying every copy of the KEK, backups included;</li>
+<li>DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS.</li>
+</ul>
+<h2 id="errors-4"><a class="header" href="#errors-4">Errors</a></h2>
+<p>An encryption fails with <code>RANDOM_GENERATOR</code> when the backend’s CSPRNG fails. A decryption fails with
+<code>LOCAL_ENCRYPTED_DEK_FORMAT</code> when the encrypted DEK is not in the local layout,
+<code>LOCAL_KEK_ID_MISMATCH</code> when it was encrypted under another KEK id, <code>LOCAL_KEK_UNKNOWN_VERSION</code>
+when the provider does not hold its version, and <code>DECRYPT</code> when it is not authentic under that
+version.</p>
+<p>Creating a provider fails with <code>INVALID_LOCAL_KEK_ID</code> for an invalid id, <code>LOCAL_KEK_VERSIONS</code>
+when the versions are empty or list one version twice, and <code>LOCAL_KEK_SOURCE</code> or
+<code>LOCAL_KEK_LENGTH</code> when a KEK cannot be read or is not 32 bytes.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="envelope-encryption-1"><a class="header" href="#envelope-encryption-1">Envelope encryption</a></h1>
+<p><code>KmsAeadEnvelope</code> seals values under data encryption keys (DEKs) on the crypto backend it is built
+with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
+<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="#observability">Observability</a>.</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>// AES-256-GCM by default
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+// Or another algorithm
+<span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+    provider,
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+)?;
+<span class="boring">let _ = envelope;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The value does not record the algorithm, so the writer and the reader of a value must be
+configured with the same one. The backend can differ, see
+<a href="#crypto-backends">Crypto backends</a>. The default, AES-256-GCM, is read by every Tink
+implementation too, see <a href="#tinks-kms-envelope">Formats</a>. Values that 0.29 and earlier
+sealed under their default open only with ChaCha20-Poly1305 configured, see
+<a href="#default-algorithm">Migrating from 0.29</a>.</p>
+<h2 id="encrypting-values"><a class="header" href="#encrypting-values">Encrypting values</a></h2>
+<p><code>encrypt</code> seals a value under a new DEK, encrypts the DEK with one KMS call, and returns both in
+one <code>Encrypted&lt;T, Envelope&gt;</code>, where <code>T</code> is the type of the value. <code>decrypt</code> decrypts the DEK with
+one KMS call, opens the value and returns a <code>T</code>. A value with no type of its own is a
+<code>SecretValue</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let aad = b"orders/1042";
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; = envelope
+    .encrypt(aad, &amp;SecretValue::from("4111 1111 1111 1111"))
+    .await?;
+
+// The bytes to store, and the value read back from them
+let stored: Vec&lt;u8&gt; = encrypted.into_value();
+let read_back = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(stored)?;
+
+let decrypted: SecretValue = envelope.decrypt(aad, &amp;read_back).await?;
+assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
+lowercase hex. Stored bytes become an <code>Encrypted</code> again only through <code>Encrypted::try_from</code>, and
+stored hex through <code>Encrypted::try_from_hex_string</code>, which check them against the layout of the
+format.</p>
+<p>The value is in Tink’s KMS envelope format for every provider, so Tink’s <code>KmsEnvelopeAead</code> reads
+it with the same KMS key and algorithm, see <a href="#tinks-kms-envelope">Formats</a>.</p>
+<p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
+configured to use one, see <a href="#kms-random-generators">KMS random generators</a>.</p>
+<h2 id="typed-fields"><a class="header" href="#typed-fields">Typed fields</a></h2>
+<p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, so a field can have
+a type of its own. The value is encoded by its <code>Plaintext</code> implementation, and the result is an
+<code>Encrypted&lt;T, Envelope&gt;</code> that names the type:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+// Sealed as the same UTF-8 bytes as a String
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let aad = b"users/1042/email";
+let email = Email("alice@example.com".to_string());
+let encrypted: Encrypted&lt;Email, Envelope&gt; = envelope.encrypt(aad, &amp;email).await?;
+
+// The bytes to store, and the field read back from them
+let stored: Vec&lt;u8&gt; = encrypted.into_value();
+let read_back = Encrypted::&lt;Email, Envelope&gt;::try_from(stored)?;
+
+let decrypted: Email = envelope.decrypt(aad, &amp;read_back).await?;
+assert_eq!(decrypted, email);
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<ul>
+<li><code>Plaintext</code> is implemented for <code>String</code>, <code>Vec&lt;u8&gt;</code>, <code>SecretValue</code>, <code>bool</code>, <code>i32</code>, <code>i64</code>, <code>u32</code>
+and <code>u64</code>, and with the <code>serde-json</code> feature for <code>Json&lt;T&gt;</code>, any serde type stored as its compact
+JSON. An application type maps to one of them, as <code>Email</code> does;</li>
+<li>the calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt
+through the envelope’s DEK cache, whatever the type;</li>
+<li><code>Encrypted::try_from</code> checks the stored bytes against Tink’s KMS envelope layout, so a
+truncated or foreign value fails when it is read, before any KMS call, with
+<code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_CIPHER_TEXT_FORMAT</code> or, without <code>legacy-formats</code>,
+<code>LEGACY_FORMAT</code>. It checks the framing only: a changed value fails to decrypt with <code>DECRYPT</code>;</li>
+<li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>.</li>
+</ul>
+<p><code>Encrypted&lt;T, Envelope&gt;</code> has no <code>==</code>: two values of the same plaintext differ, so compare
+<code>value()</code> to tell whether two values are the same stored bytes. <code>Debug</code> shows the length only. See
+<a href="#formats-of-encrypted">Formats</a> for its layout.</p>
+<h3 id="storing-typed-fields"><a class="header" href="#storing-typed-fields">Storing typed fields</a></h3>
+<p>Three features store <code>Encrypted</code> as bytes, and each one reads it back through <code>TryFrom</code>, so a
+malformed stored value fails in the decode:</p>
+<ul>
+<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code>, a <code>bytes</code> value in Firestore and an array of numbers in
+serde_json;</li>
+<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types, for tokio-postgres, as <code>BYTEA</code>, and a
+slice as <code>BYTEA[]</code> for <code>= ANY($1)</code>;</li>
+<li><code>sqlx</code>: sqlx’s <code>Type</code>, <code>Encode</code>, <code>Decode</code> and <code>PgHasArrayType</code> for PostgreSQL, as <code>BYTEA</code>. It
+depends on <code>sqlx-core</code> and <code>sqlx-postgres</code> only, so the application chooses sqlx’s runtime and
+TLS stack.</li>
+</ul>
+<p>With sqlx:</p>
+<pre><code class="language-rust no_run">use kms_aead::formats::Envelope;
+use kms_aead::Encrypted;
+use sqlx::PgPool;
+
+<span class="boring">#[derive(Clone)]
+</span><span class="boring">struct Email(String);
+</span>async fn store(pool: &amp;PgPool, id: i64, email: &amp;Encrypted&lt;Email, Envelope&gt;) -&gt; sqlx::Result&lt;()&gt; {
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+        .bind(id)
+        .bind(email)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn load(pool: &amp;PgPool, id: i64) -&gt; sqlx::Result&lt;Encrypted&lt;Email, Envelope&gt;&gt; {
+    sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+}</code></pre>
+<h3 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h3>
+<p><code>AeadCipher::encrypt</code> seals a field under a key the application holds, in Tink’s layout of a key
+whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
+<code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
+<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant, and Tink
+and BigQuery read the values with a keyset of the one key under that id:</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::Ring;
+use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+// The id of the one key, in every value and in the keyset
+const EMAIL_KEY: KeyId = KeyId::new(1);
+
+<span class="boring">async fn example() -&gt; KmsAeadResult&lt;()&gt; {
+</span>let key_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let provider = GcpKmsProvider::new(&amp;key_ref).await?;
+let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+let cache = DekCache::new(DekCacheOptions::new())?;
+
+// Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
+let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+    cipher.generate_encrypted_dek(&amp;provider).await?;
+
+// On every write and read: the key decrypted through the cache, no KMS call while it is cached
+let email = Email("alice@example.com".to_string());
+let (encrypted, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        cipher.encrypt(EMAIL_KEY, b"users/1042/email", &amp;email, dek)
+    })
+    .await?;
+let encrypted: Encrypted&lt;Email, Randomized&gt; = encrypted?;
+
+let (decrypted, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        cipher.decrypt(b"users/1042/email", &amp;encrypted, dek)
+    })
+    .await?;
+let decrypted: Email = decrypted?;
+assert_eq!(decrypted, email);
+
+// Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
+let mut keyset = TinkKeyset::new(EMAIL_KEY);
+let (added, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), dek)
+    })
+    .await?;
+added?;
+let first_level_keyset: EncryptedDataEncryptionKey = provider
+    .encrypt_data_encryption_key(&amp;DataEncryptionKey::from(keyset.to_bytes()))
+    .await?;
+<span class="boring">let _ = first_level_keyset;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
+query parameter:</p>
+<pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(
+    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
+    @first_level_keyset),
+  u.email,
+  CONCAT('users/', CAST(u.id AS STRING), '/email'))
+FROM users u;
+</code></pre>
+<ul>
+<li>BigQuery reads AES-256-GCM values with <code>AEAD.DECRYPT_STRING</code> and <code>AEAD.DECRYPT_BYTES</code>, and
+the AES-SIV values of <code>DeterministicCipher</code> with <code>DETERMINISTIC_DECRYPT_STRING</code> and
+<code>DETERMINISTIC_DECRYPT_BYTES</code>. <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only;</li>
+<li><code>AeadCipher::decrypt</code> reads the values Tink and BigQuery write under the same key and id. The
+caller picks the key by <code>key_id()</code>, which the prefix names without authenticating it;</li>
+<li>a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
+kms-aead-keyring keeps those versions.</li>
+</ul>
+<h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
+<p>A beacon, or blind index, finds rows by a field’s value without decrypting the column: an
+HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
+query calculates the beacon of the value it looks for and matches it by equality. <code>Beacon&lt;T&gt;</code> holds
+the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{
+    Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KeyId, KmsAeadEnvelope,
+    KmsAeadResult, Plaintext,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+// The application's id of its beacon key, which every beacon names
+const EMAIL_BEACON_KEY: KeyId = KeyId::new(1);
+
+impl Email {
+    // The beacon of an email matches regardless of case
+    fn new(email: &amp;str) -&gt; Self {
+        Email(email.to_lowercase())
+    }
+}
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+// Once, by an administrative job: the beacon key, stored beside the application's settings
+let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)
+    .generate_encrypted_dek(envelope.provider())
+    .await?;
+
+// On every write: the field and its beacon
+let email = Email::new("Alice@Example.com");
+let encrypted: Encrypted&lt;Email, Envelope&gt; =
+    envelope.encrypt(b"users/1042/email", &amp;email).await?;
+let beacon: Beacon&lt;Email&gt; = envelope
+    .beacon(EMAIL_BEACON_KEY, b"users/email", BeaconBits::DEFAULT, &amp;email, &amp;encrypted_dek)
+    .await?;
+
+// A lookup: the beacon of the value looked for, then a decryption of each matching row
+let probe: Beacon&lt;Email&gt; = envelope
+    .beacon(
+        EMAIL_BEACON_KEY,
+        b"users/email",
+        BeaconBits::DEFAULT,
+        &amp;Email::new("alice@example.com"),
+        &amp;encrypted_dek,
+    )
+    .await?;
+assert_eq!(probe, beacon);
+let decrypted: Email = envelope.decrypt(b"users/1042/email", &amp;encrypted).await?;
+assert_eq!(decrypted, email);
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<ul>
+<li>the context, <code>users/email</code> here, names the field and never a row, so that equal values in one
+field give equal beacons. A beacon of one field never matches a beacon of another;</li>
+<li><code>BeaconBits</code> sets how much of the HMAC a beacon keeps, 1 to 256 bits, 16 by default. With <code>n</code>
+distinct values and <code>b</code> bits, about <code>n / 2^b</code> values share each beacon: a lookup returns that
+many rows, which the application decrypts and filters, and an equal beacon never proves an
+equal value. More bits leak more; fewer bits return more rows to filter;</li>
+<li>normalisation is the application’s: the beacon of <code>Alice@Example.com</code> and of
+<code>alice@example.com</code> differ unless the type normalises the value before it is sealed, as
+<code>Email::new</code> does;</li>
+<li>the key id, a <code>KeyId</code>, is the application’s number for the beacon key, written into every
+beacon so that a column can hold beacons of two keys at once;</li>
+<li>the beacon key is decrypted through the envelope’s DEK cache, as a DEK is.</li>
+</ul>
+<p>A beacon column leaks which rows are likely to hold equal values, and with them how often each
+value occurs, to anyone who reads the column. A leaked beacon key lets its holder test guesses
+against the whole column offline. Beacons fit fields that are looked up and have many distinct
+values, such as emails and external ids, and never low-cardinality fields such as a status or a
+country. BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery
+cannot calculate a beacon; it matches beacons the application calculated.</p>
+<p>Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
+beacons under the new one, query with a beacon under each key until a re-index has rewritten
+every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
+beacon. kms-aead-keyring does this with key versions.</p>
+<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
+read back through <code>TryFrom</code>, which checks its layout. See <a href="#beacons-1">Formats</a>.</p>
+<h3 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h3>
+<p>A <a href="#deterministic-encryption">deterministic field</a> also finds rows by equality, by its cipher text:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
+</thead>
+<tbody>
+<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
+<tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
+<tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
+<tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
+<tr><td>BigQuery</td><td>SQL cannot calculate a beacon; it matches beacons the application calculated</td><td>SQL decrypts the field and searches it by equality</td></tr>
+</tbody>
+</table>
+</div>
+<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
+emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
+about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.</p>
+<h2 id="aad"><a class="header" href="#aad">AAD</a></h2>
+<p>The AAD is authenticated but not encrypted: a value opens only with the AAD it was sealed with,
+and a wrong AAD fails with <code>DECRYPT</code>. Use it to bind a value to its place, such as
+<code>&lt;table&gt;/&lt;row id&gt;/&lt;column&gt;</code>, so that a value copied into another row or column fails to open.</p>
+<p>The AAD is not stored in the value, so the reader rebuilds it from the same data. It is never
+logged or put in an error, but it is not secret either: keep secrets in the value itself.</p>
+<h2 id="working-with-deks-yourself"><a class="header" href="#working-with-deks-yourself">Working with DEKs yourself</a></h2>
+<p>The <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls let the application keep one DEK for many
+values and store the encrypted DEK apart from them, such as one DEK per tenant or per file. The
+values are <code>Encrypted&lt;T, Bare&gt;</code>, with no encrypted DEK in them.</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Bare;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+// One KMS call: a new DEK and the same DEK encrypted
+let (dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+
+// No KMS call: seal and open with the plaintext DEK
+let first: Encrypted&lt;SecretValue, Bare&gt; =
+    envelope.encrypt_with_dek(b"files/1/chunk/0", &amp;SecretValue::from("first"), &amp;dek)?;
+let second: Encrypted&lt;SecretValue, Bare&gt; =
+    envelope.encrypt_with_dek(b"files/1/chunk/1", &amp;SecretValue::from("second"), &amp;dek)?;
+let decrypted: SecretValue = envelope.decrypt_with_dek(b"files/1/chunk/0", &amp;first, &amp;dek)?;
+assert_eq!(decrypted, SecretValue::from("first"));
+
+// Later, with only the encrypted DEK: the envelope decrypts it with the KMS
+let decrypted: SecretValue = envelope
+    .decrypt_with_encrypted_dek(b"files/1/chunk/1", &amp;second, &amp;encrypted_dek)
+    .await?;
+assert_eq!(decrypted, SecretValue::from("second"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The calls are:</p>
+<ul>
+<li><code>generate_encrypted_dek</code>: a new DEK and the same DEK encrypted, one KMS call;</li>
+<li><code>encrypt_with_dek</code> and <code>decrypt_with_dek</code>: with a plaintext DEK, no KMS call;</li>
+<li><code>encrypt_with_encrypted_dek</code> and <code>decrypt_with_encrypted_dek</code>: with an encrypted DEK, decrypted
+through the envelope’s DEK cache, so one KMS call per call without a cache.</li>
+</ul>
+<p>Be aware not to seal more than about 2^32 values under one DEK: every value takes a random 96-bit
+nonce, see <a href="#nonces">Security considerations</a>.</p>
+<h2 id="storing-encrypted-deks"><a class="header" href="#storing-encrypted-deks">Storing encrypted DEKs</a></h2>
+<p><code>EncryptedDataEncryptionKey</code> holds the bytes the provider returned, which also name the KMS key
+version where the KMS needs one to decrypt after a rotation. Store <code>value()</code> or <code>to_hex_string()</code>,
+and read them back with <code>EncryptedDataEncryptionKey::from</code> or <code>try_from_hex_string()</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, ValueStruct};
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+</span>let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+
+let stored: Vec&lt;u8&gt; = encrypted_dek.value().clone();
+let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
+
+let stored_hex: String = encrypted_dek.to_hex_string();
+let read_back_hex_encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(&amp;stored_hex)?;
+
+assert_eq!(read_back_encrypted_dek, read_back_hex_encrypted_dek);
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The encrypted DEK is the one Tink stores in its KMS envelope, so <code>Encrypted::join</code> of a bare value
+and its encrypted DEK is an <code>Encrypted&lt;T, Envelope&gt;</code> that Tink reads. See
+<a href="#encrypted-deks-1">Formats</a> for each provider’s bytes.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="dek-caching-and-reuse"><a class="header" href="#dek-caching-and-reuse">DEK caching and reuse</a></h1>
+<p>Without a cache, every read of a value decrypts its DEK with one KMS call, and every
+<code>encrypt</code> encrypts a new DEK with another. The library has two ways to make fewer KMS calls:</p>
+<ul>
+<li><code>DekCache</code>, a cache of decrypted DEKs, which serves repeated reads of values under the same
+DEK without the KMS;</li>
+<li>store-less DEK reuse, with a <code>DekReusePolicy</code>, where one DEK seals many values, so a write
+calls the KMS only when the DEK is renewed.</li>
+</ul>
+<h2 id="dek-cache"><a class="header" href="#dek-cache">DEK cache</a></h2>
+<p><code>kms_aead::cache::DekCache</code> holds plaintext DEKs a provider decrypted, keyed by the provider’s
+KEK and the encrypted DEK’s bytes. A per-call envelope has no cache unless the options give it one:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use std::num::NonZeroUsize;
+use std::time::Duration;
+
+<span class="boring">fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let cache = DekCache::new(
+    DekCacheOptions::new()
+        .with_ttl(Duration::from_secs(5 * 60))
+        .with_max_entries(NonZeroUsize::new(10_000).expect("not zero")),
+)?;
+
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+    provider,
+    KmsAeadEnvelopeOptions::new().with_dek_cache(cache.clone()),
+)?;
+<span class="boring">let _ = envelope;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>decrypt</code>, the <code>*_with_encrypted_dek</code> calls and a store-less <code>encrypt</code> decrypt through the
+envelope’s cache. <code>Clone</code> shares the same cache, so one cache may serve several envelopes and
+several KEKs: an entry serves only a lookup that names the same KEK, and a key decrypted under
+one KEK never reaches a caller with the provider of another.</p>
+<p>The cache:</p>
+<ul>
+<li>serves an entry for its TTL after it was inserted, however often it is used, 15 minutes by
+default;</li>
+<li>holds at most <code>max_entries</code> entries, 1024 by default, and evicts the oldest entry past it;</li>
+<li>makes one provider call for concurrent misses of the same key, and every caller receives its
+result, the key or the error;</li>
+<li>keeps no entry for a failed decryption, so during a KMS outage every call fails as fast as the KMS
+does;</li>
+<li>zeroises a key when its entry leaves the cache: once it is evicted, invalidated, cleared, or
+purged after it expired.</li>
+</ul>
+<p><code>DekCache::disabled()</code> holds nothing, and every lookup calls the provider. It is what a per-call
+envelope has by default.</p>
+<h3 id="sizing"><a class="header" href="#sizing">Sizing</a></h3>
+<p>Size <code>max_entries</code> above the number of distinct DEKs read per TTL. With per-call envelopes every
+value has its own DEK, so a cache helps only values read more than once within the TTL. With
+store-less writers the number of DEKs is the number of writers times the renewals per TTL, which
+is small.</p>
+<p>A longer TTL saves more KMS calls, and keeps DEKs in memory for longer, see
+<a href="#key-lifetime">Key lifetime</a>.</p>
+<h3 id="invalidation"><a class="header" href="#invalidation">Invalidation</a></h3>
+<p>A disabled KMS key or a revoked IAM grant reaches the cached keys only when their entries expire.
+To drop one at once, invalidate it with the envelope’s own KEK:</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::cache::{DekCache, DekCacheOptions};
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+</span>use kms_aead::KmsAeadEncryptionProvider;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(provider,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
+</span>let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+
+// One encrypted DEK
+envelope
+    .dek_cache()
+    .invalidate(envelope.provider().kek(), &amp;encrypted_dek);
+
+// Every DEK
+envelope.dek_cache().clear();
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Pass <code>envelope.provider().kek()</code> to <code>invalidate</code>, with the <code>KmsAeadEncryptionProvider</code> trait in
+scope: a <code>KekRef</code> built by hand that differs from it matches no entry.</p>
+<h3 id="key-lifetime"><a class="header" href="#key-lifetime">Key lifetime</a></h3>
+<p>The cache runs no thread and no task of its own. Expired entries are dropped at the next call on
+the cache, at <code>purge_expired</code>, or when the last clone of the cache is dropped. With no calls, the
+bytes of an expired key stay in memory. An application whose process can sit idle while the cache
+holds keys, and that needs the TTL to bound their lifetime in memory, calls <code>purge_expired</code> on a
+timer of its own:</p>
+<pre><code class="language-rust no_run"><span class="boring">use kms_aead::cache::{DekCache, DekCacheOptions};
+</span><span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let cache = DekCache::new(DekCacheOptions::new())?;
+
+let purged = cache.clone();
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+    loop {
+        interval.tick().await;
+        purged.purge_expired();
+    }
+});
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A key reaches the caller only inside the closure of <code>DekCache::with_dek</code>, and stays intact until
+the closure returns, whatever leaves the cache meanwhile. The closure must not keep a copy of the
+key: a copy taken out of it outlives the cache’s control of its lifetime.</p>
+<h2 id="store-less-dek-reuse"><a class="header" href="#store-less-dek-reuse">Store-less DEK reuse</a></h2>
+<p>A <code>KmsAeadEnvelope</code> with a <code>DekReusePolicy</code> encrypts many values under one DEK and renews it at
+the first encryption past <code>max_age</code> or past <code>max_uses</code>, whichever comes first. A renewal makes one
+KMS encrypt call. Each value still carries its encrypted DEK in Tink’s KMS envelope, so nothing is
+stored apart from the values, and values under earlier DEKs stay readable.</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{DekReusePolicy, Encrypted, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use secret_vault_value::SecretValue;
+use std::num::NonZeroU64;
+use std::time::Duration;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+    provider,
+    KmsAeadEnvelopeOptions::new().with_dek_reuse(
+        DekReusePolicy::new()
+            .with_max_age(Duration::from_secs(60 * 60))
+            .with_max_uses(NonZeroU64::new(1_000_000).expect("not zero")),
+    ),
+)?;
+
+// One KMS encryption for both values
+let first: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(b"events/1", &amp;SecretValue::from("first")).await?;
+let second: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(b"events/2", &amp;SecretValue::from("second")).await?;
+
+// Read with any envelope over the same KEK and algorithm
+let decrypted_first: SecretValue = envelope.decrypt(b"events/1", &amp;first).await?;
+let decrypted_second: SecretValue = envelope.decrypt(b"events/2", &amp;second).await?;
+assert_eq!(decrypted_first, SecretValue::from("first"));
+assert_eq!(decrypted_second, SecretValue::from("second"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The defaults are a <code>max_age</code> of 24 hours and a <code>max_uses</code> of 2^24. <code>max_age</code> must be longer than
+zero and <code>max_uses</code> at most 2^32, the bound for random 96-bit nonces under one key, otherwise the
+envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
+<h3 id="the-dek-lives-in-the-cache"><a class="header" href="#the-dek-lives-in-the-cache">The DEK lives in the cache</a></h3>
+<p>The envelope keeps only the encrypted DEK. Its plaintext lives in the envelope’s <code>DekCache</code>, which a
+store-less envelope always has: <code>DekCache::new(DekCacheOptions::new())</code> unless the options give it
+another, and <code>INVALID_DEK_REUSE_POLICY</code> beside <code>DekCache::disabled()</code>.</p>
+<p>The first encryption after the DEK has left the cache renews it. So the DEK is renewed:</p>
+<ul>
+<li>at the cache’s TTL, whatever <code>max_age</code>;</li>
+<li>when the cache evicts it for capacity;</li>
+<li>after <code>invalidate</code> with <code>envelope.provider().kek()</code>, or after <code>clear</code>.</li>
+</ul>
+<p>In a cache shared with readers, size <code>max_entries</code> above the number of distinct DEKs read per
+TTL, or give the writer a cache of its own, otherwise reads evict the writer’s DEK and it renews
+more often than the policy says.</p>
+<p>A writer that falls quiet leaves its DEK in memory until the cache’s next call or
+<code>purge_expired</code>, see <a href="#key-lifetime">Key lifetime</a>. The values sealed while the cache holds the
+DEK are readable by whoever reads the process’s memory in that window.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="crypto-backends"><a class="header" href="#crypto-backends">Crypto backends</a></h1>
+<p>The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
+a type to <code>kms_aead::backends</code>, and <code>AeadCipher</code>, <code>DeterministicCipher</code>, <code>KmsAeadEnvelope</code> and <code>LocalKmsProvider</code> take
+that type as their backend type parameter <code>B</code>. A build may enable any number of backends, and
+there is no default one.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>Type</th><th>Library</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ring</code></td><td><code>Ring</code></td><td><a href="https://crates.io/crates/ring">ring</a></td></tr>
+<tr><td><code>aws-lc</code></td><td><code>AwsLc</code></td><td><a href="https://crates.io/crates/aws-lc-rs">aws-lc-rs</a></td></tr>
+<tr><td><code>aws-lc-fips</code></td><td><code>AwsLc</code>, on the FIPS module</td><td><a href="https://crates.io/crates/aws-lc-rs">aws-lc-rs</a></td></tr>
+<tr><td><code>rustcrypto</code></td><td><code>RustCrypto</code></td><td>the <a href="https://github.com/RustCrypto/AEADs">RustCrypto AEADs</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>There is no default because Cargo unifies features: a default chosen by features would change
+for every crate in a build when one crate enables another backend.</p>
+<h2 id="code-generic-over-the-backend"><a class="header" href="#code-generic-over-the-backend">Code generic over the backend</a></h2>
+<p>The backend types implement <code>AeadBackend</code>, a sealed trait in <code>kms_aead::backends</code>. Its items are the
+constant <code>NAME</code>, the backend’s name in spans and logs: <code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>, and
+<code>generate_random_bytes</code>. Code that works with any backend bounds its type parameter with
+<code>AeadBackend</code> and nothing else:</p>
+<pre><code class="language-rust">use kms_aead::backends::{AeadBackend, Ring};
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{KmsAeadEnvelope, KmsAeadResult};
+use secret_vault_value::SecretValue;
+
+struct Orders&lt;B&gt; {
+    envelope: KmsAeadEnvelope&lt;LocalKmsProvider&lt;B&gt;, B&gt;,
+}
+
+impl&lt;B: AeadBackend&gt; Orders&lt;B&gt; {
+    fn new() -&gt; KmsAeadResult&lt;Self&gt; {
+        let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("orders".to_string())?)?;
+        Ok(Self {
+            envelope: KmsAeadEnvelope::new(provider)?,
+        })
+    }
+
+    async fn round_trip(&amp;self, card: &amp;SecretValue) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        let sealed = self.envelope.encrypt(b"orders/1042", card).await?;
+        self.envelope.decrypt(b"orders/1042", &amp;sealed).await
+    }
+}
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span>let orders = Orders::&lt;Ring&gt;::new()?;
+let card = SecretValue::from("4111 1111 1111 1111");
+assert_eq!(orders.round_trip(&amp;card).await?, card);
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>B::generate_random_bytes(len)</code> returns <code>len</code> bytes from the CSPRNG of the backend <code>B</code>, for
+secrets the application generates itself.</p>
+<h2 id="algorithms"><a class="header" href="#algorithms">Algorithms</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Key</th><th><code>Ring</code></th><th><code>AwsLc</code></th><th><code>RustCrypto</code></th></tr>
+</thead>
+<tbody>
+<tr><td><code>ChaCha20Poly1305</code> (RFC 8439)</td><td>32 bytes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>Aes128Gcm</code></td><td>16 bytes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>Aes256Gcm</code>, the envelope’s default</td><td>32 bytes</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td><code>Aes256GcmSiv</code> (RFC 8452)</td><td>32 bytes</td><td>no</td><td>yes</td><td>yes</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every algorithm writes <code>[nonce: 12][ciphertext][tag: 16]</code>, with a random nonce from the backend’s
+CSPRNG. A backend that does not implement the algorithm fails at construction, never later, with
+<code>KmsAeadError::UnsupportedAlgorithm</code> and the code <code>UNSUPPORTED_ALGORITHM</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::{errors::KmsAeadError, AeadAlgorithm, AeadCipher};
+
+let result = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256GcmSiv);
+assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));</code></pre>
+<p><code>AeadAlgorithm</code> reads and writes its names with <code>FromStr</code> and <code>Display</code>: <code>chacha20-poly1305</code>,
+<code>aes-128-gcm</code>, <code>aes-256-gcm</code> and <code>aes-256-gcm-siv</code>.</p>
+<h2 id="aead-without-a-kms"><a class="header" href="#aead-without-a-kms">AEAD without a KMS</a></h2>
+<p><code>AeadCipher</code> seals and opens values with a key the application holds. <code>encrypt_bare</code> writes the
+AEAD output alone, an <code>Encrypted&lt;T, Bare&gt;</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
+use secret_vault_value::SecretValue;
+
+<span class="boring">fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
+let dek = cipher.generate_dek()?;
+
+let aad = b"orders/1042";
+let cipher_text: Encrypted&lt;SecretValue, Bare&gt; =
+    cipher.encrypt_bare(aad, &amp;SecretValue::from("secret"), &amp;dek)?;
+let decrypted: SecretValue = cipher.decrypt_bare(aad, &amp;cipher_text, &amp;dek)?;
+
+assert_eq!(decrypted, SecretValue::from("secret"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs">here</a>.</p>
+<p><code>encrypt</code> writes an <code>Encrypted&lt;T, Randomized&gt;</code>: the same output after Tink’s TINK prefix, which
+names the key by a <code>KeyId</code>, see <a href="#one-fixed-key">One fixed key</a>.</p>
+<p><code>generate_dek</code> makes a DEK without a KMS. <code>generate_encrypted_dek</code> makes a DEK and encrypts it with
+a provider in one call, for an application that stores the encrypted DEK itself. The other calls
+of <code>AeadCipher</code> make no KMS call and open no span.</p>
+<h2 id="cross-backend-compatibility"><a class="header" href="#cross-backend-compatibility">Cross-backend compatibility</a></h2>
+<p>Every backend writes the same bytes for the same algorithm, so a value sealed by one backend
+opens with any other that implements its algorithm. A writer on <code>Ring</code> and a reader on <code>AwsLc</code>
+work together, and moving an application from one backend to another needs no migration of its
+data:</p>
+<pre><code class="language-rust">use kms_aead::backends::{Ring, RustCrypto};
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
+use secret_vault_value::SecretValue;
+
+<span class="boring">fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let writer = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+let reader = AeadCipher::&lt;RustCrypto&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+
+let dek = writer.generate_dek()?;
+let cipher_text: Encrypted&lt;SecretValue, Bare&gt; =
+    writer.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
+
+let decrypted: SecretValue = reader.decrypt_bare(b"aad", &amp;cipher_text, &amp;dek)?;
+assert_eq!(decrypted, SecretValue::from("secret"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<h2 id="ring"><a class="header" href="#ring">ring</a></h2>
+<p>ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. ring does not zeroise
+its expanded key schedules, so they stay in freed memory after each call.</p>
+<h2 id="aws-lc-rs-and-fips"><a class="header" href="#aws-lc-rs-and-fips">aws-lc-rs and FIPS</a></h2>
+<p><code>aws-lc</code> builds aws-lc-rs with every algorithm. It is the backend that adds no second crypto
+library to a build with a cloud provider, since the providers already build aws-lc-rs for TLS.</p>
+<p><code>aws-lc-fips</code> runs the same backend on the AWS-LC FIPS module, and builds only the FIPS module,
+so it does not need <code>aws-lc</code>. It needs CMake and Go to build. Be aware it moves every user of
+aws-lc-rs in the build to the FIPS module, the rustls aws-lc-rs provider included. A build with
+both features compiles both C libraries, and aws-lc-rs runs on the FIPS one. AES-256-GCM is the
+algorithm for FIPS deployments. AES-SIV, the deterministic algorithm, is not FIPS-approved, see
+<a href="#deterministic-encryption">Deterministic encryption</a>.</p>
+<p>aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own allocator, which
+overwrites every allocation with zeros before freeing it. The expanded key schedule does not stay
+in freed memory after a call, as long as the application leaves AWS-LC’s allocator in place. The
+record keys AES-256-GCM-SIV derives for each call live on the stack, and AWS-LC does not clear
+them.</p>
+<h2 id="rustcrypto"><a class="header" href="#rustcrypto">RustCrypto</a></h2>
+<p>Every algorithm, in pure Rust, with <code>getrandom</code> as the CSPRNG. It needs no C compiler. The
+feature turns on the crates’ <code>zeroize</code> features, so their key objects, and the Poly1305 and
+POLYVAL keys each call derives, are zeroised when dropped.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="deterministic-encryption"><a class="header" href="#deterministic-encryption">Deterministic encryption</a></h1>
+<p>Feature <code>deterministic</code>.</p>
+<p>Randomised encryption gives a different cipher text every time, even for the same value. A
+deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
+sealed column can be compared, joined or looked up by equality without opening it.</p>
+<p>The library provides AES-SIV (RFC 5297) with a 64-byte key, <code>DeterministicAlgorithm::Aes256Siv</code>.
+Its name for <code>FromStr</code> and <code>Display</code> is <code>aes-256-siv</code>. <code>DeterministicCipher</code> takes a backend, as
+<code>AeadCipher</code> does, and draws its keys from the backend’s CSPRNG. Every backend seals and opens with
+the RustCrypto <code>aes-siv</code> crate, so a value sealed under one backend opens under any other.</p>
+<p>AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
+validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the FIPS module’s DRBG.</p>
+<h2 id="what-it-leaks"><a class="header" href="#what-it-leaks">What it leaks</a></h2>
+<p>Be aware what equal cipher texts tell a reader of the stored data:</p>
+<ul>
+<li><strong>Equality</strong>: which rows hold the same value;</li>
+<li><strong>Frequency</strong>: how often each value occurs. On a column with few distinct values, such as a
+country, a status or a yes/no answer, the most frequent cipher text is the most frequent value,
+and the values can be read back from public statistics.</li>
+</ul>
+<p>So do not use deterministic encryption:</p>
+<ul>
+<li>for a column with few distinct values or a skewed distribution;</li>
+<li>when equality itself is sensitive;</li>
+<li>when the value is never looked up by equality: randomised encryption leaks nothing of the
+kind.</li>
+</ul>
+<p>The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
+equal values of two tenants apart.</p>
+<p>A beacon finds rows by equality as well and keeps the value randomised, see
+<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
+<p><code>DeterministicCipher</code> seals and opens with a <code>DataEncryptionKey</code> of
+<code>DeterministicAlgorithm::key_len()</code> bytes, 64 for AES-SIV, and refuses a key of another length
+with <code>INVALID_KEY_LENGTH</code>, such as the 16 or 32 bytes of a randomised algorithm’s key. The
+application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
+key ids.</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Deterministic;
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId};
+use secret_vault_value::SecretValue;
+
+<span class="boring">fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let cipher = DeterministicCipher::&lt;Ring&gt;::new(DeterministicAlgorithm::Aes256Siv)?;
+let dek = cipher.generate_dek()?;
+
+let aad = b"customers/email";
+let first: Encrypted&lt;SecretValue, Deterministic&gt; =
+    cipher.encrypt(KeyId::new(1), aad, &amp;SecretValue::from("user@example.com"), &amp;dek)?;
+let second: Encrypted&lt;SecretValue, Deterministic&gt; =
+    cipher.encrypt(KeyId::new(1), aad, &amp;SecretValue::from("user@example.com"), &amp;dek)?;
+
+// Equal values give equal cipher texts, to look up by
+assert_eq!(first, second);
+let decrypted: SecretValue = cipher.decrypt(aad, &amp;first, &amp;dek)?;
+assert_eq!(decrypted, SecretValue::from("user@example.com"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>An <code>Encrypted&lt;T, Deterministic&gt;</code> is <code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code>: Tink’s
+5-byte TINK prefix that names the key by its <code>KeyId</code>, then the output of RFC 5297, so Tink and
+BigQuery read it with a keyset of that key, see
+<a href="#one-fixed-key">One fixed key</a>. Its equality compares in constant time,
+and its <code>Debug</code> prints only the length, since the bytes tell which values are equal.</p>
+<h2 id="keys-encrypted-by-a-kms"><a class="header" href="#keys-encrypted-by-a-kms">Keys encrypted by a KMS</a></h2>
+<p>The envelope generates and decrypts deterministic keys with its provider:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Deterministic;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+let algorithm = DeterministicAlgorithm::Aes256Siv;
+
+// A new key, and the same key encrypted, to store
+let (dek, encrypted_dek) = envelope.generate_encrypted_deterministic_dek(algorithm).await?;
+
+// Later: decrypt the stored key
+let decrypted_dek = envelope.decrypt_deterministic_dek(algorithm, &amp;encrypted_dek).await?;
+
+let cipher = DeterministicCipher::&lt;Ring&gt;::new(algorithm)?;
+let sealed: Encrypted&lt;SecretValue, Deterministic&gt; =
+    cipher.encrypt(KeyId::new(1), b"aad", &amp;SecretValue::from("value"), &amp;dek)?;
+let decrypted: SecretValue = cipher.decrypt(b"aad", &amp;sealed, &amp;decrypted_dek)?;
+assert_eq!(decrypted, SecretValue::from("value"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>decrypt_deterministic_dek</code> calls the provider every time and does not go through the envelope’s
+DEK cache. To cache deterministic keys, use <code>DekCache::with_dek</code>, which holds the keys of both
+kinds of algorithm.</p>
+<p><code>DeterministicCipher::generate_encrypted_dek</code> does the same with any provider.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="formats"><a class="header" href="#formats">Formats</a></h1>
+<p>Every byte layout the library reads or writes is on this page.</p>
+<p>The library writes one envelope format for every provider, Tink’s KMS envelope. A value encrypted
+by <code>KmsAeadEnvelope::encrypt</code> opens with Tink’s <code>KmsEnvelopeAead</code> on the same KMS key and
+algorithm, and a value Tink encrypts opens with <code>KmsAeadEnvelope::decrypt</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Read by</th><th>Written by</th></tr>
+</thead>
+<tbody>
+<tr><td>Tink KMS envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td>Bare value</td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>every release</td></tr>
+<tr><td>Encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes, see <a href="#encrypted-deks-1">Encrypted DEKs</a></td><td>kms-aead, Tink for GCP and AWS keys</td><td>0.30.0 and later</td></tr>
+<tr><td>Serialised DEK</td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message, see <a href="#serialised-deks">Serialised DEKs</a></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td>TINK-prefixed value</td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td>Tink keyset</td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td>Tink encrypted keyset</td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later</td></tr>
+<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
+<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
+<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets before 0.24.0</td><td>kms-aead with <code>legacy-formats</code></td><td>0.8.0 to 0.28.1</td></tr>
+<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>up to 0.29</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
+provider encrypts the raw DEK in every release, see <a href="#encrypted-deks-1">Encrypted DEKs</a>.</p>
+<h2 id="tinks-kms-envelope"><a class="header" href="#tinks-kms-envelope">Tink’s KMS envelope</a></h2>
+<p><code>KmsAeadEnvelope::encrypt</code> writes Tink’s KMS envelope, and <code>Encrypted::join</code> writes it from a
+bare value and an encrypted DEK. <code>separate</code> reads it back:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(b"aad", &amp;SecretValue::from("secret")).await?;
+
+let (bare, encrypted_dek) = encrypted.separate()?;
+let joined = Encrypted::&lt;SecretValue, Envelope&gt;::join(&amp;bare, &amp;encrypted_dek)?;
+assert_eq!(joined.value(), encrypted.value());
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<ul>
+<li><code>w</code> is 1 to 4,096 bytes, the limit of every Tink implementation, on write and on read;</li>
+<li>the encrypted DEK is the provider’s <a href="#encrypted-deks-1"><code>EncryptedDataEncryptionKey</code></a>, the KMS
+ciphertext of the <a href="#serialised-deks">serialised DEK</a>, or of the raw DEK for Azure;</li>
+<li>the AAD goes to the DEK’s AEAD only. The KMS encryption of the DEK has no AAD, as in Tink, so
+Tink’s AWS client sends no encryption context and its GCP client no additional authenticated data;</li>
+<li>the rest is a <a href="#formats-of-encrypted"><code>Bare</code> value</a>.</li>
+</ul>
+<p>The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Tink key type</th><th>Tink for Java and Go</th><th>Tink for C++ and Python</th></tr>
+</thead>
+<tbody>
+<tr><td>ChaCha20-Poly1305</td><td><code>ChaCha20Poly1305Key</code></td><td>reads and writes</td><td>no</td></tr>
+<tr><td>AES-128-GCM, AES-256-GCM</td><td><code>AesGcmKey</code></td><td>reads and writes</td><td>reads and writes</td></tr>
+<tr><td>AES-256-GCM-SIV</td><td><code>AesGcmSivKey</code></td><td>reads and writes</td><td>reads and writes</td></tr>
+</tbody>
+</table>
+</div>
+<p>AES-256-GCM is the default of <code>KmsAeadEnvelope::new</code>, so every Tink implementation reads the
+values of an envelope that names no algorithm. The default of 0.29 and earlier was
+ChaCha20-Poly1305, see <a href="#default-algorithm">Migrating from 0.29</a>.</p>
+<p>Tink for Python reads a kms-aead value with the key URI of the provider’s key:</p>
+<pre><code class="language-python">from tink import aead
+from tink.integration import gcpkms
+
+aead.register()
+key_uri = 'gcp-kms://projects/p/locations/l/keyRings/r/cryptoKeys/k'
+remote = gcpkms.GcpKmsClient(key_uri).get_aead(key_uri)
+envelope = aead.KmsEnvelopeAead(aead.aead_key_templates.AES256_GCM, remote)
+plain_text = envelope.decrypt(value, aad)
+</code></pre>
+<p>Checked on a Cloud KMS key and an AWS KMS key, both ways: AES-128-GCM, AES-256-GCM and
+AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.24.0 for Java on
+the Cloud KMS key. <code>tests/tink_interop.py</code> and <code>examples/tink_interop.rs</code> repeat the Python check.</p>
+<h2 id="encrypted-deks-1"><a class="header" href="#encrypted-deks-1">Encrypted DEKs</a></h2>
+<p><code>EncryptedDataEncryptionKey</code> is the bytes the provider returned from an encryption, which are also
+the bytes to store and the bytes it decrypts. Each provider’s bytes name the KMS key version that
+encrypted the DEK where the KMS needs one to decrypt:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Provider</th><th>Bytes</th><th>Key version</th></tr>
+</thead>
+<tbody>
+<tr><td>GCP</td><td>the Cloud KMS ciphertext, starting with <code>0x0a</code></td><td>inside the ciphertext</td></tr>
+<tr><td>AWS</td><td>the AWS KMS ciphertext blob, starting with <code>0x01</code></td><td>not exposed</td></tr>
+<tr><td>Azure</td><td><code>[0x01][k: u8][key version: k][Key Vault encrypted DEK]</code></td><td>in the layout</td></tr>
+<tr><td>Vault Transit</td><td>the Transit ciphertext, <code>vault:vN:…</code></td><td>the <code>N</code></td></tr>
+<tr><td>local</td><td><code>[0x01][i: u8][KEK id: i][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]</code></td><td>in the layout</td></tr>
+<tr><td>an application’s own</td><td>whatever it returns</td><td></td></tr>
+</tbody>
+</table>
+</div>
+<p>The Azure layout is the library’s own: Key Vault decrypts only with the key version that encrypted,
+and no Tink client exists for Azure. For the same reason, the Key Vault encrypted DEK is the KMS
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialised DEK: AES key
+wrap, <code>A128KW</code> to <code>A256KW</code>, takes only multiples of 8 bytes, which no serialised DEK is. The local
+KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to the version as the
+AAD, so neither the id nor the version can be changed without the decryption failing.</p>
+<p>Store <code>value()</code> or <code>to_hex_string()</code>, and read them back with <code>EncryptedDataEncryptionKey::from</code>
+or <code>try_from_hex_string</code>, see
+<a href="#storing-encrypted-deks">Storing encrypted DEKs</a>.</p>
+<h2 id="serialised-deks"><a class="header" href="#serialised-deks">Serialised DEKs</a></h2>
+<p>The plaintext a provider encrypts is the DEK serialised as Tink serialises a key, the message of its
+Tink key type with <code>version</code> 0, which protobuf leaves out. The Azure provider encrypts the raw DEK
+instead, see <a href="#encrypted-deks-1">Encrypted DEKs</a>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Message</th><th>Bytes</th></tr>
+</thead>
+<tbody>
+<tr><td>ChaCha20-Poly1305</td><td><code>ChaCha20Poly1305Key</code></td><td><code>[0x12][0x20][key: 32]</code></td></tr>
+<tr><td>AES-128-GCM</td><td><code>AesGcmKey</code></td><td><code>[0x1a][0x10][key: 16]</code></td></tr>
+<tr><td>AES-256-GCM</td><td><code>AesGcmKey</code></td><td><code>[0x1a][0x20][key: 32]</code></td></tr>
+<tr><td>AES-256-GCM-SIV</td><td><code>AesGcmSivKey</code></td><td><code>[0x1a][0x20][key: 32]</code></td></tr>
+<tr><td>AES-256-SIV, deterministic</td><td><code>AesSivKey</code></td><td><code>[0x12][0x40][key: 64]</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>A beacon key of HMAC-SHA256 is serialised as <code>[0x1a][0x20][key: 32]</code>, its 32 bytes in
+<code>key_value</code>, field 3, as in Tink’s <code>HmacPrfKey</code> without its parameters: the bytes of a 32-byte
+<code>AesGcmKey</code>. It is encrypted as a DEK is, raw under an Azure key.</p>
+<p><code>KmsAeadEnvelope::generate_encrypted_dek</code>, <code>generate_encrypted_deterministic_dek</code> and the
+<code>generate_encrypted_dek</code> of both ciphers and of <code>BeaconMac</code> encrypt their keys the same way. The
+message does not name its type, and AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the
+algorithm of the reader decides how the key is used, as in Tink.</p>
+<p>A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
+<code>INVALID_KEY_FORMAT</code>. An encrypted Tink
+keyset decrypts under the same KEK too, and this is what keeps it out of the DEK cache.</p>
+<h2 id="tink-keysets-and-the-tink-prefix"><a class="header" href="#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a></h2>
+<p>Two items describe the TINK-prefixed values:</p>
+<ul>
+<li><code>kms_aead::KeyId</code>: the key id of Tink’s output prefix of type TINK, <code>[0x01][key id: u32 BE]</code>,
+the start of every <code>Randomized</code> and <code>Deterministic</code> value and of every beacon. It picks the key
+that opens the value, and Tink and BigQuery pick the key of a keyset by it. It is not
+authenticated;</li>
+<li><code>kms_aead::formats::TinkKeyset</code>: a serialised <code>google.crypto.tink.Keyset</code> of enabled, symmetric,
+TINK-prefixed keys, the bytes <code>tinkey</code> writes for the same keys. Encrypted by a Cloud KMS key, it
+is the keyset of BigQuery’s <code>KEYS.KEYSET_CHAIN</code>: an application writes it for its one key, see
+<a href="#one-fixed-key">One fixed key</a>, and a keyring exports it for its
+versions.</li>
+</ul>
+<p><code>TinkKeyset::into_encrypted_bytes</code> writes the keyset encrypted by a KMS key, as Tink writes an
+encrypted keyset: a <code>google.crypto.tink.EncryptedKeyset</code> whose <code>encrypted_keyset</code>, field 2, is the
+KMS ciphertext of the serialised keyset, encrypted with no associated data. Tink’s binary keyset
+writers leave out <code>keyset_info</code>, field 3, and so does the library. Tink’s <code>KeysetHandle.read</code>
+reads it with the KMS client of <code>KekRef::tink_key_uri</code>, which Tink has for GCP and AWS keys, and
+Tink for Go for Vault Transit keys too.</p>
+<h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
+<p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
+format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
+check stored bytes against it:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Format</th><th>Layout</th><th>Shortest value</th><th><code>key_id()</code></th><th>Written by</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Envelope</code></td><td><a href="#tinks-kms-envelope">Tink’s KMS envelope</a></td><td>an encrypted DEK of 1 to 4,096 bytes, then 28 bytes</td><td>none</td><td><code>KmsAeadEnvelope::encrypt</code>, <code>Encrypted::join</code></td></tr>
+<tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>28 bytes</td><td>none</td><td><code>AeadCipher::encrypt_bare</code>, <code>KmsAeadEnvelope::encrypt_with_dek</code> and <code>encrypt_with_encrypted_dek</code>, <code>Encrypted::separate</code></td></tr>
+<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td>33 bytes</td><td><code>KeyId</code></td><td><code>AeadCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td>21 bytes</td><td><code>KeyId</code></td><td><code>DeterministicCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>Bare</code> value is Tink’s AEAD output under a key with the output prefix RAW, and the part of every
+<code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
+that opens it.</p>
+<p>The check reads the framing only, and whether the bytes are authentic is known when they are
+decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the envelope layout v1 of 0.29 and
+the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
+same type until they are upgraded, see <a href="#upgrading-stored-values">Upgrading stored values</a>.
+Without the feature, <code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses
+them in every build. The layout of 32-bit targets before 0.24.0 has Tink’s framing, so it reads as
+an <code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decrypt</code> opens it with <code>legacy-formats</code>.</p>
+<p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
+bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
+the integers, and compact JSON for <code>Json&lt;T&gt;</code>. See
+<a href="#typed-fields">Typed fields</a>.</p>
+<h2 id="beacons-1"><a class="header" href="#beacons-1">Beacons</a></h2>
+<p>A <code>Beacon&lt;T&gt;</code> is a prefix and a truncated HMAC-SHA256:</p>
+<pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
+</code></pre>
+<ul>
+<li><code>0x01</code> is the version of the beacon layout. A later layout takes another first byte, so that
+beacons of both layouts can share a column during a re-index;</li>
+<li>the key id names the beacon key that calculated the beacon;</li>
+<li>the HMAC keeps its first <code>bits</code> bits, and the unused low bits of the last byte are zero. A
+beacon is 6 to 37 bytes.</li>
+</ul>
+<p>The HMAC covers the bits, the context and the plaintext, as the <code>Plaintext</code> type encodes it:</p>
+<pre><code class="language-text">HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
+</code></pre>
+<p>so that beacons of two fields, or of two bit counts, never match. <code>Beacon::try_from</code> checks the
+prefix and that 1 to 32 bytes of HMAC follow, and fails with <code>INVALID_BEACON_FORMAT</code> otherwise.</p>
+<h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
+<p>The first bytes of a stored value:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>First bytes</th><th>Layout</th></tr>
+</thead>
+<tbody>
+<tr><td><code>00 00 00 00</code></td><td>the length-prefixed envelope of 0.28.1 and earlier</td></tr>
+<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, or the 4-byte length prefix of 32-bit targets before 0.24.0</td></tr>
+<tr><td><code>01</code></td><td>envelope layout v1 of 0.29, or a TINK-prefixed value</td></tr>
+<tr><td><code>FF 01</code></td><td>encrypted DEK layout v1 of 0.29</td></tr>
+</tbody>
+</table>
+</div>
+<p>Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
+16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
+or the local KMS also starts with <code>0x01</code>, and Tink’s LEGACY and CRUNCHY output prefixes with <code>0x00</code>.</p>
+<p>A column that holds two layouts:</p>
+<ul>
+<li>Tink envelopes and TINK-prefixed values: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.29 envelopes: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.28.1 envelopes: the first four bytes;</li>
+<li>0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
+outside the value, such as in another column;</li>
+<li>bare values and any other layout: a bare value has no framing, and its random nonce can start
+with any byte, so a column of bare values holds no other layout;</li>
+<li>encrypted DEKs of 0.29 and of 0.30: <code>0xFF 0x01</code> starts no encrypted DEK of a built-in provider, so
+the library tells them apart for those. It never inspects the bytes of an application’s own
+provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its 0.29 keys before reading them.</li>
+</ul>
+<h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
+<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
+<ul>
+<li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
+holds with the feature;</li>
+<li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
+raw encrypted DEKs.</li>
+</ul>
+<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
+hold needs the provider to become its bytes.</p>
+<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
+<code>LEGACY_FORMAT</code>, and one of:</p>
+<ul>
+<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
+<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
+values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
+</ul>
+<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
+process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
+spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="#observability">Observability</a>.</p>
+<h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
+<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
+and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
+<ul>
+<li><code>upgrade_legacy_value</code>, for envelope values;</li>
+<li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
+<code>to_bytes</code>.</li>
+</ul>
+<p>Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
+serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
+one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
+The AEAD bytes stay as they are.</p>
+<p>The envelope’s algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
+0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
+encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the
+value’s AAD and opens the value before it writes anything. Under another algorithm or another AAD
+it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> has no value to open, so it records the
+envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
+another algorithm than its values were sealed with: use <code>upgrade_legacy_value</code> wherever the values
+are at hand.</p>
+<p>A sweep over stored rows:</p>
+<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult};
+use secret_vault_value::SecretValue;
+
+/// A stored envelope value and the AAD it was sealed under.
+struct Row {
+    aad: Vec&lt;u8&gt;,
+    value: Vec&lt;u8&gt;,
+}
+
+/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
+#[allow(deprecated)]
+async fn upgrade_values&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;mut [Row],
+) -&gt; KmsAeadResult&lt;usize&gt;
+where
+    P: KmsAeadEncryptionProvider + Send + Sync,
+    B: AeadBackend,
+{
+    let mut upgraded = 0;
+    for row in rows.iter_mut() {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.value.clone())?;
+        if let Some(value) = envelope.upgrade_legacy_value(&amp;row.aad, &amp;stored).await? {
+            row.value = value.into_value();
+            upgraded += 1;
+        }
+    }
+    Ok(upgraded)
+}
+<span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
+</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
+</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
+</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
+</span><span class="boring">legacy.extend_from_slice(bare.value());
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+</span><span class="boring">    provider,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+</span><span class="boring">)?;
+</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
+</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
+</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
+</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
+<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
+<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
+breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
+<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
+older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h1>
+<p>Every fallible call returns <code>KmsAeadResult&lt;T&gt;</code>, whose error is <code>kms_aead::errors::KmsAeadError</code>:</p>
+<ul>
+<li><code>SystemError</code>: the configuration or the environment, such as invalid provider options or a KMS
+client that cannot be built;</li>
+<li><code>NetworkError</code>: a KMS that could not be reached or did not answer in time, a server error or a
+rate limit from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS;</li>
+<li><code>EncryptionError</code>: encrypting or decrypting a value or a DEK failed, or a stored value
+could not be read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault
+refused;</li>
+<li><code>UnsupportedAlgorithm</code>: the backend does not implement the algorithm, from constructors only;</li>
+<li><code>LegacyFormat</code>: a stored value in a layout of 0.29 or earlier, which only the
+<code>legacy-formats</code> feature reads, see <a href="#values-written-by-029-and-earlier">Formats</a>.</li>
+</ul>
+<p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a <code>_</code> arm.</p>
+<h2 id="codes"><a class="header" href="#codes">Codes</a></h2>
+<p><code>code()</code> returns a code to match on: one of the library’s own codes, or the code the KMS returned,
+such as AWS’s <code>IncorrectKeyException</code>. It is also the <code>error_code</code> field of the spans.</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::errors::KmsAeadError;
+use kms_aead::formats::Bare;
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
+use secret_vault_value::SecretValue;
+
+<span class="boring">fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+let dek = cipher.generate_dek()?;
+let cipher_text: Encrypted&lt;SecretValue, Bare&gt; =
+    cipher.encrypt_bare(b"orders/1042", &amp;SecretValue::from("secret"), &amp;dek)?;
+
+match cipher.decrypt_bare(b"orders/1043", &amp;cipher_text, &amp;dek) {
+    Err(KmsAeadError::EncryptionError(error)) if error.public.code == "DECRYPT" =&gt; {
+        // Not authentic under this key and AAD
+    }
+    other =&gt; panic!("{other:?}"),
+}
+
+let too_short = Encrypted::&lt;SecretValue, Bare&gt;::try_from(vec![0; 8]);
+assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"));
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The library’s codes:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ENCRYPT</code>, <code>DECRYPT</code></td><td>encryption</td><td>sealing failed, or a value is not authentic under the key and the AAD</td></tr>
+<tr><td><code>ENCRYPT_KEY</code>, <code>DECRYPT_KEY</code></td><td>encryption</td><td>the backend refused a key, or a KMS request could not be built</td></tr>
+<tr><td><code>RANDOM_GENERATOR</code></td><td>encryption</td><td>the CSPRNG failed, for a nonce or a key</td></tr>
+<tr><td><code>INVALID_KEY_LENGTH</code></td><td>encryption</td><td>a key that does not fit the algorithm, or a KMS generator that returned another length</td></tr>
+<tr><td><code>UNSUPPORTED_ALGORITHM</code></td><td>unsupported algorithm</td><td>the backend does not implement the algorithm</td></tr>
+<tr><td><code>UNKNOWN_ALGORITHM</code></td><td>encryption</td><td><code>FromStr</code> of an algorithm name it does not know</td></tr>
+<tr><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td>encryption</td><td>a value too short, a length past its end, or a <code>Randomized</code> or <code>Deterministic</code> value without Tink’s output prefix</td></tr>
+<tr><td><code>UNKNOWN_CIPHER_TEXT_LAYOUT</code></td><td>encryption</td><td>an empty envelope value, or a first byte that starts no layout</td></tr>
+<tr><td><code>INVALID_PLAINTEXT</code></td><td>encryption</td><td>a decrypted value that is not an encoding of its type, or a <code>Json</code> value that does not serialise</td></tr>
+<tr><td><code>INVALID_KEY_FORMAT</code></td><td>encryption</td><td>a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset</td></tr>
+<tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the encrypted DEK layout v1 of 0.29 that cannot be read, with <code>legacy-formats</code></td></tr>
+<tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29</td></tr>
+<tr><td><code>INVALID_HEX</code></td><td>encryption</td><td><code>try_from_hex_string</code> of text that is not hex</td></tr>
+<tr><td><code>INVALID_BEACON_FORMAT</code></td><td>encryption</td><td>stored bytes that are not <code>[0x01][key id: u32 BE]</code> and 1 to 32 bytes of HMAC, at <code>Beacon::try_from</code></td></tr>
+<tr><td><code>INVALID_BEACON_CONTEXT</code></td><td>encryption</td><td>a beacon context longer than 2^32 - 1 bytes</td></tr>
+<tr><td><code>BEACON</code></td><td>encryption</td><td>the backend failed to calculate a beacon’s HMAC</td></tr>
+<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
+<tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
+<tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+<tr><td><code>INVALID_LOCAL_KEK_ID</code>, <code>LOCAL_*</code></td><td>system, encryption</td><td>the <a href="#errors-4">local KMS</a></td></tr>
+<tr><td><code>AZURE_*</code></td><td>system, encryption</td><td>the <a href="#errors-2">Azure provider</a></td></tr>
+<tr><td><code>VAULT_*</code></td><td>system, network, encryption</td><td>the <a href="#errors-3">Vault Transit provider</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>The KMS codes are the gRPC status codes of Google Cloud KMS, such as <code>PermissionDenied</code>, the AWS
+error codes, such as <code>NotFoundException</code>, and Key Vault’s error codes, such as <code>KeyNotFound</code>.</p>
+<h2 id="retries"><a class="header" href="#retries">Retries</a></h2>
+<p>The library retries nothing itself. The AWS and Azure SDKs apply their own retry policies, which
+the Azure provider takes in <code>client_options</code>.</p>
+<p>A <code>NetworkError</code> is the class to consider for a retry: a KMS that was not reached, a timeout, a
+server error or a rate limit. For Google Cloud KMS every failed call is a <code>NetworkError</code>, so check
+its code as well: <code>Unavailable</code>, <code>DeadlineExceeded</code> or <code>ResourceExhausted</code> are worth a retry,
+<code>PermissionDenied</code> or <code>InvalidArgument</code> are not. An <code>EncryptionError</code> from a decrypt does not
+change on a retry.</p>
+<h2 id="what-errors-never-carry"><a class="header" href="#what-errors-never-carry">What errors never carry</a></h2>
+<p>No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
+text bytes, in <code>Display</code> or in <code>Debug</code>. An application can log errors with <code>{}</code> and <code>{:?}</code>.</p>
+<p><code>message</code> is meant for a person reading logs. <code>public</code> holds the code, the part safe to return to
+the application’s own callers, and with the <code>serde</code> feature it is <code>Serialize</code> and <code>Deserialize</code>.
+<code>std::error::Error::source()</code> returns the root cause, the error of the SDK or library that
+failed, when there is one.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="observability"><a class="header" href="#observability">Observability</a></h1>
+<p>The library uses <a href="https://github.com/tokio-rs/tracing">tracing</a>. Every envelope call and every KMS
+call opens one span at the <code>DEBUG</code> level, and the spans carry what a call used besides how long it
+took: the mode, the algorithm and backend, whether the DEK came from the cache, the KMS key and
+its version, and the error code.</p>
+<p>The spans are:</p>
+<ul>
+<li><code>KMS AEAD encrypt</code>: the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code> and
+<code>encrypt_with_encrypted_dek</code>;</li>
+<li><code>KMS AEAD decrypt</code>: the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code> and
+<code>decrypt_with_encrypted_dek</code>;</li>
+<li><code>KMS AEAD generate DEK</code>: <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>;</li>
+<li><code>KMS AEAD decrypt DEK</code>: <code>decrypt_deterministic_dek</code>;</li>
+<li><code>KMS AEAD beacon</code>: the envelope’s <code>beacon</code>;</li>
+<li><code>KMS encrypt DEK</code>: each provider’s encryption of a DEK;</li>
+<li><code>KMS decrypt DEK</code>: each provider’s decryption of a DEK;</li>
+<li><code>KMS random</code>: a call to the GCP or AWS KMS generator, when the provider uses it.</li>
+</ul>
+<p>The KMS spans nest inside the envelope span, so a DEK the envelope had to decrypt shows its KMS call
+as a child, and a DEK served by the cache shows none. <code>AeadCipher</code> and <code>DeterministicCipher</code> open
+no spans: they run once per value inside the caller’s span.</p>
+<h2 id="showing-the-spans"><a class="header" href="#showing-the-spans">Showing the spans</a></h2>
+<p>Any tracing subscriber works. With <code>tracing-subscriber</code>, an <code>EnvFilter</code> that enables <code>DEBUG</code> for
+the library and span close events, every span is printed with its fields when it ends:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+use tracing_subscriber::fmt::format::FmtSpan;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let subscriber = tracing_subscriber::fmt()
+    .with_env_filter("kms_aead=debug")
+    .with_span_events(FmtSpan::CLOSE)
+    .finish();
+tracing::subscriber::set_global_default(subscriber)?;
+
+let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let aad = b"orders/1042";
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(aad, &amp;SecretValue::from("secret")).await?;
+let decrypted: SecretValue = envelope.decrypt(aad, &amp;encrypted).await?;
+<span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The decrypt prints, without timestamps:</p>
+<pre><code class="language-text">DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
+</code></pre>
+<p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/tracing.rs">here</a>,
+run it with <code>cargo run --example tracing --features ring</code>.</p>
+<h2 id="opentelemetry"><a class="header" href="#opentelemetry">OpenTelemetry</a></h2>
+<p>With <a href="https://github.com/tokio-rs/tracing-opentelemetry">tracing-opentelemetry</a> every span field
+becomes a span attribute with the same name, such as <code>/kms_aead/key_version</code>, so the KMS calls and
+cache hits show up next to the latency of a request in Cloud Trace, Jaeger, etc.</p>
+<p>The fields are declared empty when the span opens and recorded once their value is known, which
+<code>tracing-opentelemetry</code> exports the same way as fields given at the start. Add its layer to the
+subscriber as usual:</p>
+<pre><code class="language-rust ignore">use opentelemetry::trace::TracerProvider;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+    .with_batch_exporter(exporter) // any exporter, e.g. opentelemetry-otlp
+    .build();
+
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::new("info,kms_aead=debug"))
+    .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("my-service")))
+    .init();</code></pre>
+<p>Be aware the library spans are <code>DEBUG</code>, so the filter has to enable that level for <code>kms_aead</code>.</p>
+<h2 id="fields"><a class="header" href="#fields">Fields</a></h2>
+<p>Every field name has the <code>/kms_aead/</code> prefix, such as <code>/kms_aead/mode</code>. A value nobody reported is
+left unrecorded, never recorded as <code>0</code> or an empty string.</p>
+<h3 id="kms-aead-encrypt-and-kms-aead-decrypt"><a class="header" href="#kms-aead-encrypt-and-kms-aead-decrypt">KMS AEAD encrypt and KMS AEAD decrypt</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>mode</code></td><td><code>per_call</code> for <code>encrypt</code> and <code>decrypt</code>, <code>store_less</code> for both on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
+<tr><td><code>algorithm</code></td><td><code>chacha20-poly1305</code>, <code>aes-128-gcm</code>, <code>aes-256-gcm</code> or <code>aes-256-gcm-siv</code></td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> for a call that decrypts through an enabled cache, a failed decryption recording <code>miss</code>; unrecorded for a call that looks nothing up</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="kms-aead-generate-dek-and-kms-aead-decrypt-dek"><a class="header" href="#kms-aead-generate-dek-and-kms-aead-decrypt-dek">KMS AEAD generate DEK and KMS AEAD decrypt DEK</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>purpose</code></td><td><code>randomized</code> or <code>deterministic</code></td></tr>
+<tr><td><code>algorithm</code></td><td>the algorithm of the key, <code>aes-256-siv</code> for deterministic keys</td></tr>
+<tr><td><code>backend</code></td><td>generate DEK only: the envelope’s backend, <code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>dek_cache</code></td><td>decrypt DEK only: <code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="kms-encrypt-dek-kms-decrypt-dek-and-kms-random"><a class="header" href="#kms-encrypt-dek-kms-decrypt-dek-and-kms-random">KMS encrypt DEK, KMS decrypt DEK and KMS random</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
+<tr><td><code>key</code></td><td>the KEK, see below; for <code>KMS random</code> the GCP location, and unrecorded on AWS</td></tr>
+<tr><td><code>key_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, from the encrypted DEK’s bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption</td></tr>
+<tr><td><code>len</code></td><td>random only: the bytes requested from the KMS generator</td></tr>
+<tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>The <code>key</code> of each provider:</p>
+<ul>
+<li>GCP: the CryptoKey name, <code>projects/&lt;project&gt;/locations/&lt;location&gt;/keyRings/&lt;ring&gt;/cryptoKeys/&lt;key&gt;</code>;</li>
+<li>AWS: the key or alias ARN, or the configured key id when no region is known;</li>
+<li>Azure: <code>&lt;vault URL&gt;/keys/&lt;name&gt;</code>;</li>
+<li>Vault Transit: <code>&lt;vault address&gt;/&lt;namespace&gt;/&lt;mount&gt;/keys/&lt;name&gt;</code>, without the namespace segment
+when none is set;</li>
+<li>local: the KEK id.</li>
+</ul>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<p>Besides the spans, the library logs:</p>
+<ul>
+<li><code>WARN</code>, inside the KMS span: a GCP or Vault Transit response without a key version;</li>
+<li><code>WARN</code>, once per process and layout: the first read of a layout of 0.29 or earlier with
+<code>legacy-formats</code>;</li>
+<li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
+CA certificate that cannot be loaded;</li>
+<li><code>INFO</code>, when a local KMS provider is created: its KEK id and versions, each with where it came
+from, in the <code>key</code> and <code>key_versions</code> fields.</li>
+</ul>
+<p>The library retries nothing itself, so there is no retry field.</p>
+<h2 id="what-is-never-logged"><a class="header" href="#what-is-never-logged">What is never logged</a></h2>
+<p>No span field or event carries:</p>
+<ul>
+<li>plaintext, DEKs in any form, plaintext or encrypted, or KEK material;</li>
+<li>AAD content, which can hold entity ids and so personal data;</li>
+<li>cipher text bytes;</li>
+<li>the length of a value or of its AAD. For AES-256-GCM the plaintext length is the value’s length
+minus a fixed overhead, and a length tells short values such as <code>yes</code>, <code>no</code> or a country code
+apart.</li>
+</ul>
+<p>Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
+project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
+<code>key</code> field accordingly in a trace pipeline.</p>
+<p>Errors follow the same rules, see <a href="#what-errors-never-carry">Error handling</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="security-considerations"><a class="header" href="#security-considerations">Security considerations</a></h1>
+<h2 id="threat-model"><a class="header" href="#threat-model">Threat model</a></h2>
+<p>Envelope encryption protects stored values from whoever can read the store but cannot use the
+KEK: a database dump, a backup, a replica, a data export or an operator with read access to the
+tables. Opening a value needs a KMS decryption, and the KMS checks the caller’s permission and, for
+the cloud KMSs, writes an audit log entry.</p>
+<p>It does not protect values from:</p>
+<ul>
+<li>a process, or whoever controls it, that may decrypt with the KEK: it can read every value it can
+fetch;</li>
+<li>whoever can read the memory of a process while it holds plaintext DEKs, in the
+<a href="#key-lifetime">DEK cache</a> or as a store-less writer’s DEK;</li>
+<li>a reader of the store learning which values are equal, for values sealed with
+<a href="#what-it-leaks">deterministic encryption</a>.</li>
+</ul>
+<p>The AAD protects a value from being moved: a value copied into another row or column, with an AAD
+that names its place, fails to open there. The AAD itself is not encrypted, and neither is the
+length of the encrypted DEK at the start of Tink’s KMS envelope, which is not authenticated either.</p>
+<p>An encrypted DEK carries no context that the KMS authenticates. Whoever can write where encrypted
+DEKs are stored, such as a database table or a keyring store, can copy an encrypted DEK to another
+record or relabel it, and the KMS decrypts it for any principal allowed to decrypt with that KEK.
+The controls for this are in the deployment:</p>
+<ul>
+<li>write access to the stored keys is kept apart from the right to decrypt with the KEK;</li>
+<li>each isolation boundary, such as a tenant or an environment, has a KEK of its own, so a DEK
+copied across it fails to decrypt;</li>
+<li>the KMS audit log of decrypt calls, turned on where the KMS leaves it off by default, shows
+which principal decrypted which key.</li>
+</ul>
+<p>The local KMS has no IAM, no audit log and no HSM, see its <a href="#limits">limits</a>.</p>
+<h2 id="nonces"><a class="header" href="#nonces">Nonces</a></h2>
+<p>Every AEAD algorithm takes a random 96-bit nonce from the backend’s CSPRNG for each value, and
+writes it in front of the cipher text. NIST SP 800-38D allows 2^32 encryptions under one key with
+random 96-bit nonces, and the library applies the same bound to every algorithm:</p>
+<ul>
+<li>the per-call envelope seals one value per DEK, so the bound does not apply to it;</li>
+<li>a store-less envelope renews its DEK at <code>max_uses</code>, 2^24 by default and at most 2^32;</li>
+<li>with <code>encrypt_with_dek</code> and <code>AeadCipher</code>, the application counts the values it seals
+under one key, and moves to a new key before 2^32;</li>
+<li>the local KMS seals each DEK it encrypts with AES-256-GCM, so a KEK version is good for about 2^32
+encryptions. Add a new version before that.</li>
+</ul>
+<p>AES-256-GCM-SIV (RFC 8452) resists nonce misuse: a repeated nonce reveals only whether the two
+values sealed with it are equal, and does not break integrity.</p>
+<p>Deterministic encryption with AES-SIV takes no random nonce.</p>
+<h2 id="key-lifetime-and-zeroisation"><a class="header" href="#key-lifetime-and-zeroisation">Key lifetime and zeroisation</a></h2>
+<p><code>DataEncryptionKey</code>, <code>LocalKek</code> and the Vault token are zeroised on drop and shown as <code>***</code> by
+<code>Debug</code>. The DEK cache zeroises a key when its entry leaves the cache and no <code>with_dek</code> closure
+holds it.</p>
+<p>Some copies are out of the library’s reach:</p>
+<ul>
+<li>the KMS SDKs and HTTP clients the providers use keep copies of each plaintext DEK in request and
+response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
+stack;</li>
+<li>ring does not zeroise its expanded key schedules, so they stay in freed memory after each call;</li>
+<li>aws-lc-rs clears its key context through AWS-LC’s allocator, as long as the application leaves
+that allocator in place. The record keys AES-256-GCM-SIV derives for each call stay on the stack;</li>
+<li>the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;</li>
+<li>an expired DEK stays in the cache’s memory until the next call on the cache or
+<code>purge_expired</code>;</li>
+<li>a plaintext value returned to the application is a <code>SecretValue</code>, zeroised on drop, and what the
+application does with it afterwards is its own.</li>
+</ul>
+<h2 id="what-rotation-does-not-protect"><a class="header" href="#what-rotation-does-not-protect">What rotation does not protect</a></h2>
+<p>Rotating the KEK in the KMS makes the KMS encrypt new DEKs under the new key version. It does not:</p>
+<ul>
+<li>re-encrypt the DEKs already stored: they still decrypt with the old key version, which the KMS
+must keep enabled for as long as those values are read;</li>
+<li>re-encrypt any value: a DEK that leaked keeps opening every value sealed under it, whatever the
+KEK version that encrypts it. To retire a leaked DEK, decrypt and encrypt the values again under
+new DEKs;</li>
+<li>reach DEKs already in a DEK cache: they keep serving until their entries expire, or until
+<code>invalidate</code> or <code>clear</code>. The same holds for disabling a KMS key or revoking an IAM grant;</li>
+<li>renew a store-less writer’s DEK: it is renewed by its policy, or once it leaves the cache.</li>
+</ul>
+<p>With the local KMS, rotation is a new KEK version. The old version has to stay in the provider for
+as long as DEKs encrypted under it are read, and crypto-shredding means destroying every copy of it,
+backups included.</p>
+<h2 id="oss"><a class="header" href="#oss">OSS</a></h2>
+<p>Open source code is created through voluntary collaboration of software developers. The original
+authors license the code so that anyone can see it, modify it, and distribute new versions of it.
+You should manage all OSS using the same procedures and tools that you use for commercial
+products. As always, train your employees on cyber security best practices that can help them
+securely use and manage software products. You should not solely rely on individuals, especially
+on the projects like this reading sensitive information.</p>
+<h2 id="versioning"><a class="header" href="#versioning">Versioning</a></h2>
+<p>Please don’t use broad version dependency management not to include a new version of dependency
+automatically without auditing the changes.</p>
+<h2 id="reporting-a-vulnerability"><a class="header" href="#reporting-a-vulnerability">Reporting a vulnerability</a></h2>
+<p>See <a href="https://github.com/abdolence/kms-aead-rs/blob/master/SECURITY.md">SECURITY.md</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="migrating-from-029"><a class="header" href="#migrating-from-029">Migrating from 0.29</a></h1>
+<p>0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse,
+the DEK cache, deterministic encryption and the local KMS, and makes ring optional. It writes
+Tink’s KMS envelope format for every provider, so values written by 0.29 and earlier read only
+with the deprecated <code>legacy-formats</code> feature, which also rewrites them in the new format, see
+<a href="#old-values">Old values</a>. The default algorithm of the envelope is AES-256-GCM, see
+<a href="#default-algorithm">Default algorithm</a>.</p>
+<h2 id="features-1"><a class="header" href="#features-1">Features</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>0.29</th><th>0.30</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ring-aead-encryption</code></td><td><code>ring</code></td></tr>
+<tr><td>a provider feature alone, which turned on ring</td><td>the provider feature plus <code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>vault-transit-kms-encryption</code></td><td><code>hashicorp-vault-transit-kms-encryption</code></td></tr>
+<tr><td><code>vault-transit-kms-encryption-base</code></td><td><code>hashicorp-vault-transit-kms-encryption-base</code></td></tr>
+<tr><td><code>vault-transit-kms-encryption-tls-roots</code>, <code>-tls-webpki</code></td><td><code>hashicorp-vault-transit-kms-encryption-tls-roots</code>, <code>-tls-webpki</code></td></tr>
+<tr><td><code>vault-transit-kms-encryption-tls-aws-lc-rs</code>, <code>-tls-ring</code></td><td><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code>, <code>-tls-ring</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
+“kms-aead needs a crypto backend for its KMS providers”, so add a backend feature. <code>aws-lc</code> adds
+no second crypto library to a cloud provider build, see <a href="#choosing-a-backend">Choosing a
+backend</a>.</p>
+<p>The crate declares <code>rust-version = "1.99"</code>.</p>
+<h2 id="names"><a class="header" href="#names">Names</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>0.29</th><th>0.30</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KmsAeadRingEnvelopeEncryption&lt;P&gt;</code></td><td><code>KmsAeadEnvelope&lt;P, Ring&gt;</code>, with the backend as a type parameter</td></tr>
+<tr><td><code>KmsAeadRingEnvelopeEncryption::new(provider).await?</code></td><td><code>KmsAeadEnvelope::&lt;P, Ring&gt;::new(provider)?</code>, not <code>async</code>, on AES-256-GCM rather than ChaCha20-Poly1305, see <a href="#default-algorithm">Default algorithm</a></td></tr>
+<tr><td><code>KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &amp;ring::aead::AES_256_GCM)</code></td><td><code>KmsAeadEnvelope::&lt;P, Ring&gt;::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))</code></td></tr>
+<tr><td><code>with_options</code>, <code>with_algorithm_options</code></td><td><code>KmsAeadEnvelope::&lt;P, Ring&gt;::with_options(provider, options)</code></td></tr>
+<tr><td><code>KmsAeadRingEnvelopeEncryptionOptions</code></td><td><code>KmsAeadEnvelopeOptions</code></td></tr>
+<tr><td><code>KmsAeadRingEncryptionProvider</code></td><td><code>KmsAeadEncryptionProvider</code>, see <a href="#your-own-provider-1">Your own provider</a></td></tr>
+<tr><td>module <code>kms_aead::ring_encryption</code></td><td>removed; <code>AeadCipher&lt;Ring&gt;</code>, with <code>AeadCipher</code> at the crate root and <code>Ring</code> in <code>kms_aead::backends</code></td></tr>
+<tr><td><code>RingAeadEncryption::new()</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)</code></td></tr>
+<tr><td><code>RingAeadEncryption::with_algorithm(&amp;ring::aead::AES_256_GCM, rand)</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)</code></td></tr>
+<tr><td><code>RingAeadEncryption::with_rand</code>, <code>with_options</code>, <code>with_algorithm_options</code></td><td>removed; the backend owns its CSPRNG, and the random nonce was the only option</td></tr>
+<tr><td><code>RingAeadEncryptionOptions</code>, <code>RingAeadEncryptionNonceKind</code></td><td>removed</td></tr>
+<tr><td><code>RingAeadEncryption.algo</code></td><td><code>AeadCipher::algorithm()</code></td></tr>
+<tr><td><code>RingAeadEncryption::generate_data_encryption_key()</code></td><td><code>AeadCipher::generate_dek()</code></td></tr>
+<tr><td><code>kms_aead::kms_envelope_encryption::…</code></td><td>the same names at the crate root</td></tr>
+<tr><td><code>CipherText(bytes)</code></td><td><code>Encrypted::&lt;SecretValue, Bare&gt;::try_from(bytes)?</code>, which checks the layout</td></tr>
+<tr><td><code>CipherTextWithEncryptedKey(bytes)</code></td><td><code>Encrypted::&lt;SecretValue, Envelope&gt;::try_from(bytes)?</code>, which checks the layout</td></tr>
+<tr><td><code>CipherTextWithEncryptedKey::new(&amp;cipher_text, &amp;encrypted_dek)</code></td><td><code>Encrypted::&lt;SecretValue, Envelope&gt;::join(&amp;bare, &amp;encrypted_dek)?</code>, in Tink’s KMS envelope format</td></tr>
+<tr><td><code>cipher_text.to_hex_string()</code></td><td><code>value.to_hex_string()</code>, read back with <code>Encrypted::try_from_hex_string</code></td></tr>
+<tr><td><code>cipher_text == other</code></td><td><code>value.value() == other.value()</code></td></tr>
+<tr><td><code>EncryptedDataEncryptionKey::new(encrypted, key_version)</code></td><td><code>EncryptedDataEncryptionKey::new(bytes)</code>: the provider’s bytes, which carry the key version where the KMS needs one</td></tr>
+<tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code> and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
+<tr><td><code>encrypted_dek.to_hex_string()?</code></td><td><code>encrypted_dek.to_hex_string()</code>, infallible</td></tr>
+<tr><td><code>encrypted_dek.key_version()</code></td><td>removed; the <code>key_version</code> field of the KMS spans</td></tr>
+<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KmsKeyVersion</code>, the type of <code>AzureKmsKeyRef::key_version</code></td></tr>
+<tr><td><code>DataEncryptionKey(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
+<tr><td><code>errors::BoxedError</code></td><td>removed</td></tr>
+</tbody>
+</table>
+</div>
+<p>HashiCorp Vault Transit types have the <code>Hc</code> prefix:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>0.29</th><th>0.30</th></tr>
+</thead>
+<tbody>
+<tr><td><code>VaultTransitProvider</code></td><td><code>HcVaultTransitProvider</code></td></tr>
+<tr><td><code>VaultTransitProviderOptions</code></td><td><code>HcVaultTransitProviderOptions</code></td></tr>
+<tr><td><code>VaultTransitKeyRef</code></td><td><code>HcVaultTransitKeyRef</code></td></tr>
+<tr><td><code>VaultTransitToken</code></td><td><code>HcVaultTransitToken</code></td></tr>
+<tr><td><code>examples/vault_transit_kms.rs</code></td><td><code>examples/hc_vault_transit_kms.rs</code></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="traits-replaced-by-inherent-methods"><a class="header" href="#traits-replaced-by-inherent-methods">Traits replaced by inherent methods</a></h2>
+<p><code>AeadEncryption</code> and <code>KmsAeadEnvelopeEncryption</code> are gone. Their methods are inherent methods of
+<code>AeadCipher</code> and <code>KmsAeadEnvelope</code>, so delete the trait imports. The AAD is any
+<code>&amp;(impl AsRef&lt;[u8]&gt; + ?Sized)</code>, like 0.29’s <code>Aad: AsRef&lt;[u8]&gt;</code>, so <code>&amp;aad</code> still compiles, and the
+calls that make no KMS call are not <code>async</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>0.29</th><th>0.30</th></tr>
+</thead>
+<tbody>
+<tr><td><code>use kms_aead::KmsAeadEnvelopeEncryption;</code> <code>envelope.encrypt_value(&amp;aad, &amp;value).await?</code></td><td><code>envelope.encrypt(&amp;aad, &amp;value).await?</code></td></tr>
+<tr><td><code>envelope.encrypt_value_with_dek(&amp;aad, &amp;value, &amp;dek).await?</code></td><td><code>envelope.encrypt_with_dek(&amp;aad, &amp;value, &amp;dek)?</code></td></tr>
+<tr><td><code>envelope.decrypt_value(&amp;aad, &amp;cipher_text).await?</code></td><td><code>envelope.decrypt(&amp;aad, &amp;value).await?</code></td></tr>
+<tr><td><code>envelope.decrypt_value_with_dek(&amp;aad, &amp;cipher_text, &amp;dek).await?</code></td><td><code>envelope.decrypt_with_dek(&amp;aad, &amp;bare, &amp;dek)?</code></td></tr>
+<tr><td><code>encrypt_value_with_encrypted_dek</code>, <code>decrypt_value_with_encrypted_dek</code></td><td><code>encrypt_with_encrypted_dek</code>, <code>decrypt_with_encrypted_dek</code></td></tr>
+<tr><td><code>KmsAeadEnvelopeEncryption::&lt;Aad&gt;::generate_new_dek(&amp;envelope)</code></td><td><code>envelope.generate_encrypted_dek()</code></td></tr>
+<tr><td><code>use kms_aead::AeadEncryption;</code> <code>cipher.encrypt_value(&amp;aad, &amp;value, &amp;key).await?</code></td><td><code>cipher.encrypt_bare(&amp;aad, &amp;value, &amp;key)?</code></td></tr>
+<tr><td><code>cipher.decrypt_value(&amp;aad, &amp;cipher_text, &amp;key).await?</code></td><td><code>cipher.decrypt_bare(&amp;aad, &amp;bare, &amp;key)?</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Every cipher text is an <code>Encrypted&lt;T, F&gt;</code>, see <a href="#formats-of-encrypted">Formats</a>. It
+has its own <code>value()</code> and <code>into_value()</code>. Those of <code>EncryptedDataEncryptionKey</code> come from
+<code>ValueStruct</code>, which the crate re-exports: <code>use kms_aead::ValueStruct</code>. <code>DataEncryptionKey</code> no
+longer implements <code>ValueStruct</code>, and has its own <code>value()</code>.</p>
+<h2 id="your-own-provider-1"><a class="header" href="#your-own-provider-1">Your own provider</a></h2>
+<p>An application’s own implementation of the provider trait:</p>
+<ul>
+<li>implements <code>KmsAeadEncryptionProvider</code> instead of <code>KmsAeadRingEncryptionProvider</code>;</li>
+<li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code> and a key name that identifies the
+key;</li>
+<li>deletes <code>generate_encryption_key</code> when it returned the backend’s key. The replacement,
+<code>generate_key_material(&amp;self, len)</code>, has a default implementation that lets the backend generate
+the key, and is implemented only for a KMS generator;</li>
+<li>returns <code>EncryptedDataEncryptionKey::new(bytes)</code>. A KMS that needs the key version to decrypt
+gets it from those bytes, as the Azure provider’s do.</li>
+</ul>
+<p>The plaintext the provider encrypts is the DEK serialised as a Tink key, see
+<a href="#serialised-deks">Formats</a>. The library never inspects the provider’s own bytes.</p>
+<h2 id="errors-5"><a class="header" href="#errors-5">Errors</a></h2>
+<p><code>KmsAeadError</code> is <code>#[non_exhaustive]</code>, so an exhaustive <code>match</code> on it needs a <code>_</code> arm. It has two
+new variants, <code>UnsupportedAlgorithm</code> and <code>LegacyFormat</code>. <code>code()</code> returns the code of any variant,
+and <code>source()</code> returns the root cause.</p>
+<p>The <code>From</code> conversions of SDK errors into <code>KmsAeadError</code> are gone: <code>gcloud_sdk::error::Error</code>,
+<code>gcloud_sdk::tonic::Status</code>, the AWS <code>SdkError</code>, the hyper client error, <code>azure_core::Error</code> and
+<code>SystemTimeError</code>. Map an SDK error in the application.</p>
+<p><code>ConstantTimeEq</code> is no longer implemented on the public types. <code>==</code> still compares in constant
+time. The <code>Debug</code> of <code>Encrypted</code> prints only the length, and <code>==</code> is gone from randomised values:
+only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>
+<p>Error codes that changed:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>0.29</th><th>0.30</th><th>Where</th></tr>
+</thead>
+<tbody>
+<tr><td><code>INVALID_CIPHERTEXT</code></td><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td><code>Encrypted::try_from</code> of a <code>Bare</code> value shorter than a nonce and a tag</td></tr>
+<tr><td><code>ENCRYPTION</code></td><td><code>RANDOM_GENERATOR</code></td><td>a CSPRNG failure, for a nonce or a key</td></tr>
+<tr><td><code>DECRYPT_KEY</code></td><td><code>ENCRYPT_KEY</code></td><td>the GCP encryption, when its request cannot be built</td></tr>
+<tr><td><code>DECRYPT_KEY</code></td><td><code>RANDOM_GENERATOR</code></td><td>the GCP KMS generator, when its request cannot be built</td></tr>
+<tr><td><code>SYSTEM_TIME_ERROR</code></td><td>removed</td><td></td></tr>
+<tr><td><code>UNKNOWN_ENCRYPTED_KEY_LAYOUT</code></td><td>removed</td><td>stored encrypted DEKs are the provider’s bytes</td></tr>
+<tr><td><code>AZURE_KEY_VERSION_MISSING</code></td><td><code>AZURE_ENCRYPTED_DEK_FORMAT</code></td><td>the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with <code>legacy-formats</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The other 0.29 codes keep their spelling. The new codes are listed in
+<a href="#codes">Error handling</a>.</p>
+<h2 id="aws-kms-decryption-names-the-key"><a class="header" href="#aws-kms-decryption-names-the-key">AWS KMS decryption names the key</a></h2>
+<p>The AWS provider sends the configured key as <code>KeyId</code> on every decryption. In 0.29 a decryption left
+it out, so AWS KMS decrypted under whichever key the encrypted DEK named, for any key the principal
+may decrypt with. A 0.30 process refuses a DEK encrypted under another key with
+<code>IncorrectKeyException</code>. A deployment that relied on decrypting under a second key configures a
+provider per key.</p>
+<p>An alias name such as <code>alias/orders</code> becomes an alias ARN, where 0.29 built a key ARN of it.
+Configure the key ARN rather than an alias, see <a href="#key-arn-and-aliases">AWS KMS</a>.</p>
+<h2 id="default-algorithm"><a class="header" href="#default-algorithm">Default algorithm</a></h2>
+<p>The default algorithm of <code>KmsAeadEnvelope</code> is AES-256-GCM, which every Tink implementation reads
+in a KMS envelope. The default of 0.29 was ChaCha20-Poly1305.</p>
+<p>A value does not record its algorithm. Values sealed under the default of 0.29 open only with
+ChaCha20-Poly1305 configured, and an envelope on the new default fails them with <code>DECRYPT</code>. A 0.29
+envelope that named no algorithm becomes:</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+
+<span class="boring">async fn example(key_ref: GcpKmsKeyRef) -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>// 0.29: KmsAeadRingEnvelopeEncryption::new(provider).await?
+let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, Ring&gt;::with_options(
+    GcpKmsProvider::new(&amp;key_ref).await?,
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+)?;
+<span class="boring">let _ = envelope;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Configure it on every envelope that reads those values, on the one that upgrades them, see
+<a href="#old-values">Old values</a>, and on every envelope that writes new values beside them: a reader
+cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0.29 values.</p>
+<h2 id="old-values"><a class="header" href="#old-values">Old values</a></h2>
+<p>0.30 writes Tink’s KMS envelope, and encrypts every DEK but Azure’s as a serialised Tink key. 0.29
+wrote envelope layout v1 and the encrypted DEK layout v1 <code>[0xFF][0x01]…</code>, and 0.28.1 and earlier a
+length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
+<code>legacy-formats</code> feature, and fails with <code>LEGACY_FORMAT</code> without it, see
+<a href="#values-written-by-029-and-earlier">Formats</a>.</p>
+<p>The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
+<a href="#default-algorithm">Default algorithm</a>.</p>
+<p>To move stored values to the new format:</p>
+<ol>
+<li>upgrade every process that reads the values to 0.30 with <code>legacy-formats</code>. 0.29 and earlier
+cannot read Tink’s format, so no process writes it before every reader has the upgrade;</li>
+<li>rewrite the stored values with <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> of
+<code>KmsAeadEnvelope</code>, one or two KMS calls per value, see
+<a href="#upgrading-stored-values">Upgrading stored values</a>. <code>upgrade_legacy_value</code> takes
+the value’s AAD, and fails with <code>DECRYPT</code> on a value that does not open under the envelope’s
+algorithm and that AAD;</li>
+<li>turn the feature off.</li>
+</ol>
+<p><code>Encrypted::&lt;T, Envelope&gt;::separate</code> reads Tink’s format only, with or without the feature, so
+code that separated stored 0.29 values runs after the sweep.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+        <script>
+        window.addEventListener('load', function() {
+            window.setTimeout(window.print, 100);
+        });
+        </script>
+
+
+    </div>
+    </body>
+</html>
