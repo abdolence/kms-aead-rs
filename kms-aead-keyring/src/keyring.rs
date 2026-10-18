@@ -200,7 +200,7 @@ where
         aad: &FieldAad,
         value: &T,
     ) -> KeyringResult<Encrypted<T>> {
-        let span = spans::encrypt(self.id(), Purpose::Randomized, self.backend);
+        let span = spans::encrypt(self.id(), Purpose::Randomized, Some(self.backend));
         spans::in_span(span, async {
             let record = self.cache.current().await;
             let (version, dek) = record
@@ -210,7 +210,7 @@ where
             self.check_interop(aad.interop, version)?;
             let cipher = self.cipher(version)?;
             let plaintext = value.to_plaintext()?;
-            let sealed = self
+            let (sealed, outcome) = self
                 .with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
                     cache
                         .with_key(&self.provider, dek, binding, |key| {
@@ -218,8 +218,9 @@ where
                         })
                         .await
                 })
-                .await??;
-            Ok(Encrypted::new(version.key_id(), &sealed.0))
+                .await?;
+            spans::record_dek_cache(outcome);
+            Ok(Encrypted::new(version.key_id(), &sealed?.0))
         })
         .await
     }
@@ -628,7 +629,7 @@ where
     ) -> KeyringResult<SecretValue> {
         let cipher = self.cipher(version)?;
         let body = CipherText(value.body().to_vec());
-        Ok(self
+        let (opened, outcome) = self
             .with_cached_key(record, version.key_id(), dek, async |cache, binding| {
                 cache
                     .with_key(&self.provider, dek, binding, |key| {
@@ -636,12 +637,14 @@ where
                     })
                     .await
             })
-            .await??)
+            .await?;
+        spans::record_dek_cache(outcome);
+        Ok(opened?)
     }
 
     /// Runs `use_cache`, a call of the [`DekCache`] with the key `dek` wraps, with the binding of
-    /// `key_id`, and records where the key came from on the current span. `record` is the record
-    /// `dek` was read from, as the wrapped key of `key_id`.
+    /// `key_id`, and returns its result and where the key came from, for the caller to record.
+    /// `record` is the record `dek` was read from, as the wrapped key of `key_id`.
     ///
     /// A refresh evicts the keys it takes out of use once, when it takes the new record. A call
     /// that read `dek` from the record before and unwraps it after that eviction caches it
@@ -656,10 +659,9 @@ where
             &DekCache,
             Option<&DekBinding>,
         ) -> KmsAeadResult<(T, DekCacheOutcome)>,
-    ) -> KeyringResult<T> {
+    ) -> KeyringResult<(T, DekCacheOutcome)> {
         let binding = self.cache.binding(key_id)?;
         let (result, outcome) = use_cache(self.dek_cache(), binding.as_ref()).await?;
-        spans::record_dek_cache(outcome);
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
             if !std::ptr::eq(record, &*current)
@@ -669,7 +671,7 @@ where
                     .invalidate(self.provider.kek(), dek, binding.as_ref());
             }
         }
-        Ok(result)
+        Ok((result, outcome))
     }
 
     /// A new version to replace the active version `key_id` that is being flagged compromised,

@@ -3,7 +3,7 @@
 
 use std::cmp::Reverse;
 
-use kms_aead::cache::DekCache;
+use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::{
     DeterministicCipher, DeterministicCipherText, DeterministicDataEncryptionKey,
     EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, ValueStruct,
@@ -17,10 +17,6 @@ use crate::{
     Decrypted, Deterministic, DeterministicAad, Encrypted, KeyAlgorithm, KeyTrust, KeyVersion,
     Keyring, KeyringRecord, Plaintext, Purpose,
 };
-
-/// The `backend` span value of a deterministic call: kms-aead runs AES-SIV on RustCrypto whatever
-/// the keyring's AEAD backend.
-const DETERMINISTIC_BACKEND: &str = "rustcrypto";
 
 /// Deterministic fields: equal plaintexts under one version give equal values, so that a data
 /// store finds a row by an encrypted column.
@@ -53,7 +49,7 @@ where
         aad: &DeterministicAad,
         value: &T,
     ) -> KeyringResult<Encrypted<T, Deterministic>> {
-        let span = spans::encrypt(self.id(), Purpose::Deterministic, DETERMINISTIC_BACKEND);
+        let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
         spans::in_span(span, async {
             let record = self.cache.current().await;
             let (version, dek) = record.active_dek(Purpose::Deterministic).ok_or_else(|| {
@@ -62,9 +58,10 @@ where
             spans::record_sealing_version(version);
             self.check_interop(aad.interop, version)?;
             let plaintext = value.to_plaintext()?;
-            let sealed = self
+            let (sealed, outcome) = self
                 .seal_cached(&record, version, dek, aad, &plaintext)
                 .await?;
+            spans::record_dek_cache(outcome);
             Ok(Encrypted::new(version.key_id(), sealed.value()))
         })
         .await
@@ -89,7 +86,7 @@ where
             self.apply_read_policy(version, compromise)?;
             let cipher = self.deterministic_cipher(version)?;
             let body = DeterministicCipherText::from(value.body().to_vec());
-            let plaintext = self
+            let (plaintext, outcome) = self
                 .with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
                     cache
                         .with_deterministic_key(
@@ -101,8 +98,9 @@ where
                         )
                         .await
                 })
-                .await??;
-            T::from_plaintext(plaintext)
+                .await?;
+            spans::record_dek_cache(outcome);
+            T::from_plaintext(plaintext?)
         })
         .await
     }
@@ -131,26 +129,28 @@ where
             let open =
                 |key: &DeterministicDataEncryptionKey| cipher.decrypt_value(&aad.bytes, &body, key);
             let (plaintext, trust) = match compromise {
-                None => (
-                    self.with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
-                        cache
-                            .with_deterministic_key(
-                                &self.provider,
-                                cipher.algorithm(),
-                                dek,
-                                binding,
-                                open,
-                            )
-                            .await
-                    })
-                    .await??,
-                    KeyTrust::Trusted,
-                ),
-                Some(compromise) => (
-                    self.with_uncached_key(version, dek, &cipher, open)
-                        .await??,
-                    KeyTrust::Compromised(compromise.clone()),
-                ),
+                None => {
+                    let (plaintext, outcome) = self
+                        .with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
+                            cache
+                                .with_deterministic_key(
+                                    &self.provider,
+                                    cipher.algorithm(),
+                                    dek,
+                                    binding,
+                                    open,
+                                )
+                                .await
+                        })
+                        .await?;
+                    spans::record_dek_cache(outcome);
+                    (plaintext?, KeyTrust::Trusted)
+                }
+                Some(compromise) => {
+                    let plaintext = self.with_uncached_key(version, dek, &cipher, open).await?;
+                    spans::record_dek_cache_bypassed();
+                    (plaintext?, KeyTrust::Compromised(compromise.clone()))
+                }
             };
             Ok(Decrypted {
                 value: T::from_plaintext(plaintext)?,
@@ -181,7 +181,9 @@ where
         aad: &DeterministicAad,
         value: &T,
     ) -> KeyringResult<Vec<Encrypted<T, Deterministic>>> {
-        let span = spans::encrypt(self.id(), Purpose::Deterministic, DETERMINISTIC_BACKEND);
+        // One span for every version's probe, so it records no field of a single version: no
+        // key id, algorithm or DEK cache outcome.
+        let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
         spans::in_span(span, async {
             let record = self.cache.current().await;
             let plaintext = value.to_plaintext()?;
@@ -204,6 +206,7 @@ where
                     None => {
                         self.seal_cached(&record, version, dek, aad, &plaintext)
                             .await?
+                            .0
                     }
                     Some(_) => {
                         let cipher = self.deterministic_cipher(version)?;
@@ -231,7 +234,7 @@ where
     }
 
     /// Seals `plaintext` with `aad` under `version` of `record`, whose wrapped key is `dek`, with
-    /// the key through the [`DekCache`].
+    /// the key through the [`DekCache`], and returns where the key came from.
     async fn seal_cached(
         &self,
         record: &KeyringRecord,
@@ -239,9 +242,9 @@ where
         dek: &EncryptedDataEncryptionKey,
         aad: &DeterministicAad,
         plaintext: &SecretValue,
-    ) -> KeyringResult<DeterministicCipherText> {
+    ) -> KeyringResult<(DeterministicCipherText, DekCacheOutcome)> {
         let cipher = self.deterministic_cipher(version)?;
-        Ok(self
+        let (sealed, outcome) = self
             .with_cached_key(record, version.key_id(), dek, async |cache, binding| {
                 cache
                     .with_deterministic_key(
@@ -253,7 +256,8 @@ where
                     )
                     .await
             })
-            .await??)
+            .await?;
+        Ok((sealed?, outcome))
     }
 
     /// Runs `use_key` with the key of `version`, which the provider unwraps for this call only
@@ -275,7 +279,6 @@ where
                 use_key,
             )
             .await?;
-        spans::record_dek_cache_bypassed();
         Ok(result)
     }
 }

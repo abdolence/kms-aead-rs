@@ -188,12 +188,12 @@ filter beside `kms_aead=debug`.
 |---|---|
 | `keyring` | the keyring id, which can name a tenant |
 | `purpose` | `randomized` or `deterministic` |
-| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version |
-| `algorithm` | the sealing version's algorithm, such as `aes-256-gcm` |
-| `backend` | `ring`, `aws-lc` or `rustcrypto`; `rustcrypto` for deterministic calls, since AES-SIV runs there |
+| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version, and for `equality_probes`, which seals under several |
+| `algorithm` | the sealing version's algorithm, such as `aes-256-gcm`; unrecorded for `equality_probes` |
+| `backend` | `ring`, `aws-lc` or `rustcrypto`; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring's backend |
 | `key_state` | `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
-| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap`, the export, and a compromised version read past the cache |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap`, the export, and a compromised version read past the cache; unrecorded for `equality_probes` |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, or an application store's name |
 | `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |

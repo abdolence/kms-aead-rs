@@ -11,6 +11,7 @@ use std::fmt::Display;
 use std::future::Future;
 
 use kms_aead::cache::DekCacheOutcome;
+use kms_aead::AeadBackend;
 use tracing::{debug_span, field, Instrument, Span};
 
 use crate::errors::{KeyringResult, RegressionRule};
@@ -47,14 +48,16 @@ const RECORD: &str = "/kms_aead_keyring/record";
 /// cache: `rewrap`, a keyset export, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
-pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: impl Display) -> Span {
+/// `Keyring encrypt`, with the keyring's AEAD backend for a randomized call. A deterministic call
+/// leaves `backend` unrecorded: AES-SIV runs on RustCrypto whatever the keyring's backend.
+pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<AeadBackend>) -> Span {
     debug_span!(
         "Keyring encrypt",
         { KEYRING } = keyring.as_str(),
         { PURPOSE } = %purpose,
         { KEY_ID } = field::Empty,
         { ALGORITHM } = field::Empty,
-        { BACKEND } = %backend,
+        { BACKEND } = backend.map(field::display),
         { DEK_CACHE } = field::Empty,
         { ERROR_CODE } = field::Empty,
     )
