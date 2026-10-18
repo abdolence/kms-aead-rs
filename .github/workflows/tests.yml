@@ -58,7 +58,7 @@ jobs:
             features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
           - name: backend aws-lc FIPS
             features: aws-lc-fips
-            absent: ring
+            absent: ring aws-lc-sys
             fips: true
     steps:
       - uses: actions/checkout@v7
