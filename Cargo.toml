@@ -16,7 +16,7 @@ documentation = "https://docs.rs/kms-aead"
 categories = ["cryptography","api-bindings"]
 keywords = ["kms", "google", "aws", "azure", "vault"]
 readme = "README.md"
-include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md"]
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md", "docs/src/**/*.md"]
 
 [badges]
 maintenance = { status = "actively-developed" }

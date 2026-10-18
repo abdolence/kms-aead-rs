@@ -243,6 +243,23 @@ pub use rvstruct::ValueStruct;
 
 pub mod providers;
 
+// The book's code uses every provider, backend and optional feature, so it compiles in the build
+// with the docs.rs feature set only.
+#[cfg(all(
+    doctest,
+    feature = "ring",
+    feature = "aws-lc",
+    feature = "rustcrypto",
+    feature = "deterministic",
+    feature = "legacy-formats",
+    feature = "serde",
+    feature = "gcp-kms-encryption",
+    feature = "aws-kms-encryption",
+    feature = "azure-kms-encryption",
+    feature = "hashicorp-vault-transit-kms-encryption"
+))]
+mod book;
+
 #[cfg(test)]
 mod test_provider;
 
