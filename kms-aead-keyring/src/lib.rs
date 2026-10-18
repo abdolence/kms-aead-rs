@@ -169,6 +169,19 @@ pub use record::*;
 
 mod record_cache;
 
+// The book's code uses the deterministic fields, serde and every store, so it compiles in the
+// build with the docs.rs feature set only.
+#[cfg(all(
+    doctest,
+    feature = "ring",
+    feature = "deterministic",
+    feature = "serde-json",
+    feature = "firestore",
+    feature = "postgres",
+    feature = "gcs"
+))]
+mod book;
+
 mod spans;
 
 pub mod store;

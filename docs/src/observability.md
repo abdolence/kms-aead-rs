@@ -164,6 +164,69 @@ Besides the spans, the library logs:
 
 The library retries nothing itself, so there is no retry field.
 
+## Keyring spans
+
+The `kms-aead-keyring` crate follows the same rules: one `DEBUG` span per call, field names with
+the `/kms_aead_keyring/` prefix, and nothing recorded for a value nobody reported. kms-aead's spans
+nest inside them, so a `KMS unwrap` under a `Keyring decrypt` is a DEK cache miss, and a `KMS
+wrap` under a `Keyring rotate` is the new version's DEK. Enable `kms_aead_keyring=debug` in the
+filter beside `kms_aead=debug`.
+
+| Span | Opened by | Fields |
+|---|---|---|
+| `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `equality_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
+| `Keyring decrypt` | `decrypt`, `decrypt_with_status`, their deterministic pair, `decrypt_envelope_value` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
+| `Keyring load` | every store read: `open`, a revalidation, a reload, the read before an administrative write | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
+| `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
+| `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
+| `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
+| `Keyring rewrap` | `rewrap` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
+| `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
+
+| Field | Value |
+|---|---|
+| `keyring` | the keyring id, which can name a tenant |
+| `purpose` | `randomized` or `deterministic` |
+| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version |
+| `algorithm` | the sealing version's algorithm, such as `aes-256-gcm` |
+| `backend` | `ring`, `aws-lc` or `rustcrypto`; `rustcrypto` for deterministic calls, since AES-SIV runs there |
+| `key_state` | `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
+| `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap` and for a compromised version read past the cache |
+| `store` | `memory`, `firestore`, `postgres`, `gcs`, or an application store's name |
+| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `admin` for the read before a write |
+| `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
+| `revision` | the store's revision of the record read, as text |
+| `response_time` | milliseconds the store call took |
+| `from_key_id`, `to_key_id` | the version a rotation replaced, and the new one |
+| `cas_retries` | the compare-and-swap conflicts before the write landed |
+| `versions` | the versions `rewrap` wrapped again |
+| `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` | the counts of the `SweepReport` |
+| `error_code` | the variant name of the `KeyringError` returned, such as `KeyVersionCompromised` |
+
+### Keyring events
+
+- `WARN`: a read of a compromised version under the `Allow` policy, with the key id;
+- `WARN`: a read refused because its version is retired or destroyed, for an operator watching a
+  sweep;
+- `WARN`: a failed revalidation, and a record the store no longer holds, the cached one staying in
+  use;
+- `ERROR`: a refreshed record refused because it moves a version backwards, with the first rule it
+  breaks. Alert on it: it is the detection of a rewritten or restored record;
+- `WARN`: a compromised flag written without a rotation because the new DEK could not be wrapped;
+- `INFO`: the active version of a purpose changed, with the old and new key ids;
+- `WARN`: the store's listener disconnected, reconnected, or did not start, and a keyring
+  opened with no tokio runtime to follow the store's signals;
+- `WARN`: a keyring opened with `bind_keys` off;
+- `WARN`: a record a sweep could not re-seal, with the application's record id and the error
+  code. A record id is often an entity id, so the sweep's log is an administrative log;
+- `DEBUG`: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
+  retried.
+
+The keyring's spans, events and errors leave out everything kms-aead's do, listed below. The AAD
+rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
+`EntityId` appears anywhere. Key ids, keyring ids and store names are identifiers and appear.
+
 ## What is never logged
 
 No span field or event carries:

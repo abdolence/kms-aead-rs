@@ -8,9 +8,10 @@ description = "Field encryption over kms-aead with a keyring: key versions in a 
 homepage = "https://github.com/abdolence/kms-aead-rs"
 repository = "https://github.com/abdolence/kms-aead-rs"
 documentation = "https://docs.rs/kms-aead-keyring"
+readme = "README.md"
 categories = ["cryptography"]
 keywords = ["kms", "keyring", "tink", "encryption", "aead"]
-include = ["Cargo.toml", "src/**/*.rs"]
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE"]
 
 [lib]
 name = "kms_aead_keyring"

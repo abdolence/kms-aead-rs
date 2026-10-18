@@ -19,6 +19,18 @@
 - [Crypto backends](./crypto-backends.md)
 - [Deterministic encryption](./deterministic.md)
 
+# Keyring
+
+- [Keyring and field encryption](./keyring.md)
+  - [Key versions and lifecycle](./keyring/lifecycle.md)
+  - [Keyring stores](./keyring/stores.md)
+  - [Record cache](./keyring/record-cache.md)
+  - [Encrypted fields and AAD](./keyring/fields.md)
+  - [Deterministic fields](./keyring/deterministic.md)
+  - [Wrap-time key binding](./keyring/key-binding.md)
+  - [BigQuery and Tink interop](./keyring/bigquery.md)
+- [Operations](./operations.md)
+
 # Reference
 
 - [Formats](./formats.md)

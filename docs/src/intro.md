@@ -18,6 +18,8 @@ encryption without a KMS:
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
 - Binding a wrapped key to non-secret text the KMS authenticates;
 - Optional KMS-side random generators for GCP and AWS;
+- Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
+  Firestore, PostgreSQL or Cloud Storage, central rotation, and values in Tink's wire format;
 - Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
   in them;
 - No unsafe code.
@@ -57,7 +59,23 @@ the KMS is called:
 - **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the wrapped key
   versions, and values carry a 4-byte key id in Tink's wire format instead of a wrapped DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery
-  and Tink read too. See [kms-aead-keyring](https://crates.io/crates/kms-aead-keyring).
+  and Tink read too. See [Keyring and field encryption](./keyring.md).
+
+| | Per-call envelope | Store-less DEK reuse | Keyring |
+|---|---|---|---|
+| Crate | `kms-aead` | `kms-aead` | `kms-aead-keyring` |
+| DEKs | one per value | one per process at a time, renewed by age or count | one per key version of a scope |
+| KMS calls on write | one wrap per value | one wrap per renewed DEK | none |
+| KMS calls on read | one unwrap per value, or per DEK cache miss | one unwrap per DEK per cache TTL | one unwrap per key version per cache TTL |
+| A value carries | its wrapped DEK | its wrapped DEK | a 4-byte key id |
+| Infrastructure | a KMS | a KMS | a KMS and a keyring store |
+| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: rotate, retire, destroy, and a compromised flag every process sees |
+| Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |
+| BigQuery and Tink readers | no | no | yes, with a Cloud KMS KEK |
+| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or destroying a keyring's versions |
+
+Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
+[Migrating from envelope values](./operations.md#migrating-from-envelope-values).
 
 `AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
 holds.
