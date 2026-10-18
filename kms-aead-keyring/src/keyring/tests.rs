@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::{KeyringStore, MemoryKeyringStore};
-use crate::testing::{backend, email_of, TestProvider, TestResult, TestStore, TENANT};
+use crate::testing::{email_of, TestProvider, TestResult, TestStore, TENANT, TEST_BACKEND};
 use crate::Transition;
 
 /// A keyring created on a counting store, beside the memory store it writes to.
@@ -32,7 +32,7 @@ impl Fixture {
         let keyring = Keyring::create(
             store.clone(),
             provider.clone(),
-            backend(),
+            TEST_BACKEND,
             TENANT,
             KeyringPolicy::new(),
             options,
@@ -51,7 +51,7 @@ impl Fixture {
         Keyring::open(
             self.memory.clone(),
             self.provider.clone(),
-            backend(),
+            TEST_BACKEND,
             TENANT,
             no_watch(),
         )
@@ -107,7 +107,7 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
         .and_then(KeyVersion::wrapped_dek)
         .ok_or("version 1 holds no key")?;
     let key = fixture.provider.decrypt_data_encryption_key(dek).await?;
-    let opened = AeadCipher::new(backend(), AeadAlgorithm::Aes256Gcm)?
+    let opened = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?
         .decrypt_value(&aad.bytes, &CipherText(bytes[5..].to_vec()), &key)
         .await?;
     assert_eq!(opened.as_sensitive_str(), ALICE);
@@ -149,7 +149,7 @@ async fn a_value_sealed_by_tink_decrypts() -> TestResult {
     });
     let record = KeyringRecord::from_json(&TENANT, document.to_string().as_bytes())?;
     memory.compare_and_swap(&record, None).await?;
-    let keyring = Keyring::open(memory, provider, backend(), TENANT, no_watch()).await?;
+    let keyring = Keyring::open(memory, provider, TEST_BACKEND, TENANT, no_watch()).await?;
 
     let value = Encrypted::<String>::try_from(TINK_VALUE.to_vec())?;
     assert_eq!(keyring.decrypt(&email_of("42")?, &value).await?, ALICE);
@@ -223,7 +223,7 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
     let admin = Keyring::create(
         memory.clone(),
         provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         KeyringPolicy::new(),
         no_watch(),
@@ -231,7 +231,7 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
     .await?;
     let store = TestStore::with_delay(&memory, Duration::from_millis(50));
     let reader =
-        Arc::new(Keyring::open(store.clone(), provider, backend(), TENANT, no_watch()).await?);
+        Arc::new(Keyring::open(store.clone(), provider, TEST_BACKEND, TENANT, no_watch()).await?);
     admin.rotate(Purpose::Randomized).await?;
     let aad = Arc::new(email_of("42")?);
     let value = admin.encrypt(&aad, &alice()).await?;
@@ -326,7 +326,7 @@ async fn a_missing_record_keeps_the_cached_one() -> TestResult {
     let opened = Keyring::open(
         fixture.store.clone(),
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         no_watch(),
     )
@@ -363,7 +363,7 @@ async fn open_with_the_wrong_kek_fails() -> TestResult {
     let opened = Keyring::open(
         fixture.memory.clone(),
         other.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         no_watch(),
     )
@@ -481,7 +481,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
         .and_then(KeyVersion::wrapped_dek)
         .ok_or("version 1 holds no key")?;
     let leaked = fixture.provider.decrypt_data_encryption_key(dek).await?;
-    let body = AeadCipher::new(backend(), AeadAlgorithm::Aes256Gcm)?
+    let body = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?
         .encrypt_value(
             &aad.bytes,
             &SecretValue::from("mallory@example.com"),
@@ -628,7 +628,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     let created = Keyring::create(
         fixture.memory.clone(),
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         KeyringPolicy::new(),
         no_watch(),
@@ -639,7 +639,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     let opened = Keyring::open_or_create(
         fixture.memory.clone(),
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         KeyringPolicy::new(),
         no_watch(),
@@ -654,7 +654,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     let opened = Keyring::open(
         empty.clone(),
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         no_watch(),
     )
@@ -663,7 +663,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     let fresh = Keyring::open_or_create(
         empty,
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         KeyringPolicy::new(),
         no_watch(),
@@ -754,7 +754,7 @@ async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
     let keyring = Keyring::create(
         MemoryKeyringStore::new(),
         provider,
-        backend(),
+        TEST_BACKEND,
         TENANT,
         policy,
         no_watch(),
@@ -782,7 +782,7 @@ async fn a_deterministic_policy_needs_the_feature() -> TestResult {
     let created = Keyring::create(
         MemoryKeyringStore::new(),
         TestProvider::new("tenant-42-kek")?,
-        backend(),
+        TEST_BACKEND,
         TENANT,
         policy,
         no_watch(),
@@ -926,7 +926,7 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
     let keyring = Keyring::open(
         store,
         fixture.provider.clone(),
-        backend(),
+        TEST_BACKEND,
         TENANT,
         KeyringOptions::new(),
     )

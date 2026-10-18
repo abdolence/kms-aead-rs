@@ -5,19 +5,13 @@ use serde_json::{json, Value};
 use super::stored::StoredRecord;
 use super::*;
 use crate::errors::RecordInvalidError;
+use crate::testing::{TestResult, TENANT};
 
-type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-const KEYRING: &str = "tenant-42";
 const CREATED: &str = "2026-01-10T09:00:00Z";
 const ROTATED: &str = "2026-04-10T09:00:00Z";
 const COMPROMISED: &str = "2026-05-01T12:00:00Z";
 /// The wrapped bytes of every fixture version: distinctive, so that a test can look for them.
 const WRAPPED: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
-
-fn keyring_id() -> KeyringResult<KeyringId> {
-    KeyringId::try_from(KEYRING)
-}
 
 fn wrapped_dek() -> KeyringResult<EncryptedDataEncryptionKey> {
     Ok(EncryptedDataEncryptionKey::new(WRAPPED.to_vec(), None))
@@ -56,7 +50,7 @@ fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> 
 fn document(versions: Vec<Value>) -> Value {
     json!({
         "schema": 1,
-        "id": KEYRING,
+        "id": TENANT.as_str(),
         "kek": { "provider": "gcp", "key": "projects/p/locations/europe-west1/keyRings/app/cryptoKeys/keyring-kek" },
         "algorithms": { "randomized": "aes-256-gcm", "deterministic": "aes-256-siv" },
         "versions": versions,
@@ -66,7 +60,7 @@ fn document(versions: Vec<Value>) -> Value {
 }
 
 fn parse(document: &Value) -> KeyringResult<KeyringRecord> {
-    KeyringRecord::from_json(&keyring_id()?, document.to_string().as_bytes())
+    KeyringRecord::from_json(&TENANT, document.to_string().as_bytes())
 }
 
 /// The reason `document` is refused for, or `None` when it parses.
@@ -98,7 +92,7 @@ fn timestamp(text: &str) -> Result<Timestamp, jiff::Error> {
 #[test]
 fn a_record_round_trips_through_its_json() -> TestResult {
     let record = parse(&rotated()?)?;
-    let reparsed = KeyringRecord::from_json(&keyring_id()?, &record.to_json()?)?;
+    let reparsed = KeyringRecord::from_json(&TENANT, &record.to_json()?)?;
     assert_eq!(reparsed.to_json()?, record.to_json()?);
     assert_eq!(
         serde_json::from_slice::<Value>(&record.to_json()?)?,
@@ -262,14 +256,14 @@ fn a_record_over_the_size_cap_is_invalid() -> TestResult {
     let padding = (1 << 20) + 1 - document.len();
     document.extend(std::iter::repeat_n(b' ', padding));
     assert!(matches!(
-        KeyringRecord::from_json(&keyring_id()?, &document),
+        KeyringRecord::from_json(&TENANT, &document),
         Err(KeyringError::RecordInvalid(RecordInvalidError {
             reason: RecordInvalidReason::TooLarge,
             ..
         }))
     ));
     document.pop();
-    KeyringRecord::from_json(&keyring_id()?, &document)?;
+    KeyringRecord::from_json(&TENANT, &document)?;
     Ok(())
 }
 
@@ -285,7 +279,7 @@ fn a_record_over_the_version_cap_is_invalid() -> TestResult {
         .collect();
     let stored: StoredRecord = serde_json::from_value(document(versions))?;
     assert!(matches!(
-        KeyringRecord::from_stored(&keyring_id()?, stored),
+        KeyringRecord::from_stored(&TENANT, stored),
         Err(KeyringError::RecordInvalid(RecordInvalidError {
             reason: RecordInvalidReason::TooManyVersions,
             ..

@@ -868,5 +868,5 @@ pub enum KeyTrust {
     Compromised(Compromise),
 }
 
-#[cfg(test)]
+#[cfg(all(test, any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")))]
 mod tests;
