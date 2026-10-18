@@ -81,6 +81,7 @@ rustls = { version = "0.23", default-features = false, features = ["std", "tls12
 rustls-native-certs = { version = "0.8", optional = true }
 webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
+go-duration = { version = "0.2", optional = true }
 serde_json = { version = "1", optional = true }
 azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
 azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
@@ -183,6 +184,7 @@ hashicorp-vault-transit-kms-encryption-base = [
     "dep:http-body-util",
     "dep:rustls",
     "dep:percent-encoding",
+    "dep:go-duration",
     "dep:serde",
     "dep:serde_json",
     "tokio/time",

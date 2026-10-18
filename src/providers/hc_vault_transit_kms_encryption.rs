@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
 use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE};
@@ -539,7 +540,10 @@ fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
             .and_then(|days| days.checked_mul(24 * 60 * 60))
             .map(Duration::from_secs)
     } else {
-        go_duration(text)
+        GoDuration::try_from(text)
+            .ok()
+            .and_then(|timeout| u64::try_from(timeout.nanoseconds()).ok())
+            .map(Duration::from_nanos)
     };
     timeout.filter(|timeout| !timeout.is_zero()).ok_or_else(|| {
         KmsAeadSystemError::create(
@@ -549,60 +553,6 @@ fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
             ),
         )
     })
-}
-
-/// A non-negative duration in the syntax of Go's `time.ParseDuration`: an optional `+`, then
-/// decimal numbers that each carry a unit of `ns`, `us`, `µs`, `ms`, `s`, `m` or `h`. Digits of
-/// a fraction below one nanosecond are dropped, as Go drops them. `None` for anything else.
-fn go_duration(text: &str) -> Option<Duration> {
-    let mut rest = text.strip_prefix('+').unwrap_or(text);
-    if rest == "0" {
-        return Some(Duration::ZERO);
-    }
-    if rest.is_empty() {
-        return None;
-    }
-    let mut nanos: u128 = 0;
-    while !rest.is_empty() {
-        let number_end = rest
-            .find(|c: char| !c.is_ascii_digit() && c != '.')
-            .unwrap_or(rest.len());
-        let (number, after_number) = rest.split_at(number_end);
-        let unit_end = after_number
-            .find(|c: char| c.is_ascii_digit() || c == '.')
-            .unwrap_or(after_number.len());
-        let (unit, after_unit) = after_number.split_at(unit_end);
-        let unit_nanos: u128 = match unit {
-            "ns" => 1,
-            "us" | "µs" | "μs" => 1_000,
-            "ms" => 1_000_000,
-            "s" => 1_000_000_000,
-            "m" => 60 * 1_000_000_000,
-            "h" => 60 * 60 * 1_000_000_000,
-            _ => return None,
-        };
-        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
-        if (whole.is_empty() && fraction.is_empty()) || fraction.contains('.') {
-            return None;
-        }
-        let whole: u128 = if whole.is_empty() {
-            0
-        } else {
-            whole.parse().ok()?
-        };
-        let mut fraction_nanos = 0;
-        let mut digit_nanos = unit_nanos;
-        for digit in fraction.bytes() {
-            digit_nanos /= 10;
-            fraction_nanos += u128::from(digit - b'0') * digit_nanos;
-        }
-        nanos = whole
-            .checked_mul(unit_nanos)?
-            .checked_add(fraction_nanos)?
-            .checked_add(nanos)?;
-        rest = after_unit;
-    }
-    u64::try_from(nanos).ok().map(Duration::from_nanos)
 }
 
 /// A Vault address: an `http` or `https` URI with a host and no query. Its text without the
