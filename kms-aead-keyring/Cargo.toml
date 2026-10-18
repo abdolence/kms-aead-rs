@@ -81,7 +81,14 @@ unwrap_used = "deny"
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "deterministic", "serde-json", "firestore", "postgres-tls-rustls"]
+features = [
+    "ring",
+    "deterministic",
+    "serde-json",
+    "firestore",
+    "postgres-tls-rustls",
+    "gcs-tls-roots",
+]
 
 [[example]]
 name = "local_kms"
