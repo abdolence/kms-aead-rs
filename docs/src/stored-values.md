@@ -316,6 +316,45 @@ assert_eq!(Email::from_plaintext(email.to_plaintext()?)?, email);
 # }
 ```
 
+A newtype over `SecretValue` is written the same way:
+
+```rust
+use kms_aead::{KmsAeadResult, Plaintext};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(SecretValue);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        Ok(self.0.clone())
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        Ok(Email(plaintext))
+    }
+}
+
+# fn main() -> KmsAeadResult<()> {
+let email = Email(SecretValue::from("alice@example.com"));
+let decrypted: Email = Email::from_plaintext(email.to_plaintext()?)?;
+assert_eq!(decrypted.0.as_sensitive_str(), "alice@example.com");
+# Ok(())
+# }
+```
+
+It differs from the `String` newtype as follows:
+
+- the decrypted value is zeroised on drop, and `Debug` prints `***` instead of it;
+- text is sealed as the same bytes as through `String`, so `AEAD.DECRYPT_STRING` still reads it;
+- there is no UTF-8 check on read, so bytes that are not UTF-8 decrypt without an error;
+- the text is reached through `SecretValue`'s accessors rather than as a `&str`:
+  `as_sensitive_str()`, which panics on bytes that are not UTF-8, or `sensitive_value_to_str()`,
+  which returns an error.
+
+`SecretValue` suits values that are secrets or personal data, and `String` values that are used as
+text throughout.
+
 The built-in types encode as follows. The encodings are fixed, so that other readers of the same
 values, such as BigQuery's `AEAD.DECRYPT_STRING`, decode them:
 
