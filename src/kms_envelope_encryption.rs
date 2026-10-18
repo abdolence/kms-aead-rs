@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::num::NonZeroU64;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
@@ -105,7 +106,12 @@ struct DekReuse {
     current: RwLock<Option<Arc<CurrentDek>>>,
     /// Held across a renewal's KMS calls, so that one writer renews at a time. It holds the error
     /// of the last attempt when that attempt failed.
-    renewal: tokio::sync::Mutex<Option<KmsAeadError>>,
+    ///
+    /// Neither tokio's mutex nor the error is unwind safe, and the assertion keeps the envelope
+    /// so. A panic in `renew`, the provider's code, leaves the state a cancelled renewal leaves:
+    /// tokio releases the guard without poisoning, and nothing under it is written before `renew`
+    /// returns. What runs after `renew` only counts, clones and stores.
+    renewal: AssertUnwindSafe<tokio::sync::Mutex<Option<KmsAeadError>>>,
     /// The renewal attempts that ended, which tells a writer whether one ended while it waited
     /// for `renewal`. A cancelled attempt does not end.
     ended_renewals: AtomicU64,
@@ -140,7 +146,7 @@ impl DekReuse {
         Ok(Self {
             policy,
             current: RwLock::new(None),
-            renewal: tokio::sync::Mutex::new(None),
+            renewal: AssertUnwindSafe(tokio::sync::Mutex::new(None)),
             ended_renewals: AtomicU64::new(0),
         })
     }
@@ -1095,5 +1101,11 @@ mod tests {
         assert_eq!(wraps_of_one_attempt, 1);
         assert_eq!(envelope.provider.wraps(), 2);
         Ok(())
+    }
+
+    #[test]
+    fn envelope_is_unwind_safe() {
+        fn unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        unwind_safe::<Envelope>();
     }
 }
