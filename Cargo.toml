@@ -3,6 +3,9 @@ name = "kms-aead"
 version = "0.29.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
+# The AWS SDK crates of aws-kms-encryption declare 1.94.1. The backends alone build from 1.89,
+# the floor of aes 0.9.
+rust-version = "1.94.1"
 license = "Apache-2.0"
 description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit, with ring, aws-lc-rs or RustCrypto AEAD"
 homepage = "https://github.com/abdolence/kms-aead-rs"
