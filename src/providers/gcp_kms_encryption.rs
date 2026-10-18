@@ -43,13 +43,14 @@ impl GcpKmsKeyRef {
     }
 }
 
-/// The request with the routing header Cloud KMS expects for `resource`.
-fn routed<T>(message: T, resource: &str) -> KmsAeadResult<tonic::Request<T>> {
+/// The request with the routing header Cloud KMS expects for `resource`, failing with
+/// `error_code` when `resource` cannot be a header value.
+fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<tonic::Request<T>> {
     let mut request = tonic::Request::new(message);
     let routing = MetadataValue::<tonic::metadata::Ascii>::try_from(format!("name={resource}"))
         .map_err(|e| {
             KmsAeadEncryptionError::create(
-                "DECRYPT_KEY",
+                error_code,
                 format!("Unable to create request metadata: {e:?}").as_str(),
             )
         })?;
@@ -69,18 +70,45 @@ fn crypto_key_version(key: &str, name: &str) -> Option<KmsKeyVersion> {
     KmsKeyVersion::try_from(version.to_string()).ok()
 }
 
-/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one.
+/// Wraps under the primary version of the CryptoKey `key`, with `binding` as the additional
+/// authenticated data.
+fn encrypt_request(
+    key: &str,
+    encryption_key: &DataEncryptionKey,
+    binding: Option<&DekBinding>,
+) -> KmsAeadResult<tonic::Request<EncryptRequest>> {
+    routed(
+        EncryptRequest {
+            name: key.to_string(),
+            plaintext: SecretValue::new(encryption_key.value().ref_sensitive_value().clone()),
+            additional_authenticated_data: binding
+                .map(|binding| binding.as_str().as_bytes().to_vec())
+                .unwrap_or_default(),
+            ..Default::default()
+        },
+        key,
+        "ENCRYPT_KEY",
+    )
+}
+
+/// Names the CryptoKey `key`, so that Cloud KMS refuses a key wrapped under another one, and
+/// `binding` as the additional authenticated data, which must equal the wrap's.
 fn decrypt_request(
     key: &str,
     encrypted_key: &EncryptedDataEncryptionKey,
+    binding: Option<&DekBinding>,
 ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
     routed(
         DecryptRequest {
             name: key.to_string(),
             ciphertext: encrypted_key.wrapped().to_vec(),
+            additional_authenticated_data: binding
+                .map(|binding| binding.as_str().as_bytes().to_vec())
+                .unwrap_or_default(),
             ..Default::default()
         },
         key,
+        "DECRYPT_KEY",
     )
 }
 
@@ -165,23 +193,8 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         encryption_key: &DataEncryptionKey,
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        if binding.is_some() {
-            return Err(KmsAeadEncryptionError::create(
-                "DEK_BINDING_UNSUPPORTED",
-                "This provider does not bind wrapped keys yet",
-            ));
-        }
         spans::in_span(kms::wrap_span(&self.kek), async {
-            let encrypt_request = routed(
-                EncryptRequest {
-                    name: self.kek.key().to_string(),
-                    plaintext: SecretValue::new(
-                        encryption_key.value().ref_sensitive_value().clone(),
-                    ),
-                    ..Default::default()
-                },
-                self.kek.key(),
-            )?;
+            let encrypt_request = encrypt_request(self.kek.key(), encryption_key, binding)?;
 
             let encrypt_response = kms::timed(self.client.get().encrypt(encrypt_request))
                 .await
@@ -207,15 +220,9 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         encrypted_key: &EncryptedDataEncryptionKey,
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        if binding.is_some() {
-            return Err(KmsAeadEncryptionError::create(
-                "DEK_BINDING_UNSUPPORTED",
-                "This provider does not bind wrapped keys yet",
-            ));
-        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
-            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
+            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key, binding)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
                 .await
                 .map_err(KmsAeadError::from_gcp_status)?;
@@ -246,6 +253,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                     protection_level: ProtectionLevel::Hsm.into(),
                 },
                 &self.location,
+                "RANDOM_GENERATOR",
             )?;
 
             let response = kms::timed(self.client.get().generate_random_bytes(request))
@@ -281,6 +289,7 @@ mod tests {
         let request = decrypt_request(
             &key_ref.to_google_ref(),
             &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
+            None,
         )?;
 
         assert_eq!(request.get_ref().name, KEY_NAME);
@@ -289,6 +298,56 @@ mod tests {
             request.metadata().get("x-goog-request-params").unwrap(),
             format!("name={KEY_NAME}").as_str()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
+        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
+        let dek = DataEncryptionKey::from(SecretValue::from(KEY_MARKER));
+
+        let encrypt = encrypt_request(KEY_NAME, &dek, Some(&binding))?;
+        let decrypt = decrypt_request(
+            KEY_NAME,
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
+            Some(&binding),
+        )?;
+
+        assert_eq!(
+            encrypt.get_ref().additional_authenticated_data,
+            b"tenant-42/3"
+        );
+        assert_eq!(
+            decrypt.get_ref().additional_authenticated_data,
+            b"tenant-42/3"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_unbound_wrap_builds_the_0_29_request() -> KmsAeadResult<()> {
+        let dek = DataEncryptionKey::from(SecretValue::from(KEY_MARKER));
+
+        let encrypt = encrypt_request(KEY_NAME, &dek, None)?;
+        let decrypt = decrypt_request(
+            KEY_NAME,
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
+            None,
+        )?;
+
+        assert_eq!(
+            encrypt.get_ref(),
+            &EncryptRequest {
+                name: KEY_NAME.to_string(),
+                plaintext: SecretValue::from(KEY_MARKER),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            encrypt.metadata().get("x-goog-request-params").unwrap(),
+            format!("name={KEY_NAME}").as_str()
+        );
+        assert!(decrypt.get_ref().additional_authenticated_data.is_empty());
         Ok(())
     }
 
@@ -429,6 +488,41 @@ mod tests {
             let secret = encryption.decrypt_value(b"test-aad", &envelope).await?;
             assert_eq!(secret, SecretValue::from("test-secret"));
         }
+        Ok(())
+    }
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
+        let key_ref = GcpKmsKeyRef::new(
+            std::env::var("PROJECT_ID").expect("PROJECT_ID is set"),
+            std::env::var("PROJECT_LOCATION").expect("PROJECT_LOCATION is set"),
+            std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
+            std::env::var("KMS_KEY").expect("KMS_KEY is set"),
+        );
+        let provider = GcpKmsProvider::new(&key_ref).await?;
+        let wrapped = provider
+            .encrypt_data_encryption_key(
+                &DataEncryptionKey::from(SecretValue::from(KEY_MARKER)),
+                Some(&DekBinding::try_from("tenant-42/1".to_string())?),
+            )
+            .await?;
+
+        let result = provider
+            .decrypt_data_encryption_key(
+                &wrapped,
+                Some(&DekBinding::try_from("tenant-42/2".to_string())?),
+            )
+            .await;
+
+        println!(
+            "GCP KMS refused another binding with {:?}",
+            result.as_ref().err().map(KmsAeadError::code)
+        );
+        assert!(
+            matches!(&result, Err(KmsAeadError::NetworkError(e)) if e.public.code == "InvalidArgument"),
+            "{:?}",
+            result.err()
+        );
         Ok(())
     }
 }
