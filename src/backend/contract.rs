@@ -254,6 +254,22 @@ fn generated_keys_have_the_algorithm_length_and_differ() -> KmsAeadResult<()> {
     Ok(())
 }
 
+#[test]
+fn random_bytes_have_the_requested_length_and_differ() -> KmsAeadResult<()> {
+    for &backend in BACKENDS {
+        for len in [0, 33] {
+            let random = backend.generate_random_bytes(len)?;
+            assert_eq!(random.ref_sensitive_value().len(), len, "{backend}");
+        }
+        assert_ne!(
+            backend.generate_random_bytes(32)?,
+            backend.generate_random_bytes(32)?,
+            "{backend}"
+        );
+    }
+    Ok(())
+}
+
 /// The AEAD layer of every envelope layout: kms-aead 0.28.1 output with the default algorithm.
 #[test]
 fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
