@@ -292,10 +292,9 @@ are at hand.
 A sweep over stored rows:
 
 ```rust
+use kms_aead::backends::AeadBackend;
 use kms_aead::formats::Envelope;
-use kms_aead::{
-    AeadBackend, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
-};
+use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 /// A stored envelope value and the AAD it was sealed under.

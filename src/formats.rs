@@ -20,10 +20,11 @@
 //! last two are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery
 //! read them with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
 
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
-    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider,
-    KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
+    KmsAeadResult, ValueStruct,
 };
 
 pub(crate) mod envelope;

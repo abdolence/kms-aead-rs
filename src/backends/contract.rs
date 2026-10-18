@@ -15,13 +15,14 @@ use super::Ring;
 #[cfg(feature = "rustcrypto")]
 use super::RustCrypto;
 use crate::aead_cipher::AeadKeyBytesOps;
+use crate::backends::AeadBackend;
 use crate::errors::KmsAeadError;
 use crate::formats::Bare;
 #[cfg(feature = "deterministic")]
 use crate::formats::Deterministic;
 use crate::{
-    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconBits, BeaconMac,
-    DataEncryptionKey, Encrypted, KeyId, KmsAeadResult,
+    AeadAlgorithm, AeadCipher, BeaconAlgorithm, BeaconBits, BeaconMac, DataEncryptionKey,
+    Encrypted, KeyId, KmsAeadResult,
 };
 #[cfg(feature = "deterministic")]
 use crate::{DeterministicAlgorithm, DeterministicCipher};

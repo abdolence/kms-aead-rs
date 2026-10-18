@@ -6,12 +6,13 @@ use std::str::FromStr;
 use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::TinkKeyType;
 use crate::types::checked_key_bytes;
 use crate::{
-    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider,
-    KmsAeadResult, Plaintext,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult,
+    Plaintext,
 };
 
 #[cfg(feature = "postgres")]

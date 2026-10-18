@@ -43,7 +43,8 @@ mod contract;
 /// ```rust
 /// use kms_aead::formats::Envelope;
 /// use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-/// use kms_aead::{AeadBackend, Encrypted, KmsAeadEnvelope, KmsAeadResult};
+/// use kms_aead::backends::AeadBackend;
+/// use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult};
 /// use secret_vault_value::SecretValue;
 ///
 /// struct Orders<B> {
@@ -86,7 +87,7 @@ pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {
     /// `ring`, `aws-lc` or `rustcrypto`. `aws-lc-fips` runs the `aws-lc` backend.
     ///
     /// ```rust
-    /// use kms_aead::AeadBackend;
+    /// use kms_aead::backends::AeadBackend;
     ///
     /// # #[cfg(feature = "ring")]
     /// assert_eq!(kms_aead::backends::Ring::NAME, "ring");

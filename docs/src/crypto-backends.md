@@ -17,15 +17,15 @@ for every crate in a build when one crate enables another backend.
 
 ## Code generic over the backend
 
-The backend types implement `AeadBackend`, a sealed trait at the crate root. Its items are the
+The backend types implement `AeadBackend`, a sealed trait in `kms_aead::backends`. Its items are the
 constant `NAME`, the backend's name in spans and logs: `ring`, `aws-lc` or `rustcrypto`, and
 `generate_random_bytes`. Code that works with any backend bounds its type parameter with
 `AeadBackend` and nothing else:
 
 ```rust
-use kms_aead::backends::Ring;
+use kms_aead::backends::{AeadBackend, Ring};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadResult};
+use kms_aead::{KmsAeadEnvelope, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 struct Orders<B> {

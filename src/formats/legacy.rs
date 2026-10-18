@@ -6,13 +6,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::envelope::{split_envelope, EnvelopeLayout};
 use super::{decrypt_dek, encrypt_dek, Envelope};
 use crate::aead_cipher::AeadKeyBytesOps;
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::providers::kms_key_version::read_key_version;
 use crate::providers::KmsKeyVersion;
 use crate::types::checked_key_bytes;
 use crate::{
-    AeadBackend, Encrypted, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadEnvelope, KmsAeadResult,
+    Encrypted, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult,
 };
 
 /// An encrypted DEK as 0.29 and earlier stored it: the KMS's encrypted DEK, with the key version

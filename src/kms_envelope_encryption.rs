@@ -10,11 +10,12 @@ use secret_vault_value::SecretValue;
 use tracing::Span;
 
 use crate::aead_cipher::AeadKeyBytesOps;
+use crate::backends::AeadBackend;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::formats::{Bare, Envelope};
 use crate::{
-    spans, AeadAlgorithm, AeadBackend, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
+    spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
     DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider,
     KmsAeadResult, Plaintext,
 };

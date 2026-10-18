@@ -35,7 +35,7 @@
 //! # Backends
 //!
 //! The AEAD runs on a crypto library that a feature compiles in, named by a type in [`backends`]
-//! that implements [`AeadBackend`]: the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`].
+//! that implements [`AeadBackend`](backends::AeadBackend): the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`].
 //! A build may enable any number of them, and there is no default one.
 //!
 //! | Feature | Type | Algorithms |
@@ -53,7 +53,7 @@
 //!
 //! A build without a backend feature compiles, and
 //! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or encrypts
-//! can be constructed: no type implements [`AeadBackend`].
+//! can be constructed: no type implements [`AeadBackend`](backends::AeadBackend).
 //!
 //! # Store-less mode and the DEK cache
 //!
@@ -250,7 +250,6 @@ mod algorithm;
 pub use algorithm::*;
 
 pub mod backends;
-pub use backends::AeadBackend;
 
 mod aead_cipher;
 pub use aead_cipher::*;

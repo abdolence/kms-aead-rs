@@ -94,11 +94,12 @@ mod aes_siv_cipher {
     use secret_vault_value::SecretValue;
 
     use super::DeterministicAlgorithm;
+    use crate::backends::AeadBackend;
     use crate::errors::KmsAeadEncryptionError;
     use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
     use crate::types::checked_key_bytes;
     use crate::{
-        spans, AeadBackend, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+        spans, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
         KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, Plaintext,
     };
 

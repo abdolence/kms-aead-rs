@@ -2,12 +2,13 @@ use std::marker::PhantomData;
 
 use secret_vault_value::SecretValue;
 
+use crate::backends::AeadBackend;
 use crate::backends::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    AeadAlgorithm, AeadBackend, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    AeadAlgorithm, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
     KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 

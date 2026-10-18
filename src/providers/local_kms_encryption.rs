@@ -10,12 +10,13 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 use crate::aead_cipher::AeadKeyBytesOps;
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
-    AeadAlgorithm, AeadBackend, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey,
-    KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
