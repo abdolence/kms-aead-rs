@@ -33,8 +33,6 @@ subtle = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing = { workspace = true }
 firestore = { version = "0.58", optional = true }
-# Never below 0.8.1: earlier releases overflow the length prefix of a large value in the wire
-# protocol.
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.

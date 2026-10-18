@@ -59,12 +59,13 @@ pub(crate) struct ProviderCalls {
 
 impl ProviderCalls {
     fn refused(&self, binding: Option<&DekBinding>) -> KmsAeadResult<()> {
-        match binding.is_some() && self.refuse_bindings.load(Ordering::SeqCst) {
-            true => Err(KmsAeadEncryptionError::create(
+        if binding.is_some() && self.refuse_bindings.load(Ordering::SeqCst) {
+            Err(KmsAeadEncryptionError::create(
                 "BINDING_UNSUPPORTED",
                 "The test KMS binds nothing",
-            )),
-            false => Ok(()),
+            ))
+        } else {
+            Ok(())
         }
     }
 }
@@ -164,9 +165,10 @@ impl KeyringStore for TestStore {
 
     async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<MemoryRevision>>> {
         self.calls.loads.fetch_add(1, Ordering::SeqCst);
-        match self.calls.missing.load(Ordering::SeqCst) {
-            true => Ok(None),
-            false => self.memory.load(id).await,
+        if self.calls.missing.load(Ordering::SeqCst) {
+            Ok(None)
+        } else {
+            self.memory.load(id).await
         }
     }
 
@@ -177,9 +179,10 @@ impl KeyringStore for TestStore {
     ) -> KeyringResult<Revalidation<MemoryRevision>> {
         self.calls.revalidations.fetch_add(1, Ordering::SeqCst);
         tokio::time::sleep(self.delay).await;
-        match self.calls.missing.load(Ordering::SeqCst) {
-            true => Ok(Revalidation::Missing),
-            false => self.memory.revalidate(id, known).await,
+        if self.calls.missing.load(Ordering::SeqCst) {
+            Ok(Revalidation::Missing)
+        } else {
+            self.memory.revalidate(id, known).await
         }
     }
 
@@ -198,9 +201,10 @@ impl KeyringStore for TestStore {
                 left.checked_sub(1)
             })
             .is_ok();
-        match conflict {
-            true => Ok(Swap::Conflict),
-            false => self.memory.compare_and_swap(record, expected).await,
+        if conflict {
+            Ok(Swap::Conflict)
+        } else {
+            self.memory.compare_and_swap(record, expected).await
         }
     }
 

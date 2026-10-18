@@ -237,11 +237,10 @@ impl Display for PostgresRevision {
 fn store_error(operation: StoreOperation, error: sqlx::Error) -> KeyringError {
     let error = match error {
         sqlx::Error::Database(database) => {
-            let message = format!(
-                "{} (SQLSTATE {})",
-                database.message(),
-                database.code().unwrap_or_default()
-            );
+            let message = match database.code() {
+                Some(code) => format!("{} (SQLSTATE {code})", database.message()),
+                None => database.message().to_string(),
+            };
             return KeyringError::Store(KeyringStoreError::new(
                 StoreKind::Postgres,
                 operation,
