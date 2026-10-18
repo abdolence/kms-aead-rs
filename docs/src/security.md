@@ -51,6 +51,18 @@ values sealed with it are equal, and does not break integrity.
 
 Deterministic encryption with AES-SIV takes no random nonce.
 
+## Data volume
+
+AES-GCM also has a bound on the data under one key, whatever the nonces: RFC 8446, section 5.5,
+allows 2^24.5 records of 2^14 bytes, 2^38.5 bytes, for an AE advantage of about 2^-57. The bound
+applies to AES-GCM keys this way:
+
+- a store-less envelope renews its DEK at `max_bytes`, 2^38 bytes by default under AES-GCM and at
+  most 2^52, see [Volume limit](./dek-caching.md#volume-limit). AES-256-GCM-SIV and
+  ChaCha20-Poly1305 have no default volume limit;
+- with `encrypt_with_dek` and `AeadCipher`, the application counts the bytes it seals under one
+  AES-GCM key too, and moves to a new key before 2^38 bytes.
+
 ## Key lifetime and zeroisation
 
 `DataEncryptionKey`, `LocalKek` and the Vault token are zeroised on drop and shown as `***` by

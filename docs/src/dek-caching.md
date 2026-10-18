@@ -133,7 +133,7 @@ key: a copy taken out of it outlives the cache's control of its lifetime.
 ## Store-less DEK reuse
 
 A `KmsAeadEnvelope` with a `DekReusePolicy` encrypts many values under one DEK and renews it at
-the first encryption past `max_age` or past `max_uses`, whichever comes first. A renewal makes one
+the first encryption past `max_age`, past `max_uses` or past `max_bytes`, whichever comes first. A renewal makes one
 KMS encrypt call. Each value still carries its encrypted DEK in Tink's KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.
 
@@ -176,6 +176,41 @@ assert_eq!(decrypted_second, SecretValue::from("second"));
 The defaults are a `max_age` of 24 hours and a `max_uses` of 2^24. `max_age` must be longer than
 zero and `max_uses` at most 2^32, the bound for random 96-bit nonces under one key, otherwise the
 envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
+
+### Volume limit
+
+`max_bytes` counts the plaintext bytes sealed under the DEK. Its default depends on the algorithm:
+
+| Algorithm | Default `max_bytes` | Most allowed |
+|---|---|---|
+| AES-128-GCM, AES-256-GCM | 2^38 bytes (256 GiB) | 2^52 bytes |
+| AES-256-GCM-SIV | no limit beyond `max_uses` | any |
+| ChaCha20-Poly1305 | no limit beyond `max_uses` | any |
+
+The figures come from these bounds:
+
+- AES-GCM: RFC 8446, section 5.5, allows "up to 2^24.5 full-size records (about 24 million)" of
+  2^14 bytes, 2^38.5 bytes, "while keeping a safety margin of approximately 2^-57 for
+  Authenticated Encryption (AE) security". Luykx and Paterson, "Limits on Authenticated Encryption
+  Use in TLS", table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60. The
+  default of 2^38 bytes stays below that. The most allowed, 2^52 bytes, is the 2^48 blocks RFC
+  8452, section 9, allows under one AES-GCM key for an advantage of 2^-32;
+- AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
+  random nonces for an advantage of 2^-32, so `max_uses` bounds it already;
+- ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
+  beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
+  attempts, which no writer can count.
+
+A `max_bytes` set in the policy replaces the default, under any algorithm. Above the most
+allowed, the envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
+
+A value that would take the count past `max_bytes` renews the DEK before it is sealed. A value
+longer than `max_bytes` alone is sealed under a new DEK of its own, as the per-call envelope does,
+and the current DEK stays in use for the next values.
+
+The bounds count blocks of plaintext and AAD, and one more block per value, and `max_bytes` counts
+plaintext bytes only. At the default `max_uses` and an AAD of 16 bytes or less, the difference is
+at most 3 × 2^24 blocks beside the 2^34 blocks of the default.
 
 ### The DEK lives in the cache
 
