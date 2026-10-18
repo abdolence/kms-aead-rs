@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-940bca23.js";
+            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -249,23 +249,24 @@ and Tink read across rotations. See <a href="#keyring-and-field-encryption">Keyr
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th></th><th>Per-call envelope</th><th>Store-less DEK reuse</th><th>Keyring</th></tr>
+<tr><th></th><th>Per-call envelope</th><th>Store-less DEK reuse</th><th>One fixed key</th><th>Keyring</th></tr>
 </thead>
 <tbody>
-<tr><td>Crate</td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead-keyring</code></td></tr>
-<tr><td>DEKs</td><td>one per value</td><td>one per process at a time, renewed by age or count</td><td>one per key version of a scope</td></tr>
-<tr><td>KMS calls on write</td><td>one encryption per value</td><td>one encryption per renewed DEK</td><td>no encryption, and one decryption per key version per DEK cache TTL</td></tr>
-<tr><td>KMS calls on read</td><td>one decryption per value, or per DEK cache miss</td><td>one decryption per DEK per cache TTL</td><td>one decryption per key version per cache TTL</td></tr>
-<tr><td>A value carries</td><td>its encrypted DEK</td><td>its encrypted DEK</td><td>a 4-byte key id</td></tr>
-<tr><td>Infrastructure</td><td>a KMS</td><td>a KMS</td><td>a KMS and a keyring store</td></tr>
-<tr><td>Rotation</td><td>the KEK in the KMS</td><td>the KEK in the KMS, and DEK renewal per process</td><td>central: staged rotate and promote, retire, destroy, and a compromised flag every process sees</td></tr>
-<tr><td>Deterministic fields</td><td>with keys the application stores, see <a href="#deterministic-encryption">Deterministic encryption</a></td><td>no</td><td>yes, with queries across rotations</td></tr>
-<tr><td>BigQuery and Tink readers</td><td>no</td><td>no</td><td>yes: BigQuery with a Cloud KMS KEK, Tink with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit</td></tr>
-<tr><td>Crypto-shredding</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction, or <code>dangerously_destroy_all_versions</code> and the deletion of the record’s backups</td></tr>
+<tr><td>Crate</td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead-keyring</code></td></tr>
+<tr><td>DEKs</td><td>one per value</td><td>one per process at a time, renewed by age or count</td><td>one, encrypted once by an administrative job</td><td>one per key version of a scope</td></tr>
+<tr><td>KMS calls on write</td><td>one encryption per value</td><td>one encryption per renewed DEK</td><td>no encryption, and one decryption per DEK cache TTL</td><td>no encryption, and one decryption per key version per DEK cache TTL</td></tr>
+<tr><td>KMS calls on read</td><td>one decryption per value, or per DEK cache miss</td><td>one decryption per DEK per cache TTL</td><td>one decryption per cache TTL</td><td>one decryption per key version per cache TTL</td></tr>
+<tr><td>A value carries</td><td>its encrypted DEK</td><td>its encrypted DEK</td><td>a 4-byte key id</td><td>a 4-byte key id</td></tr>
+<tr><td>Infrastructure</td><td>a KMS</td><td>a KMS</td><td>a KMS, and the encrypted DEK in the application’s settings</td><td>a KMS and a keyring store</td></tr>
+<tr><td>Rotation</td><td>the KEK in the KMS</td><td>the KEK in the KMS, and DEK renewal per process</td><td>the KEK in the KMS; the DEK is not rotated</td><td>central: staged rotate and promote, retire, destroy, and a compromised flag every process sees</td></tr>
+<tr><td>Deterministic fields</td><td>with keys the application stores, see <a href="#deterministic-encryption">Deterministic encryption</a></td><td>no</td><td>yes, with <code>DeterministicCipher</code></td><td>yes, with queries across rotations</td></tr>
+<tr><td>BigQuery readers</td><td>no</td><td>no</td><td>yes, with a keyset of the key encrypted by a Cloud KMS KEK</td><td>yes, with a Cloud KMS KEK</td></tr>
+<tr><td>Tink readers</td><td>yes, with <code>KmsEnvelopeAead</code> for GCP and AWS keys</td><td>yes, with <code>KmsEnvelopeAead</code> for GCP and AWS keys</td><td>yes, with a keyset of the key</td><td>yes, with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit</td></tr>
+<tr><td>Crypto-shredding</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction, or <code>dangerously_destroy_all_versions</code> and the deletion of the record’s backups</td></tr>
 </tbody>
 </table>
 </div>
-<p>Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
+<p>No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
 <a href="#migrating-from-envelope-values">Migrating from envelope values</a>.</p>
 <p>Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 <code>Encrypted&lt;T, Envelope&gt;</code> that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
@@ -996,9 +997,11 @@ wrapKey and unwrapKey key operations, as in the “Key Vault Crypto User” role
 <h2 id="options"><a class="header" href="#options">Options</a></h2>
 <p><code>AzureKmsProviderOptions</code> has:</p>
 <ul>
-<li><code>algorithm</code>: the wrap algorithm, <code>RsaOaep256</code> by default for RSA keys, <code>A256Kw</code> for Managed
-HSM AES keys. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code> and unknown
-algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
+<li><code>algorithm</code>: the wrap algorithm, which must suit the key type: <code>RsaOaep256</code> for RSA keys,
+<code>A256Kw</code> for Managed HSM AES keys. The default, <code>DEFAULT_ALGORITHM</code>, is <code>RsaOaep256</code> for every
+key, so a Managed HSM AES key needs <code>algorithm</code> set to <code>A256Kw</code> and the provider built with
+<code>AzureKmsProvider::with_options</code>. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code>
+and unknown algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
 life of the key;</li>
 <li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
 policy.</li>
@@ -3772,8 +3775,8 @@ revalidated” meanwhile;</li>
 <li>A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
 <a href="#nonces">Nonces</a>. The library cannot count the values a fleet seals, so estimate
 them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
-sooner at higher rates. AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all take a 12-byte
-nonce, so the same cadence applies to each;</li>
+sooner at higher rates. AES-128-GCM, AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all
+take a 12-byte nonce, so the same cadence applies to each;</li>
 <li>AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
 for an AE advantage of about 2^-57. The keyring does not count bytes, since its DEKs are shared
 across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
@@ -5496,6 +5499,9 @@ breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
 <li><code>INFO</code>: the active version of a purpose changed, with the old and new key ids;</li>
 <li><code>WARN</code>: the store’s listener disconnected, reconnected, or did not start, and a keyring
 opened with no tokio runtime to follow the store’s signals;</li>
+<li><code>WARN</code>: a <code>KeyringRegistry</code> dropped while its background tasks run, which aborts them, with the
+count of open keyrings, and a <code>shutdown</code> whose timeout aborted the tasks still running, with
+their count;</li>
 <li><code>WARN</code>: a record a sweep could not re-seal, with the <code>Display</code> of the application’s candidate
 in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
 values, secrets and personal data out of them. A record id is often an entity id, so the
@@ -5592,8 +5598,9 @@ that allocator in place. The record keys AES-256-GCM-SIV derives for each call s
 <li>the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;</li>
 <li>an expired DEK stays in the cache’s memory until the next call on the cache or
 <code>purge_expired</code>;</li>
-<li>a plaintext value returned to the application is a <code>SecretValue</code>, zeroised on drop, and what the
-application does with it afterwards is its own.</li>
+<li><code>decrypt</code> returns the application’s own <code>T: Plaintext</code>. Only <code>SecretValue</code> as <code>T</code> is zeroised on
+drop; <code>String</code> and <code>Vec&lt;u8&gt;</code> take over the decrypted buffer and leave it in freed memory, and
+what the application does with the value afterwards is its own.</li>
 </ul>
 <h2 id="what-rotation-does-not-protect"><a class="header" href="#what-rotation-does-not-protect">What rotation does not protect</a></h2>
 <p>Rotating the KEK in the KMS makes the KMS encrypt new DEKs under the new key version. It does not:</p>

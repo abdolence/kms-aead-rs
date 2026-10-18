@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-940bca23.js";
+            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -248,8 +248,9 @@ that allocator in place. The record keys AES-256-GCM-SIV derives for each call s
 <li>the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;</li>
 <li>an expired DEK stays in the cache’s memory until the next call on the cache or
 <code>purge_expired</code>;</li>
-<li>a plaintext value returned to the application is a <code>SecretValue</code>, zeroised on drop, and what the
-application does with it afterwards is its own.</li>
+<li><code>decrypt</code> returns the application’s own <code>T: Plaintext</code>. Only <code>SecretValue</code> as <code>T</code> is zeroised on
+drop; <code>String</code> and <code>Vec&lt;u8&gt;</code> take over the decrypted buffer and leave it in freed memory, and
+what the application does with the value afterwards is its own.</li>
 </ul>
 <h2 id="what-rotation-does-not-protect"><a class="header" href="#what-rotation-does-not-protect">What rotation does not protect</a></h2>
 <p>Rotating the KEK in the KMS makes the KMS encrypt new DEKs under the new key version. It does not:</p>

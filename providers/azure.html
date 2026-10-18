@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-940bca23.js";
+            window.path_to_searchindex_js = "../searchindex-7ff84b6e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -215,9 +215,11 @@ wrapKey and unwrapKey key operations, as in the “Key Vault Crypto User” role
 <h2 id="options"><a class="header" href="#options">Options</a></h2>
 <p><code>AzureKmsProviderOptions</code> has:</p>
 <ul>
-<li><code>algorithm</code>: the wrap algorithm, <code>RsaOaep256</code> by default for RSA keys, <code>A256Kw</code> for Managed
-HSM AES keys. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code> and unknown
-algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
+<li><code>algorithm</code>: the wrap algorithm, which must suit the key type: <code>RsaOaep256</code> for RSA keys,
+<code>A256Kw</code> for Managed HSM AES keys. The default, <code>DEFAULT_ALGORITHM</code>, is <code>RsaOaep256</code> for every
+key, so a Managed HSM AES key needs <code>algorithm</code> set to <code>A256Kw</code> and the provider built with
+<code>AzureKmsProvider::with_options</code>. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code>
+and unknown algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
 life of the key;</li>
 <li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
 policy.</li>

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-940bca23.js";
+            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -390,6 +390,9 @@ breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
 <li><code>INFO</code>: the active version of a purpose changed, with the old and new key ids;</li>
 <li><code>WARN</code>: the store’s listener disconnected, reconnected, or did not start, and a keyring
 opened with no tokio runtime to follow the store’s signals;</li>
+<li><code>WARN</code>: a <code>KeyringRegistry</code> dropped while its background tasks run, which aborts them, with the
+count of open keyrings, and a <code>shutdown</code> whose timeout aborted the tasks still running, with
+their count;</li>
 <li><code>WARN</code>: a record a sweep could not re-seal, with the <code>Display</code> of the application’s candidate
 in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
 values, secrets and personal data out of them. A record id is often an entity id, so the

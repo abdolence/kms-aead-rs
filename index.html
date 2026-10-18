@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-940bca23.js";
+            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -248,23 +248,24 @@ and Tink read across rotations. See <a href="./keyring.html">Keyring and field e
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th></th><th>Per-call envelope</th><th>Store-less DEK reuse</th><th>Keyring</th></tr>
+<tr><th></th><th>Per-call envelope</th><th>Store-less DEK reuse</th><th>One fixed key</th><th>Keyring</th></tr>
 </thead>
 <tbody>
-<tr><td>Crate</td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead-keyring</code></td></tr>
-<tr><td>DEKs</td><td>one per value</td><td>one per process at a time, renewed by age or count</td><td>one per key version of a scope</td></tr>
-<tr><td>KMS calls on write</td><td>one encryption per value</td><td>one encryption per renewed DEK</td><td>no encryption, and one decryption per key version per DEK cache TTL</td></tr>
-<tr><td>KMS calls on read</td><td>one decryption per value, or per DEK cache miss</td><td>one decryption per DEK per cache TTL</td><td>one decryption per key version per cache TTL</td></tr>
-<tr><td>A value carries</td><td>its encrypted DEK</td><td>its encrypted DEK</td><td>a 4-byte key id</td></tr>
-<tr><td>Infrastructure</td><td>a KMS</td><td>a KMS</td><td>a KMS and a keyring store</td></tr>
-<tr><td>Rotation</td><td>the KEK in the KMS</td><td>the KEK in the KMS, and DEK renewal per process</td><td>central: staged rotate and promote, retire, destroy, and a compromised flag every process sees</td></tr>
-<tr><td>Deterministic fields</td><td>with keys the application stores, see <a href="./deterministic.html">Deterministic encryption</a></td><td>no</td><td>yes, with queries across rotations</td></tr>
-<tr><td>BigQuery and Tink readers</td><td>no</td><td>no</td><td>yes: BigQuery with a Cloud KMS KEK, Tink with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit</td></tr>
-<tr><td>Crypto-shredding</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction, or <code>dangerously_destroy_all_versions</code> and the deletion of the record’s backups</td></tr>
+<tr><td>Crate</td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead</code></td><td><code>kms-aead-keyring</code></td></tr>
+<tr><td>DEKs</td><td>one per value</td><td>one per process at a time, renewed by age or count</td><td>one, encrypted once by an administrative job</td><td>one per key version of a scope</td></tr>
+<tr><td>KMS calls on write</td><td>one encryption per value</td><td>one encryption per renewed DEK</td><td>no encryption, and one decryption per DEK cache TTL</td><td>no encryption, and one decryption per key version per DEK cache TTL</td></tr>
+<tr><td>KMS calls on read</td><td>one decryption per value, or per DEK cache miss</td><td>one decryption per DEK per cache TTL</td><td>one decryption per cache TTL</td><td>one decryption per key version per cache TTL</td></tr>
+<tr><td>A value carries</td><td>its encrypted DEK</td><td>its encrypted DEK</td><td>a 4-byte key id</td><td>a 4-byte key id</td></tr>
+<tr><td>Infrastructure</td><td>a KMS</td><td>a KMS</td><td>a KMS, and the encrypted DEK in the application’s settings</td><td>a KMS and a keyring store</td></tr>
+<tr><td>Rotation</td><td>the KEK in the KMS</td><td>the KEK in the KMS, and DEK renewal per process</td><td>the KEK in the KMS; the DEK is not rotated</td><td>central: staged rotate and promote, retire, destroy, and a compromised flag every process sees</td></tr>
+<tr><td>Deterministic fields</td><td>with keys the application stores, see <a href="./deterministic.html">Deterministic encryption</a></td><td>no</td><td>yes, with <code>DeterministicCipher</code></td><td>yes, with queries across rotations</td></tr>
+<tr><td>BigQuery readers</td><td>no</td><td>no</td><td>yes, with a keyset of the key encrypted by a Cloud KMS KEK</td><td>yes, with a Cloud KMS KEK</td></tr>
+<tr><td>Tink readers</td><td>yes, with <code>KmsEnvelopeAead</code> for GCP and AWS keys</td><td>yes, with <code>KmsEnvelopeAead</code> for GCP and AWS keys</td><td>yes, with a keyset of the key</td><td>yes, with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit</td></tr>
+<tr><td>Crypto-shredding</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction</td><td>KEK destruction, or <code>dangerously_destroy_all_versions</code> and the deletion of the record’s backups</td></tr>
 </tbody>
 </table>
 </div>
-<p>Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
+<p>No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
 <a href="./operations.html#migrating-from-envelope-values">Migrating from envelope values</a>.</p>
 <p>Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 <code>Encrypted&lt;T, Envelope&gt;</code> that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
