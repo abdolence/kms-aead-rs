@@ -15,6 +15,7 @@ value Tink encrypts opens with `decrypt_value`.
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
 | TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
+| Tink encrypted keyset | `TinkKeyset::to_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][wrapped keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later |
 | Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped DEK]` | kms-aead with `legacy-formats` | 0.29 |
 | Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][wrapped DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
@@ -147,6 +148,13 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
   of BigQuery's `KEYS.KEYSET_CHAIN`: an application writes it for its one key, see
   [One fixed key](./envelope-encryption.md#one-fixed-key), and a keyring exports it for its
   versions.
+
+`TinkKeyset::to_encrypted_bytes` writes the keyset encrypted by a KMS key, as Tink writes an
+encrypted keyset: a `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset`, field 2, is the
+KMS ciphertext of the serialized keyset, wrapped with no associated data. Tink's binary keyset
+writers leave out `keyset_info`, field 3, and so does the library. Tink's `KeysetHandle.read`
+reads it with the KMS client of `KekRef::tink_key_uri`, which Tink has for GCP and AWS keys, and
+Tink for Go for Vault Transit keys too.
 
 ## Typed fields
 

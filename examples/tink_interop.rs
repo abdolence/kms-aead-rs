@@ -1,16 +1,24 @@
-//! kms-aead's typed fields against Tink's `KmsEnvelopeAead` on a Cloud KMS key and an AWS KMS
-//! key. `encrypt` writes one `Encrypted<Message, Envelope>` per KMS and algorithm for
-//! `python -I tests/tink_interop.py decrypt`, and `decrypt` reads what
-//! `python -I tests/tink_interop.py encrypt` writes. The script lists the commands and the
-//! variables that name the keys; a KMS whose variables are not set is skipped.
+//! kms-aead's typed fields against Tink on a Cloud KMS key and an AWS KMS key, both ways:
+//!
+//! - `encrypt` writes one `Encrypted<Message, Envelope>` per KMS and algorithm, which
+//!   `python -I tests/tink_interop.py decrypt` opens with Tink's `KmsEnvelopeAead`;
+//! - `export` writes a keyset of one new key per KMS and algorithm, encrypted by the KMS key, and
+//!   an `Encrypted<Message, Randomized>` of the key, which
+//!   `python -I tests/tink_interop.py read-keysets` opens with the keyset;
+//! - `decrypt` reads what `python -I tests/tink_interop.py encrypt` and `read-keysets` write.
+//!
+//! The script lists the commands and the variables that name the keys; a KMS whose variables are
+//! not set is skipped.
 
 use std::io::BufRead;
 
-use kms_aead::formats::Envelope;
+use kms_aead::cache::DekCache;
+use kms_aead::formats::{Envelope, Randomized, TinkKeyId, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AwsLc, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope,
-    KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext, ValueStruct,
+    AeadAlgorithm, AeadCipher, AwsLc, Encrypted, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
+    ValueStruct,
 };
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
@@ -35,6 +43,9 @@ const ALGORITHMS: [AeadAlgorithm; 4] = [
     AeadAlgorithm::Aes256GcmSiv,
     AeadAlgorithm::ChaCha20Poly1305,
 ];
+
+/// The id of the one key of every exported keyset.
+const EXPORTED_KEY_ID: TinkKeyId = TinkKeyId::new(1042);
 
 #[tokio::main]
 async fn main() -> KmsAeadResult<()> {
@@ -62,44 +73,53 @@ async fn main() -> KmsAeadResult<()> {
                 }
             }
         }
+        Some("export") => {
+            for algorithm in ALGORITHMS {
+                if let Some(gcp_key) = &gcp_key {
+                    export("gcp", GcpKmsProvider::new(gcp_key).await?, algorithm).await?;
+                }
+                if let Some(aws_key) = &aws_key {
+                    export("aws", AwsKmsProvider::new(aws_key).await?, algorithm).await?;
+                }
+            }
+        }
         Some("decrypt") => {
             let mut failures = 0;
             for line in std::io::stdin().lock().lines() {
                 let case: Value = serde_json::from_str(&line.expect("stdin is readable"))
                     .expect("each line is a JSON object");
-                let field = |name: &str| case[name].as_str().expect("the field is a string");
-                let algorithm: AeadAlgorithm = field("algorithm").parse()?;
-                let aad = hex::decode(field("aad")).expect("aad is hex");
-                let value = Encrypted::<Message, Envelope>::try_from(
-                    hex::decode(field("value")).expect("value is hex"),
-                )?;
-                let decrypted = match (field("kms"), &gcp_key, &aws_key) {
+                let kms = case["kms"].as_str().expect("kms is a string");
+                let algorithm = case["algorithm"].as_str().expect("algorithm is a string");
+                let decrypted = match (kms, &gcp_key, &aws_key) {
                     ("gcp", Some(gcp_key), _) => {
-                        let provider = GcpKmsProvider::new(gcp_key).await?;
-                        decrypt(provider, algorithm, &aad, &value).await?
+                        decrypt(GcpKmsProvider::new(gcp_key).await?, &case).await?
                     }
                     ("aws", _, Some(aws_key)) => {
-                        let provider = AwsKmsProvider::new(aws_key).await?;
-                        decrypt(provider, algorithm, &aad, &value).await?
+                        decrypt(AwsKmsProvider::new(aws_key).await?, &case).await?
                     }
-                    (kms, _, _) => {
+                    _ => {
                         println!("{kms} {algorithm}: skipped, its key is not configured");
                         continue;
                     }
                 };
-                let expected = hex::decode(field("plain_text")).expect("plain_text is hex");
+                let expected = hex_field(&case, "plain_text");
                 if decrypted.0.as_bytes() == expected {
-                    println!("{} {algorithm}: ok", field("kms"));
+                    println!("{kms} {algorithm}: ok");
                 } else {
-                    println!("{} {algorithm}: another plain text", field("kms"));
+                    println!("{kms} {algorithm}: another plain text");
                     failures += 1;
                 }
             }
             std::process::exit(if failures == 0 { 0 } else { 1 });
         }
-        _ => eprintln!("usage: tink_interop encrypt|decrypt"),
+        _ => eprintln!("usage: tink_interop encrypt|export|decrypt"),
     }
     Ok(())
+}
+
+fn hex_field(case: &Value, name: &str) -> Vec<u8> {
+    let field = case[name].as_str().expect("the field is a string");
+    hex::decode(field).expect("the field is hex")
 }
 
 async fn encrypt<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
@@ -127,19 +147,65 @@ where
     Ok(())
 }
 
-async fn decrypt<P>(
-    provider: P,
-    algorithm: AeadAlgorithm,
-    aad: &[u8],
-    value: &Encrypted<Message, Envelope>,
-) -> KmsAeadResult<Message>
+/// A keyset of a new key, encrypted by `provider` for Tink, with a value of the key and the key
+/// wrapped by `provider`, from which `decrypt` opens the value Tink seals with the keyset.
+async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
-    KmsAeadEnvelope::<P, AwsLc>::with_options(
-        provider,
-        KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
-    )?
-    .decrypt_field(aad, value)
-    .await
+    let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
+    let (key, wrapped_key) = cipher.generate_wrapped_key(&provider).await?;
+    let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
+    keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &key)?;
+    let aad = format!("orders/{kms}/{algorithm}");
+    let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
+    let value = cipher.encrypt_field(EXPORTED_KEY_ID, aad.as_bytes(), &message, &key)?;
+    println!(
+        "{}",
+        json!({
+            "kms": kms,
+            "algorithm": algorithm.to_string(),
+            "key_uri": provider.kek().tink_key_uri(),
+            "keyset": hex::encode(keyset.to_encrypted_bytes(&provider).await?),
+            "wrapped_key": wrapped_key.to_hex_string(),
+            "aad": hex::encode(aad),
+            "plain_text": hex::encode(&message.0),
+            "value": hex::encode(value.value()),
+        })
+    );
+    Ok(())
+}
+
+/// The value of `case`: a Tink envelope, or with `wrapped_key` a value of that key.
+async fn decrypt<P>(provider: P, case: &Value) -> KmsAeadResult<Message>
+where
+    P: KmsAeadEncryptionProvider + Send + Sync,
+{
+    let algorithm: AeadAlgorithm = case["algorithm"]
+        .as_str()
+        .expect("algorithm is a string")
+        .parse()?;
+    let aad = hex_field(case, "aad");
+    let value = hex_field(case, "value");
+    match case["wrapped_key"].as_str() {
+        None => {
+            KmsAeadEnvelope::<P, AwsLc>::with_options(
+                provider,
+                KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
+            )?
+            .decrypt_field(&aad, &Encrypted::<Message, Envelope>::try_from(value)?)
+            .await
+        }
+        Some(wrapped_key) => {
+            let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
+            let value = Encrypted::<Message, Randomized>::try_from(value)?;
+            let wrapped_key = EncryptedDataEncryptionKey::try_from_hex_string(wrapped_key)?;
+            let (decrypted, _) = DekCache::disabled()
+                .with_key(&provider, &wrapped_key, |key| {
+                    cipher.decrypt_field(&aad, &value, key)
+                })
+                .await?;
+            decrypted
+        }
+    }
 }
