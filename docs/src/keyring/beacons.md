@@ -5,9 +5,12 @@ truncated HMAC-SHA256 of the value, stored beside the field's randomised value, 
 matches by equality. The keyring computes beacons under its beacon versions, of the purpose
 `Purpose::Beacon`, which rotate like any other.
 
-kms-aead's [Beacons](../envelope-encryption.md#beacons) describes the primitive, `Beacon<T>`
+kms-aead's [Beacons](../beacons.md) describes the primitive, `Beacon<T>`
 and `BeaconBits`, with keys the application keeps itself, and [Formats](../formats.md#beacons) its
 bytes.
+
+A [deterministic field](./deterministic.md) also finds rows by equality, by its encrypted value,
+see [Beacon or deterministic field](../beacons.md#beacon-or-deterministic-field).
 
 ## What a beacon leaks
 

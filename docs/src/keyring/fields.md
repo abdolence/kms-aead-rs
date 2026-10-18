@@ -2,9 +2,10 @@
 
 ## Encrypted values
 
-A keyring value is kms-aead's `Encrypted<T, Randomized>`, re-exported by the keyring: the bytes
-to store, which decrypt to a `T`. `T` is any type that implements `Plaintext`, usually an
-application newtype such as `Email`, so a field names what it holds. Its layout is in
+A keyring value is kms-aead's [`Encrypted<T, Randomized>`](../stored-values.md#encryptedt-f),
+re-exported by the keyring: the bytes to store, which decrypt to a `T`. `T` is any type that
+implements `Plaintext`, usually an application newtype such as `Email`, so a field names what it
+holds. Its layout is in
 [Formats of `Encrypted`](../formats.md#formats-of-encrypted). The keyring seals and opens it with
 kms-aead's `AeadCipher::encrypt` and `decrypt` under the key of the version, the calls an
 application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes itself.
@@ -18,20 +19,7 @@ application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes 
 - `Debug` shows the length only. A randomised value has no `==`: two values of one plaintext
   differ.
 
-The plaintext types and how they encode, which is fixed so that other readers, such as BigQuery,
-decode them:
-
-| Type | Encoding |
-|---|---|
-| `String` | UTF-8 |
-| `Vec<u8>`, `SecretValue` | the bytes themselves |
-| `bool` | `true` or `false` |
-| `i32`, `i64`, `u32`, `u64` | decimal ASCII, which SQL reads with `CAST` |
-| `Json<T>`, feature `serde-json` | the compact JSON of any serde type |
-
-An application type implements `Plaintext` by mapping to one of them, as `Email` maps to `String`.
-The decrypted value belongs to the application. Only `SecretValue` as `T` is zeroised on drop;
-`String` and `Vec<u8>` take over the decrypted buffer without a copy.
+The plaintext types and their encodings are in [Stored values](../stored-values.md#plaintext).
 
 ## In application records
 
@@ -160,7 +148,7 @@ async fn email_of(
 
 A column holding a value that is no keyring value fails in the decode, before any decryption.
 kms-aead's `sqlx` feature binds `Encrypted` in sqlx the same way, see
-[Storing typed fields](../envelope-encryption.md#storing-typed-fields).
+[Stored values](../stored-values.md#storing).
 
 ## AAD
 

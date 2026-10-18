@@ -3,6 +3,10 @@
 Feature `deterministic`, to create deterministic key versions. The deterministic types exist in
 every build, so values pass through a process without the feature.
 
+Deterministic fields fit exact-match lookups where the leak of equality is acceptable. When a
+field only needs lookups and its stored value should stay randomised, a
+[beacon](./beacons.md) fits instead.
+
 ## What they leak
 
 A deterministic column leaks to anyone who reads it, without any key:

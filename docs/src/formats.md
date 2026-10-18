@@ -189,7 +189,7 @@ an `Envelope` value in every build, and `KmsAeadEnvelope::decrypt` opens it with
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
 bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
 the integers, and compact JSON for `Json<T>`. See
-[Typed fields](./envelope-encryption.md#typed-fields).
+[Stored values](./stored-values.md#plaintext).
 
 ## Beacons
 

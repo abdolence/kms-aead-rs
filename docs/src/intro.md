@@ -89,7 +89,7 @@ Neither mode needs the other. Values of the envelope modes move to a keyring wit
 Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 `Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
 it as bytes, so a column of secrets needs no store of its own. See
-[Typed fields](./envelope-encryption.md#typed-fields).
+[Stored values](./stored-values.md).
 
 `AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
 holds.

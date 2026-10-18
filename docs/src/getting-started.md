@@ -64,7 +64,7 @@ Other features:
 - `sqlx`: sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS
   stack.
 
-See [Typed fields](./envelope-encryption.md#typed-fields).
+See [Stored values](./stored-values.md).
 
 ## Choosing a backend
 

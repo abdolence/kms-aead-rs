@@ -2,6 +2,7 @@
 
 [KMS envelope encryption for Rust](./intro.md)
 [Getting started](./getting-started.md)
+[Stored values](./stored-values.md)
 
 # Providers
 
@@ -18,6 +19,7 @@
 - [DEK caching and reuse](./dek-caching.md)
 - [Crypto backends](./crypto-backends.md)
 - [Deterministic encryption](./deterministic.md)
+- [Beacons](./beacons.md)
 
 # Keyring
 
