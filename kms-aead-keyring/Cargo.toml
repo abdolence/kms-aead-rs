@@ -33,8 +33,7 @@ firestore = { version = "0.58", optional = true }
 # Never below 0.8.1: earlier releases overflow the length prefix of a large value in the wire
 # protocol.
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"], optional = true }
-# The version kms-aead's GCP provider depends on, so that one copy is in the tree.
-gcloud-sdk = { version = "0.33", optional = true, default-features = false }
+gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
 tokio-stream = { version = "0.1", optional = true, default-features = false }
 
