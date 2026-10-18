@@ -304,7 +304,7 @@ where
     /// [`cas_retries`](KeyringOptions::cas_retries) conflicts.
     pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<Rotation> {
         spans::in_span(spans::rotate(self.id(), purpose), async {
-            let (rotation, conflicts) = self
+            let rotation = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let algorithm = edit
@@ -315,7 +315,6 @@ where
                     self.rotate_record(edit, algorithm).await
                 })
                 .await?;
-            spans::record_cas_retries(conflicts);
             spans::record_rotation(rotation.previous, rotation.current);
             Ok(rotation)
         })
@@ -330,14 +329,13 @@ where
     /// does not implement `algorithm`.
     pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<Rotation> {
         spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
-            let (rotation, conflicts) = self
+            let rotation = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.set_algorithm(algorithm, Timestamp::now());
                     self.rotate_record(edit, algorithm).await
                 })
                 .await?;
-            spans::record_cas_retries(conflicts);
             spans::record_rotation(rotation.previous, rotation.current);
             Ok(rotation)
         })
@@ -364,7 +362,7 @@ where
         note: Option<String>,
     ) -> KeyringResult<Option<Rotation>> {
         spans::in_span(spans::mark_compromised(self.id(), key_id), async {
-            let (rotation, conflicts) = self
+            let rotation = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let record = edit.record();
@@ -381,7 +379,6 @@ where
                     )
                 })
                 .await?;
-            spans::record_cas_retries(conflicts);
             if let Some(rotation) = &rotation {
                 spans::record_rotation(None, rotation.current);
             }
@@ -400,14 +397,11 @@ where
     /// errors of a write as for [`rotate`](Self::rotate).
     pub async fn retire(&self, key_id: KeyId) -> KeyringResult<()> {
         spans::in_span(spans::retire(self.id(), key_id), async {
-            let ((), conflicts) = self
-                .cache
+            self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.retire(key_id, Timestamp::now())
                 })
-                .await?;
-            spans::record_cas_retries(conflicts);
-            Ok(())
+                .await
         })
         .await
     }
@@ -420,14 +414,11 @@ where
     /// As [`retire`](Self::retire), for any version that is not retired.
     pub async fn reinstate(&self, key_id: KeyId) -> KeyringResult<()> {
         spans::in_span(spans::reinstate(self.id(), key_id), async {
-            let ((), conflicts) = self
-                .cache
+            self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.reinstate(key_id, Timestamp::now())
                 })
-                .await?;
-            spans::record_cas_retries(conflicts);
-            Ok(())
+                .await
         })
         .await
     }
@@ -440,14 +431,11 @@ where
     /// As [`retire`](Self::retire), for any version that is not retired.
     pub async fn destroy(&self, key_id: KeyId) -> KeyringResult<()> {
         spans::in_span(spans::destroy(self.id(), key_id), async {
-            let ((), conflicts) = self
-                .cache
+            self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.destroy(key_id, Timestamp::now())
                 })
-                .await?;
-            spans::record_cas_retries(conflicts);
-            Ok(())
+                .await
         })
         .await
     }
@@ -462,7 +450,7 @@ where
     /// The provider's errors, and the errors of a write as for [`rotate`](Self::rotate).
     pub async fn rewrap(&self) -> KeyringResult<usize> {
         spans::in_span(spans::rewrap(self.id()), async {
-            let (versions, conflicts) = self
+            let versions = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let deks = edit.record().wrapped_deks();
@@ -474,7 +462,6 @@ where
                     Ok(deks.len())
                 })
                 .await?;
-            spans::record_cas_retries(conflicts);
             spans::record_versions(versions);
             Ok(versions)
         })
