@@ -1,0 +1,381 @@
+//! The in-process copy of one keyring record, [`RecordCache`]: what `encrypt` and `decrypt`
+//! read instead of the store, and the rules by which it is refreshed.
+//!
+//! - A record older than the TTL is revalidated with a conditional read by the first call that
+//!   finds it so, while the other calls keep using it. A failed revalidation keeps it, and is
+//!   retried after the reload interval.
+//! - An unknown key id causes one reload, which concurrent misses share, at most once per reload
+//!   interval.
+//! - A store's change signal causes a revalidation, at most once per reload interval; signals
+//!   inside the interval collapse into the next one.
+//! - A refreshed record is taken only if it moves forward from the cached one, and a record that
+//!   went missing from the store stays in use.
+//! - Taking a record evicts from the DEK cache every key it takes out of use.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
+
+use kms_aead::cache::DekCache;
+use kms_aead::KekRef;
+use tokio::time::Instant;
+
+use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
+use crate::spans;
+use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, Swap, WatchEvent};
+use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
+
+/// The cached record of one keyring, and the store it came from.
+pub(crate) struct RecordCache<S: KeyringStore> {
+    store: S,
+    id: KeyringId,
+    kek: KekRef,
+    dek_cache: DekCache,
+    record_ttl: Duration,
+    reload_min_interval: Duration,
+    cached: Mutex<Cached<S::Revision>>,
+    /// Held by every store read that may change the cached record, and by every write, so that
+    /// one runs at a time and none takes a record older than the one another just took.
+    refresh: tokio::sync::Mutex<Refreshes>,
+    /// The reloads for unknown key ids so far, read before waiting for `refresh`, so that a
+    /// caller can tell that a reload ran while it waited.
+    unknown_id_reloads: AtomicU64,
+}
+
+struct Cached<R> {
+    record: Arc<KeyringRecord>,
+    revision: R,
+    revalidate_at: Instant,
+}
+
+#[derive(Default)]
+struct Refreshes {
+    last_unknown_id_reload: Option<Instant>,
+}
+
+impl<S: KeyringStore> RecordCache<S> {
+    /// The cache of `stored`, the record of its keyring as just read or written. `kek` is the
+    /// provider's, under which `dek_cache` holds the unwrapped keys of the record's versions.
+    pub(crate) fn new(
+        store: S,
+        kek: KekRef,
+        dek_cache: DekCache,
+        record_ttl: Duration,
+        reload_min_interval: Duration,
+        stored: Stored<S::Revision>,
+    ) -> Self {
+        Self {
+            store,
+            id: stored.record.id().clone(),
+            kek,
+            dek_cache,
+            record_ttl,
+            reload_min_interval,
+            cached: Mutex::new(Cached {
+                record: Arc::new(stored.record),
+                revision: stored.revision,
+                revalidate_at: Instant::now() + record_ttl,
+            }),
+            refresh: tokio::sync::Mutex::default(),
+            unknown_id_reloads: AtomicU64::new(0),
+        }
+    }
+
+    pub(crate) fn id(&self) -> &KeyringId {
+        &self.id
+    }
+
+    pub(crate) fn store(&self) -> &S {
+        &self.store
+    }
+
+    pub(crate) fn dek_cache(&self) -> &DekCache {
+        &self.dek_cache
+    }
+
+    pub(crate) fn reload_min_interval(&self) -> Duration {
+        self.reload_min_interval
+    }
+
+    pub(crate) fn record(&self) -> Arc<KeyringRecord> {
+        Arc::clone(&self.lock().record)
+    }
+
+    /// The cached record, revalidated first when it is older than the TTL and no other call is
+    /// refreshing it.
+    pub(crate) async fn current(&self) -> Arc<KeyringRecord> {
+        if self.revalidation_due() {
+            if let Ok(mut refreshes) = self.refresh.try_lock() {
+                // Another call may have revalidated between the check and the lock.
+                if self.revalidation_due() {
+                    self.revalidate(&mut refreshes, "ttl").await;
+                }
+            }
+        }
+        self.record()
+    }
+
+    /// The cached record, reloaded first when it has no version `key_id`: once for all the
+    /// calls that miss it together, and at most once per reload interval. Returns the record,
+    /// which may still lack the version, and what the miss caused, the `reload` span value.
+    pub(crate) async fn find(&self, key_id: KeyId) -> (Arc<KeyringRecord>, &'static str) {
+        let record = self.current().await;
+        if record.version(key_id).is_some() {
+            return (record, "none");
+        }
+        let reloads = self.unknown_id_reloads.load(Ordering::SeqCst);
+        let mut refreshes = self.refresh.lock().await;
+        let record = self.record();
+        if record.version(key_id).is_some() {
+            return (record, "none");
+        }
+        if self.unknown_id_reloads.load(Ordering::SeqCst) != reloads {
+            return (record, "reloaded");
+        }
+        let now = Instant::now();
+        if refreshes
+            .last_unknown_id_reload
+            .is_some_and(|last| now < last + self.reload_min_interval)
+        {
+            spans::reload_rate_limited(&self.id, key_id);
+            return (record, "rate_limited");
+        }
+        refreshes.last_unknown_id_reload = Some(now);
+        self.revalidate(&mut refreshes, "unknown_key_id").await;
+        self.unknown_id_reloads.fetch_add(1, Ordering::SeqCst);
+        (self.record(), "reloaded")
+    }
+
+    /// Reads the record from the store, past the TTL and the rate limit, and takes it unless it
+    /// moves backwards. The cached record stays when the read fails.
+    pub(crate) async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
+        let mut refreshes = self.refresh.lock().await;
+        let span = spans::load(&self.id, S::KIND, "forced");
+        spans::in_span(span, async {
+            let stored = spans::timed(self.store.load(&self.id))
+                .await?
+                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
+            let revision = stored.revision.clone();
+            match self.accept(&mut refreshes, stored) {
+                Ok(()) => {
+                    spans::record_load("true", Some(&revision));
+                    Ok(self.record())
+                }
+                Err(rule) => {
+                    spans::record_load("regressed", Some(&revision));
+                    Err(self.regressed(rule))
+                }
+            }
+        })
+        .await
+    }
+
+    /// Applies `change` to the record as the store holds it and writes the result with a
+    /// compare-and-swap, reading again after each conflict, up to `cas_retries` times. Takes the
+    /// written record, and returns what `change` returned and the conflicts retried. A stored
+    /// record that moves backwards from the cached one is refused before `change` runs.
+    pub(crate) async fn write<T>(
+        &self,
+        cas_retries: u32,
+        mut change: impl AsyncFnMut(&mut KeyringRecord) -> KeyringResult<T>,
+    ) -> KeyringResult<(T, u32)> {
+        let mut refreshes = self.refresh.lock().await;
+        for conflicts in 0..=cas_retries {
+            let stored = self.read_for_write().await?;
+            let mut record = stored.record;
+            let outcome = change(&mut record).await?;
+            let record = record.validated()?;
+            match self
+                .store
+                .compare_and_swap(&record, Some(&stored.revision))
+                .await?
+            {
+                Swap::Written(revision) => {
+                    self.install(&mut refreshes, Stored { record, revision });
+                    return Ok((outcome, conflicts));
+                }
+                Swap::Conflict => spans::write_conflict(&self.id, conflicts.saturating_add(1)),
+            }
+        }
+        Err(KeyringError::RecordConflict(RecordConflictError {
+            keyring: self.id.clone(),
+            attempts: cas_retries.saturating_add(1),
+        }))
+    }
+
+    pub(crate) async fn read(
+        store: &S,
+        id: &KeyringId,
+    ) -> KeyringResult<Option<Stored<S::Revision>>> {
+        let span = spans::load(id, S::KIND, "open");
+        spans::in_span(span, async {
+            let stored = spans::timed(store.load(id)).await?;
+            if let Some(stored) = &stored {
+                spans::record_load("true", Some(&stored.revision));
+            }
+            Ok(stored)
+        })
+        .await
+    }
+
+    /// The store's record, refused when it moves backwards from the cached one, for a write to
+    /// build on.
+    async fn read_for_write(&self) -> KeyringResult<Stored<S::Revision>> {
+        let span = spans::load(&self.id, S::KIND, "admin");
+        spans::in_span(span, async {
+            let stored = spans::timed(self.store.load(&self.id))
+                .await?
+                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
+            match self.record().check_successor(&stored.record) {
+                Ok(()) => {
+                    spans::record_load("false", Some(&stored.revision));
+                    Ok(stored)
+                }
+                Err(rule) => {
+                    spans::record_load("regressed", Some(&stored.revision));
+                    Err(self.regressed(rule))
+                }
+            }
+        })
+        .await
+    }
+
+    /// Revalidates the cached record now, whatever its age, and takes what the store returns
+    /// when it moves forward. A failure keeps the cached record, and the next TTL revalidation
+    /// comes after the reload interval.
+    async fn revalidate(&self, refreshes: &mut Refreshes, reason: &'static str) {
+        let revision = self.lock().revision.clone();
+        let span = spans::load(&self.id, S::KIND, reason);
+        let result = spans::in_span(span, async {
+            match spans::timed(self.store.revalidate(&self.id, &revision)).await? {
+                Revalidation::Unchanged => spans::record_load("false", None::<&S::Revision>),
+                Revalidation::Changed(stored) => {
+                    let revision = stored.revision.clone();
+                    match self.accept(refreshes, stored) {
+                        Ok(()) => spans::record_load("true", Some(&revision)),
+                        Err(rule) => {
+                            spans::record_regressed(&self.id, rule);
+                            spans::record_load("regressed", Some(&revision));
+                        }
+                    }
+                }
+                Revalidation::Missing => {
+                    spans::record_missing_kept(&self.id);
+                    spans::record_load("false", None::<&S::Revision>);
+                }
+            }
+            Ok(())
+        })
+        .await;
+        let next = match result {
+            Ok(()) => self.record_ttl,
+            Err(error) => {
+                spans::revalidation_failed(&self.id, &error);
+                self.reload_min_interval
+            }
+        };
+        self.lock().revalidate_at = Instant::now() + next;
+    }
+
+    fn accept(
+        &self,
+        refreshes: &mut Refreshes,
+        stored: Stored<S::Revision>,
+    ) -> Result<(), RegressionRule> {
+        self.record().check_successor(&stored.record)?;
+        self.install(refreshes, stored);
+        Ok(())
+    }
+
+    /// Takes `stored` as the cached record, then evicts from the DEK cache the keys it takes out
+    /// of use. A read that took the previous record just before can still cache such a key
+    /// again; it then stays until the DEK cache's TTL, and serves no read that the new record
+    /// refuses.
+    fn install(&self, _refreshes: &mut Refreshes, stored: Stored<S::Revision>) {
+        let next = Arc::new(stored.record);
+        let held = std::mem::replace(
+            &mut *self.lock(),
+            Cached {
+                record: Arc::clone(&next),
+                revision: stored.revision,
+                revalidate_at: Instant::now() + self.record_ttl,
+            },
+        )
+        .record;
+        for dek in held.withdrawn_deks(&next) {
+            self.dek_cache.invalidate(&self.kek, dek);
+        }
+        for purpose in [Purpose::Randomized, Purpose::Deterministic] {
+            let before = held.active(purpose).map(KeyVersion::key_id);
+            let after = next.active(purpose).map(KeyVersion::key_id);
+            if before != after {
+                spans::active_version_changed(&self.id, purpose, before, after);
+            }
+        }
+    }
+
+    fn regressed(&self, rule: RegressionRule) -> KeyringError {
+        spans::record_regressed(&self.id, rule);
+        KeyringError::RecordRegressed(RecordRegressedError {
+            keyring: self.id.clone(),
+            rule,
+        })
+    }
+
+    fn revalidation_due(&self) -> bool {
+        Instant::now() >= self.lock().revalidate_at
+    }
+
+    /// The cached state, also from a poisoned lock: nothing that runs under the lock panics.
+    fn lock(&self) -> MutexGuard<'_, Cached<S::Revision>> {
+        self.cached.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl<S: KeyringStore> RecordCache<S> {
+    /// Revalidates `cache` on the change signals of `watch`, at most once per reload interval,
+    /// until the watch ends or the cache is dropped. A signal inside the interval waits for its
+    /// end, and every signal that arrived meanwhile is covered by that one revalidation.
+    pub(crate) async fn follow(
+        cache: Weak<Self>,
+        id: KeyringId,
+        interval: Duration,
+        mut watch: KeyringWatch,
+    ) {
+        let mut last: Option<Instant> = None;
+        while let Some(event) = watch.next().await {
+            if !event.calls_for_revalidation(&id) {
+                continue;
+            }
+            if let Some(last) = last {
+                tokio::time::sleep_until(last + interval).await;
+            }
+            for event in watch.pending() {
+                event.calls_for_revalidation(&id);
+            }
+            let Some(cache) = cache.upgrade() else {
+                return;
+            };
+            last = Some(Instant::now());
+            let mut refreshes = cache.refresh.lock().await;
+            cache.revalidate(&mut refreshes, "watch").await;
+        }
+    }
+}
+
+impl WatchEvent {
+    /// Whether the event calls for a revalidation, after logging a lost or regained connection.
+    fn calls_for_revalidation(self, keyring: &KeyringId) -> bool {
+        match self {
+            WatchEvent::Changed => true,
+            WatchEvent::Disconnected => {
+                spans::watch_disconnected(keyring);
+                false
+            }
+            WatchEvent::Reconnected => {
+                spans::watch_reconnected(keyring);
+                true
+            }
+        }
+    }
+}

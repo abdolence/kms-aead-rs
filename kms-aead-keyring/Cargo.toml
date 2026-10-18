@@ -1,0 +1,66 @@
+[package]
+name = "kms-aead-keyring"
+version = "0.30.0"
+authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
+edition = "2021"
+license = "Apache-2.0"
+description = "Field encryption over kms-aead with a keyring: key versions in a keyring store, Tink's value layout, rotation and a compromised flag"
+homepage = "https://github.com/abdolence/kms-aead-rs"
+repository = "https://github.com/abdolence/kms-aead-rs"
+documentation = "https://docs.rs/kms-aead-keyring"
+categories = ["cryptography"]
+keywords = ["kms", "keyring", "tink", "encryption", "aead"]
+include = ["Cargo.toml", "src/**/*.rs"]
+
+[lib]
+name = "kms_aead_keyring"
+path = "src/lib.rs"
+
+[dependencies]
+kms-aead = { version = "0.29", path = "..", default-features = false }
+async-trait = { workspace = true }
+# The major version secret-vault-value depends on, so that one copy is in the tree.
+base64 = "0.23"
+jiff = { version = "0.2", features = ["serde"] }
+rsb_derive = { workspace = true }
+secret-vault-value = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+subtle = { workspace = true }
+# `rt` runs the task that follows a store's change signals and `time` spaces its revalidations.
+tokio = { workspace = true, features = ["sync", "rt", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
+uuid = { version = "1", features = ["v7"] }
+
+[features]
+default = []
+# The AEAD backends of kms-aead: any number of them in one build.
+ring = ["kms-aead/ring"]
+aws-lc = ["kms-aead/aws-lc"]
+aws-lc-fips = ["kms-aead/aws-lc-fips"]
+rustcrypto = ["kms-aead/rustcrypto"]
+# Creates deterministic key versions. The deterministic types exist in every build.
+deterministic = ["kms-aead/deterministic"]
+# Deprecated in kms-aead: reads the layouts written up to kms-aead 0.28.1.
+legacy-formats = ["kms-aead/legacy-formats"]
+# `Serialize` and `Deserialize` for `Encrypted`.
+serde = ["kms-aead/serde"]
+# `Json<T>`, a plaintext stored as its JSON.
+serde-json = ["serde"]
+
+[lints.clippy]
+mod_module_files = "deny"
+unwrap_used = "deny"
+
+[package.metadata.docs.rs]
+all-features = false
+features = ["ring", "deterministic", "serde-json"]
+
+[[example]]
+name = "local_kms"
+path = "examples/local_kms.rs"
+required-features = ["ring"]

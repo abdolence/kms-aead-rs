@@ -14,6 +14,7 @@ readme = "README.md"
 include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md"]
 
 [workspace]
+members = ["kms-aead-keyring"]
 
 # The versions of the crates both members depend on, so that the two never resolve to different
 # releases. A member adds the features it needs on top.
