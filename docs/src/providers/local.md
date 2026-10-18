@@ -119,23 +119,53 @@ let provider = LocalKmsProvider::<AwsLc>::new(
 # }
 ```
 
-To rotate, add `kek-v2` the same way and list both versions. Version 2 encrypts new DEKs, and the
-DEKs encrypted under version 1 still decrypt. Version 1 can be dropped once nothing encrypted under
-it is left.
+To rotate, add `kek-v2` the same way and list both versions, as the next section describes.
 
 ## Key versions and rotation
 
-A rotation is a new version in the provider's list, which encrypts new DEKs in every process that
-loads the list. A process that lists only the old versions fails on a DEK of the new one with
-`LOCAL_KEK_UNKNOWN_VERSION`, so every process that reads the stored values lists the new version
-before any of them encrypts under it.
+Every version in the provider's list decrypts, and the highest one encrypts unless
+`with_encrypting_version` names another. A process that does not list a version fails on a DEK
+under it with `LOCAL_KEK_UNKNOWN_VERSION`, so a rotation without downtime takes two deploys:
 
-`key_version` reads the version of an encrypted DEK from its layout, with no decryption. After a
-sweep with `reencrypt_dek`, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
-it shows whether any stored value still needs the old version. Dropping the old version from the
-list then disables it, and listing it again restores it. Destroying it means destroying every copy
-of its material, backups included.
+1. list the new version in every process, with `with_encrypting_version` keeping the current one
+   encrypting;
+2. once every process lists the new version, drop `with_encrypting_version`, or point it at the new
+   version, so the new version encrypts.
+
+```rust
+use std::num::NonZeroU32;
+
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use secret_vault_value::SecretValue;
+
+# fn example(
+#     kek_v1: SecretValue,
+#     kek_v2: SecretValue,
+# ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+let v1 = LocalKekVersion::from(NonZeroU32::try_from(1)?);
+let v2 = LocalKekVersion::from(NonZeroU32::try_from(2)?);
+
+// The first deploy: version 2 decrypts, version 1 still encrypts
+let provider = LocalKmsProvider::<Ring>::new(
+    LocalKekId::try_from("orders".to_string())?,
+    vec![
+        LocalKek::from_secret(v1, kek_v1)?,
+        LocalKek::from_secret(v2, kek_v2)?,
+    ],
+)?
+.with_encrypting_version(v1)?;
+# let _ = provider;
+# Ok(())
+# }
+```
+
+A version that is not in the list fails `with_encrypting_version` with `LOCAL_KEK_VERSIONS`.
+
+Then sweep, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+Dropping the old version from the list disables it, and listing it again restores it. Destroying it
+means destroying every copy of its material, backups included.
 
 ## Limits
 

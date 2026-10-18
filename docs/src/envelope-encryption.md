@@ -344,166 +344,30 @@ and its encrypted DEK is an `Encrypted<T, Envelope>` that Tink reads. See
 ## Re-encrypting DEKs after a KEK rotation
 
 A KEK rotation makes the KMS encrypt new DEKs under a new key version, and every DEK stored before
-it keeps decrypting with the old version only. `reencrypt_dek` moves the DEK of a stored value to
-the current version, so the old version can be retired without downtime:
+it keeps decrypting with the old version only. `reencrypt_encrypted_dek` and `reencrypt_dek` move a
+stored DEK to the current version, so the old version can be retired while the application keeps
+reading and writing:
 
-1. Rotate the KEK in the KMS;
-2. re-encrypt the DEK of every stored value with `reencrypt_dek`;
-3. confirm that no stored value still needs the old version;
-4. disable the old version, wait, then destroy it.
+1. rotate the KEK in the KMS, as the page of each provider describes;
+2. re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
+   values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`;
+3. disable the old version, then check that the KMS decrypts every stored DEK. A DEK it refuses is
+   one the sweep missed: enable the old version again, sweep again and check again;
+4. keep the old version disabled for as long as the backups of the stored values are kept, check
+   once more, then destroy it.
 
-What a rotation, a disabled version and a destroyed version are differs per KMS, see the page of
-each provider.
+A backup taken before the sweep holds the DEKs under the old version, so destroying the old version
+makes every such backup unreadable for good. Keyring records are the same, see
+[Key lifecycle](./keyring/lifecycle.md#compromised-versions). What a rotation, a disabled version
+and a destroyed version are differs per KMS, see the page of each provider.
 
-`reencrypt_dek` makes two KMS calls: the KMS decrypts the DEK with the version that encrypted it
-and encrypts it again with its current one. The AEAD bytes stay as they are, so the call takes no
-AAD, opens nothing, and the value decrypts as before:
+### The sweep
 
-```rust
-use std::num::NonZeroU32;
-
-use kms_aead::backends::Ring;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::{
-    KmsKeyVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
-};
-use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope};
-use secret_vault_value::SecretValue;
-
-# #[tokio::main(flavor = "current_thread")]
-# async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-# let kek_v1 = SecretValue::new(vec![0x01; 32]);
-# let kek_v2 = SecretValue::new(vec![0x02; 32]);
-let kek_id = LocalKekId::try_from("orders".to_string())?;
-let v1 = LocalKekVersion::from(NonZeroU32::try_from(1)?);
-let v2 = LocalKekVersion::from(NonZeroU32::try_from(2)?);
-let provider = LocalKmsProvider::<Ring>::new(
-    kek_id.clone(),
-    vec![LocalKek::from_secret(v1, kek_v1.clone())?],
-)?;
-let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let stored: Encrypted<SecretValue, Envelope> = envelope
-    .encrypt(b"orders/1042", &SecretValue::from("4111 1111 1111 1111"))
-    .await?;
-
-// The KEK rotated: version 2 encrypts, and version 1 still decrypts
-let provider = LocalKmsProvider::<Ring>::new(
-    kek_id.clone(),
-    vec![
-        LocalKek::from_secret(v1, kek_v1)?,
-        LocalKek::from_secret(v2, kek_v2.clone())?,
-    ],
-)?;
-let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let reencrypted: Encrypted<SecretValue, Envelope> = envelope.reencrypt_dek(&stored).await?;
-
-let (_, encrypted_dek) = reencrypted.separate()?;
-assert_eq!(
-    envelope.provider().key_version(&encrypted_dek)?,
-    Some(KmsKeyVersion::from(v2))
-);
-
-// Version 1 retired: the re-encrypted value still decrypts
-let provider = LocalKmsProvider::<Ring>::new(kek_id, vec![LocalKek::from_secret(v2, kek_v2)?])?;
-let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let decrypted: SecretValue = envelope.decrypt(b"orders/1042", &reencrypted).await?;
-assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
-# Ok(())
-# }
-```
-
-The DEK cache plays no part: `reencrypt_dek` decrypts through the provider and leaves the cache as
-it is, so a sweep evicts no entry that serves reads. Every call encrypts again, also for a value
-already under the current version. The sweep needs KMS encrypt and decrypt on the KEK.
-
-### Finding the values under the old version
-
-The provider's `key_version` reads the version that encrypted a DEK from the encrypted DEK's bytes,
-with no KMS call:
-
-| Provider | `key_version` | Read from |
-|---|---|---|
-| local | the KEK version | the `[KEK version: u32 BE]` field of the local layout |
-| Azure | the Key Vault key version | the key version field of the library's Azure layout, which records the version Key Vault names when it encrypts |
-| Vault Transit | the `N` of `vault:vN:` | the Transit ciphertext |
-| GCP | `None` | nothing: Cloud KMS keeps the version inside its ciphertext in a form it does not document |
-| AWS | `None` | nothing: AWS KMS exposes no versions of a key |
-| an application's own | `None`, unless it implements `key_version` | its own bytes |
-
-A sweep skips the values under another version than the retired one, where the provider names
-versions, and re-encrypts all of them where it does not. Run again, it re-encrypts nothing, which is
-step 3 for the providers that name versions:
-
-```rust
-use kms_aead::backends::AeadBackend;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::KmsKeyVersion;
-use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult};
-use secret_vault_value::SecretValue;
-
-/// Moves the DEK of every stored value in `rows` off the KEK version `retired`, and returns how
-/// many changed.
-async fn reencrypt_values<P, B>(
-    envelope: &KmsAeadEnvelope<P, B>,
-    rows: &mut [Vec<u8>],
-    retired: &KmsKeyVersion,
-) -> KmsAeadResult<usize>
-where
-    P: KmsAeadEncryptionProvider + Send + Sync,
-    B: AeadBackend,
-{
-    let mut reencrypted = 0;
-    for row in rows.iter_mut() {
-        let stored = Encrypted::<SecretValue, Envelope>::try_from(row.clone())?;
-        let (_, encrypted_dek) = stored.separate()?;
-        // `None` from a provider that names no versions: every value is re-encrypted
-        let version: Option<KmsKeyVersion> = envelope.provider().key_version(&encrypted_dek)?;
-        if version.is_some_and(|version| version != *retired) {
-            continue;
-        }
-        *row = envelope.reencrypt_dek(&stored).await?.into_value();
-        reencrypted += 1;
-    }
-    Ok(reencrypted)
-}
-# use std::num::NonZeroU32;
-# use kms_aead::backends::Ring;
-# use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-# #[tokio::main(flavor = "current_thread")]
-# async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-# let kek_id = LocalKekId::try_from("orders".to_string())?;
-# let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
-# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
-#     kek_id.clone(),
-#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
-# )?)?;
-# let mut rows = Vec::new();
-# for card in ["4111 1111 1111 1111", "5500 0000 0000 0004"] {
-#     rows.push(envelope.encrypt(b"orders/1042", &SecretValue::from(card)).await?.into_value());
-# }
-# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
-#     kek_id,
-#     vec![
-#         LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
-#         LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
-#     ],
-# )?)?;
-# let retired = KmsKeyVersion::from(v1);
-# assert_eq!(reencrypt_values(&envelope, &mut rows, &retired).await?, 2);
-# assert_eq!(reencrypt_values(&envelope, &mut rows, &retired).await?, 0);
-# Ok(())
-# }
-```
-
-Under GCP and AWS no stored value tells its version, so step 3 rests on the sweep: it has to reach
-every value written before the rotation.
-
-### DEKs shared or stored apart
-
-`reencrypt_dek` gives each value an encrypted DEK of its own. Values that share a DEK, as a
-store-less envelope writes them, would then cost one KMS encryption each in the sweep and one KMS
-decryption each on a cache miss afterwards. `reencrypt_encrypted_dek` re-encrypts an encrypted DEK
-on its own, so each distinct one is re-encrypted once and joined with each of its values:
+`reencrypt_encrypted_dek` makes two KMS calls: the KMS decrypts the DEK with the version that
+encrypted it and encrypts it again with its current one. The AEAD bytes of a value stay as they
+are, so the sweep takes no AAD, opens nothing, and the value decrypts as before. Each distinct
+encrypted DEK is re-encrypted once and joined with each of its values, so the values a store-less
+envelope wrote under one DEK still share one afterwards:
 
 ```rust
 use std::collections::HashMap;
@@ -516,19 +380,20 @@ use kms_aead::{
 };
 use secret_vault_value::SecretValue;
 
-/// Re-encrypts each distinct encrypted DEK of the values in `rows` once, so that the values that
-/// shared a DEK still share its encrypted DEK.
-async fn reencrypt_shared_deks<P, B>(
+/// The bytes to write back for each stored value in `rows`, beside the bytes read, with its DEK
+/// under the KEK's current version. Each distinct encrypted DEK is re-encrypted once.
+async fn reencrypt_values<P, B>(
     envelope: &KmsAeadEnvelope<P, B>,
-    rows: &mut [Vec<u8>],
-) -> KmsAeadResult<()>
+    rows: &[Vec<u8>],
+) -> KmsAeadResult<Vec<(Vec<u8>, Vec<u8>)>>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
     B: AeadBackend,
 {
     let mut reencrypted: HashMap<EncryptedDataEncryptionKey, EncryptedDataEncryptionKey> =
         HashMap::new();
-    for row in rows.iter_mut() {
+    let mut updates = Vec::with_capacity(rows.len());
+    for row in rows {
         let stored = Encrypted::<SecretValue, Envelope>::try_from(row.clone())?;
         let (bare, encrypted_dek) = stored.separate()?;
         let new_encrypted_dek = match reencrypted.get(&encrypted_dek) {
@@ -539,47 +404,174 @@ where
                 new_encrypted_dek
             }
         };
-        *row = Encrypted::join(&bare, &new_encrypted_dek)?.into_value();
+        updates.push((row.clone(), Encrypted::join(&bare, &new_encrypted_dek)?.into_value()));
     }
-    Ok(())
+    Ok(updates)
 }
+# use std::num::NonZeroU32;
 # use kms_aead::backends::Ring;
-# use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+# use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 # use kms_aead::{DekReusePolicy, KmsAeadEnvelopeOptions};
 # #[tokio::main(flavor = "current_thread")]
-# async fn main() -> KmsAeadResult<()> {
-# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+# let kek_id = LocalKekId::try_from("orders".to_string())?;
+# let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
-#     provider,
+#     LocalKmsProvider::new(
+#         kek_id.clone(),
+#         vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+#     )?,
 #     KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
 # )?;
 # let mut rows = Vec::new();
 # for card in ["4111 1111 1111 1111", "5500 0000 0000 0004"] {
 #     rows.push(envelope.encrypt(b"orders/1042", &SecretValue::from(card)).await?.into_value());
 # }
-# reencrypt_shared_deks(&envelope, &mut rows).await?;
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
+#     kek_id.clone(),
+#     vec![
+#         LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
+#         LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+#     ],
+# )?)?;
+# for (read, new) in reencrypt_values(&envelope, &rows).await? {
+#     if let Some(row) = rows.iter_mut().find(|row| **row == read) {
+#         *row = new;
+#     }
+# }
 # let encrypted_deks = rows
 #     .iter()
 #     .map(|row| Ok(Encrypted::<SecretValue, Envelope>::try_from(row.clone())?.separate()?.1))
 #     .collect::<KmsAeadResult<Vec<EncryptedDataEncryptionKey>>>()?;
 # assert_eq!(encrypted_deks[0], encrypted_deks[1]);
+# let disabled = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
+#     kek_id,
+#     vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+# )?)?;
+# for row in &rows {
+#     let stored = Encrypted::<SecretValue, Envelope>::try_from(row.clone())?;
+#     disabled.decrypt(b"orders/1042", &stored).await?;
+# }
 # Ok(())
 # }
 ```
 
-The same call re-encrypts the DEKs stored apart from their values, such as those of the
-`*_with_encrypted_dek` calls, of beacons and of deterministic fields. A value or a DEK in a layout of
-0.29 or earlier fails with `LEGACY_FORMAT`: `upgrade_legacy_value` and
-`upgrade_legacy_encrypted_dek` rewrite it in Tink's format, with its DEK under the current version,
-see [Upgrading stored values](./formats.md#upgrading-stored-values).
+Write each value back only where the stored bytes are still the ones read, with a compare-and-set
+such as `UPDATE orders SET card = $new WHERE id = $id AND card = $read`, or the store's own
+conditional write. An unconditional write puts back the value the sweep read over one the
+application wrote in the meantime, which is then lost. A row the application rewrote keeps its new
+value, and the check in step 3 finds it if its DEK is still under the old version.
 
-### Disabling the old version
+`reencrypt_dek` does the same for one value. It gives each value an encrypted DEK of its own, so
+values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
+each on a cache miss afterwards. The same `reencrypt_encrypted_dek` re-encrypts the DEKs stored
+apart from their values, such as those of the `*_with_encrypted_dek` calls, of beacons and of
+deterministic fields. A value or a DEK in a layout of 0.29 or earlier fails with `LEGACY_FORMAT`:
+`upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` rewrite it in Tink's format, with its DEK
+under the current version, see [Upgrading stored values](./formats.md#upgrading-stored-values).
 
-Two things keep using the old version after a rotation, and each sets how long to wait:
+The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
+so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
+current version. The sweep needs KMS encrypt and decrypt on the KEK.
+
+### Pacing
+
+The sweep makes two KMS calls per distinct encrypted DEK, and the check one, on top of the calls
+the application makes. Under a KMS with a request quota, as the cloud KMSs have, pace the sweep
+below it: a fixed number of DEKs per second, or a pause after each batch, with room left for the
+application. A sweep over the quota fails with the KMS's error, such as `ResourceExhausted` on GCP,
+and so do the application's own calls meanwhile.
+
+### The check
+
+Once the old version is disabled, the KMS refuses every DEK still under it, so the check decrypts
+each distinct encrypted DEK through the provider, never through the DEK cache, which would serve a
+missed DEK from memory. It needs no AAD and opens no value, and it runs online, under every
+provider. Any error counts as a missed DEK:
+
+```rust
+use std::collections::HashSet;
+
+use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{
+    Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult,
+};
+use secret_vault_value::SecretValue;
+
+/// The distinct encrypted DEKs of the values in `rows` that the provider fails to decrypt.
+async fn missed_deks<P, B>(
+    envelope: &KmsAeadEnvelope<P, B>,
+    rows: &[Vec<u8>],
+) -> KmsAeadResult<Vec<EncryptedDataEncryptionKey>>
+where
+    P: KmsAeadEncryptionProvider + Send + Sync,
+    B: AeadBackend,
+{
+    let mut encrypted_deks: HashSet<EncryptedDataEncryptionKey> = HashSet::new();
+    for row in rows {
+        let stored = Encrypted::<SecretValue, Envelope>::try_from(row.clone())?;
+        let (_, encrypted_dek) = stored.separate()?;
+        encrypted_deks.insert(encrypted_dek);
+    }
+    let mut missed = Vec::new();
+    for encrypted_dek in encrypted_deks {
+        if envelope
+            .provider()
+            .decrypt_data_encryption_key(&encrypted_dek)
+            .await
+            .is_err()
+        {
+            missed.push(encrypted_dek);
+        }
+    }
+    Ok(missed)
+}
+# use std::num::NonZeroU32;
+# use kms_aead::backends::Ring;
+# use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+# let kek_id = LocalKekId::try_from("orders".to_string())?;
+# let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
+#     kek_id.clone(),
+#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+# )?)?;
+# let stored = envelope.encrypt(b"orders/1042", &SecretValue::from("4111 1111 1111 1111")).await?;
+# let rows = vec![stored.into_value()];
+# let disabled = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(LocalKmsProvider::new(
+#     kek_id,
+#     vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+# )?)?;
+# assert_eq!(missed_deks(&disabled, &rows).await?.len(), 1);
+# Ok(())
+# }
+```
+
+A keyring's record is checked by running `KeyringAdmin::reencrypt_deks` again with the old version
+disabled: it decrypts every DEK in the record through the provider, and fails on one still under
+the old version.
+
+Two things keep using the old version after a rotation, and each sets when to check:
 
 - a store-less writer keeps sealing under its current DEK, encrypted under the old version, until
   its reuse policy renews the DEK or the DEK leaves its cache, at the cache's TTL of 15 minutes by
-  default. Start the sweep once every writer has renewed, or run it again afterwards;
+  default. Start the sweep once every writer has renewed, or the check finds the values written
+  meanwhile;
 - every DEK cache serves the DEKs it holds, without a KMS call, until their entries expire. A value
-  the sweep missed fails to decrypt only once its entry has expired, so wait at least the cache TTL
-  after disabling the version before destroying it, see [DEK caching](./dek-caching.md).
+  the sweep missed fails to decrypt in the application only once its entry has expired, see
+  [DEK caching](./dek-caching.md). The check does not wait for that, since it never reads a cache.
+
+A KMS whose changes take time to propagate, such as Cloud KMS, can keep encrypting under the old
+version for a while after the rotation and keep decrypting under it for a while after it is
+disabled. Wait before the sweep and again before trusting the check, see the page of each provider.
+
+### Rolling back a rotation
+
+A swept value's DEK is under the new version only. Rolling back a rotation, by making the old
+version encrypt again, keeps the new version enabled: disabling it makes every swept value and
+every value written since the rotation unreadable, until it is enabled again. Rolling back to the
+old version needs no new sweep. To retire the new version afterwards, run the procedure above with
+the old version as the current one.

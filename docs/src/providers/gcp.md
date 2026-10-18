@@ -69,15 +69,25 @@ A rotation adds a version to the CryptoKey and makes it the primary version, by 
 key's rotation schedule. New DEKs are encrypted under the primary version from then on, and Cloud
 KMS decrypts every DEK with the version that encrypted it, for as long as that version is enabled.
 
-The encrypted DEK is the Cloud KMS ciphertext as it is, which Tink and BigQuery read, and Cloud KMS
-keeps the version inside it in a form it does not document. So `key_version` returns `None`, and
-the version is recorded only in the `KMS encrypt DEK` span. A sweep with `reencrypt_dek` after a
-rotation has to re-encrypt every value written before it, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+To retire the old version, disable it once the sweep has reached every value, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation):
+decryptions under it fail, and enabling it again restores them. Destroying it schedules its
+destruction, 30 days later by default, and until then the version can be restored.
 
-To retire the old version, disable it once the sweep is done: decryptions under it fail, and
-enabling it again restores them. Destroying it schedules its destruction, 30 days later by default,
-and until then the version can be restored.
+Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
+[Cloud KMS resource consistency](https://docs.cloud.google.com/kms/docs/consistency). Until a new
+primary version has propagated, `Encrypt` may still use the previous one, and a disabled version
+"typically remains usable for encrypting and decrypting data for up to 1 minute after it is
+disabled", for several hours in exceptional cases. So:
+
+- start the sweep only once the new primary version has propagated. The `key_version` field of the
+  `KMS encrypt DEK` span names the version Cloud KMS encrypted with, see
+  [Observability](../observability.md);
+- run the check only once the disable has propagated, and run it again before destroying the
+  version. A check inside that window passes on DEKs that are still under the old version.
+
+Enabling a version is strongly consistent: an enabled version is available at once, so enabling
+the old version again after a failed check takes effect immediately.
 
 ## Errors
 

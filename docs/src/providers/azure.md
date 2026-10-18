@@ -72,8 +72,7 @@ in `AzureKmsKeyRef`, the latest version encrypts new DEKs; with one, that versio
 to the new version before a sweep. A sweep with a provider pinned to the old version re-encrypts
 under the old version.
 
-`key_version` reads the version each encrypted DEK records, with no request. After a sweep with
-`reencrypt_dek`, see
+Once the sweep has reached every value, see
 [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
 disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
 Key Vault deletes a key with all its versions and never one version alone, so the old version stays
