@@ -7,7 +7,10 @@ use base64::Engine;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Randomized;
-use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey, KekRef, ValueStruct};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey, KekRef, KmsAeadResult, Plaintext,
+    ValueStruct,
+};
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
@@ -167,6 +170,36 @@ async fn values_round_trip_through_their_plaintext_types() -> TestResult {
         let sealed = keyring.encrypt(&aad, &json).await?;
         assert_eq!(keyring.decrypt(&aad, &sealed).await?, json);
     }
+    Ok(())
+}
+
+/// An application's email type, sealed as the UTF-8 of the address.
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+/// A newtype field is sealed as the plaintext of the type it maps to, so a reader of that type,
+/// such as BigQuery's `AEAD.DECRYPT_STRING` for a `String`, opens it.
+#[tokio::test]
+async fn a_newtype_field_is_sealed_as_its_string() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let alice = Email(ALICE.to_string());
+
+    let sealed: Encrypted<Email, Randomized> = fixture.keyring.encrypt(&aad, &alice).await?;
+    let as_string = Encrypted::<String, Randomized>::try_from(sealed.value().clone())?;
+
+    assert_eq!(fixture.keyring.decrypt(&aad, &sealed).await?, alice);
+    assert_eq!(fixture.keyring.decrypt(&aad, &as_string).await?, ALICE);
     Ok(())
 }
 
