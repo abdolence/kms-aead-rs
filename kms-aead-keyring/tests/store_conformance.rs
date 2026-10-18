@@ -16,11 +16,13 @@ fn unique_keyring_id() -> KeyringResult<KeyringId> {
     KeyringId::try_from(format!("conformance-{}", uuid::Uuid::now_v7()))
 }
 
+/// The wrapped key of every version of [`record`]: `[0xFF][0x01][0x00]` starts encrypted key
+/// layout v1 with no key version, and `wrapped` follows. A store error never contains it.
+const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
+
 /// The record of `id` after `rotations` rotations: randomized versions 1 to `rotations`
 /// decrypt only, and the next one is active.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
-    // `[0xFF][0x01][0x00]` starts encrypted key layout v1 with no key version.
-    let wrapped_dek = "/wEAd3JhcHBlZA==";
     let versions: Vec<_> = (1..=rotations + 1)
         .map(|key_id| {
             json!({
@@ -30,7 +32,7 @@ fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
                 "compromised": null,
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
-                "wrapped_dek": wrapped_dek,
+                "wrapped_dek": WRAPPED_DEK,
             })
         })
         .collect();
@@ -236,4 +238,56 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
 #[tokio::test]
 async fn the_memory_store_conforms() -> TestResult {
     conformance(MemoryKeyringStore::new).await
+}
+
+/// The Firestore store, on the emulator `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
+/// application default credentials when it is unset, in the project `PROJECT_ID`. The records
+/// go to the collection `kms_aead_rs_ci_keyrings`.
+#[cfg(feature = "firestore")]
+mod firestore_store {
+    use std::error::Error;
+
+    use firestore::{FirestoreDb, FirestoreTimestamp};
+    use kms_aead_keyring::store::FirestoreKeyringStore;
+    use kms_aead_keyring::KeyringError;
+
+    use super::*;
+
+    async fn store() -> Result<FirestoreKeyringStore, Box<dyn Error>> {
+        let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
+        Ok(FirestoreKeyringStore::new(db).with_collection("kms_aead_rs_ci_keyrings"))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn the_firestore_store_conforms() -> TestResult {
+        let store = store().await?;
+        conformance(|| store.clone()).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn a_store_error_carries_no_record_bytes() -> TestResult {
+        let store = store().await?;
+        let record = record(&unique_keyring_id()?, 2)?;
+        let created = written(store.compare_and_swap(&record, None).await?)?;
+        // Firestore refuses an update time that is not a whole microsecond.
+        let misaligned =
+            FirestoreTimestamp(created.0.checked_add(jiff::SignedDuration::from_nanos(1))?);
+        let error = store
+            .compare_and_swap(&record, Some(&misaligned))
+            .await
+            .err()
+            .ok_or("Firestore took a misaligned update time")?;
+        assert!(matches!(error, KeyringError::Store(_)));
+        let mut texts = vec![error.to_string(), format!("{error:?}")];
+        let mut source = error.source();
+        while let Some(cause) = source {
+            texts.push(cause.to_string());
+            texts.push(format!("{cause:?}"));
+            source = cause.source();
+        }
+        assert!(texts.iter().all(|text| !text.contains(WRAPPED_DEK)));
+        Ok(())
+    }
 }

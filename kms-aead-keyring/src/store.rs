@@ -1,4 +1,5 @@
-//! Where keyring records live: the [`KeyringStore`] trait, and [`MemoryKeyringStore`].
+//! Where keyring records live: the [`KeyringStore`] trait, [`MemoryKeyringStore`], and the
+//! store of each store feature.
 
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -10,6 +11,11 @@ use crate::{KeyringId, KeyringRecord};
 
 mod memory;
 pub use memory::*;
+
+#[cfg(feature = "firestore")]
+mod firestore;
+#[cfg(feature = "firestore")]
+pub use self::firestore::*;
 
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///
@@ -153,15 +159,18 @@ pub enum WatchEvent {
 pub enum StoreKind {
     /// [`MemoryKeyringStore`].
     Memory,
+    /// `FirestoreKeyringStore`, of the `firestore` feature.
+    Firestore,
     /// An application's own store, by the name it gives.
     Other(&'static str),
 }
 
-/// `memory`, or the application's name: the value of the `store` span field.
+/// `memory`, `firestore`, or the application's name: the value of the `store` span field.
 impl Display for StoreKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             StoreKind::Memory => "memory",
+            StoreKind::Firestore => "firestore",
             StoreKind::Other(name) => name,
         })
     }

@@ -52,6 +52,7 @@
 //! | Store | Type | Feature |
 //! |---|---|---|
 //! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
+//! | Firestore, with a listener for push | `store::FirestoreKeyringStore` | `firestore` |
 //!
 //! # Features
 //!
@@ -62,6 +63,7 @@
 //! | `legacy-formats` | kms-aead's `legacy-formats` |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and [`Json`], a plaintext stored as its JSON |
+//! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
 //!
 //! # Example
 //!

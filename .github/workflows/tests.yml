@@ -137,3 +137,30 @@ jobs:
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
       - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
+  # The Firestore store against the emulator, so that the job needs no credentials. The emulator
+  # image's entry point is gcloud, which a service container cannot be given arguments for.
+  keyring-firestore:
+    name: keyring-firestore
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,deterministic,serde,firestore
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8687
+      PROJECT_ID: kms-aead-emulator
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: |
+          docker run -d -p 8687:8687 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8687
+          for attempt in $(seq 1 60); do
+            curl -sf "http://$FIRESTORE_EMULATOR_HOST" > /dev/null && break
+            sleep 1
+          done
+          curl -sf "http://$FIRESTORE_EMULATOR_HOST" > /dev/null
+      - run: |
+          cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+          cargo test -p kms-aead-keyring --features "$FEATURES"
+          cargo test -p kms-aead-keyring --features "$FEATURES" --test store_conformance -- --ignored firestore_store
