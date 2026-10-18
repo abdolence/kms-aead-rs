@@ -25,7 +25,7 @@ pub trait KmsAeadEncryptionProvider {
     /// a cache of decrypted keys may be keyed by it.
     fn kek(&self) -> &KekRef;
 
-    /// Encrypts `encryption_key` with the KEK, recording the KEK version that encrypted it when the
+    /// Encrypts `dek` with the KEK, recording the KEK version that encrypted it when the
     /// KMS reports one.
     ///
     /// # Errors
@@ -34,10 +34,10 @@ pub trait KmsAeadEncryptionProvider {
     /// has one, such as `NotFoundException` from AWS KMS or `VAULT_STATUS_403` from Vault.
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
 
-    /// Decrypts `encrypted_key` with the KEK. The request names the configured KEK, so a key
+    /// Decrypts `encrypted_dek` with the KEK. The request names the configured KEK, so a key
     /// encrypted under another KEK is refused by the KMS.
     ///
     /// # Errors
@@ -45,7 +45,7 @@ pub trait KmsAeadEncryptionProvider {
     /// As [`encrypt_data_encryption_key`](Self::encrypt_data_encryption_key).
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey>;
 
     /// `len` random bytes from the KMS's own generator, for a provider configured to use it.

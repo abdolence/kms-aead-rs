@@ -153,7 +153,7 @@ async fn decrypt_names_the_configured_kek() -> KmsAeadResult<()> {
 #[tokio::test]
 async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
     let key_marker = azure_core::base64::encode_url_safe(LEAK_MARKER);
-    let encrypted_key = encrypted_key(b"wrapped");
+    let encrypted_dek = encrypted_key(b"wrapped");
     let responses = [
         // A successful decryption whose body is not the expected model.
         (StatusCode::Ok, format!(r#"{{"value": ["{key_marker}"]}}"#)),
@@ -166,7 +166,7 @@ async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
 
     for (status, body) in responses {
         let err = provider_over(status, body)?
-            .decrypt_data_encryption_key(&encrypted_key)
+            .decrypt_data_encryption_key(&encrypted_dek)
             .await
             .unwrap_err();
 
@@ -186,11 +186,11 @@ async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -
         azure_core::base64::encode_url_safe(&wrapped)
     );
 
-    let encrypted_key = provider_over(StatusCode::Ok, body)?
+    let encrypted_dek = provider_over(StatusCode::Ok, body)?
         .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
-    assert_eq!(encrypted_key, self::encrypted_key(&wrapped));
+    assert_eq!(encrypted_dek, self::encrypted_key(&wrapped));
     Ok(())
 }
 
@@ -213,7 +213,7 @@ async fn key_vault_encrypts_the_raw_key() -> Result<(), Box<dyn std::error::Erro
             KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
         )?;
 
-        let (key, _) = envelope.generate_dek().await?;
+        let (dek, _) = envelope.generate_dek().await?;
 
         let request_bodies = http_client.request_bodies.lock().unwrap();
         let [request_body] = request_bodies.as_slice() else {
@@ -226,7 +226,7 @@ async fn key_vault_encrypts_the_raw_key() -> Result<(), Box<dyn std::error::Erro
                 .ok_or("no value in the encryption request")?,
         )?;
         assert_eq!(wrapped.len(), algorithm.key_len(), "{algorithm}");
-        assert_eq!(wrapped, *key.value().ref_sensitive_value(), "{algorithm}");
+        assert_eq!(wrapped, *dek.value().ref_sensitive_value(), "{algorithm}");
     }
     Ok(())
 }

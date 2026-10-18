@@ -36,7 +36,7 @@ fn ciphers<B: AeadBackend>() -> impl Iterator<Item = AeadCipher<B>> {
 /// A value one backend sealed, for the others to open.
 struct SealedValue<C> {
     backend: &'static str,
-    key: DataEncryptionKey,
+    dek: DataEncryptionKey,
     cipher_text: C,
 }
 
@@ -83,18 +83,18 @@ fn every_supported_algorithm_round_trips() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let inputs = (vec(any::<u8>(), 0..4096), vec(any::<u8>(), 0..256));
         for cipher in ciphers::<B>() {
-            let key = cipher.generate_key()?;
+            let dek = cipher.generate_key()?;
             TestRunner::default()
                 .run(&inputs, |(plain_text, aad)| {
                     let plain_text = SecretValue::new(plain_text);
-                    let cipher_text = cipher.encrypt_value(&aad, &plain_text, &key)?;
+                    let cipher_text = cipher.encrypt_value(&aad, &plain_text, &dek)?;
                     prop_assert_eq!(
                         cipher_text.value().len(),
                         AeadAlgorithm::NONCE_LEN
                             + plain_text.ref_sensitive_value().len()
                             + AeadAlgorithm::TAG_LEN
                     );
-                    prop_assert_eq!(cipher.decrypt_value(&aad, &cipher_text, &key)?, plain_text);
+                    prop_assert_eq!(cipher.decrypt_value(&aad, &cipher_text, &dek)?, plain_text);
                     Ok(())
                 })
                 .unwrap_or_else(|failure| panic!("{cipher:?}: {failure}"));
@@ -120,11 +120,11 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
         sealed: &mut Vec<SealedValue<CipherText>>,
     ) -> KmsAeadResult<()> {
         if let Ok(cipher) = AeadCipher::<B>::new(algorithm) {
-            let key = cipher.generate_key()?;
-            let cipher_text = cipher.encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT), &key)?;
+            let dek = cipher.generate_key()?;
+            let cipher_text = cipher.encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT), &dek)?;
             sealed.push(SealedValue {
                 backend: B::NAME,
-                key,
+                dek,
                 cipher_text,
             });
         }
@@ -138,7 +138,7 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
         if let Ok(cipher) = AeadCipher::<B>::new(algorithm) {
             for value in sealed {
                 assert_eq!(
-                    cipher.decrypt_value(AAD, &value.cipher_text, &value.key)?,
+                    cipher.decrypt_value(AAD, &value.cipher_text, &value.dek)?,
                     SecretValue::from(PLAIN_TEXT),
                     "{algorithm} sealed by {} and opened by {}",
                     value.backend,
@@ -178,11 +178,11 @@ fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAe
         sealed: &mut Vec<SealedValue<DeterministicCipherText>>,
     ) -> KmsAeadResult<()> {
         let cipher = DeterministicCipher::<B>::new(algorithm)?;
-        let key = cipher.generate_key()?;
-        let cipher_text = cipher.encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT), &key)?;
+        let dek = cipher.generate_key()?;
+        let cipher_text = cipher.encrypt_value(AAD, &SecretValue::from(PLAIN_TEXT), &dek)?;
         sealed.push(SealedValue {
             backend: B::NAME,
-            key,
+            dek,
             cipher_text,
         });
         Ok(())
@@ -196,14 +196,14 @@ fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAe
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for value in sealed {
             assert_eq!(
-                cipher.encrypt_value(AAD, &plain_text, &value.key)?,
+                cipher.encrypt_value(AAD, &plain_text, &value.dek)?,
                 value.cipher_text,
                 "{algorithm} sealed by {} and by {}",
                 value.backend,
                 B::NAME
             );
             assert_eq!(
-                cipher.decrypt_value(AAD, &value.cipher_text, &value.key)?,
+                cipher.decrypt_value(AAD, &value.cipher_text, &value.dek)?,
                 plain_text,
                 "{algorithm} sealed by {} and opened by {}",
                 value.backend,
@@ -235,19 +235,19 @@ fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAe
 #[test]
 fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
-        let deterministic_sized_key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
+        let deterministic_sized_dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
-            let sealed = cipher.encrypt_value(AAD, &plain_text, &deterministic_sized_key);
+            let sealed = cipher.encrypt_value(AAD, &plain_text, &deterministic_sized_dek);
             assert!(
                 matches!(&sealed, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_LENGTH"),
                 "{cipher:?} seals: {sealed:?}"
             );
 
-            let key = cipher.generate_key()?;
-            let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
-            let opened = cipher.decrypt_value(AAD, &cipher_text, &deterministic_sized_key);
+            let dek = cipher.generate_key()?;
+            let cipher_text = cipher.encrypt_value(AAD, &plain_text, &dek)?;
+            let opened = cipher.decrypt_value(AAD, &cipher_text, &deterministic_sized_dek);
             assert!(
                 matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_LENGTH"),
@@ -271,9 +271,9 @@ fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
-            let key = cipher.generate_key()?;
-            let other_key = cipher.generate_key()?;
-            let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
+            let dek = cipher.generate_key()?;
+            let other_dek = cipher.generate_key()?;
+            let cipher_text = cipher.encrypt_value(AAD, &plain_text, &dek)?;
             let last = cipher_text.value().len() - 1;
             let flipped = |index: usize| {
                 let mut bytes = cipher_text.value().clone();
@@ -285,20 +285,20 @@ fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
                     "another AAD",
                     b"orders/1043/card",
                     cipher_text.clone(),
-                    &key,
+                    &dek,
                 ),
-                ("another key", AAD, cipher_text.clone(), &other_key),
-                ("a flipped nonce bit", AAD, flipped(0), &key),
+                ("another key", AAD, cipher_text.clone(), &other_dek),
+                ("a flipped nonce bit", AAD, flipped(0), &dek),
                 (
                     "a flipped cipher text bit",
                     AAD,
                     flipped(AeadAlgorithm::NONCE_LEN),
-                    &key,
+                    &dek,
                 ),
-                ("a flipped tag bit", AAD, flipped(last), &key),
+                ("a flipped tag bit", AAD, flipped(last), &dek),
             ];
-            for (case, aad, value, key) in cases {
-                let opened = cipher.decrypt_value(aad, &value, key);
+            for (case, aad, value, dek) in cases {
+                let opened = cipher.decrypt_value(aad, &value, dek);
                 assert!(
                     matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                         if error.public.code == "DECRYPT"),
@@ -322,14 +322,14 @@ fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
 fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         for cipher in ciphers::<B>() {
-            let key = cipher.generate_key()?;
+            let dek = cipher.generate_key()?;
             for len in [
                 0,
                 AeadAlgorithm::NONCE_LEN - 1,
                 AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN - 1,
             ] {
                 let short = CipherText(vec![0xAA; len]);
-                let opened = cipher.decrypt_value(AAD, &short, &key);
+                let opened = cipher.decrypt_value(AAD, &short, &dek);
                 assert!(
                     matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                         if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
@@ -354,10 +354,10 @@ fn sealing_twice_gives_different_values() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
-            let key = cipher.generate_key()?;
+            let dek = cipher.generate_key()?;
             let mut nonces = HashSet::new();
             for _ in 0..100 {
-                let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
+                let cipher_text = cipher.encrypt_value(AAD, &plain_text, &dek)?;
                 nonces.insert(cipher_text.value()[..AeadAlgorithm::NONCE_LEN].to_vec());
             }
             assert_eq!(nonces.len(), 100, "{cipher:?}");
@@ -380,8 +380,8 @@ fn generated_keys_have_the_algorithm_length_and_differ() -> KmsAeadResult<()> {
         for cipher in ciphers::<B>() {
             let mut keys = HashSet::new();
             for _ in 0..100 {
-                let key = cipher.generate_key()?;
-                keys.insert(key.value().ref_sensitive_value().clone());
+                let dek = cipher.generate_key()?;
+                keys.insert(dek.value().ref_sensitive_value().clone());
             }
             assert_eq!(keys.len(), 100, "{cipher:?}");
             assert!(
@@ -431,7 +431,7 @@ fn random_bytes_have_the_requested_length_and_differ() -> KmsAeadResult<()> {
 #[test]
 fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
-        let key = DataEncryptionKey::from(SecretValue::new(
+        let dek = DataEncryptionKey::from(SecretValue::new(
             hex::decode("ee1b4efa8e3b1f550edfe8fe963d575b8cbf4e1f686e8c512ac7e4b3b1b7dd0a")
                 .unwrap(),
         ));
@@ -443,7 +443,7 @@ fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
         );
         let cipher = AeadCipher::<B>::new(AeadAlgorithm::ChaCha20Poly1305)?;
 
-        let opened = cipher.decrypt_value(b"fixture-aad", &cipher_text, &key)?;
+        let opened = cipher.decrypt_value(b"fixture-aad", &cipher_text, &dek)?;
 
         assert_eq!(opened, SecretValue::from("fixture-secret"), "{}", B::NAME);
         Ok(())
@@ -464,7 +464,7 @@ fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
 #[test]
 fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
-        let key = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
+        let dek = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
         let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256);
         for (bits, beacon) in [
             (
@@ -480,7 +480,7 @@ fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
                 b"user/email",
                 bits,
                 &"alice@example.com".to_string(),
-                &key,
+                &dek,
             )?;
             assert_eq!(
                 hex::encode(computed.value()),

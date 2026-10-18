@@ -49,7 +49,7 @@ pub(crate) mod legacy;
 /// the encrypted DEK, which no built-in provider's own bytes start with.
 const LEGACY_ENCRYPTED_DEK_V1_PREFIX: [u8; 2] = [0xFF, 0x01];
 
-/// `key` encrypted by `provider` as Tink encrypts a data encryption key: the KMS ciphertext of the
+/// `dek` encrypted by `provider` as Tink encrypts a data encryption key: the KMS ciphertext of the
 /// key serialised as a key of `key_type`, with no associated data. An Azure KEK encrypts the raw
 /// key instead: Key Vault's AES key wrap takes only multiples of 8 bytes, which no serialised Tink
 /// key is, and no Tink client exists for Azure.
@@ -58,7 +58,7 @@ const LEGACY_ENCRYPTED_DEK_V1_PREFIX: [u8; 2] = [0xFF, 0x01];
 ///
 /// The provider's errors.
 pub(crate) async fn encrypt_dek<P>(
-    key: &DataEncryptionKey,
+    dek: &DataEncryptionKey,
     key_type: TinkKeyType,
     provider: &P,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey>
@@ -66,10 +66,10 @@ where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
     match provider.kek().provider() {
-        KekProvider::Azure => provider.encrypt_data_encryption_key(key).await,
+        KekProvider::Azure => provider.encrypt_data_encryption_key(dek).await,
         _ => {
-            let serialized = DataEncryptionKey::from(serialize_tink_key(key_type, key));
-            provider.encrypt_data_encryption_key(&serialized).await
+            let serialized_dek = DataEncryptionKey::from(serialize_tink_key(key_type, dek));
+            provider.encrypt_data_encryption_key(&serialized_dek).await
         }
     }
 }
@@ -91,7 +91,7 @@ where
     B: AeadBackend,
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
-    let key = match provider.generate_key_material(key_len).await? {
+    let dek = match provider.generate_key_material(key_len).await? {
         Some(material) if material.ref_sensitive_value().len() != key_len => {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_KEY_LENGTH",
@@ -104,15 +104,15 @@ where
         Some(material) => DataEncryptionKey::from(material),
         None => DataEncryptionKey::from(generate_random_bytes::<B>(key_len)?),
     };
-    let encrypted_key = encrypt_dek(&key, key_type, provider).await?;
-    Ok((key, encrypted_key))
+    let encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
+    Ok((dek, encrypted_dek))
 }
 
-/// The data encryption key that `encrypted` holds, decrypted by `provider`, and the layout written
-/// by 0.29 or earlier that it was read from, if any. Only `legacy-formats` reads those layouts: the
-/// bytes of 0.29's encrypted key layout given to a built-in provider, and an encrypted DEK that
-/// holds the raw key rather than a serialised Tink key. The bytes of an application's own provider
-/// are never inspected.
+/// The data encryption key that `encrypted_dek` holds, decrypted by `provider`, and the layout
+/// written by 0.29 or earlier that it was read from, if any. Only `legacy-formats` reads those
+/// layouts: the bytes of 0.29's encrypted key layout given to a built-in provider, and an encrypted
+/// DEK that holds the raw key rather than a serialised Tink key. The bytes of an application's own
+/// provider are never inspected.
 ///
 /// # Errors
 ///
@@ -120,7 +120,7 @@ where
 /// key, or under an Azure KEK not a raw key, and without `legacy-formats` `LEGACY_FORMAT` for a
 /// layout of 0.29 or earlier.
 pub(crate) async fn decrypt_dek<P>(
-    encrypted: &EncryptedDataEncryptionKey,
+    encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)>
 where
@@ -128,19 +128,21 @@ where
 {
     if !matches!(provider.kek().provider(), KekProvider::Other(_)) {
         #[cfg(feature = "legacy-formats")]
-        if let Some(after_header) = encrypted
+        if let Some(after_header) = encrypted_dek
             .value()
             .strip_prefix(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
         {
-            let encrypted =
+            let inner_encrypted_dek =
                 legacy::encrypted_key_from_layout_v1(after_header, provider.kek().provider())?;
-            let decrypted = provider.decrypt_data_encryption_key(&encrypted).await?;
-            let (key, _) = key_from_decrypted(decrypted, provider.kek().provider())?;
+            let decrypted_dek = provider
+                .decrypt_data_encryption_key(&inner_encrypted_dek)
+                .await?;
+            let (dek, _) = key_from_decrypted(decrypted_dek, provider.kek().provider())?;
             legacy::warn_once(KmsAeadLegacyFormat::EncryptedKeyV1);
-            return Ok((key, Some(KmsAeadLegacyFormat::EncryptedKeyV1)));
+            return Ok((dek, Some(KmsAeadLegacyFormat::EncryptedKeyV1)));
         }
         #[cfg(not(feature = "legacy-formats"))]
-        if encrypted
+        if encrypted_dek
             .value()
             .starts_with(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
         {
@@ -149,20 +151,20 @@ where
             ));
         }
     }
-    let decrypted = provider.decrypt_data_encryption_key(encrypted).await?;
-    key_from_decrypted(decrypted, provider.kek().provider())
+    let decrypted_dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
+    key_from_decrypted(decrypted_dek, provider.kek().provider())
 }
 
-/// The key in `decrypted`, what the provider of `kek` decrypted: under an Azure KEK the raw key of
-/// 16, 32 or 64 bytes, and under any other a serialised Tink key, or with `legacy-formats` the raw
-/// key of 16 or 32 bytes that 0.29 and earlier encrypted. No serialised Tink key has any of those
-/// lengths.
+/// The key in `decrypted_dek`, what the provider of `kek` decrypted: under an Azure KEK the raw key
+/// of 16, 32 or 64 bytes, and under any other a serialised Tink key, or with `legacy-formats` the
+/// raw key of 16 or 32 bytes that 0.29 and earlier encrypted. No serialised Tink key has any of
+/// those lengths.
 fn key_from_decrypted(
-    decrypted: DataEncryptionKey,
+    decrypted_dek: DataEncryptionKey,
     kek: &KekProvider,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)> {
-    match (kek, decrypted.value().ref_sensitive_value().len()) {
-        (KekProvider::Azure, 16 | 32 | 64) => Ok((decrypted, None)),
+    match (kek, decrypted_dek.value().ref_sensitive_value().len()) {
+        (KekProvider::Azure, 16 | 32 | 64) => Ok((decrypted_dek, None)),
         (KekProvider::Azure, len) => Err(KmsAeadEncryptionError::create(
             "INVALID_KEY_FORMAT",
             &format!("The decrypted key of {len} bytes is not a raw key of 16, 32 or 64 bytes"),
@@ -170,14 +172,14 @@ fn key_from_decrypted(
         #[cfg(feature = "legacy-formats")]
         (_, 16 | 32) => {
             legacy::warn_once(KmsAeadLegacyFormat::RawEncryptedDek);
-            Ok((decrypted, Some(KmsAeadLegacyFormat::RawEncryptedDek)))
+            Ok((decrypted_dek, Some(KmsAeadLegacyFormat::RawEncryptedDek)))
         }
         #[cfg(not(feature = "legacy-formats"))]
         (_, 16 | 32) => Err(crate::errors::KmsAeadLegacyFormatError::create(
             KmsAeadLegacyFormat::RawEncryptedDek,
         )),
         _ => Ok((
-            tink::read_tink_key(decrypted.value().ref_sensitive_value())?,
+            tink::read_tink_key(decrypted_dek.value().ref_sensitive_value())?,
             None,
         )),
     }
@@ -210,10 +212,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_tink_key_decrypts_to_its_key() -> KmsAeadResult<()> {
-        let encrypted = encrypted_by_test_provider(TinkKeyType::AesGcm, &KEY);
+        let encrypted_dek = encrypted_by_test_provider(TinkKeyType::AesGcm, &KEY);
 
-        let (key, legacy) = decrypt_dek(
-            &encrypted,
+        let (dek, legacy) = decrypt_dek(
+            &encrypted_dek,
             &CountingKmsProvider::with_kek(
                 TestKmsProvider::Working,
                 KekRef::new(KekProvider::Gcp, CLOUD_KMS_KEY),
@@ -221,7 +223,7 @@ mod tests {
         )
         .await?;
 
-        assert_eq!(key, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
+        assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
         assert_eq!(legacy, None);
         Ok(())
     }
@@ -237,13 +239,13 @@ mod tests {
             (TinkKeyType::AesGcm, 32),
             (TinkKeyType::AesSiv, 64),
         ] {
-            let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; len]));
+            let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; len]));
 
-            let encrypted = encrypt_dek(&key, key_type, &provider).await?;
-            let (decrypted, legacy) = decrypt_dek(&encrypted, &provider).await?;
+            let encrypted_dek = encrypt_dek(&dek, key_type, &provider).await?;
+            let (decrypted_dek, legacy) = decrypt_dek(&encrypted_dek, &provider).await?;
 
-            assert_eq!(encrypted.value(), key.value().ref_sensitive_value());
-            assert_eq!(decrypted, key);
+            assert_eq!(encrypted_dek.value(), dek.value().ref_sensitive_value());
+            assert_eq!(decrypted_dek, dek);
             assert_eq!(legacy, None);
         }
         Ok(())
@@ -284,8 +286,8 @@ mod tests {
                 KmsAeadLegacyFormat::EncryptedKeyV1,
             ),
         ];
-        for (encrypted, format) in cases {
-            let result = decrypt_dek(&encrypted, &provider).await;
+        for (encrypted_dek, format) in cases {
+            let result = decrypt_dek(&encrypted_dek, &provider).await;
             assert!(
                 matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if error.format == format),
                 "{format:?}: {result:?}"
@@ -312,9 +314,9 @@ mod tests {
                 KmsAeadLegacyFormat::EncryptedKeyV1,
             ),
         ];
-        for (encrypted, format) in cases {
-            let (key, legacy) = decrypt_dek(&encrypted, &provider).await?;
-            assert_eq!(key, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
+        for (encrypted_dek, format) in cases {
+            let (dek, legacy) = decrypt_dek(&encrypted_dek, &provider).await?;
+            assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(KEY.to_vec())));
             assert_eq!(legacy, Some(format));
         }
         Ok(())

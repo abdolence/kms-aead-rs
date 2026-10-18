@@ -89,11 +89,11 @@ use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-let key = cipher.generate_key()?;
+let dek = cipher.generate_key()?;
 
 let aad = b"orders/1042";
-let cipher_text = cipher.encrypt_value(aad, &SecretValue::from("secret"), &key)?;
-let decrypted = cipher.decrypt_value(aad, &cipher_text, &key)?;
+let cipher_text = cipher.encrypt_value(aad, &SecretValue::from("secret"), &dek)?;
+let decrypted = cipher.decrypt_value(aad, &cipher_text, &dek)?;
 
 assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())
@@ -102,7 +102,7 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs).
 
-`generate_dek` makes a key and encrypts it with a provider in one call, for an application
+`generate_dek` makes a dek and encrypts it with a provider in one call, for an application
 that stores the encrypted DEK itself. `AeadCipher` makes no KMS call and opens no span.
 
 ## Cross-backend compatibility
@@ -120,11 +120,11 @@ use secret_vault_value::SecretValue;
 let writer = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 let reader = AeadCipher::<RustCrypto>::new(AeadAlgorithm::Aes256Gcm)?;
 
-let key = writer.generate_key()?;
-let cipher_text = writer.encrypt_value(b"aad", &SecretValue::from("secret"), &key)?;
+let dek = writer.generate_key()?;
+let cipher_text = writer.encrypt_value(b"aad", &SecretValue::from("secret"), &dek)?;
 
 assert_eq!(
-    reader.decrypt_value(b"aad", &cipher_text, &key)?,
+    reader.decrypt_value(b"aad", &cipher_text, &dek)?,
     SecretValue::from("secret")
 );
 # Ok(())

@@ -378,10 +378,10 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let plaintext = encryption_key.value().as_sensitive_base64_str();
+            let plaintext = dek.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroised.
             let request = serde_json::to_vec(&EncryptRequest {
                 plaintext: &plaintext,
@@ -404,10 +404,10 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     /// key.
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let ciphertext = std::str::from_utf8(encrypted_key.value()).map_err(|_| {
+            let ciphertext = std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
                 KmsAeadEncryptionError::create(
                     "VAULT_CIPHERTEXT",
                     "The encrypted data encryption key is not a Vault Transit ciphertext",

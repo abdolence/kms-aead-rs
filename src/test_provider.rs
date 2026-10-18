@@ -56,7 +56,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
             #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
@@ -65,14 +65,14 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
                 "The test provider fails to encrypt",
             )),
             _ => Ok(EncryptedDataEncryptionKey::new(
-                encryption_key.value().ref_sensitive_value().clone(),
+                dek.value().ref_sensitive_value().clone(),
             )),
         }
     }
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         match self {
             TestKmsProvider::FailingToDecrypt => Err(KmsAeadEncryptionError::create(
@@ -82,12 +82,12 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
             TestKmsProvider::Stamping(since) => {
                 let nanos = u64::try_from(since.elapsed().as_nanos())
                     .expect("a test runs for less than 584 years");
-                let mut key = encrypted_key.value().clone();
+                let mut key = encrypted_dek.value().clone();
                 key.extend(nanos.to_le_bytes());
                 Ok(DataEncryptionKey::from(SecretValue::new(key)))
             }
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
-                encrypted_key.value().clone(),
+                encrypted_dek.value().clone(),
             ))),
         }
     }
@@ -165,20 +165,20 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         self.encryptions.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
-        self.inner.encrypt_data_encryption_key(encryption_key).await
+        self.inner.encrypt_data_encryption_key(dek).await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         self.decryptions.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
-        self.inner.decrypt_data_encryption_key(encrypted_key).await
+        self.inner.decrypt_data_encryption_key(encrypted_dek).await
     }
 }
 
@@ -188,8 +188,8 @@ pub(crate) fn encrypted_by_test_provider(
     key_type: impl Into<TinkKeyType>,
     key: &[u8],
 ) -> EncryptedDataEncryptionKey {
-    let key = DataEncryptionKey::from(SecretValue::new(key.to_vec()));
-    let serialized = crate::formats::serialize_tink_key(key_type.into(), &key);
+    let dek = DataEncryptionKey::from(SecretValue::new(key.to_vec()));
+    let serialized = crate::formats::serialize_tink_key(key_type.into(), &dek);
     EncryptedDataEncryptionKey::new(serialized.ref_sensitive_value().clone())
 }
 

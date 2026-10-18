@@ -317,11 +317,11 @@ where
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # // A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
 # let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-# let key = cipher.generate_key()?;
-# let cipher_text = cipher.encrypt_value(b"aad", &SecretValue::from("secret"), &key)?;
-# let encrypted = provider.encrypt_data_encryption_key(&key).await?;
-# let mut legacy = u64::try_from(encrypted.value().len()).unwrap().to_be_bytes().to_vec();
-# legacy.extend_from_slice(encrypted.value());
+# let dek = cipher.generate_key()?;
+# let cipher_text = cipher.encrypt_value(b"aad", &SecretValue::from("secret"), &dek)?;
+# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+# let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
+# legacy.extend_from_slice(encrypted_dek.value());
 # legacy.extend_from_slice(cipher_text.value());
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 #     provider,

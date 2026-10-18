@@ -225,15 +225,15 @@ let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
 // On every write and read: the key decrypted through the cache, no KMS call while it is cached
 let email = Email("alice@example.com".to_string());
 let (encrypted, _) = cache
-    .with_key(&provider, &encrypted_dek, |key| {
-        cipher.encrypt_field(EMAIL_KEY, b"users/1042/email", &email, key)
+    .with_key(&provider, &encrypted_dek, |dek| {
+        cipher.encrypt_field(EMAIL_KEY, b"users/1042/email", &email, dek)
     })
     .await?;
 let encrypted: Encrypted<Email, Randomized> = encrypted?;
 
 let (decrypted, _) = cache
-    .with_key(&provider, &encrypted_dek, |key| {
-        cipher.decrypt_field(b"users/1042/email", &encrypted, key)
+    .with_key(&provider, &encrypted_dek, |dek| {
+        cipher.decrypt_field(b"users/1042/email", &encrypted, dek)
     })
     .await?;
 assert_eq!(decrypted?, email);
@@ -241,8 +241,8 @@ assert_eq!(decrypted?, email);
 // Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
 let mut keyset = TinkKeyset::new(EMAIL_KEY);
 let (added, _) = cache
-    .with_key(&provider, &encrypted_dek, |key| {
-        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), key)
+    .with_key(&provider, &encrypted_dek, |dek| {
+        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), dek)
     })
     .await?;
 added?;
@@ -464,12 +464,12 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
 let (_dek, encrypted_dek) = envelope.generate_dek().await?;
 
 let stored: Vec<u8> = encrypted_dek.value().clone();
-let read_back = EncryptedDataEncryptionKey::from(stored);
+let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
 
 let stored_hex: String = encrypted_dek.to_hex_string();
-let read_back_hex = EncryptedDataEncryptionKey::try_from_hex_string(&stored_hex)?;
+let read_back_hex_encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(&stored_hex)?;
 
-assert_eq!(read_back, read_back_hex);
+assert_eq!(read_back_encrypted_dek, read_back_hex_encrypted_dek);
 # Ok(())
 # }
 ```

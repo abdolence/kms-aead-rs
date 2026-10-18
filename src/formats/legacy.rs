@@ -58,13 +58,11 @@ impl<'w> LegacyEncryptedDek<'w> {
                         "The encrypted data encryption key records no Azure Key Vault key version",
                     )
                 })?;
-                let encrypted_dek = super::azure::AzureWrappedKey {
+                let wrapped_key = super::azure::AzureWrappedKey {
                     key_version,
                     wrapped: self.dek_bytes,
                 };
-                encrypted_dek
-                    .to_bytes()
-                    .map(EncryptedDataEncryptionKey::new)
+                wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
             }
             _ => Ok(EncryptedDataEncryptionKey::new(self.dek_bytes.to_vec())),
         }
@@ -205,24 +203,24 @@ where
         let layout = EnvelopeLayout::try_from(value.0.as_slice())?;
         let (cipher_text, encrypted_dek) =
             separate_any_layout(&value.0, self.provider.kek().provider())?;
-        let (key, legacy_key) = decrypt_dek(&encrypted_dek, &self.provider).await?;
+        let (dek, legacy_key) = decrypt_dek(&encrypted_dek, &self.provider).await?;
         if legacy_key.is_none() && layout == EnvelopeLayout::Tink {
             return Ok(None);
         }
         // A raw key records no algorithm, and every algorithm with its length takes it, so only
         // opening the value shows that the Tink key type written below is the right one.
-        self.cipher.decrypt_value(aad, &cipher_text, &key)?;
-        let upgraded_dek = match legacy_key {
-            Some(_) => encrypt_dek(&key, self.algorithm().into(), &self.provider).await?,
+        self.cipher.decrypt_value(aad, &cipher_text, &dek)?;
+        let upgraded_encrypted_dek = match legacy_key {
+            Some(_) => encrypt_dek(&dek, self.algorithm().into(), &self.provider).await?,
             None => encrypted_dek,
         };
-        CipherTextWithEncryptedKey::join(&cipher_text, &upgraded_dek).map(Some)
+        CipherTextWithEncryptedKey::join(&cipher_text, &upgraded_encrypted_dek).map(Some)
     }
 
-    /// `encrypted`, an encrypted key stored by 0.29 or earlier, encrypted again as Tink encrypts a
-    /// key, or `None` when it already is, so that a sweep writes only the rows that change. The
-    /// stored bytes of 0.29's `to_bytes` and `to_hex_string` read as they are, for every
-    /// built-in provider.
+    /// `encrypted_dek`, an encrypted key stored by 0.29 or earlier, encrypted again as Tink
+    /// encrypts a key, or `None` when it already is, so that a sweep writes only the rows that
+    /// change. The stored bytes of 0.29's `to_bytes` and `to_hex_string` read as they are, for
+    /// every built-in provider.
     ///
     /// It decrypts the key with the provider, never through the DEK cache, and for a key in a
     /// legacy layout encrypts it again, a second KMS call. The envelope's algorithm is the one the
@@ -243,15 +241,15 @@ where
     )]
     pub async fn upgrade_legacy_encrypted_key(
         &self,
-        encrypted: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Option<EncryptedDataEncryptionKey>> {
-        let (key, legacy) = decrypt_dek(encrypted, &self.provider).await?;
+        let (dek, legacy) = decrypt_dek(encrypted_dek, &self.provider).await?;
         if legacy.is_none() {
             return Ok(None);
         }
         let algorithm = self.algorithm();
-        checked_key_bytes(&key, algorithm, algorithm.key_len())?;
-        encrypt_dek(&key, algorithm.into(), &self.provider)
+        checked_key_bytes(&dek, algorithm, algorithm.key_len())?;
+        encrypt_dek(&dek, algorithm.into(), &self.provider)
             .await
             .map(Some)
     }
@@ -305,8 +303,8 @@ mod tests {
         let azure_bytes = [&[0x01, 0x02, b'1', b'8'][..], ENCRYPTED_DEK].concat();
         let value = hex::decode(ENVELOPE_V1).unwrap();
 
-        let (_, from_envelope) = separate_any_layout(&value, &KekProvider::Azure)?;
-        let from_encrypted_key = encrypted_key_from_layout_v1(
+        let (_, envelope_encrypted_dek) = separate_any_layout(&value, &KekProvider::Azure)?;
+        let key_layout_encrypted_dek = encrypted_key_from_layout_v1(
             &hex::decode(ENCRYPTED_KEY_V1).unwrap()[2..],
             &KekProvider::Azure,
         )?;
@@ -315,8 +313,8 @@ mod tests {
             &KekProvider::Azure,
         );
 
-        assert_eq!(*from_envelope.value(), azure_bytes);
-        assert_eq!(*from_encrypted_key.value(), azure_bytes);
+        assert_eq!(*envelope_encrypted_dek.value(), azure_bytes);
+        assert_eq!(*key_layout_encrypted_dek.value(), azure_bytes);
         assert!(
             matches!(&without_key_version, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "AZURE_KEY_VERSION_MISSING"),
@@ -409,7 +407,7 @@ mod tests {
                 ),
                 KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
             )?;
-            let tink_key = encrypted_by_test_provider(TinkKeyType::AesGcm, &KEY);
+            let tink_encrypted_dek = encrypted_by_test_provider(TinkKeyType::AesGcm, &KEY);
             let stored = [
                 // As 0.29's `to_bytes` stored it, and as 0.28.1 stored the bare encrypted DEK.
                 [&[0xFF, 0x01, 0x00][..], &KEY].concat(),
@@ -417,13 +415,15 @@ mod tests {
             ];
 
             for stored in stored {
-                let upgraded = envelope
+                let upgraded_encrypted_dek = envelope
                     .upgrade_legacy_encrypted_key(&EncryptedDataEncryptionKey::new(stored))
                     .await?;
-                assert_eq!(upgraded.as_ref(), Some(&tink_key));
+                assert_eq!(upgraded_encrypted_dek.as_ref(), Some(&tink_encrypted_dek));
             }
             assert_eq!(
-                envelope.upgrade_legacy_encrypted_key(&tink_key).await?,
+                envelope
+                    .upgrade_legacy_encrypted_key(&tink_encrypted_dek)
+                    .await?,
                 None
             );
             assert_eq!(envelope.provider().encryptions(), 2);
