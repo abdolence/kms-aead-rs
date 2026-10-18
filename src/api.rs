@@ -141,7 +141,8 @@ pub enum KekProvider {
     HcVaultTransit,
     /// A KEK held by the application itself.
     Local,
-    /// An application's own provider, named by the application.
+    /// An application's own provider, named by the application. The name is never one of the
+    /// built-in names above, which [`FromStr`] reads as their own variants.
     Other(String),
 }
 
@@ -160,8 +161,9 @@ impl Display for KekProvider {
     }
 }
 
-/// Reads what `Display` writes: a built-in name is its variant, and any other name is
-/// [`KekProvider::Other`].
+/// A built-in name is its variant, and any other name is [`KekProvider::Other`]. It reads back
+/// what `Display` writes for every value but an `Other` holding a built-in name, which reads back
+/// as that name's variant.
 impl FromStr for KekProvider {
     type Err = Infallible;
 
