@@ -4,12 +4,6 @@
 //! credentials. The principal needs the KMS key's encrypt and decrypt rights and
 //! `bigquery.jobs.create` in the project.
 
-#![cfg(all(
-    feature = "bigquery-export",
-    feature = "deterministic",
-    feature = "ring"
-))]
-
 use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClient;
 use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};

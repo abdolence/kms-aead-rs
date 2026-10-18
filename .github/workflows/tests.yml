@@ -76,7 +76,7 @@ jobs:
           FEATURES: ${{ matrix.features }}
           ABSENT: ${{ matrix.absent }}
         run: |
-          cargo fmt -- --check
+          cargo fmt --all -- --check
           if cargo tree -e normal --features "$FEATURES" -d --depth 0 | grep -q '^reqwest '; then
             echo "Two reqwest versions: the Azure TLS features would configure the one azure_core does not use"
             exit 1
@@ -269,7 +269,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      FEATURES: ring,deterministic,serde,bigquery-export
+      FEATURES: ring,deterministic,serde,ci-bigquery
       GCP_PROJECT: latestbit
       GCP_PROJECT_ID: 288860578009
       PROJECT_ID: latestbit

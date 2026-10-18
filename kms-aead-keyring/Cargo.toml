@@ -42,9 +42,6 @@ prost = { version = "0.14", optional = true }
 zeroize = { version = "1", optional = true }
 
 [dev-dependencies]
-# BigQuery's `jobs.query` for the live test of the keyset export, and a root store and crypto
-# provider for its Cloud KMS and BigQuery clients.
-gcloud-sdk = { workspace = true, features = ["google-cloud-bigquery-v2", "tls-roots", "auth-default-crypto"] }
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
 async-trait = { workspace = true }
 proptest = { workspace = true }
@@ -83,6 +80,14 @@ gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default
 # `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider without a TLS root store or crypto
 # provider: the application enables kms-aead's `gcp-kms-encryption` to build it.
 bigquery-export = ["kms-aead/gcp-kms-encryption-base", "dep:prost", "dep:zeroize"]
+# The live test of the keyset export: BigQuery's `jobs.query`, and a root store and crypto provider
+# for its Cloud KMS and BigQuery clients.
+ci-bigquery = [
+    "bigquery-export",
+    "dep:gcloud-sdk",
+    "gcloud-sdk/google-cloud-bigquery-v2",
+    "kms-aead/gcp-kms-encryption",
+]
 
 [lints]
 workspace = true
@@ -108,3 +113,8 @@ required-features = ["ring"]
 name = "migrate"
 path = "examples/migrate.rs"
 required-features = ["ring"]
+
+[[test]]
+name = "bigquery_live"
+path = "tests/bigquery_live.rs"
+required-features = ["ci-bigquery", "deterministic", "ring"]
