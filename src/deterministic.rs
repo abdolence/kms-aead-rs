@@ -339,13 +339,12 @@ mod aes_siv_cipher {
         /// The cipher keyed with `key`: the first half keys S2V's CMAC and the second half CTR,
         /// the order of RFC 5297 and of Tink's `AesSivKey`.
         fn siv(&self, key: &DataEncryptionKey) -> KmsAeadResult<Aes256Siv> {
-            let key = key.value().ref_sensitive_value();
+            let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
             match self.algorithm {
                 DeterministicAlgorithm::Aes256Siv => Aes256Siv::new_from_slice(key).map_err(|_| {
-                    KmsAeadEncryptionError::invalid_key_length(
-                        key.len(),
-                        self.algorithm,
-                        self.algorithm.key_len(),
+                    KmsAeadEncryptionError::create(
+                        "INVALID_KEY_LENGTH",
+                        "AES-SIV refused a key of its own length",
                     )
                 }),
             }

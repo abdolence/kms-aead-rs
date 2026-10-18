@@ -1,4 +1,5 @@
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
+use crate::providers::kms_key_version::read_key_version;
 use crate::providers::KmsKeyVersion;
 use crate::KmsAeadResult;
 
@@ -57,7 +58,7 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
             .filter(|(key_version, _)| !key_version.is_empty())
             .ok_or_else(Self::malformed)?;
         Ok(Self {
-            key_version: KmsKeyVersion::from_ascii(key_version)?,
+            key_version: read_key_version(key_version)?,
             wrapped,
         })
     }

@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use super::envelope::{separate_envelope, EnvelopeLayout};
 use super::{unwrap_key, wrap_key};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
+use crate::providers::kms_key_version::read_key_version;
 use crate::providers::KmsKeyVersion;
 use crate::types::checked_key_bytes;
 use crate::{
@@ -37,7 +38,7 @@ impl<'w> LegacyWrappedKey<'w> {
     fn new(key_version: &[u8], wrapped: &'w [u8]) -> KmsAeadResult<Self> {
         let key_version = match key_version {
             [] => None,
-            key_version => Some(KmsKeyVersion::from_ascii(key_version)?),
+            key_version => Some(read_key_version(key_version)?),
         };
         Ok(Self {
             key_version,

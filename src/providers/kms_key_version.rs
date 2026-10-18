@@ -17,33 +17,35 @@ impl KmsKeyVersion {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+}
 
-    /// The key version of `bytes`, read from storage. The error reports the length and the class
-    /// of the first rejected byte, never the bytes themselves, which end up in logs.
-    pub(crate) fn from_ascii(bytes: &[u8]) -> KmsAeadResult<Self> {
-        let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
-            Some("is not 1 to 255 bytes long")
-        } else {
-            bytes
-                .iter()
-                .find(|byte| !byte.is_ascii_alphanumeric())
-                .map(|byte| {
-                    if !byte.is_ascii() {
-                        "contains a non-ASCII byte"
-                    } else if byte.is_ascii_control() {
-                        "contains an ASCII control byte"
-                    } else {
-                        "contains ASCII punctuation or a space"
-                    }
-                })
-        };
-        match rejected {
-            Some(reason) => Err(KmsAeadEncryptionError::create(
-                "INVALID_KEY_VERSION",
-                &format!("KMS key version of {} bytes {reason}", bytes.len()),
-            )),
-            None => Ok(Self(bytes.iter().copied().map(char::from).collect())),
-        }
+/// The key version of `bytes`, read from storage. The error reports the length and the class of
+/// the first rejected byte, never the bytes themselves, which end up in logs.
+pub(crate) fn read_key_version(bytes: &[u8]) -> KmsAeadResult<KmsKeyVersion> {
+    let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
+        Some("is not 1 to 255 bytes long")
+    } else {
+        bytes
+            .iter()
+            .find(|byte| !byte.is_ascii_alphanumeric())
+            .map(|byte| {
+                if !byte.is_ascii() {
+                    "contains a non-ASCII byte"
+                } else if byte.is_ascii_control() {
+                    "contains an ASCII control byte"
+                } else {
+                    "contains ASCII punctuation or a space"
+                }
+            })
+    };
+    match rejected {
+        Some(reason) => Err(KmsAeadEncryptionError::create(
+            "INVALID_KEY_VERSION",
+            &format!("KMS key version of {} bytes {reason}", bytes.len()),
+        )),
+        None => Ok(KmsKeyVersion(
+            bytes.iter().copied().map(char::from).collect(),
+        )),
     }
 }
 
@@ -51,7 +53,7 @@ impl TryFrom<String> for KmsKeyVersion {
     type Error = KmsAeadError;
 
     fn try_from(value: String) -> KmsAeadResult<Self> {
-        Self::from_ascii(value.as_bytes())
+        read_key_version(value.as_bytes())
     }
 }
 
@@ -80,7 +82,7 @@ mod tests {
 
     #[test]
     fn a_key_version_error_echoes_no_stored_bytes() {
-        let error = KmsKeyVersion::from_ascii(b"marker/18").unwrap_err();
+        let error = KmsKeyVersion::try_from("marker/18".to_string()).unwrap_err();
 
         assert!(
             !format!("{error} {error:?}").contains("marker"),
