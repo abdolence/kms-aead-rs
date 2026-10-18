@@ -189,7 +189,7 @@ pub(crate) fn wrapped_by_test_provider(
     key: &[u8],
 ) -> EncryptedDataEncryptionKey {
     let key = DataEncryptionKey::from(SecretValue::new(key.to_vec()));
-    let serialized = key_type.into().serialize(&key);
+    let serialized = crate::formats::serialize_tink_key(key_type.into(), &key);
     EncryptedDataEncryptionKey::new(serialized.ref_sensitive_value().clone())
 }
 

@@ -510,7 +510,7 @@ where
     ) -> KmsAeadResult<SecretValue> {
         #[cfg(feature = "legacy-formats")]
         let (cipher_text, encrypted_dek) =
-            value.separate_any_layout(self.provider.kek().provider())?;
+            crate::formats::legacy::separate_any_layout(value, self.provider.kek().provider())?;
         #[cfg(not(feature = "legacy-formats"))]
         let (cipher_text, encrypted_dek) = value.separate()?;
         self.with_dek(&encrypted_dek, |key| {

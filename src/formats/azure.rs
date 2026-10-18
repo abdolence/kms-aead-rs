@@ -52,7 +52,7 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
         let [Self::LAYOUT, rest @ ..] = bytes else {
             return Err(Self::malformed());
         };
-        let (key_version, wrapped) = KmsKeyVersion::split_field(rest)
+        let (key_version, wrapped) = super::split_key_version_field(rest)
             .filter(|(key_version, _)| !key_version.is_empty())
             .ok_or_else(Self::malformed)?;
         Ok(Self {

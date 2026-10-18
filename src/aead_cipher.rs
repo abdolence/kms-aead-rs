@@ -77,7 +77,7 @@ impl<B: AeadBackend> AeadCipher<B> {
             Some(material) => DataEncryptionKey::from(material),
             None => self.generate_key()?,
         };
-        let encrypted_key = key.wrap_with(self.algorithm.into(), provider).await?;
+        let encrypted_key = crate::formats::wrap_key(&key, self.algorithm.into(), provider).await?;
         Ok((key, encrypted_key))
     }
 

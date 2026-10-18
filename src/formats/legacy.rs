@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::envelope::EnvelopeLayout;
+use super::{unwrap_key, wrap_key};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
     AeadBackend, CipherText, CipherTextWithEncryptedKey, EncryptedDataEncryptionKey, KekProvider,
@@ -65,106 +66,101 @@ impl<'w> LegacyWrappedKey<'w> {
     }
 }
 
-impl CipherTextWithEncryptedKey {
-    /// The cipher text and the wrapped key of the value in any layout, the wrapped key in the
-    /// bytes the provider of `kek` takes:
-    ///
-    /// - Tink's KMS envelope, as [`separate`](Self::separate) reads it;
-    /// - the envelope layout v1 of 0.29, `[0x01][k: u8][key version: k][w: u16 BE]
-    ///   [wrapped key: w][cipher text]`;
-    /// - the length prefix written up to 0.28.1, `[w: u64 BE][wrapped key: w][cipher text]`.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`separate`](Self::separate) but `LEGACY_FORMAT`,
-    /// `INVALID_CIPHER_TEXT_FORMAT` on a length past the end of a legacy value, and
-    /// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
-    pub(crate) fn separate_any_layout(
-        &self,
-        kek: &KekProvider,
-    ) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let layout = EnvelopeLayout::try_from(self.0.as_slice())?;
-        let fields = match layout {
-            EnvelopeLayout::Tink => return self.separate(),
-            EnvelopeLayout::V1 => self.0.split_first().and_then(|(_, header)| {
-                let (key_version, rest) = KmsKeyVersion::split_field(header)?;
-                let (wrapped_len, rest) = rest.split_first_chunk::<2>()?;
-                let wrapped_len = usize::from(u16::from_be_bytes(*wrapped_len));
-                let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len)?;
-                Some((key_version, wrapped, cipher_text))
-            }),
-            EnvelopeLayout::LengthPrefixed => {
-                self.0
-                    .split_first_chunk::<8>()
-                    .and_then(|(wrapped_len, rest)| {
-                        let wrapped_len = usize::try_from(u64::from_be_bytes(*wrapped_len)).ok()?;
-                        let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len)?;
-                        Some((&[][..], wrapped, cipher_text))
-                    })
-            }
-        };
-        let (key_version, wrapped, cipher_text) = fields.ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "INVALID_CIPHER_TEXT_FORMAT",
-                "A length in the cipher text header runs past the end of the buffer",
-            )
-        })?;
-        let wrapped_key = LegacyWrappedKey::new(key_version, wrapped)?;
-        match layout {
-            EnvelopeLayout::V1 => KmsAeadLegacyFormat::EnvelopeV1.warn_once(),
-            _ => KmsAeadLegacyFormat::LengthPrefixedEnvelope.warn_once(),
+/// The cipher text and the wrapped key of `value` in any layout, the wrapped key in the bytes the
+/// provider of `kek` takes:
+///
+/// - Tink's KMS envelope, as [`separate`](CipherTextWithEncryptedKey::separate) reads it;
+/// - the envelope layout v1 of 0.29, `[0x01][k: u8][key version: k][w: u16 BE]
+///   [wrapped key: w][cipher text]`;
+/// - the length prefix written up to 0.28.1, `[w: u64 BE][wrapped key: w][cipher text]`.
+///
+/// # Errors
+///
+/// The errors of [`separate`](CipherTextWithEncryptedKey::separate) but `LEGACY_FORMAT`,
+/// `INVALID_CIPHER_TEXT_FORMAT` on a length past the end of a legacy value, and
+/// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
+pub(crate) fn separate_any_layout(
+    value: &CipherTextWithEncryptedKey,
+    kek: &KekProvider,
+) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
+    let layout = EnvelopeLayout::try_from(value.0.as_slice())?;
+    let fields = match layout {
+        EnvelopeLayout::Tink => return value.separate(),
+        EnvelopeLayout::V1 => value.0.split_first().and_then(|(_, header)| {
+            let (key_version, rest) = super::split_key_version_field(header)?;
+            let (wrapped_len, rest) = rest.split_first_chunk::<2>()?;
+            let wrapped_len = usize::from(u16::from_be_bytes(*wrapped_len));
+            let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len)?;
+            Some((key_version, wrapped, cipher_text))
+        }),
+        EnvelopeLayout::LengthPrefixed => {
+            value
+                .0
+                .split_first_chunk::<8>()
+                .and_then(|(wrapped_len, rest)| {
+                    let wrapped_len = usize::try_from(u64::from_be_bytes(*wrapped_len)).ok()?;
+                    let (wrapped, cipher_text) = rest.split_at_checked(wrapped_len)?;
+                    Some((&[][..], wrapped, cipher_text))
+                })
         }
-        Ok((
-            CipherText(cipher_text.to_vec()),
-            wrapped_key.into_encrypted_key(kek)?,
-        ))
+    };
+    let (key_version, wrapped, cipher_text) = fields.ok_or_else(|| {
+        KmsAeadEncryptionError::create(
+            "INVALID_CIPHER_TEXT_FORMAT",
+            "A length in the cipher text header runs past the end of the buffer",
+        )
+    })?;
+    let wrapped_key = LegacyWrappedKey::new(key_version, wrapped)?;
+    match layout {
+        EnvelopeLayout::V1 => warn_once(KmsAeadLegacyFormat::EnvelopeV1),
+        _ => warn_once(KmsAeadLegacyFormat::LengthPrefixedEnvelope),
     }
+    Ok((
+        CipherText(cipher_text.to_vec()),
+        wrapped_key.into_encrypted_key(kek)?,
+    ))
 }
 
-impl EncryptedDataEncryptionKey {
-    /// The wrapped key of stored bytes in the encrypted key layout of 0.29,
-    /// `[0xFF][0x01][k: u8][key version: k][wrapped key]`, from `after_header`, the bytes after
-    /// `[0xFF][0x01]`, as the bytes the provider of `kek` takes.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_ENCRYPTED_KEY_FORMAT` when the key version runs past the end, and
-    /// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
-    pub(crate) fn from_encrypted_key_layout_v1(
-        after_header: &[u8],
-        kek: &KekProvider,
-    ) -> KmsAeadResult<Self> {
-        let (key_version, wrapped) = KmsKeyVersion::split_field(after_header).ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "INVALID_ENCRYPTED_KEY_FORMAT",
-                "The key version length runs past the end of the encrypted key",
-            )
-        })?;
-        LegacyWrappedKey::new(key_version, wrapped)?.into_encrypted_key(kek)
-    }
+/// The wrapped key of stored bytes in the encrypted key layout of 0.29,
+/// `[0xFF][0x01][k: u8][key version: k][wrapped key]`, from `after_header`, the bytes after
+/// `[0xFF][0x01]`, as the bytes the provider of `kek` takes.
+///
+/// # Errors
+///
+/// `INVALID_ENCRYPTED_KEY_FORMAT` when the key version runs past the end, and
+/// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
+pub(super) fn encrypted_key_from_layout_v1(
+    after_header: &[u8],
+    kek: &KekProvider,
+) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+    let (key_version, wrapped) = super::split_key_version_field(after_header).ok_or_else(|| {
+        KmsAeadEncryptionError::create(
+            "INVALID_ENCRYPTED_KEY_FORMAT",
+            "The key version length runs past the end of the encrypted key",
+        )
+    })?;
+    LegacyWrappedKey::new(key_version, wrapped)?.into_encrypted_key(kek)
 }
 
-impl KmsAeadLegacyFormat {
-    /// Logs one `WARN` event the first time a process reads a value in this layout.
-    pub(crate) fn warn_once(self) {
-        static ENVELOPE_V1: AtomicBool = AtomicBool::new(false);
-        static LENGTH_PREFIXED_ENVELOPE: AtomicBool = AtomicBool::new(false);
-        static ENCRYPTED_KEY_V1: AtomicBool = AtomicBool::new(false);
-        static RAW_WRAPPED_KEY: AtomicBool = AtomicBool::new(false);
-        let warned = match self {
-            KmsAeadLegacyFormat::EnvelopeV1 => &ENVELOPE_V1,
-            KmsAeadLegacyFormat::LengthPrefixedEnvelope => &LENGTH_PREFIXED_ENVELOPE,
-            KmsAeadLegacyFormat::EncryptedKeyV1 => &ENCRYPTED_KEY_V1,
-            KmsAeadLegacyFormat::RawWrappedKey => &RAW_WRAPPED_KEY,
-        };
-        if !warned.swap(true, Ordering::Relaxed) {
-            tracing::warn!(
-                format = ?self,
-                "Read a value in a layout written by kms-aead 0.29 or earlier. Reading it is \
-                 deprecated and will be removed in a later breaking release: rewrite stored values \
-                 with KmsAeadEnvelope::upgrade_legacy_value and upgrade_legacy_encrypted_key"
-            );
-        }
+/// Logs one `WARN` event the first time a process reads a value in `format`.
+pub(super) fn warn_once(format: KmsAeadLegacyFormat) {
+    static ENVELOPE_V1: AtomicBool = AtomicBool::new(false);
+    static LENGTH_PREFIXED_ENVELOPE: AtomicBool = AtomicBool::new(false);
+    static ENCRYPTED_KEY_V1: AtomicBool = AtomicBool::new(false);
+    static RAW_WRAPPED_KEY: AtomicBool = AtomicBool::new(false);
+    let warned = match format {
+        KmsAeadLegacyFormat::EnvelopeV1 => &ENVELOPE_V1,
+        KmsAeadLegacyFormat::LengthPrefixedEnvelope => &LENGTH_PREFIXED_ENVELOPE,
+        KmsAeadLegacyFormat::EncryptedKeyV1 => &ENCRYPTED_KEY_V1,
+        KmsAeadLegacyFormat::RawWrappedKey => &RAW_WRAPPED_KEY,
+    };
+    if !warned.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            ?format,
+            "Read a value in a layout written by kms-aead 0.29 or earlier. Reading it is \
+             deprecated and will be removed in a later breaking release: rewrite stored values \
+             with KmsAeadEnvelope::upgrade_legacy_value and upgrade_legacy_encrypted_key"
+        );
     }
 }
 
@@ -202,8 +198,8 @@ where
     ) -> KmsAeadResult<Option<CipherTextWithEncryptedKey>> {
         let layout = EnvelopeLayout::try_from(value.0.as_slice())?;
         let (cipher_text, encrypted_dek) =
-            value.separate_any_layout(self.provider.kek().provider())?;
-        let (key, legacy_key) = encrypted_dek.unwrap_with(&self.provider).await?;
+            separate_any_layout(value, self.provider.kek().provider())?;
+        let (key, legacy_key) = unwrap_key(&encrypted_dek, &self.provider).await?;
         if legacy_key.is_none() && layout == EnvelopeLayout::Tink {
             return Ok(None);
         }
@@ -211,10 +207,7 @@ where
         // opening the value shows that the Tink key type written below is the right one.
         self.cipher.decrypt_value(aad, &cipher_text, &key)?;
         let upgraded_dek = match legacy_key {
-            Some(_) => {
-                key.wrap_with(self.algorithm().into(), &self.provider)
-                    .await?
-            }
+            Some(_) => wrap_key(&key, self.algorithm().into(), &self.provider).await?,
             None => encrypted_dek,
         };
         CipherTextWithEncryptedKey::join(&cipher_text, &upgraded_dek).map(Some)
@@ -246,7 +239,7 @@ where
         &self,
         encrypted: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Option<EncryptedDataEncryptionKey>> {
-        let (key, legacy) = encrypted.unwrap_with(&self.provider).await?;
+        let (key, legacy) = unwrap_key(encrypted, &self.provider).await?;
         if legacy.is_none() {
             return Ok(None);
         }
@@ -259,7 +252,7 @@ where
                 algorithm.key_len(),
             ));
         }
-        key.wrap_with(algorithm.into(), &self.provider)
+        wrap_key(&key, algorithm.into(), &self.provider)
             .await
             .map(Some)
     }
@@ -294,12 +287,12 @@ mod tests {
         ] {
             let value = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
 
-            let (cipher_text, encrypted_dek) = value.separate_any_layout(&KekProvider::Gcp)?;
+            let (cipher_text, encrypted_dek) = separate_any_layout(&value, &KekProvider::Gcp)?;
 
             assert_eq!(cipher_text, CipherText(SEALED.to_vec()), "{stored}");
             assert_eq!(*encrypted_dek.value(), WRAPPED, "{stored}");
         }
-        let encrypted_dek = EncryptedDataEncryptionKey::from_encrypted_key_layout_v1(
+        let encrypted_dek = encrypted_key_from_layout_v1(
             &hex::decode(ENCRYPTED_KEY_V1).unwrap()[2..],
             &KekProvider::Gcp,
         )?;
@@ -313,14 +306,17 @@ mod tests {
         let azure_bytes = [&[0x01, 0x02, b'1', b'8'][..], WRAPPED].concat();
         let value = CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap());
 
-        let (_, from_envelope) = value.separate_any_layout(&KekProvider::Azure)?;
-        let from_encrypted_key = EncryptedDataEncryptionKey::from_encrypted_key_layout_v1(
+        let (_, from_envelope) = separate_any_layout(&value, &KekProvider::Azure)?;
+        let from_encrypted_key = encrypted_key_from_layout_v1(
             &hex::decode(ENCRYPTED_KEY_V1).unwrap()[2..],
             &KekProvider::Azure,
         )?;
-        let without_key_version =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1_WITHOUT_KEY_VERSION).unwrap())
-                .separate_any_layout(&KekProvider::Azure);
+        let without_key_version = separate_any_layout(
+            &CipherTextWithEncryptedKey::from(
+                hex::decode(ENVELOPE_V1_WITHOUT_KEY_VERSION).unwrap(),
+            ),
+            &KekProvider::Azure,
+        );
 
         assert_eq!(*from_envelope.value(), azure_bytes);
         assert_eq!(*from_encrypted_key.value(), azure_bytes);
@@ -348,18 +344,17 @@ mod tests {
             &[0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xAA],
         ];
         for value in truncated {
-            let result = CipherTextWithEncryptedKey::from(value.to_vec())
-                .separate_any_layout(&KekProvider::Gcp);
+            let result = separate_any_layout(
+                &CipherTextWithEncryptedKey::from(value.to_vec()),
+                &KekProvider::Gcp,
+            );
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
                 "{value:02x?}: {result:?}"
             );
         }
-        let result = EncryptedDataEncryptionKey::from_encrypted_key_layout_v1(
-            &[0x05, b'1'],
-            &KekProvider::Gcp,
-        );
+        let result = encrypted_key_from_layout_v1(&[0x05, b'1'], &KekProvider::Gcp);
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "INVALID_ENCRYPTED_KEY_FORMAT"),
@@ -374,7 +369,8 @@ mod tests {
         value.extend_from_slice(stored_version);
         value.extend_from_slice(&[0x00, 0x01, 0xAA, 0xBB]);
 
-        let result = CipherTextWithEncryptedKey::from(value).separate_any_layout(&KekProvider::Gcp);
+        let result =
+            separate_any_layout(&CipherTextWithEncryptedKey::from(value), &KekProvider::Gcp);
 
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(error))
@@ -391,9 +387,11 @@ mod tests {
             rest in prop::collection::vec(any::<u8>(), 0..64),
         ) {
             let bytes = [&[first][..], &rest].concat();
-            let _ = CipherTextWithEncryptedKey::from(bytes.clone())
-                .separate_any_layout(&KekProvider::Azure);
-            let _ = EncryptedDataEncryptionKey::from_encrypted_key_layout_v1(&bytes, &KekProvider::Azure);
+            let _ = separate_any_layout(
+                &CipherTextWithEncryptedKey::from(bytes.clone()),
+                &KekProvider::Azure,
+            );
+            let _ = encrypted_key_from_layout_v1(&bytes, &KekProvider::Azure);
         }
     }
 

@@ -195,7 +195,8 @@ mod aes_siv_cipher {
                 Some(material) => DataEncryptionKey::from(material),
                 None => self.generate_key()?,
             };
-            let encrypted_key = key.wrap_with(self.algorithm.into(), provider).await?;
+            let encrypted_key =
+                crate::formats::wrap_key(&key, self.algorithm.into(), provider).await?;
             Ok((key, encrypted_key))
         }
 
@@ -301,7 +302,7 @@ mod aes_siv_cipher {
         ) -> KmsAeadResult<DataEncryptionKey> {
             let span = spans::decrypt_dek("deterministic", algorithm, self.dek_cache());
             spans::in_span(span, async {
-                let (key, _) = encrypted_key.unwrap_with(&self.provider).await?;
+                let (key, _) = crate::formats::unwrap_key(encrypted_key, &self.provider).await?;
                 let len = key.value().ref_sensitive_value().len();
                 if len == algorithm.key_len() {
                     Ok(key)

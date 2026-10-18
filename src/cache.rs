@@ -427,7 +427,11 @@ impl DekCache {
     {
         // A wrapped value of the same KEK that is no data encryption key, such as an exported
         // keyset, unwraps too, and the decoding of a serialized Tink key keeps it out.
-        let unwrap_key = || async { encrypted.unwrap_with(provider).await.map(|(key, _)| key) };
+        let unwrap_key = || async {
+            crate::formats::unwrap_key(encrypted, provider)
+                .await
+                .map(|(key, _)| key)
+        };
         match &self.0 {
             Some(enabled) => {
                 enabled

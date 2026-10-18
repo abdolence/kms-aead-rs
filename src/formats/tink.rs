@@ -66,67 +66,65 @@ impl TinkKeyType {
             TinkKeyType::ChaCha20Poly1305 | TinkKeyType::AesSiv => 2,
         }
     }
-
-    /// `key` serialized as a key of this type. `version` 0 is proto3's default and so is not
-    /// written, as Tink writes it.
-    pub(crate) fn serialize(self, key: &DataEncryptionKey) -> SecretValue {
-        let key = key.value().ref_sensitive_value();
-        let field = self.key_value_field();
-        // Sized up front, since growing the buffer would leave a copy of the key in freed memory.
-        let mut serialized =
-            SecretValue::new(Vec::with_capacity(encoding::bytes::encoded_len(field, key)));
-        encoding::bytes::encode(field, key, serialized.ref_sensitive_value_mut());
-        serialized
-    }
 }
 
-impl DataEncryptionKey {
-    /// The key a serialized Tink key holds: an `AesGcmKey` or `AesGcmSivKey` of 16 or 32 bytes, a
-    /// `ChaCha20Poly1305Key` of 32 bytes or an `AesSivKey` of 64 bytes, with `version` 0 and no
-    /// other field. The message does not name its type, so a key of one type is read as a key
-    /// of another of the same field and length: AES-256-GCM and AES-256-GCM-SIV keys are written
-    /// alike, in Tink too, which reads them as the type it is configured with.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_KEY_FORMAT` for any other bytes, such as a serialized keyset. The message never
-    /// quotes them.
-    pub(crate) fn from_tink_key(serialized: &[u8]) -> KmsAeadResult<Self> {
-        let invalid = || {
-            KmsAeadEncryptionError::create(
-                "INVALID_KEY_FORMAT",
-                &format!(
-                    "The unwrapped key of {} bytes is not a serialized Tink AES-GCM, AES-GCM-SIV, \
-                     ChaCha20-Poly1305 or AES-SIV key",
-                    serialized.len()
-                ),
-            )
-        };
-        let mut rest = serialized;
-        let mut key = None;
-        while !rest.is_empty() {
-            match encoding::decode_key(&mut rest).map_err(|_| invalid())? {
-                (VERSION_FIELD, WireType::Varint) => {
-                    if encoding::decode_varint(&mut rest).map_err(|_| invalid())? != 0 {
-                        return Err(invalid());
-                    }
+/// `key` serialized as a key of `key_type`. `version` 0 is proto3's default and so is not
+/// written, as Tink writes it.
+pub(crate) fn serialize_tink_key(key_type: TinkKeyType, key: &DataEncryptionKey) -> SecretValue {
+    let key = key.value().ref_sensitive_value();
+    let field = key_type.key_value_field();
+    // Sized up front, since growing the buffer would leave a copy of the key in freed memory.
+    let mut serialized =
+        SecretValue::new(Vec::with_capacity(encoding::bytes::encoded_len(field, key)));
+    encoding::bytes::encode(field, key, serialized.ref_sensitive_value_mut());
+    serialized
+}
+
+/// The key a serialized Tink key holds: an `AesGcmKey` or `AesGcmSivKey` of 16 or 32 bytes, a
+/// `ChaCha20Poly1305Key` of 32 bytes or an `AesSivKey` of 64 bytes, with `version` 0 and no
+/// other field. The message does not name its type, so a key of one type is read as a key
+/// of another of the same field and length: AES-256-GCM and AES-256-GCM-SIV keys are written
+/// alike, in Tink too, which reads them as the type it is configured with.
+///
+/// # Errors
+///
+/// `INVALID_KEY_FORMAT` for any other bytes, such as a serialized keyset. The message never
+/// quotes them.
+pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKey> {
+    let invalid = || {
+        KmsAeadEncryptionError::create(
+            "INVALID_KEY_FORMAT",
+            &format!(
+                "The unwrapped key of {} bytes is not a serialized Tink AES-GCM, AES-GCM-SIV, \
+                 ChaCha20-Poly1305 or AES-SIV key",
+                serialized.len()
+            ),
+        )
+    };
+    let mut rest = serialized;
+    let mut key = None;
+    while !rest.is_empty() {
+        match encoding::decode_key(&mut rest).map_err(|_| invalid())? {
+            (VERSION_FIELD, WireType::Varint) => {
+                if encoding::decode_varint(&mut rest).map_err(|_| invalid())? != 0 {
+                    return Err(invalid());
                 }
-                (field @ (2 | 3), WireType::LengthDelimited) if key.is_none() => {
-                    let len = encoding::decode_varint(&mut rest).map_err(|_| invalid())?;
-                    let len = usize::try_from(len).map_err(|_| invalid())?;
-                    let (value, after) = rest.split_at_checked(len).ok_or_else(invalid)?;
-                    key = Some((field, value));
-                    rest = after;
-                }
-                _ => return Err(invalid()),
             }
-        }
-        match key {
-            Some((field, value)) if matches!((field, value.len()), (2, 32 | 64) | (3, 16 | 32)) => {
-                Ok(Self::from(SecretValue::new(value.to_vec())))
+            (field @ (2 | 3), WireType::LengthDelimited) if key.is_none() => {
+                let len = encoding::decode_varint(&mut rest).map_err(|_| invalid())?;
+                let len = usize::try_from(len).map_err(|_| invalid())?;
+                let (value, after) = rest.split_at_checked(len).ok_or_else(invalid)?;
+                key = Some((field, value));
+                rest = after;
             }
-            _ => Err(invalid()),
+            _ => return Err(invalid()),
         }
+    }
+    match key {
+        Some((field, value)) if matches!((field, value.len()), (2, 32 | 64) | (3, 16 | 32)) => {
+            Ok(DataEncryptionKey::from(SecretValue::new(value.to_vec())))
+        }
+        _ => Err(invalid()),
     }
 }
 
@@ -195,7 +193,7 @@ impl TinkKeyset {
         self.0.key.push(Key {
             key_data: Some(KeyData {
                 type_url: key_type.type_url().to_string(),
-                value: std::mem::take(key_type.serialize(key).ref_sensitive_value_mut()),
+                value: std::mem::take(serialize_tink_key(key_type, key).ref_sensitive_value_mut()),
                 key_material_type: SYMMETRIC,
             }),
             status: ENABLED,
@@ -330,12 +328,12 @@ mod tests {
             let serialized = hex::decode(tink_key.serialized).unwrap();
 
             assert_eq!(
-                *tink_key.key_type.serialize(&key).ref_sensitive_value(),
+                *serialize_tink_key(tink_key.key_type, &key).ref_sensitive_value(),
                 serialized,
                 "{:?}",
                 tink_key.key_type
             );
-            assert_eq!(DataEncryptionKey::from_tink_key(&serialized)?, key);
+            assert_eq!(read_tink_key(&serialized)?, key);
         }
         Ok(())
     }
@@ -348,17 +346,17 @@ mod tests {
         ) {
             let key = DataEncryptionKey::from(SecretValue::new(vec![byte; algorithm.key_len()]));
 
-            let serialized = TinkKeyType::from(algorithm).serialize(&key);
+            let serialized = serialize_tink_key(TinkKeyType::from(algorithm), &key);
 
             prop_assert_eq!(
-                DataEncryptionKey::from_tink_key(serialized.ref_sensitive_value()).unwrap(),
+                read_tink_key(serialized.ref_sensitive_value()).unwrap(),
                 key
             );
         }
 
         #[test]
         fn reading_returns_on_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..80)) {
-            let _ = DataEncryptionKey::from_tink_key(&bytes);
+            let _ = read_tink_key(&bytes);
         }
     }
 
@@ -381,7 +379,7 @@ mod tests {
             vec![0x08, 0xaf, 0xb6, 0xc1, 0xc4, 0x01, 0x12, 0x64, 0x0a, 0x58],
         ];
         for bytes in refused {
-            let result = DataEncryptionKey::from_tink_key(&bytes);
+            let result = read_tink_key(&bytes);
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_FORMAT"),
@@ -394,8 +392,7 @@ mod tests {
     fn an_explicit_version_0_is_read() -> KmsAeadResult<()> {
         let key = [0x42; 32];
 
-        let read =
-            DataEncryptionKey::from_tink_key(&[&[0x08, 0x00, 0x12, 0x20][..], &key].concat())?;
+        let read = read_tink_key(&[&[0x08, 0x00, 0x12, 0x20][..], &key].concat())?;
 
         assert_eq!(
             read,
