@@ -2,6 +2,7 @@
 
 [KMS envelope encryption for Rust](./intro.md)
 [Getting started](./getting-started.md)
+[Stored values](./stored-values.md)
 
 # Providers
 
@@ -18,6 +19,19 @@
 - [DEK caching and reuse](./dek-caching.md)
 - [Crypto backends](./crypto-backends.md)
 - [Deterministic encryption](./deterministic.md)
+- [Beacons](./beacons.md)
+
+# Keyring
+
+- [Keyring and field encryption](./keyring.md)
+  - [Key versions and lifecycle](./keyring/lifecycle.md)
+  - [Keyring stores](./keyring/stores.md)
+  - [Record cache](./keyring/record-cache.md)
+  - [Encrypted fields and AAD](./keyring/fields.md)
+  - [Deterministic fields](./keyring/deterministic.md)
+  - [Beacons](./keyring/beacons.md)
+  - [BigQuery and Tink interop](./keyring/bigquery.md)
+- [Operations](./operations.md)
 
 # Reference
 

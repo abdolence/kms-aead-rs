@@ -14,7 +14,7 @@ impl<T, F: Format> Serialize for Encrypted<T, F> {
 }
 
 /// From bytes, or from a sequence of byte numbers as serde_json writes them, checked as
-/// `TryFrom<Vec<u8>>` checks them: a malformed stored value fails here, before any decrypt.
+/// `TryFrom<Vec<u8>>` checks them: a malformed stored value fails here, before any decryption.
 impl<'de, T, F: Format> Deserialize<'de> for Encrypted<T, F> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let bytes = ByteBuf::deserialize(deserializer)?;

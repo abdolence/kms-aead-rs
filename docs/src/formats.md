@@ -14,7 +14,7 @@ algorithm, and a value Tink encrypts opens with `KmsAeadEnvelope::decrypt`.
 | Serialised DEK | the plaintext of an encrypted DEK, but Azure's | Tink's key message, see [Serialised DEKs](#serialised-deks) | kms-aead, Tink | 0.30.0 and later |
 | TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `KeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
-| Tink encrypted keyset | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][encrypted keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later |
+| Tink encrypted keyset | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][encrypted keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later, and kms-aead-keyring through it |
 | Envelope layout v1 | `Encrypted<T, Envelope>` with `legacy-formats` | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted DEK layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead with `legacy-formats` | 0.29 |
 | Length-prefixed envelope | `Encrypted<T, Envelope>` with `legacy-formats` | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
@@ -158,7 +158,8 @@ encrypted keyset: a `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset
 KMS ciphertext of the serialised keyset, encrypted with no associated data. Tink's binary keyset
 writers leave out `keyset_info`, field 3, and so does the library. Tink's `KeysetHandle.read`
 reads it with the KMS client of `KekRef::tink_key_uri`, which Tink has for GCP and AWS keys, and
-Tink for Go for Vault Transit keys too.
+Tink for Go for Vault Transit keys too. A keyring exports it for its versions, see
+[Exporting a keyset to Tink](./keyring/bigquery.md#exporting-a-keyset-to-tink).
 
 ## Formats of `Encrypted`
 
@@ -188,7 +189,7 @@ an `Envelope` value in every build, and `KmsAeadEnvelope::decrypt` opens it with
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
 bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
 the integers, and compact JSON for `Json<T>`. See
-[Typed fields](./envelope-encryption.md#typed-fields).
+[Stored values](./stored-values.md#plaintext).
 
 ## Beacons
 
@@ -212,6 +213,117 @@ HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
 
 so that beacons of two fields, or of two bit counts, never match. `Beacon::try_from` checks the
 prefix and that 1 to 32 bytes of HMAC follow, and fails with `INVALID_BEACON_FORMAT` otherwise.
+
+## Keyring key ids
+
+kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
+under it. The two high bits of the id are the purpose, and the rest is the ordinal:
+
+| Bits | Meaning |
+|---|---|
+| 31 | set for deterministic versions |
+| 30 | set for beacon versions |
+| 0 to 29 | the ordinal, from 1, counted per purpose |
+
+So the ids of each purpose are:
+
+- randomised: `1`, `2`, `3`, …;
+- deterministic: `2147483649`, `2147483650`, …;
+- beacon: `1073741825`, `1073741826`, ….
+
+An id whose ordinal is 0, such as `0`, `2^30` and `2^31`, and an id with both high bits set are
+reserved: a value that carries one fails with `ReservedKeyId`. A value whose id is of another
+purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. Ids
+are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
+a SQL column holding one is a `BIGINT`.
+
+## Keyring records
+
+kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
+record with deterministic and beacon versions, after one randomised rotation and with another one
+staged, with the encrypted DEKs shortened:
+
+```json
+{
+  "schema": 1,
+  "id": "tenant-42",
+  "kek": { "provider": "local", "key": "tenant-kek" },
+  "algorithms": {
+    "randomized": "aes-256-gcm",
+    "deterministic": "aes-256-siv",
+    "beacon": "hmac-sha256"
+  },
+  "versions": [
+    {
+      "key_id": 1,
+      "algorithm": "aes-256-gcm",
+      "state": "decrypt_only",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.054258061Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+    },
+    {
+      "key_id": 2147483649,
+      "algorithm": "aes-256-siv",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.053483320Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+    },
+    {
+      "key_id": 1073741825,
+      "algorithm": "hmac-sha256",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053483320Z",
+      "state_changed_at": "2026-10-18T12:18:31.053483320Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+    },
+    {
+      "key_id": 2,
+      "algorithm": "aes-256-gcm",
+      "state": "active",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.053897100Z",
+      "state_changed_at": "2026-10-18T12:18:31.054258061Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+    },
+    {
+      "key_id": 3,
+      "algorithm": "aes-256-gcm",
+      "state": "pending",
+      "compromised": null,
+      "created_at": "2026-10-18T12:18:31.054603074Z",
+      "state_changed_at": "2026-10-18T12:18:31.054603074Z",
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+    }
+  ],
+  "created_at": "2026-10-18T12:18:31.053483320Z",
+  "updated_at": "2026-10-18T12:18:31.054603074Z"
+}
+```
+
+- `schema` is `1`;
+- `kek` names the provider and the KEK the keyring was created with;
+- `algorithms` holds the algorithm new versions of each purpose use. `deterministic` and `beacon`
+  are `null` for a keyring without versions of that purpose;
+- `versions` holds every version ever created, in creation order, each under its
+  [key id](#keyring-key-ids);
+- `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
+  `state_changed_at` is the time it was staged;
+- `compromised` is `null`, or `{"at": "<time>", "note": "<the operator's note, or null>"}`;
+- `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
+  provider returned, here the local KMS layout. It is `null` for a destroyed version;
+- the times are RFC 3339, in UTC.
+
+A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
+fails with `RecordInvalid` on a document that breaks any of:
+
+- at most one active and one pending version per purpose, neither of them compromised;
+- an encrypted DEK on every version but the destroyed ones;
+- unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.
 
 ## Telling layouts apart
 

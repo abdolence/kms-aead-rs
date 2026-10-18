@@ -33,7 +33,7 @@ impl<T, F: Format> Encode<'_, Postgres> for Encrypted<T, F> {
 }
 
 /// Checked as `TryFrom<Vec<u8>>` checks the bytes: a malformed stored value fails here, before
-/// any decrypt.
+/// any decryption.
 impl<T, F: Format> Decode<'_, Postgres> for Encrypted<T, F> {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
         Ok(Encrypted::try_from(<Vec<u8> as Decode<Postgres>>::decode(

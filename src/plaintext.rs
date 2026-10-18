@@ -38,6 +38,41 @@ use crate::KmsAeadResult;
 /// # }
 /// ```
 ///
+/// A newtype over [`SecretValue`] keeps the decrypted value zeroised on drop, and its `Debug`
+/// prints `***` instead of the value. Text stored this way is the same bytes as through `String`,
+/// so `AEAD.DECRYPT_STRING` still reads it. In exchange there is no UTF-8 check on read, and the
+/// text is reached through `SecretValue`'s accessors, such as `as_sensitive_str()`, which panics on
+/// bytes that are not UTF-8, or `sensitive_value_to_str()`, which returns an error. `SecretValue`
+/// suits values that are secrets or personal data, `String` values that are used as text
+/// throughout:
+///
+/// ```rust
+/// use kms_aead::{KmsAeadResult, Plaintext};
+/// use secret_vault_value::SecretValue;
+///
+/// #[derive(Debug, Clone, PartialEq)]
+/// struct Email(SecretValue);
+///
+/// impl Plaintext for Email {
+///     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+///         Ok(self.0.clone())
+///     }
+///
+///     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+///         Ok(Email(plaintext))
+///     }
+/// }
+///
+/// # fn main() -> KmsAeadResult<()> {
+/// let email = Email(SecretValue::from("alice@example.com"));
+/// let decrypted: Email = Email::from_plaintext(email.to_plaintext()?)?;
+/// assert_eq!(decrypted, email);
+/// assert_eq!(decrypted.0.as_sensitive_str(), "alice@example.com");
+/// assert_eq!(format!("{decrypted:?}"), "Email(***)");
+/// # Ok(())
+/// # }
+/// ```
+///
 /// The decrypted value belongs to the application, which protects it: only [`SecretValue`] as
 /// `T` is zeroised on drop. `String` and `Vec<u8>` take over the decrypted buffer without a
 /// copy.

@@ -14,6 +14,10 @@ the RustCrypto `aes-siv` crate, so a value sealed under one backend opens under 
 AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
 validated boundary, also on `aws-lc-fips`, where the keys come from the FIPS module's DRBG.
 
+Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
+a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
+[Beacon or deterministic field](./beacons.md#beacon-or-deterministic-field).
+
 ## What it leaks
 
 Be aware what equal cipher texts tell a reader of the stored data:
@@ -32,9 +36,6 @@ So do not use deterministic encryption:
 
 The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.
-
-A beacon finds rows by equality as well and keeps the value randomised, see
-[Beacon or deterministic field](./envelope-encryption.md#beacon-or-deterministic-field).
 
 ## Usage
 

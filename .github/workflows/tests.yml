@@ -79,7 +79,7 @@ jobs:
           FEATURES: ${{ matrix.features }}
           ABSENT: ${{ matrix.absent }}
         run: |
-          cargo fmt -- --check
+          cargo fmt --all -- --check
           if cargo tree -e normal --features "$FEATURES" -d --depth 0 | grep -q '^reqwest '; then
             echo "Two reqwest versions: the Azure TLS features would configure the one azure_core does not use"
             exit 1
@@ -123,7 +123,15 @@ jobs:
         run: |
           cargo doc --no-deps
           cargo doc --no-deps --features ring
-  # The book's code compiles as doctests only with the docs.rs feature set, which no build row has.
+      # The keyring's docs.rs feature set, and its builds without `admin`, whose docs must not link
+      # to the administrative items.
+      - name: cargo doc of the keyring
+        run: |
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
+          cargo doc --no-deps -p kms-aead-keyring
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3"
+  # The book's code compiles as doctests only with each crate's docs.rs feature set, which no build
+  # row has.
   book:
     name: book
     if: github.event_name != 'schedule'
@@ -135,16 +143,21 @@ jobs:
         with:
           mdbook-version: '0.5.4'
       - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
       - run: cd docs && mdbook build
-  # `rust-version` in Cargo.toml: the docs.rs feature set builds on it.
+  # `rust-version` in the workspace's Cargo.toml: each crate's docs.rs feature set builds on it, on
+  # dependencies resolved for it.
   msrv:
     name: rust-version
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
       - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -179,6 +192,206 @@ jobs:
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
       - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
+  # The keyring stores, one job each. Each job runs the crate's suite with its store's ignored
+  # tests included, so that the same two steps serve every store.
+  #
+  # Firestore runs on the emulator, so that the job needs no credentials. The emulator image's
+  # entry point is gcloud, which a service container cannot be given arguments for.
+  keyring-firestore:
+    name: keyring-firestore
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,admin,deterministic,serde,firestore
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8687
+      PROJECT_ID: kms-aead-emulator
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: |
+          docker run -d -p 8687:8687 gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+            gcloud emulators firestore start --host-port=0.0.0.0:8687
+          for attempt in $(seq 1 60); do
+            curl -sf "http://$FIRESTORE_EMULATOR_HOST" > /dev/null && break
+            sleep 1
+          done
+          curl -sf "http://$FIRESTORE_EMULATOR_HOST" > /dev/null
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  keyring-postgres:
+    name: keyring-postgres
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      FEATURES: ring,admin,deterministic,serde,postgres
+      KMS_AEAD_KEYRING_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # GCS runs against a real bucket, on master only: the workload identity binding admits this
+  # repository's master branch, and the bucket's lifecycle rule deletes each run's objects after a
+  # day.
+  keyring-gcs:
+    name: keyring-gcs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FEATURES: ring,admin,gcs-tls-roots
+      GCP_PROJECT: latestbit
+      GCP_PROJECT_ID: 288860578009
+      KEYRING_GCS_BUCKET: latestbit-kms-aead-rs-ci
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: 'projects/${{ env.GCP_PROJECT_ID }}/locations/global/workloadIdentityPools/lb-github-identity-pool/providers/lb-github-identity-pool-provider'
+          service_account: 'lb-github-service-account@${{ env.GCP_PROJECT }}.iam.gserviceaccount.com'
+          create_credentials_file: true
+          access_token_lifetime: '240s'
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # S3 runs on MinIO, so that the job needs no credentials. MinIO publishes no image any more, and
+  # its last one writes an object on an update whose object does not exist, which breaks the
+  # compare-and-swap, so the job runs pgsty's build of a later release. Its default command is not
+  # `server`, which a service container cannot be given.
+  keyring-s3:
+    name: keyring-s3
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,admin,s3
+      KEYRING_S3_ENDPOINT: http://127.0.0.1:9000
+      KEYRING_S3_BUCKET: kms-aead-keyrings-ci
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: |
+          docker run -d -p 9000:9000 -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
+            -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
+            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+          for attempt in $(seq 1 60); do
+            curl -sf "$KEYRING_S3_ENDPOINT/minio/health/ready" && break
+            sleep 1
+          done
+          curl -sf --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+            -X PUT "$KEYRING_S3_ENDPOINT/$KEYRING_S3_BUCKET"
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
+  # only, as keyring-gcs does. The keyring lives in the memory store, and the queries read
+  # literals, so the job creates no table.
+  keyring-bigquery:
+    name: keyring-bigquery
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FEATURES: ring,deterministic,serde,ci-bigquery
+      GCP_PROJECT: latestbit
+      GCP_PROJECT_ID: 288860578009
+      PROJECT_ID: latestbit
+      PROJECT_LOCATION: europe-north1
+      KMS_KEY_RING: test-key-ring
+      KMS_KEY: test-key
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: 'projects/${{ env.GCP_PROJECT_ID }}/locations/global/workloadIdentityPools/lb-github-identity-pool/providers/lb-github-identity-pool-provider'
+          service_account: 'lb-github-service-account@${{ env.GCP_PROJECT }}.iam.gserviceaccount.com'
+          create_credentials_file: true
+          access_token_lifetime: '240s'
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # The keyring without a store, one row per AEAD backend alone so that one backend never hides a
+  # missing feature gate in another, plus the optional encodings. The unit tests create keyrings,
+  # so these rows build `admin`. The last row is an application's build: every store and encoding
+  # without `admin`, so that the data plane compiles and lints clean without the administrative
+  # API, and the tests and doctests that need no keyring run against it.
+  keyring-core:
+    name: keyring ${{ matrix.features }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ring,admin
+          - aws-lc,admin
+          - rustcrypto,admin
+          - ring,admin,deterministic,serde-json
+          - ring,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run checks
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+          cargo test -p kms-aead-keyring --features "$FEATURES"
+  # The keyring's docs.rs feature set, every store at once. The tests that need a store's service
+  # stay ignored here; the store jobs above run them. The store clients belong to the keyring, so
+  # kms-aead's own tree, with its docs.rs feature set, must not contain them. gcloud-sdk and prost
+  # are there legitimately, for the GCP provider.
+  keyring-all:
+    name: keyring docs.rs feature set
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
+      ABSENT: firestore sqlx tokio-postgres aws-sdk-s3
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Keep the store clients out of kms-aead
+        run: |
+          for crate in $ABSENT; do
+            if cargo tree -p kms-aead -e normal --features "$KMS_AEAD_FEATURES" --prefix none -f '{p}' | grep -q "^$crate v"; then
+              echo "$crate is in kms-aead's dependency tree"
+              exit 1
+            fi
+          done
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES"
   # The PostgreSQL integrations of `Encrypted` through tokio-postgres and sqlx.
   postgres-live:
     name: postgres-live

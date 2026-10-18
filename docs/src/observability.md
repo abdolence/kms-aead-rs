@@ -151,6 +151,75 @@ Besides the spans, the library logs:
 
 The library retries nothing itself, so there is no retry field.
 
+## Keyring spans
+
+The `kms-aead-keyring` crate follows the same rules: one `DEBUG` span per call, field names with
+the `/kms_aead_keyring/` prefix, and nothing recorded for a value nobody reported. kms-aead's spans
+nest inside them, so a `KMS decrypt DEK` under a `Keyring decrypt` is a DEK cache miss, and a
+`KMS encrypt DEK` under a `Keyring rotate` is the new version's DEK. Enable `kms_aead_keyring=debug`
+in the filter beside `kms_aead=debug`. The spans from `Keyring rotate` to `Keyring export` are
+those of `KeyringAdmin` calls, under the `admin` feature.
+
+| Span | Opened by | Fields |
+|---|---|---|
+| `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `deterministic_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
+| `Keyring decrypt` | `decrypt`, `decrypt_with_trust`, their deterministic pair, `decrypt_envelope_for_migration` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
+| `Keyring load` | every store read: `open`, a revalidation, a reload, the read before a write of a `KeyringAdmin` | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
+| `Keyring beacon` | `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
+| `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `to_key_id`, `cas_retries`, `error_code` |
+| `Keyring promote` | `promote` | `keyring`, `key_id`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
+| `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
+| `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
+| `Keyring destroy all versions` | `dangerously_destroy_all_versions` | `keyring`, `cas_retries`, `error_code` |
+| `Keyring re-encrypt DEKs` | `reencrypt_deks` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
+| `Keyring export` | `export_bigquery_keyset`, `export_tink_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
+| `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
+
+| Field | Value |
+|---|---|
+| `keyring` | the keyring id, which can name a tenant |
+| `purpose` | `randomized`, `deterministic` or `beacon` |
+| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version, and for `deterministic_probes` and `beacon_probes`, which run under several |
+| `algorithm` | the version's algorithm, such as `aes-256-gcm` or `hmac-sha256`; unrecorded for `deterministic_probes` and `beacon_probes` |
+| `backend` | `ring`, `aws-lc` or `rustcrypto`; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring's backend |
+| `key_state` | `pending`, `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
+| `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `reencrypt_deks`, the export, and a compromised version read past the cache; unrecorded for `deterministic_probes` and `beacon_probes` |
+| `store` | `memory`, `firestore`, `postgres`, `gcs`, `s3`, or an application store's name |
+| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
+| `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
+| `revision` | the store's revision of the record read, as text |
+| `response_time` | milliseconds the store call took |
+| `from_key_id`, `to_key_id` | the version a promotion or a compromise replaced, and the new active one; for `rotate`, `to_key_id` is the staged version |
+| `cas_retries` | the compare-and-swap conflicts before the write landed |
+| `versions` | the versions `reencrypt_deks` encrypted again, or an export put in the keyset |
+| `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` | the counts of the `SweepReport` |
+| `error_code` | `KeyringError::code()` of the error returned: kms-aead's code for a KMS or AEAD error, such as `DECRYPT`, and the variant's name in upper snake case otherwise, such as `KEY_VERSION_COMPROMISED` |
+
+### Keyring events
+
+- `WARN`: a read of a compromised version under the `Allow` policy, with the key id;
+- `WARN`: a read refused because its version is retired or destroyed, for an operator watching a
+  sweep;
+- `WARN`: a failed revalidation, and a record the store no longer holds, the cached one staying in
+  use;
+- `ERROR`: a refreshed record refused because it moves a version backwards, with the first rule it
+  breaks. Alert on it: it is the detection of a rewritten or restored record;
+- `WARN`: a compromised flag written without a rotation because the new DEK could not be encrypted;
+- `INFO`: the active version of a purpose changed, with the old and new key ids;
+- `WARN`: the store's listener disconnected, reconnected, or did not start, and a keyring
+  opened with no tokio runtime to follow the store's signals;
+- `WARN`: a record a sweep could not re-seal, with the `Display` of the application's candidate
+  in `record` and of its error in `error`. Both are the application's own text, so it keeps
+  values, secrets and personal data out of them. A record id is often an entity id, so the
+  sweep's log is an administrative log;
+- `DEBUG`: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
+  retried.
+
+The keyring's spans, events and errors leave out everything kms-aead's do, listed below. The AAD
+rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
+`EntityId` appears anywhere. Key ids, keyring ids and store names are identifiers and appear.
+
 ## What is never logged
 
 No span field or event carries:

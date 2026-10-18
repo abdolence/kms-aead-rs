@@ -8,6 +8,9 @@ mod intro {}
 #[doc = include_str!("../docs/src/getting-started.md")]
 mod getting_started {}
 
+#[doc = include_str!("../docs/src/stored-values.md")]
+mod stored_values {}
+
 #[doc = include_str!("../docs/src/providers.md")]
 mod providers {}
 
@@ -37,6 +40,9 @@ mod crypto_backends {}
 
 #[doc = include_str!("../docs/src/deterministic.md")]
 mod deterministic {}
+
+#[doc = include_str!("../docs/src/beacons.md")]
+mod beacons {}
 
 #[doc = include_str!("../docs/src/formats.md")]
 mod formats {}

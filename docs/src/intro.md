@@ -20,6 +20,9 @@ encryption without a KMS:
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
 - Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
 - Optional KMS-side random generators for GCP and AWS;
+- Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
+  Firestore, PostgreSQL, Cloud Storage or S3, central staged rotation, beacons, and values in
+  Tink's wire format;
 - Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
   in them;
 - No unsafe code.
@@ -65,12 +68,28 @@ stored value holds:
 - **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the encrypted DEK
   versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery
-  and Tink read across rotations. See [kms-aead-keyring](https://crates.io/crates/kms-aead-keyring).
+  and Tink read across rotations. See [Keyring and field encryption](./keyring.md).
+
+| | Per-call envelope | Store-less DEK reuse | Keyring |
+|---|---|---|---|
+| Crate | `kms-aead` | `kms-aead` | `kms-aead-keyring` |
+| DEKs | one per value | one per process at a time, renewed by age or count | one per key version of a scope |
+| KMS calls on write | one encryption per value | one encryption per renewed DEK | no encryption, and one decryption per key version per DEK cache TTL |
+| KMS calls on read | one decryption per value, or per DEK cache miss | one decryption per DEK per cache TTL | one decryption per key version per cache TTL |
+| A value carries | its encrypted DEK | its encrypted DEK | a 4-byte key id |
+| Infrastructure | a KMS | a KMS | a KMS and a keyring store |
+| Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
+| Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |
+| BigQuery and Tink readers | no | no | yes: BigQuery with a Cloud KMS KEK, Tink with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit |
+| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
+
+Neither mode needs the other. Values of the envelope modes move to a keyring with a sweep, see
+[Migrating from envelope values](./operations.md#migrating-from-envelope-values).
 
 Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 `Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
 it as bytes, so a column of secrets needs no store of its own. See
-[Typed fields](./envelope-encryption.md#typed-fields).
+[Stored values](./stored-values.md).
 
 `AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
 holds.

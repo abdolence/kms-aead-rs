@@ -100,6 +100,88 @@ With the local KMS, rotation is a new KEK version. The old version has to stay i
 as long as DEKs encrypted under it are read, and crypto-shredding means destroying every copy of it,
 backups included.
 
+## Keyring deployment
+
+A [keyring](./keyring.md) record decides which versions are read and which one seals new values,
+and nothing signs it: its integrity rests on the keyring store's access control. So a deployment
+splits the two sides of
+[Applications and administration](./keyring.md#applications-and-administration) into two
+principals:
+
+- **Application**: builds without the `admin` feature, and calls `Keyring` only: encryption,
+  decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
+  store. None of its calls asks the KMS to encrypt, so it needs nothing more;
+- **Administration**: builds with the `admin` feature, and calls the registry's `create`,
+  `open_or_create` and `admin`, and the `KeyringAdmin` they return: `rotate`, `promote`,
+  `change_algorithm`, `mark_compromised`, `retire`, `reinstate`, `destroy`,
+  `dangerously_destroy_all_versions`, `reencrypt_deks`, `export_bigquery_keyset` and
+  `export_tink_keyset`. It needs KMS encrypt and decrypt on the KEK, and is the only principal
+  with write access to the keyring store. It runs in a job or in infrastructure automation, never
+  in a request handler.
+
+| KMS | Application | Administration |
+|---|---|---|
+| GCP | `roles/cloudkms.cryptoKeyDecrypter` | `roles/cloudkms.cryptoKeyEncrypterDecrypter` |
+| AWS | `kms:Decrypt` on the key | `kms:Encrypt` and `kms:Decrypt` on the key, plus `kms:GenerateRandom` with the KMS random generator |
+| Azure Key Vault | a role with `keys/unwrap/action` on the key | a role with `keys/wrap/action` and `keys/unwrap/action` on the key |
+| Vault Transit | `update` on `transit/decrypt/<key>` | `update` on `transit/encrypt/<key>` and `transit/decrypt/<key>` |
+
+The permissions of each store are in [Keyring stores](./keyring/stores.md).
+
+A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
+or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
+to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
+compromised or destroyed version's DEK back into use under a new key id, or point one tenant's
+version at another tenant's DEK. A writer without KMS rights cannot add a DEK of its own, since
+every decryption names the configured KEK and the KMS refuses a DEK encrypted under another key. The
+controls for this are the deployment's, as in the [threat model](#threat-model):
+
+- write access to the keyring store for the administration only, and read-only access for the
+  applications;
+- one KEK per isolation boundary, such as a tenant or an environment, so a DEK copied across it
+  fails to decrypt;
+- backups of the record, or versioning in the store, to compare with and restore from;
+- the KMS audit log of encrypt calls, which shows whether the administrative job encrypted a
+  version's DEK.
+
+A running process also refuses every record that moves a version backwards, with an `ERROR`, see
+[Record cache](./keyring/record-cache.md#when-the-store-fails-or-misbehaves). That catches a
+rewritten state, such as a cleared compromised flag, and not a copied DEK filed under a new
+version.
+
+## Keyring limits
+
+- **The administration is trusted.** KMS encrypt plus store write re-activates any version, and
+  so does an application that provisions keyrings lazily with the `admin` feature and those
+  rights. The KMS audit log is the detection;
+- **a new process has no baseline.** A store writer can clear a compromised flag, re-activate a
+  version or restore a destroyed one for the processes that start after the write. Running
+  processes refuse such a record and log an `ERROR`; new ones take it. The record is not signed in
+  this release;
+- **an RSA key on Azure Key Vault encrypts for anyone.** With an RSA key the encryption is a
+  public-key operation, so whoever holds the public key encrypts a DEK of their own into the record.
+  Use an AES key, from Managed HSM;
+- **`decrypt_envelope_for_migration` knows no key version.** It decrypts the encrypted DEK an envelope value
+  carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
+  values through it. Keep it in the read path for the migration only;
+- **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
+  record holds encrypted DEKs the KMS still opens, see
+  [Crypto-shredding](./operations.md#crypto-shredding);
+- **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
+  BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export
+  again after every rotation and every `mark_compromised`;
+- **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are
+  decided per record before a sweep re-seals them, see
+  [The trust of re-sealed values](./operations.md#the-trust-of-re-sealed-values);
+- **deterministic fields leak equality and frequency**, and an equality query across a rotation
+  links a value's history for whoever reads the query, see
+  [Deterministic fields](./keyring/deterministic.md#what-they-leak);
+- **beacons leak likely equality and frequency**, as far as their bits tell values apart, see
+  [Beacons](./keyring/beacons.md#what-a-beacon-leaks);
+- **a promotion has no guard.** A process that has not seen a promoted version reloads its record
+  when it meets a value under it, and fails the read when it cannot reach the store, so the wait
+  before `promote` is the operator's, see [Staged rotation](./keyring/lifecycle.md#staged-rotation).
+
 ## OSS
 
 Open source code is created through voluntary collaboration of software developers. The original
