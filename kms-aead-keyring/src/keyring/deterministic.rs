@@ -172,7 +172,9 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Plaintext`] when the value does not encode, and the provider's error when
+    /// [`KeyringError::Interop`], before any unwrap, when sealing under any of the versions
+    /// breaks the [`Interop`](crate::Interop) requirement `aad` carries;
+    /// [`KeyringError::Plaintext`] when the value does not encode; and the provider's error when
     /// a version's key cannot be unwrapped.
     pub async fn equality_probes<T: Plaintext>(
         &self,
@@ -189,9 +191,12 @@ where
                 .filter(|version| version.key_id().purpose() == Purpose::Deterministic)
                 .filter_map(|version| {
                     let (dek, compromise) = version.readable_dek()?;
-                    Some((version, dek, compromise))
+                    Some(
+                        self.check_interop(aad.interop, version)
+                            .map(|()| (version, dek, compromise)),
+                    )
                 })
-                .collect::<Vec<_>>();
+                .collect::<KeyringResult<Vec<_>>>()?;
             versions.sort_by_key(|(version, ..)| Reverse(version.key_id()));
             let mut probes = Vec::with_capacity(versions.len());
             for (version, dek, compromise) in versions {
@@ -284,10 +289,13 @@ mod tests {
 
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    use kms_aead::{DataEncryptionKey, DeterministicAlgorithm, KmsAeadEncryptionProvider};
+    use kms_aead::{
+        DataEncryptionKey, DeterministicAlgorithm, KekProvider, KmsAeadEncryptionProvider,
+    };
     use secret_vault_value::SecretValue;
     use serde_json::json;
 
+    use crate::errors::InteropRequirement;
     use crate::store::{KeyringStore, MemoryKeyringStore};
     use crate::testing::{email_of, TestProvider, TestResult, TENANT, TEST_BACKEND};
     use crate::{
@@ -370,6 +378,31 @@ mod tests {
                 .await?
         );
         assert_eq!(probes[2], first);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn probes_refuse_a_field_whose_interop_the_keyring_breaks() -> TestResult {
+        let provider = TestProvider::new("tenant-42-kek")?;
+        let keyring = deterministic_keyring(provider.clone()).await?;
+        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+
+        let probes = keyring
+            .equality_probes(
+                &EMAIL.with_interop(Interop::BigQuery).deterministic_aad(),
+                &ALICE.to_string(),
+            )
+            .await;
+
+        assert!(matches!(
+            probes,
+            Err(KeyringError::Interop(error))
+                if error.requirement == InteropRequirement::Kek(KekProvider::Local)
+        ));
+        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps);
+        keyring
+            .equality_probes(&EMAIL.deterministic_aad(), &ALICE.to_string())
+            .await?;
         Ok(())
     }
 
