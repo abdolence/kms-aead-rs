@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 use rsb_derive::Builder;
 use tokio::sync::OnceCell;
 
-use crate::errors::KmsAeadSystemError;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadSystemError};
 #[cfg(feature = "deterministic")]
 use crate::{checked_deterministic_key, DeterministicAlgorithm, DeterministicDataEncryptionKey};
 use crate::{
-    DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    AeadAlgorithm, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 const DEFAULT_MAX_ENTRIES: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is not zero");
@@ -433,8 +433,9 @@ impl DekCache {
     ///
     /// # Errors
     ///
-    /// The provider's error, which every caller waiting on the same unwrap receives. The errors
-    /// of `use_key` come back in its own return value.
+    /// The provider's error, and `INVALID_KEY_LENGTH` when the unwrapped key has the length of no
+    /// [`AeadAlgorithm`]'s key, which every caller waiting on the same unwrap receives. Such a key
+    /// is not cached. The errors of `use_key` come back in its own return value.
     pub async fn with_key<P, T>(
         &self,
         provider: &P,
@@ -445,7 +446,25 @@ impl DekCache {
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        let unwrap_key = || provider.decrypt_data_encryption_key(encrypted, binding);
+        // A wrapped value of the same KEK that is no data encryption key, such as an exported
+        // keyset, unwraps too: its plaintext must not reach the cache.
+        let unwrap_key = || async {
+            let key = provider
+                .decrypt_data_encryption_key(encrypted, binding)
+                .await?;
+            let len = key.value().ref_sensitive_value().len();
+            if AeadAlgorithm::ALL
+                .iter()
+                .any(|algorithm| algorithm.key_len() == len)
+            {
+                Ok(key)
+            } else {
+                Err(KmsAeadEncryptionError::create(
+                    "INVALID_KEY_LENGTH",
+                    &format!("A key of {len} bytes fits no AEAD algorithm"),
+                ))
+            }
+        };
         match &self.0 {
             Some(shared) => {
                 shared
@@ -603,6 +622,8 @@ mod tests {
     use std::thread;
 
     use futures::executor::block_on;
+    #[cfg(feature = "deterministic")]
+    use secret_vault_value::SecretValue;
 
     use super::*;
     use crate::errors::KmsAeadError;
@@ -612,9 +633,11 @@ mod tests {
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
-    /// The test provider's wrapped key is the key itself, and 64 bytes fit both purposes.
-    const ORDERS_DEK: [u8; 64] = [0x42; 64];
-    const BILLING_DEK: [u8; 64] = [0x24; 64];
+    /// The test provider's wrapped key is the key itself, of a randomized algorithm's length.
+    const ORDERS_DEK: [u8; 32] = [0x42; 32];
+    const BILLING_DEK: [u8; 32] = [0x24; 32];
+    #[cfg(feature = "deterministic")]
+    const ORDERS_DETERMINISTIC_DEK: [u8; 64] = [0x42; 64];
     const SHORT_TTL: Duration = Duration::from_millis(200);
 
     #[tokio::test]
@@ -706,6 +729,25 @@ mod tests {
             [DekCacheOutcome::Miss, DekCacheOutcome::Hit]
         );
         assert_eq!(working.unwraps(), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_key_no_algorithm_uses_is_refused_and_not_cached() -> KmsAeadResult<()> {
+        let encrypted = EncryptedDataEncryptionKey::new(vec![0x42; 100], None);
+        let cache = DekCache::new(DekCacheOptions::new())?;
+        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
+
+        for _ in 0..2 {
+            let result = cache.with_key(&provider, &encrypted, None, |_| ()).await;
+            assert!(
+                matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
+                "{:?}",
+                result.as_ref().err()
+            );
+        }
+
+        assert_eq!(provider.unwraps(), 2);
         Ok(())
     }
 
@@ -804,25 +846,33 @@ mod tests {
     async fn invalidate_removes_both_purposes() -> KmsAeadResult<()> {
         let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
         let cache = DekCache::new(DekCacheOptions::new())?;
-        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
+        let randomized_kms = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
+        let deterministic_kms = CountingKmsProvider::new(
+            TestKmsProvider::Unwrapping(SecretValue::new(ORDERS_DETERMINISTIC_DEK.to_vec())),
+            ORDERS_KEK,
+        );
         let algorithm = DeterministicAlgorithm::Aes256Siv;
 
-        cache.with_key(&provider, &encrypted, None, |_| ()).await?;
         cache
-            .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+            .with_key(&randomized_kms, &encrypted, None, |_| ())
             .await?;
-        let randomized = cache.cached_dek(provider.kek(), &encrypted).unwrap();
-        let deterministic = cache
-            .cached_deterministic_dek(provider.kek(), &encrypted)
-            .unwrap();
-        cache.invalidate(provider.kek(), &encrypted, None);
+        cache
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
+            .await?;
+        let kek = randomized_kms.kek();
+        let randomized = cache.cached_dek(kek, &encrypted).unwrap();
+        let deterministic = cache.cached_deterministic_dek(kek, &encrypted).unwrap();
+        cache.invalidate(kek, &encrypted, None);
         let ((), outcome) = cache
-            .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
             .await?;
 
         assert_eq!(randomized.strong_count() + deterministic.strong_count(), 0);
         assert_eq!(outcome, DekCacheOutcome::Miss);
-        assert_eq!(provider.unwraps(), 3);
+        assert_eq!(
+            [randomized_kms.unwraps(), deterministic_kms.unwraps()],
+            [1, 2]
+        );
         Ok(())
     }
 
@@ -831,15 +881,21 @@ mod tests {
     async fn purposes_are_cached_apart() -> KmsAeadResult<()> {
         let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
         let cache = DekCache::new(DekCacheOptions::new())?;
-        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
+        let randomized_kms = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
+        let deterministic_kms = CountingKmsProvider::new(
+            TestKmsProvider::Unwrapping(SecretValue::new(ORDERS_DETERMINISTIC_DEK.to_vec())),
+            ORDERS_KEK,
+        );
         let algorithm = DeterministicAlgorithm::Aes256Siv;
 
-        let ((), randomized) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+        let ((), randomized) = cache
+            .with_key(&randomized_kms, &encrypted, None, |_| ())
+            .await?;
         let ((), deterministic) = cache
-            .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
             .await?;
         let ((), again) = cache
-            .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
             .await?;
 
         assert_eq!(
@@ -850,7 +906,10 @@ mod tests {
                 DekCacheOutcome::Hit
             ]
         );
-        assert_eq!(provider.unwraps(), 2);
+        assert_eq!(
+            [randomized_kms.unwraps(), deterministic_kms.unwraps()],
+            [1, 1]
+        );
         Ok(())
     }
 
@@ -944,7 +1003,7 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
         let encrypted: Vec<_> = (1..=3)
-            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 64], None))
+            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 32], None))
             .collect();
 
         let mut cached = Vec::new();
@@ -954,12 +1013,14 @@ mod tests {
         }
         #[cfg(feature = "deterministic")]
         let deterministic = {
+            let encrypted =
+                EncryptedDataEncryptionKey::new(ORDERS_DETERMINISTIC_DEK.to_vec(), None);
             let algorithm = DeterministicAlgorithm::Aes256Siv;
             cache
-                .with_deterministic_key(&provider, algorithm, &encrypted[0], None, |_| ())
+                .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
                 .await?;
             cache
-                .cached_deterministic_dek(provider.kek(), &encrypted[0])
+                .cached_deterministic_dek(provider.kek(), &encrypted)
                 .unwrap()
         };
         cache.clear();
@@ -990,7 +1051,7 @@ mod tests {
     #[cfg(feature = "deterministic")]
     #[tokio::test]
     async fn a_randomized_lookup_drops_an_expired_deterministic_key() -> KmsAeadResult<()> {
-        let orders = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let orders = EncryptedDataEncryptionKey::new(ORDERS_DETERMINISTIC_DEK.to_vec(), None);
         let billing = EncryptedDataEncryptionKey::new(BILLING_DEK.to_vec(), None);
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
@@ -1138,8 +1199,9 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(ttl))?;
         let started = Instant::now();
         let provider = CountingKmsProvider::new(TestKmsProvider::Stamping(started), ORDERS_KEK);
+        // With the 8-byte stamp, a 32-byte key.
         let keys: Vec<_> = (1..=3)
-            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 32], None))
+            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 24], None))
             .collect();
         let looking_up = AtomicBool::new(true);
 
