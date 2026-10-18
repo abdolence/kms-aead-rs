@@ -89,7 +89,7 @@
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
 //! | `deterministic` | creating deterministic key versions; the deterministic types are in every build |
-//! | `legacy-formats` | kms-aead's `legacy-formats` |
+//! | `legacy-formats` | kms-aead's `legacy-formats`: [`Keyring::decrypt_envelope_value`] also reads the values kms-aead 0.28.1 and earlier wrote |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
@@ -172,6 +172,9 @@ mod record_cache;
 mod spans;
 
 pub mod store;
+
+pub mod sweep;
+pub use sweep::{SealFormat, SealMarker};
 
 #[cfg(test)]
 mod testing;

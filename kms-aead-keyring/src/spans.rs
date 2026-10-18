@@ -15,6 +15,7 @@ use tracing::{debug_span, field, Instrument, Span};
 
 use crate::errors::{KeyringResult, RegressionRule};
 use crate::store::StoreKind;
+use crate::sweep::SweepReport;
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, Purpose};
 
 const KEYRING: &str = "/kms_aead_keyring/keyring";
@@ -35,6 +36,12 @@ const TO_KEY_ID: &str = "/kms_aead_keyring/to_key_id";
 const CAS_RETRIES: &str = "/kms_aead_keyring/cas_retries";
 const VERSIONS: &str = "/kms_aead_keyring/versions";
 const ERROR_CODE: &str = "/kms_aead_keyring/error_code";
+const SCANNED: &str = "/kms_aead_keyring/scanned";
+const RESEALED: &str = "/kms_aead_keyring/resealed";
+const RESEALED_FROM_COMPROMISED: &str = "/kms_aead_keyring/resealed_from_compromised";
+const SKIPPED: &str = "/kms_aead_keyring/skipped";
+const FAILED: &str = "/kms_aead_keyring/failed";
+const RECORD: &str = "/kms_aead_keyring/record";
 
 /// The `dek_cache` value of a call that unwraps through the provider although the keyring has a
 /// cache: `rewrap`, and a compromised version read by `decrypt_with_status`.
@@ -376,5 +383,53 @@ pub(crate) fn watch_without_runtime(keyring: &KeyringId) {
         { KEYRING } = keyring.as_str(),
         "No tokio runtime runs the call, so the keyring store's change signals are not followed: \
          the record TTL alone bounds how late this process sees a change"
+    );
+}
+
+/// `Keyring decrypt` for an envelope value, which names no key version: `key_id`, `key_state`
+/// and `reload` stay unrecorded.
+pub(crate) fn decrypt_envelope(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring decrypt",
+        { KEYRING } = keyring.as_str(),
+        { PURPOSE } = %Purpose::Randomized,
+        { KEY_ID } = field::Empty,
+        { KEY_STATE } = field::Empty,
+        { RELOAD } = field::Empty,
+        { DEK_CACHE } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring sweep`, whose counts are recorded once the sweep ends.
+pub(crate) fn sweep(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring sweep",
+        { KEYRING } = keyring.as_str(),
+        { SCANNED } = field::Empty,
+        { RESEALED } = field::Empty,
+        { RESEALED_FROM_COMPROMISED } = field::Empty,
+        { SKIPPED } = field::Empty,
+        { FAILED } = field::Empty,
+    )
+}
+
+/// Records the counts of a sweep on its span.
+pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
+    span.record(SCANNED, report.scanned);
+    span.record(RESEALED, report.resealed);
+    span.record(RESEALED_FROM_COMPROMISED, report.resealed_from_compromised);
+    span.record(SKIPPED, report.skipped);
+    span.record(FAILED, report.failed);
+}
+
+/// A record the sweep could not re-seal. The record id is the application's and often an
+/// entity id: the sweep's log is read as an administrative log.
+pub(crate) fn sweep_failed(keyring: &KeyringId, record: &str, error: &KeyringError) {
+    tracing::warn!(
+        { KEYRING } = keyring.as_str(),
+        { RECORD } = record,
+        { ERROR_CODE } = error.event_code(),
+        "The sweep could not re-seal a record"
     );
 }

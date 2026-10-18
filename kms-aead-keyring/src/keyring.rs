@@ -6,8 +6,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DekBinding, DeterministicAlgorithm,
-    EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey, DekBinding,
+    DeterministicAlgorithm, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
+    KmsAeadResult,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -716,6 +717,60 @@ where
             self.backend,
             binding.as_ref(),
         )
+        .await
+    }
+
+    /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
+    /// store-less, with the `aad` the application gave it and the `algorithm` of the envelope
+    /// that wrote it: the read of a record whose [`SealMarker`](crate::SealMarker) says
+    /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. The application
+    /// decodes a value it stored as hex before the call.
+    ///
+    /// The value's key is unwrapped unbound by this keyring's provider, so it must have been
+    /// wrapped by the keyring's KEK, and through the keyring's [`DekCache`], where a store-less
+    /// envelope's values share one entry. Values written by kms-aead 0.28.1 or earlier need the
+    /// `legacy-formats` feature.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::EnvelopeKeyOfKeyVersion`], before any KMS call, when the value carries the
+    /// wrapped key of a version of the keyring's record, in any purpose or state;
+    /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
+    /// value is not in a layout this build reads, `UNSUPPORTED_ALGORITHM` when the backend does
+    /// not implement `algorithm`, the provider's error when the key does not unwrap, and code
+    /// `DECRYPT` when the value is not authentic under it and `aad`.
+    pub async fn decrypt_envelope_value(
+        &self,
+        aad: &[u8],
+        value: &CipherTextWithEncryptedKey,
+        algorithm: AeadAlgorithm,
+    ) -> KeyringResult<SecretValue> {
+        spans::in_span(spans::decrypt_envelope(self.id()), async {
+            let (cipher_text, dek) = value.separate()?;
+            // The wrapped bytes alone, since the key version in an envelope header is not
+            // authenticated. Wrapped keys are not secret, so the comparison need not be
+            // constant-time.
+            let record = self.cache.current().await;
+            if let Some(version) = record.versions().iter().find(|version| {
+                version
+                    .wrapped_dek()
+                    .is_some_and(|wrapped| wrapped.wrapped() == dek.wrapped())
+            }) {
+                return Err(KeyringError::EnvelopeKeyOfKeyVersion(KeyVersionError {
+                    keyring: self.id().clone(),
+                    key_id: version.key_id(),
+                }));
+            }
+            let cipher = AeadCipher::new(self.backend, algorithm)?;
+            let (opened, outcome) = self
+                .dek_cache()
+                .with_key(&self.provider, &dek, None, |key| {
+                    cipher.decrypt_value(aad, &cipher_text, key)
+                })
+                .await?;
+            spans::record_dek_cache(outcome);
+            Ok(opened?)
+        })
         .await
     }
 }
