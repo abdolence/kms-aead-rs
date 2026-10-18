@@ -52,6 +52,9 @@ pub struct AzureKmsProviderOptions {
 /// [`NetworkError`](crate::errors::KmsAeadError::NetworkError), any other status an
 /// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError).
 ///
+/// A wrap or unwrap with a [`DekBinding`] fails with `AZURE_BINDING_UNSUPPORTED` before any
+/// request, since wrapKey has no associated data to bind it with.
+///
 /// Unwrapping needs the key version recorded in [`EncryptedDataEncryptionKey::key_version`].
 /// Store an encrypted key with [`EncryptedDataEncryptionKey::to_bytes`] or
 /// [`EncryptedDataEncryptionKey::to_hex_string`] and read it back with `TryFrom<&[u8]>` or
@@ -147,6 +150,18 @@ impl AzureKmsProvider {
         })
     }
 
+    /// Key Vault's wrapKey takes no associated data, so a bound call fails rather than wrap or
+    /// unwrap unbound.
+    fn refuse_binding(binding: Option<&DekBinding>) -> KmsAeadResult<()> {
+        match binding {
+            Some(_) => Err(KmsAeadEncryptionError::create(
+                "AZURE_BINDING_UNSUPPORTED",
+                "Azure Key Vault cannot bind a wrapped key: wrapKey takes no associated data",
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn key_operation(
         &self,
         value: Vec<u8>,
@@ -175,12 +190,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         encryption_key: &DataEncryptionKey,
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        if binding.is_some() {
-            return Err(KmsAeadEncryptionError::create(
-                "DEK_BINDING_UNSUPPORTED",
-                "This provider does not bind wrapped keys yet",
-            ));
-        }
+        Self::refuse_binding(binding)?;
         spans::in_span(kms::wrap_span(&self.kek), async {
             let parameters =
                 self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
@@ -236,12 +246,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         encrypted_key: &EncryptedDataEncryptionKey,
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        if binding.is_some() {
-            return Err(KmsAeadEncryptionError::create(
-                "DEK_BINDING_UNSUPPORTED",
-                "This provider does not bind wrapped keys yet",
-            ));
-        }
+        Self::refuse_binding(binding)?;
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let key_version = encrypted_key.key_version().ok_or_else(|| {

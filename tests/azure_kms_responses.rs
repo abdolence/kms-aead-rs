@@ -125,6 +125,42 @@ async fn unwrap_names_the_configured_kek() {
 }
 
 #[tokio::test]
+async fn a_binding_is_refused_before_any_request() -> KmsAeadResult<()> {
+    let http_client = Arc::new(CannedHttpClient::new(
+        StatusCode::Ok,
+        format!(r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "AAAA"}}"#),
+    ));
+    let provider = AzureKmsProvider::with_options(
+        &AzureKmsKeyRef::new(VAULT_URL.into(), KEY_NAME.into()),
+        options_with(http_client.clone()),
+        Arc::new(FixedTokenCredential),
+    )?;
+    let binding = DekBinding::try_from("tenant-42/3".to_string())?;
+
+    let wrapped = provider
+        .encrypt_data_encryption_key(&data_encryption_key(), Some(&binding))
+        .await;
+    let unwrapped = provider
+        .decrypt_data_encryption_key(
+            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version())),
+            Some(&binding),
+        )
+        .await;
+
+    assert!(
+        matches!(&wrapped, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "AZURE_BINDING_UNSUPPORTED"),
+        "{wrapped:?}"
+    );
+    assert!(
+        matches!(&unwrapped, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "AZURE_BINDING_UNSUPPORTED"),
+        "{:?}",
+        unwrapped.err()
+    );
+    assert!(http_client.urls.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn provider_errors_carry_no_key_material() {
     let key_marker = azure_core::base64::encode_url_safe(LEAK_MARKER);
     let encrypted_key = EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()));
