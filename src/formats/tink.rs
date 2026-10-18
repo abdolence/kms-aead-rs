@@ -5,7 +5,10 @@ use prost::Message;
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadEncryptionError;
-use crate::{AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, KmsAeadResult};
+use crate::{
+    AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, KmsAeadEncryptionProvider,
+    KmsAeadResult, ValueStruct,
+};
 
 /// A Tink key type: the `google.crypto.tink` message a key of an algorithm is serialized as, with
 /// `version` 0 and the key in `key_value`, as Tink writes it into a keyset and wraps it in a KMS
@@ -236,6 +239,31 @@ impl TinkKeyset {
     pub fn to_bytes(&self) -> SecretValue {
         SecretValue::new(self.0.encode_to_vec())
     }
+
+    /// The keyset encrypted by `provider`, serialized as Tink serializes an encrypted keyset: a
+    /// `google.crypto.tink.EncryptedKeyset` whose `encrypted_keyset` is the KMS ciphertext of
+    /// [`to_bytes`](Self::to_bytes), wrapped with no associated data, and with no
+    /// `keyset_info`.
+    ///
+    /// Tink reads it with the KMS AEAD of the KEK's
+    /// [`tink_key_uri`](crate::KekRef::tink_key_uri): `KeysetHandle.read` or
+    /// `TinkProtoKeysetFormat.parseEncryptedKeyset` in Java, `keyset.Read` in Go and
+    /// `tink.read_keyset_handle` in Python. A KEK without a Tink key URI wraps it as well, but no
+    /// Tink KMS client reads it.
+    ///
+    /// # Errors
+    ///
+    /// The provider's errors.
+    pub async fn to_encrypted_bytes<P>(&self, provider: &P) -> KmsAeadResult<Vec<u8>>
+    where
+        P: KmsAeadEncryptionProvider + Sync + ?Sized,
+    {
+        let encrypted_keyset = provider
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(self.to_bytes()))
+            .await?
+            .into_value();
+        Ok(EncryptedKeyset { encrypted_keyset }.encode_to_vec())
+    }
 }
 
 /// The primary and the key ids, never the keys.
@@ -278,6 +306,14 @@ struct Key {
     key_id: u32,
     #[prost(int32, tag = "4")]
     output_prefix_type: i32,
+}
+
+/// `google.crypto.tink.EncryptedKeyset`, from Tink's `tink.proto`, without `keyset_info`: Tink
+/// never reads it, and its binary keyset writers leave it out.
+#[derive(Message)]
+struct EncryptedKeyset {
+    #[prost(bytes = "vec", tag = "2")]
+    encrypted_keyset: Vec<u8>,
 }
 
 /// `google.crypto.tink.KeyData`. `value` is the serialized key, so it is zeroized on drop and
@@ -498,8 +534,8 @@ mod tests {
         0xc8, 0x32, 0xc7, 0xfd,
     ];
 
-    #[test]
-    fn keysets_are_the_ones_tinkey_writes() -> KmsAeadResult<()> {
+    /// The keyset of `gcm2.bin`.
+    fn tinkey_aes_gcm_keyset() -> KmsAeadResult<TinkKeyset> {
         let mut aes_gcm = TinkKeyset::new(TINKEY_AES_GCM_PRIMARY);
         for (key_id, key) in [
             (TINKEY_AES_GCM_PRIMARY, TINKEY_AES_GCM_PRIMARY_KEY),
@@ -511,6 +547,12 @@ mod tests {
                 &DataEncryptionKey::from(SecretValue::new(key.to_vec())),
             )?;
         }
+        Ok(aes_gcm)
+    }
+
+    #[test]
+    fn keysets_are_the_ones_tinkey_writes() -> KmsAeadResult<()> {
+        let aes_gcm = tinkey_aes_gcm_keyset()?;
         let mut aes_siv = TinkKeyset::new(TINKEY_AES_SIV);
         aes_siv.add_key(
             TINKEY_AES_SIV,
@@ -525,6 +567,31 @@ mod tests {
         assert_eq!(
             *aes_siv.to_bytes().ref_sensitive_value(),
             TINKEY_AES_SIV_KEYSET
+        );
+        Ok(())
+    }
+
+    /// The start of `gcm2.bin` as Tink 1.16.1 for Python writes it encrypted,
+    /// `handle.write(tink.BinaryKeysetWriter(out), kms)` under a KMS AEAD whose ciphertext is its
+    /// plaintext, as the test provider's is: `encrypted_keyset`, field 2, of 210 bytes, then the
+    /// keyset. Tink writes no `keyset_info`.
+    const TINK_ENCRYPTED_AES_GCM_KEYSET_HEADER: [u8; 3] = [0x12, 0xd2, 0x01];
+
+    #[tokio::test]
+    async fn encrypted_keysets_are_the_ones_tink_writes() -> KmsAeadResult<()> {
+        let keyset = tinkey_aes_gcm_keyset()?;
+
+        let encrypted = keyset
+            .to_encrypted_bytes(&crate::test_provider::TestKmsProvider::Working)
+            .await?;
+
+        assert_eq!(
+            encrypted,
+            [
+                &TINK_ENCRYPTED_AES_GCM_KEYSET_HEADER[..],
+                &TINKEY_AES_GCM_KEYSET[..]
+            ]
+            .concat()
         );
         Ok(())
     }

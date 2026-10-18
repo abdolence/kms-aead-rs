@@ -89,6 +89,28 @@ impl KekRef {
     pub fn key(&self) -> &str {
         &self.key
     }
+
+    /// The key URI Tink's KMS clients address this KEK by: `gcp-kms://<CryptoKey name>` for GCP,
+    /// `aws-kms://<key or alias ARN>` for AWS and `hcvault://<host>/<namespace>/<mount>/keys/<name>`
+    /// for Vault Transit, without the namespace segment when none is set. The Vault URI keeps
+    /// the host of the address only, so it does not address a key behind an address with a path
+    /// of its own, such as a proxy's.
+    ///
+    /// `None` for a KEK that no Tink KMS client addresses: an AWS key named without a region,
+    /// which has no ARN, and the Azure, local and an application's own KEKs.
+    pub fn tink_key_uri(&self) -> Option<String> {
+        match self.provider {
+            KekProvider::Gcp => Some(format!("gcp-kms://{}", self.key)),
+            KekProvider::Aws if self.key.starts_with("arn:") => {
+                Some(format!("aws-kms://{}", self.key))
+            }
+            KekProvider::HcVaultTransit => self
+                .key
+                .split_once("://")
+                .map(|(_, location)| format!("hcvault://{location}")),
+            _ => None,
+        }
+    }
 }
 
 /// `<provider>:<key>`.
@@ -165,6 +187,48 @@ mod tests {
             KekProvider::Other("orders-hsm".to_string()),
         ] {
             assert_eq!(provider.to_string().parse(), Ok(provider));
+        }
+    }
+
+    #[test]
+    fn tink_key_uris_are_the_ones_tink_kms_clients_take() {
+        let crypto_key =
+            "projects/orders-project/locations/europe-north1/keyRings/orders/cryptoKeys/email";
+        let key_arn =
+            "arn:aws:kms:eu-north-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab";
+        let keks = [
+            (
+                KekRef::new(KekProvider::Gcp, crypto_key),
+                Some(format!("gcp-kms://{crypto_key}")),
+            ),
+            (
+                KekRef::new(KekProvider::Aws, key_arn),
+                Some(format!("aws-kms://{key_arn}")),
+            ),
+            // A key named without a region, which has no ARN.
+            (KekRef::new(KekProvider::Aws, "alias/orders"), None),
+            (
+                KekRef::new(
+                    KekProvider::HcVaultTransit,
+                    "https://vault.example.com:8200/tenant-a/transit/keys/orders",
+                ),
+                Some("hcvault://vault.example.com:8200/tenant-a/transit/keys/orders".to_string()),
+            ),
+            (
+                KekRef::new(
+                    KekProvider::Azure,
+                    "https://orders.vault.azure.net/keys/orders",
+                ),
+                None,
+            ),
+            (KekRef::new(KekProvider::Local, "orders"), None),
+            (
+                KekRef::new(KekProvider::Other("orders-hsm".to_string()), "orders"),
+                None,
+            ),
+        ];
+        for (kek, key_uri) in keks {
+            assert_eq!(kek.tink_key_uri(), key_uri, "{kek}");
         }
     }
 }
