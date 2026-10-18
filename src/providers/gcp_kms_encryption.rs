@@ -522,10 +522,6 @@ mod tests {
             )
             .await;
 
-        println!(
-            "GCP KMS refused another binding with {:?}",
-            result.as_ref().err().map(KmsAeadError::code)
-        );
         assert!(
             matches!(&result, Err(KmsAeadError::NetworkError(e)) if e.public.code == "InvalidArgument"),
             "{:?}",
