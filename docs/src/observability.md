@@ -157,13 +157,14 @@ The `kms-aead-keyring` crate follows the same rules: one `DEBUG` span per call, 
 the `/kms_aead_keyring/` prefix, and nothing recorded for a value nobody reported. kms-aead's spans
 nest inside them, so a `KMS decrypt DEK` under a `Keyring decrypt` is a DEK cache miss, and a
 `KMS encrypt DEK` under a `Keyring rotate` is the new version's DEK. Enable `kms_aead_keyring=debug`
-in the filter beside `kms_aead=debug`.
+in the filter beside `kms_aead=debug`. The spans from `Keyring rotate` to `Keyring export` are
+those of `KeyringAdmin` calls, under the `admin` feature.
 
 | Span | Opened by | Fields |
 |---|---|---|
 | `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `deterministic_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
 | `Keyring decrypt` | `decrypt`, `decrypt_with_trust`, their deterministic pair, `decrypt_envelope` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
-| `Keyring load` | every store read: `open`, a revalidation, a reload, the read before an administrative write | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
+| `Keyring load` | every store read: `open`, a revalidation, a reload, the read before a write of a `KeyringAdmin` | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
 | `Keyring beacon` | `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
 | `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring promote` | `promote` | `keyring`, `key_id`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
@@ -171,7 +172,7 @@ in the filter beside `kms_aead=debug`.
 | `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
 | `Keyring destroy all versions` | `dangerously_destroy_all_versions` | `keyring`, `cas_retries`, `error_code` |
 | `Keyring re-encrypt DEKs` | `reencrypt_deks` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
-| `Keyring export` | `export_bigquery_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
+| `Keyring export` | `export_bigquery_keyset`, `export_tink_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
 | `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
 
 | Field | Value |

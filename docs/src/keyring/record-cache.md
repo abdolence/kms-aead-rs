@@ -16,7 +16,7 @@ constant of the type that holds the option:
 | `reload_min_interval` | `DEFAULT_RELOAD_MIN_INTERVAL`, 5 seconds | the least time between two store reads that an unknown key id or a change signal causes |
 | `watch` | `DEFAULT_WATCH`, `true` | whether to follow the store's change signals, where it has them |
 | `dek_cache` | `None`, a new cache | the cache of decrypted DEKs; a new one has kms-aead's `DekCacheOptions::DEFAULT_TTL` and `DekCacheOptions::DEFAULT_MAX_ENTRIES` |
-| `keyring.cas_retries` | `KeyringOptions::DEFAULT_CAS_RETRIES`, 5 | the conflicts an administrative write retries before `RecordConflict` |
+| `keyring.cas_retries` | `KeyringOptions::DEFAULT_CAS_RETRIES`, 5 | the conflicts a write of a `KeyringAdmin` retries before `RecordConflict` |
 | `keyring.compromised_reads` | `KeyringOptions::DEFAULT_COMPROMISED_READS`, `Block` | what `decrypt` does with a value under a compromised version, see [Lifecycle](./lifecycle.md#reading-a-compromised-version) |
 
 ```rust
@@ -47,8 +47,9 @@ A `DekCache` may be shared with other keyrings and envelopes.
 - **Unknown key ids**: a value with a key id the record does not have causes one reload, which
   concurrent misses share, at most once per `reload_min_interval`. Values with random key ids then
   cost at most one store read per interval;
-- **Own writes**: an administrative call takes the record it wrote, so the process that promotes
-  a version seals under it at once.
+- **Own writes**: a `KeyringAdmin` call takes the record it wrote. Every `Keyring` of the same
+  keyring in the registry shares that cached record, so the process that promotes a version seals
+  under it at once.
 
 `Keyring::reload` reads the record now, past the TTL and the rate limit, for operators and tests.
 
@@ -80,8 +81,8 @@ is `DecryptOnly`.
 - a refreshed record is taken only if it moves every version forward from the cached one: no
   version missing, no changed algorithm or creation time, no compromised flag cleared, and no state
   moved back against the lifecycle, such as a version back to `Pending`. Otherwise the process
-  keeps its record and logs an `ERROR` naming the first rule broken. `reload` and an
-  administrative write return `RecordRegressed` in that case.
+  keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a write of a
+  `KeyringAdmin` return `RecordRegressed` in that case.
 
 The last rule is the detection of a rewritten or restored record in a running process. A process
 that starts after such a write has no record to compare with and takes it.

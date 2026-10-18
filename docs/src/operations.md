@@ -11,7 +11,8 @@ to see it, see [Staged rotation](./keyring/lifecycle.md#staged-rotation). The pr
 decrypting. Nothing is lost while the change propagates: processes on the old record seal under
 the previous version until their record refreshes, and those values decrypt.
 
-The administrative job runs a rotation in steps:
+The administrative job runs a rotation in steps, on its `KeyringAdmin`, see
+[Applications and administration](./keyring.md#applications-and-administration):
 
 1. `rotate(purpose)`;
 2. export the `Readable` BigQuery keysets again, which then hold the pending version;
@@ -51,7 +52,8 @@ The KEK rotates in the KMS on its own schedule. After a rotation, `reencrypt_dek
 DEK in the record and encrypts it again under the KEK's current version. No value changes. A keyring
 that is not re-encrypted keeps working as long as the old KEK versions stay enabled in the KMS.
 
-`reencrypt_deks` runs in the administrative job, like every call that encrypts.
+`reencrypt_deks` is a `KeyringAdmin` call and runs in the administrative job, like every call that
+encrypts a DEK.
 
 ## Sweeps
 
@@ -116,7 +118,10 @@ current, and `reseal` then opens nothing.
 ### Running a sweep
 
 `sweep::run` drives the application's re-seal over a stream of candidates, with at most
-`concurrency` in flight, and counts what happened. Here over an in-memory table:
+`concurrency` in flight, and counts what happened. A sweep is data plane: it takes a `Keyring`
+and needs the application's rights only, since a re-seal encrypts under a DEK the record already
+holds. The rotation before it and the `retire` after it are the administrative job's, on a
+`KeyringAdmin`. Here over an in-memory table, with both in one process:
 
 ```rust
 use std::collections::BTreeMap;
@@ -131,7 +136,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
     Purpose, Resealed, Rotation,
 };
@@ -199,9 +204,10 @@ async fn reseal(
 #     MemoryKeyringStore::new(),
 #     KeyringRegistryOptions::new(),
 # )?;
-# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-#     .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+# let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .create(provider, TENANT, KeyringAlgorithms::new())
 #     .await?;
+# let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 # let table = Table::default();
 # for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
 #     let email = keyring
@@ -210,11 +216,12 @@ async fn reseal(
 #     let seal = SealMarker::keyring([email.key_id()])?;
 #     table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
 # }
-let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
-// After the wait for every process to see the staged version
-let rotation: Rotation = keyring.promote(staged).await?;
+// The administrative job stages a version, and promotes it after the wait for every process to
+// see it
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+let rotation: Rotation = admin.promote(staged).await?;
 
-// The query: every row behind the active versions
+// The sweep, on the data-plane handle: the query of every row behind the active versions
 let thresholds: SealThresholds = keyring.seal_thresholds();
 let candidates = table
     .lock()
@@ -229,13 +236,13 @@ let report: SweepReport = sweep::run(
     stream::iter(candidates),
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
-        let (keyring, table) = (&keyring, &table);
+        let table = &table;
         async move { reseal(keyring, table, &candidate).await }
     },
 )
 .await;
 
-// Nothing left under the old version: retire it
+// Nothing left under the old version: the administrative job retires it
 let behind = table
     .lock()
     .unwrap()
@@ -243,7 +250,7 @@ let behind = table
     .any(|row| row.seal.is_behind(&thresholds));
 if report.failed == 0 && !behind {
     if let Some(previous) = rotation.previous {
-        keyring.retire(previous).await?;
+        admin.retire(previous).await?;
     }
 }
 # assert_eq!(report.resealed, 2);
@@ -737,8 +744,9 @@ WHERE seal.randomized < @active;
 same text. `AEAD.ENCRYPT` seals under the keyset's primary, which a `Readable` export sets to the active
 version. A keyset exported before the promotion has the previous version as its primary, so the
 sweep exports its keyset after the promotion, and then takes `@active` from
-`seal_thresholds().randomized`: the export reads the record from the store and takes it as the
-cached record, so both come from the same record. The statement re-seals every randomised field
+`admin.keyring().seal_thresholds().randomized`: the export reads the record from the store and
+takes it as the cached record both handles share, so both come from the same record. The export
+is a `KeyringAdmin` call of the administrative job. The statement re-seals every randomised field
 of the row, or `@active` is not the oldest version among them.
 
 This sweep:
@@ -938,7 +946,7 @@ branch in the read path for the migration only.
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs),
-run it with `cargo run -p kms-aead-keyring --example migrate --features ring`.
+run it with `cargo run -p kms-aead-keyring --example migrate --features ring,admin`.
 
 ## Emergency runbook
 
@@ -1001,12 +1009,13 @@ store.
    DEK was copied or relabelled from another version, of this keyring or of another under the
    same KEK, which the KMS decrypts as it would the original; one from a principal other than the
    administrative job is an IAM over-grant, see above;
-4. audit who can write the keyring store: the serving principal has no write, and only the
+4. audit who can write the keyring store: the application has no write, and only the
    administrative job should.
 
 ### The keyring record was deleted or corrupted
 
-Running processes keep their cached record and log a `WARN`; new processes fail at `open`.
+Running processes keep their cached record and log a `WARN`; new processes fail at `open` with
+`RecordMissing` or `RecordInvalid`.
 
 1. Restore the record from the store's backup: Firestore point-in-time recovery, a PostgreSQL
    backup, or a noncurrent version of the Cloud Storage or S3 object. The encrypted DEKs inside are

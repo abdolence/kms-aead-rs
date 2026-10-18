@@ -61,8 +61,9 @@ use kms_aead_keyring::errors::{InteropError, InteropRequirement};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringAlgorithms,
-    KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -94,9 +95,10 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-    .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
     .await?;
+let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
@@ -134,18 +136,18 @@ application also enables kms-aead's `gcp-kms-encryption`, or another root store 
 kms-aead's GCP provider.
 
 BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink keyset encrypted by a
-Cloud KMS key. `export_bigquery_keyset` builds that keyset from the keyring's versions, on a
-keyring whose provider is `GcpKmsProvider`. The bytes it returns are the Cloud KMS ciphertext of
-Tink's serialised `Keyset` message, encrypted with no associated data, without the `EncryptedKeyset`
-message Tink's own keyset readers take, see [Exporting a keyset to
-Tink](#exporting-a-keyset-to-tink):
+Cloud KMS key. `KeyringAdmin::export_bigquery_keyset` builds that keyset from the keyring's
+versions, on a keyring whose provider is `GcpKmsProvider`, under the `bigquery-export` feature,
+which implies `admin`. The bytes it returns are the Cloud KMS ciphertext of Tink's serialised
+`Keyset` message, encrypted with no associated data, without the `EncryptedKeyset` message Tink's
+own keyset readers take, see [Exporting a keyset to Tink](#exporting-a-keyset-to-tink):
 
 ```rust,no_run
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, EncryptedKeyset, Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    encodings, EncryptedKeyset, KeyringAdmin, KeyringId, KeyringRegistry, KeyringRegistryOptions,
     KeysetSelection, Purpose,
 };
 
@@ -161,11 +163,11 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
-    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
+let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
+    .admin(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
     .await?;
 
-let keyset: EncryptedKeyset<encodings::BigQuery> = keyring
+let keyset: EncryptedKeyset<encodings::BigQuery> = admin
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 let literal: String = keyset.to_sql_literal();
@@ -250,7 +252,7 @@ The requirements:
 - the field is declared with `Interop::BigQuery`, so that the keyring never seals it under a
   version the keyset could not hold, see [Fields BigQuery reads](#fields-bigquery-reads);
 - the principal that queries has decrypt on the KMS key, and the one that exports has encrypt and
-  decrypt on it. The export is an administrative call, see
+  decrypt on it. The export is a `KeyringAdmin` call, see
   [Keyring deployment](../security.md#keyring-deployment).
 
 ### How it behaves
@@ -271,9 +273,10 @@ Cloud KMS encrypts at most 64 KiB of plaintext, which a keyset reaches at severa
 ## Exporting a keyset to Tink
 
 `export_tink_keyset` exports the same versions as Tink's encrypted keyset, which Tink for Java,
-Go and Python open with `KeysetHandle.read` and their own KMS client. It needs no feature and
-runs on a keyring with any provider whose KEK has a Tink key URI. The bytes are a
-`google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the serialised keyset, see
+Go and Python open with `KeysetHandle.read` and their own KMS client. It is a `KeyringAdmin`
+call, needs the `admin` feature only, and runs on a keyring with any provider whose KEK has a Tink
+key URI. The bytes are a `google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the
+serialised keyset, see
 [Tink keysets and the TINK prefix](../formats.md#tink-keysets-and-the-tink-prefix).
 
 `key_uri()` is the URI of Tink's KMS client:
@@ -292,7 +295,7 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, EncryptedKeyset, Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    encodings, EncryptedKeyset, KeyringAdmin, KeyringId, KeyringRegistry, KeyringRegistryOptions,
     KeysetSelection, Purpose,
 };
 
@@ -308,11 +311,11 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
-    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
+let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
+    .admin(GcpKmsProvider::new(&key_ref).await?, KeyringId::try_from("tenant-42".to_string())?)
     .await?;
 
-let keyset: EncryptedKeyset<encodings::Tink> = keyring
+let keyset: EncryptedKeyset<encodings::Tink> = admin
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 std::fs::write("tenant-42.keyset", keyset.value())?;

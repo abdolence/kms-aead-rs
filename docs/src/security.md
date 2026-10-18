@@ -104,17 +104,22 @@ backups included.
 
 A [keyring](./keyring.md) record decides which versions are read and which one seals new values,
 and nothing signs it: its integrity rests on the keyring store's access control. So a deployment
-splits two principals:
+splits the two sides of
+[Applications and administration](./keyring.md#applications-and-administration) into two
+principals:
 
-- **Serving principal**: KMS decrypt on the KEK and read access to the keyring store. `encrypt`,
-  `decrypt` and `beacon` make no KMS encryption call, so it needs nothing more;
-- **Administrative principal**: KMS encrypt and decrypt on the KEK, and the only principal with
-  write access to the keyring store. `create`, `rotate`, `promote`, `change_algorithm`,
-  `mark_compromised`, `retire`, `reinstate`, `destroy`, `dangerously_destroy_all_versions`,
-  `reencrypt_deks`, `export_bigquery_keyset` and `export_tink_keyset` run under it, in a job,
-  never in a request handler.
+- **Application**: builds without the `admin` feature, and calls `Keyring` only: encryption,
+  decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
+  store. None of its calls asks the KMS to encrypt, so it needs nothing more;
+- **Administration**: builds with the `admin` feature, and calls the registry's `create`,
+  `open_or_create` and `admin`, and the `KeyringAdmin` they return: `rotate`, `promote`,
+  `change_algorithm`, `mark_compromised`, `retire`, `reinstate`, `destroy`,
+  `dangerously_destroy_all_versions`, `reencrypt_deks`, `export_bigquery_keyset` and
+  `export_tink_keyset`. It needs KMS encrypt and decrypt on the KEK, and is the only principal
+  with write access to the keyring store. It runs in a job or in infrastructure automation, never
+  in a request handler.
 
-| KMS | Serving | Administration |
+| KMS | Application | Administration |
 |---|---|---|
 | GCP | `roles/cloudkms.cryptoKeyDecrypter` | `roles/cloudkms.cryptoKeyEncrypterDecrypter` |
 | AWS | `kms:Decrypt` on the key | `kms:Encrypt` and `kms:Decrypt` on the key, plus `kms:GenerateRandom` with the KMS random generator |
@@ -131,8 +136,8 @@ version at another tenant's DEK. A writer without KMS rights cannot add a DEK of
 every decryption names the configured KEK and the KMS refuses a DEK encrypted under another key. The
 controls for this are the deployment's, as in the [threat model](#threat-model):
 
-- write access to the keyring store for the administrative principal only, and read-only access
-  for the serving principals;
+- write access to the keyring store for the administration only, and read-only access for the
+  applications;
 - one KEK per isolation boundary, such as a tenant or an environment, so a DEK copied across it
   fails to decrypt;
 - backups of the record, or versioning in the store, to compare with and restore from;
@@ -146,8 +151,9 @@ version.
 
 ## Keyring limits
 
-- **The administrative principal is trusted.** KMS encrypt plus store write re-activates any
-  version. The KMS audit log is the detection;
+- **The administration is trusted.** KMS encrypt plus store write re-activates any version, and
+  so does an application that provisions keyrings lazily with the `admin` feature and those
+  rights. The KMS audit log is the detection;
 - **a new process has no baseline.** A store writer can clear a compromised flag, re-activate a
   version or restore a destroyed one for the processes that start after the write. Running
   processes refuse such a record and log an `ERROR`; new ones take it. The record is not signed in

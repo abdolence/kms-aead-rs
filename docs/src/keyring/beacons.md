@@ -42,8 +42,8 @@ use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, KmsAeadResult};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
-    KeyringRegistry, KeyringRegistryOptions, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAdmin, KeyringAlgorithms,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -81,13 +81,14 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-    .open_or_create(
+let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .create(
         provider,
         KeyringId::from_static("tenant-42"),
         KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
     )
     .await?;
+let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
 // On every write: the field and its beacon
 let aad = EMAIL.aad(&EntityId::try_from("42")?);

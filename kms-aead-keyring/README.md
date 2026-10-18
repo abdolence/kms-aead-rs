@@ -14,6 +14,8 @@ The library provides:
 - no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on
   write and read;
 - staged rotation, retirement, destruction and a compromised flag every process sees;
+- separate application and administration APIs, so applications run with KMS decrypt and store
+  read only, and keyrings are created and rotated from infrastructure;
 - keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory for tests;
 - `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support
   (sqlx through kms-aead's `sqlx` feature), and an AAD that binds a value to its row;
@@ -31,12 +33,14 @@ Cargo.toml:
 ```toml
 [dependencies]
 kms-aead = { version = "0.30", features = ["ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "admin"] }
 secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-A keyring on the memory store with a local KEK, which needs no cloud credentials:
+A keyring on the memory store with a local KEK, which needs no cloud credentials. Creating and
+rotating the keyring needs the `admin` feature; an application that only encrypts and decrypts
+builds without it and opens the keyring with `KeyringRegistry::open`:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -45,8 +49,8 @@ use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -77,9 +81,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryKeyringStore::new(),
         KeyringRegistryOptions::new(),
     )?;
-    let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-        .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+    let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .create(provider, TENANT, KeyringAlgorithms::new())
         .await?;
+    // The application's handle on the same keyring
+    let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
     // The AAD binds the value to user 42's email
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
@@ -87,8 +93,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 
     // A rotation is staged, then promoted; the previous version keeps decrypting
-    let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
-    keyring.promote(staged).await?;
+    let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+    admin.promote(staged).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
     registry.shutdown().await?;
@@ -97,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs),
-run it with `cargo run -p kms-aead-keyring --example local_kms --features ring`.
+run it with `cargo run -p kms-aead-keyring --example local_kms --features ring,admin`.
 
 ## Licence
 

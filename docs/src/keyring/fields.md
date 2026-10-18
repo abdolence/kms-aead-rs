@@ -71,9 +71,11 @@ struct User {
 #     MemoryKeyringStore::new(),
 #     KeyringRegistryOptions::new(),
 # )?;
-# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-#     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+# use kms_aead_keyring::KeyringAdmin;
+# let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
 #     .await?;
+# let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 let id = EntityId::try_from("42")?;
 let alice = Email("alice@example.com".to_string());
 let user = User {
@@ -248,9 +250,11 @@ const EMAIL: FieldSpec = FieldSpec::new(
 #     MemoryKeyringStore::new(),
 #     KeyringRegistryOptions::new(),
 # )?;
-# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-#     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+# use kms_aead_keyring::KeyringAdmin;
+# let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
 #     .await?;
+# let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 let user_id: u64 = 4711;
 let id: EntityId = EntityId::try_from(user_id.to_string())?;
 let email: String = "alice@example.com".to_string();

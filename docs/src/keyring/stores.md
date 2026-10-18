@@ -15,10 +15,19 @@ Every store keeps the record as the same [JSON document](../formats.md#keyring-r
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
 
-The store's access control is what the record's integrity rests on: only the administrative
-principal writes the record, and the serving principals read it. Back the store up, or keep its
-history, since values cannot be read without the encrypted DEKs in the record, see
-[the runbook](../operations.md#the-keyring-record-was-deleted-or-corrupted).
+The store's access control is what the record's integrity rests on: only the administration
+writes the record, and the applications read it and listen to its changes, see
+[Applications and administration](../keyring.md#applications-and-administration):
+
+| Store | Application | Administration |
+|---|---|---|
+| Firestore | read of the keyring documents, which the listener uses too, such as `roles/datastore.viewer` | read and write of the keyring documents, such as `roles/datastore.user` |
+| PostgreSQL | `SELECT` on the table, and `LISTEN`, which needs no grant | `SELECT`, `INSERT` and `UPDATE` on the table; each write also sends the `NOTIFY` |
+| Cloud Storage | `storage.objects.get` | `storage.objects.get`, `storage.objects.create`, and `storage.objects.delete`, since a write replaces the object |
+| S3 | `s3:GetObject` | `s3:GetObject` and `s3:PutObject` |
+
+Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
+in the record, see [the runbook](../operations.md#the-keyring-record-was-deleted-or-corrupted).
 
 ## Memory
 
@@ -71,7 +80,7 @@ this crate's API under the `firestore` feature.
 Each keyring holds one listen stream, on its document. Firestore's point-in-time recovery
 restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
 `firestore` target, documents included, so that level writes encrypted DEKs to the log. Keep it off
-where the log leaves the administrative principal's reach.
+where the log leaves the administration's reach.
 
 ## PostgreSQL
 
@@ -87,10 +96,11 @@ CREATE TABLE kms_keyrings (
 );
 ```
 
-- The serving principal needs `SELECT` on it, and the administrative one also `INSERT` and
-  `UPDATE`;
+- an application needs `SELECT` on it, and the administration also `INSERT` and `UPDATE`. An
+  application's watch runs `LISTEN` on the table's channel, which PostgreSQL allows every role;
 - the table name is unqualified, so the connection's `search_path` selects the schema;
-- every write sends `NOTIFY <table>, '<keyring id>'` when it commits;
+- every write sends `NOTIFY <table>, '<keyring id>'` when it commits, through `pg_notify` in the
+  same statement;
 - PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
   `reload_min_interval` however many signals arrive, so a stray `NOTIFY` costs one read.
 
@@ -159,7 +169,7 @@ Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through 
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.
 
-- The serving principal needs `storage.objects.get` on the bucket, and the administrative one also
+- an application needs `storage.objects.get` on the bucket, and the administration also
   `storage.objects.create` and `storage.objects.delete`, since a write replaces the object;
 - Cloud Storage has no change notification the store listens to, so a process sees a change once
   its record is older than `record_ttl`, 5 minutes by default;
@@ -196,7 +206,7 @@ that should read as a folder ends with `/`. A create is conditional on no object
 (`If-None-Match: *`), an update on the ETag the writer read (`If-Match`), and a revalidation reads
 the object only when its ETag changed (`If-None-Match` on the read).
 
-- The serving principal needs `s3:GetObject` on the objects, and the administrative one also
+- an application needs `s3:GetObject` on the objects, and the administration also
   `s3:PutObject`;
 - S3 has no change notification the store listens to, so a process sees a change once its record
   is older than `record_ttl`, 5 minutes by default;

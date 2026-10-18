@@ -43,8 +43,8 @@ use kms_aead::{DeterministicAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::Deterministic;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
+    DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -74,13 +74,14 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-    .open_or_create(
+let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .create(
         provider,
         KeyringId::from_static("tenant-42"),
         KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
     )
     .await?;
+let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
@@ -128,7 +129,7 @@ So an equality query matches against every version that still decrypts, with
 # use kms_aead_keyring::formats::Deterministic;
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{
-#     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring,
+#     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
 #     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 # };
 # use secret_vault_value::SecretValue;
@@ -149,19 +150,20 @@ So an equality query matches against every version that still decrypts, with
 #     MemoryKeyringStore::new(),
 #     KeyringRegistryOptions::new(),
 # )?;
-# let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-#     .open_or_create(
+# let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .create(
 #         provider,
 #         KeyringId::from_static("tenant-42"),
 #         KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
 #     )
 #     .await?;
+# let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
 let before: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
 
-let staged: KeyId = keyring.rotate(Purpose::Deterministic).await?;
-keyring.promote(staged).await?;
+let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
+admin.promote(staged).await?;
 
 // One probe per version that still decrypts, newest first
 let probes: Vec<Encrypted<Email, Deterministic>> = keyring.deterministic_probes(&aad, &alice).await?;

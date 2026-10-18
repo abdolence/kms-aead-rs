@@ -22,7 +22,8 @@ other field. What refuses a DEK encrypted under another KEK is the KMS, since ev
 the configured KEK.
 
 `Keyring::record()` returns the cached record, to inspect versions and states, such as
-`record.pending(Purpose::Randomized)` for the version a rotation staged.
+`record.pending(Purpose::Randomized)` for the version a rotation staged. An administrative job
+reads it as `admin.keyring().record()`.
 
 ## Key ids
 
@@ -63,10 +64,12 @@ active version. Any state right of `Active` may also be compromised. The flag is
 never compromised: a compromised active version moves to `DecryptOnly` in the same write that flags
 it.
 
-`create` starts each purpose with an active version. Every later version starts as pending, except
-the replacement `mark_compromised` adds for an active version, which is active at once.
+`KeyringRegistry::create` starts each purpose with an active version. Every later version starts
+as pending, except the replacement `mark_compromised` adds for an active version, which is active
+at once.
 
-The calls:
+The calls, on a `KeyringAdmin`, with the `admin` feature, see
+[Applications and administration](../keyring.md#applications-and-administration):
 
 | Call | Does |
 |---|---|
@@ -120,12 +123,14 @@ answers, the read succeeds after the reload; when it does not, the read fails wi
 `KeyVersionUnknown`. The wait before `promote` is what keeps that path rare.
 
 ```rust
+use std::sync::Arc;
+
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry,
-    KeyringRegistryOptions, Purpose, Rotation,
+    KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRecord,
+    KeyringRegistry, KeyringRegistryOptions, Purpose, Rotation,
 };
 
 # #[tokio::main]
@@ -136,20 +141,20 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
     .await?;
 
 // The administrative job stages the version
-let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
-let record = keyring.record();
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+let record: Arc<KeyringRecord> = admin.keyring().record();
 let pending = record
     .pending(Purpose::Randomized)
     .ok_or("no pending version")?;
 assert_eq!(pending.state(), KeyVersionState::Pending);
 
 // Once the wait from `pending.staged_at()` is over, the job promotes it
-let rotation: Rotation = keyring.promote(staged).await?;
+let rotation: Rotation = admin.promote(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
 registry.shutdown().await?;

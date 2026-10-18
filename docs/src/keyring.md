@@ -20,6 +20,60 @@ The price is one more piece of infrastructure, the keyring store, which holds on
 document per keyring. See [Choosing a mode](./intro.md#choosing-a-mode) for the comparison with
 the envelope modes of kms-aead.
 
+## Applications and administration
+
+A keyring has two sides, each with its own handle and its own rights:
+
+- the application encrypts, decrypts, computes beacons and runs sweeps, on a `Keyring`, which
+  `KeyringRegistry::open` returns in every build;
+- the administration creates keyrings, rotates, promotes, retires and destroys versions, flags
+  compromised ones, re-encrypts DEKs and exports keysets, on a `KeyringAdmin`, which
+  `KeyringRegistry::create`, `open_or_create` and `admin` return with the `admin` feature.
+
+The application builds without the `admin` feature and runs under a principal with the rights of
+its row only:
+
+| Side | Handle | KMS | Keyring store |
+|---|---|---|---|
+| Application | `Keyring` | decrypt: GCP `roles/cloudkms.cryptoKeyDecrypter`, AWS `kms:Decrypt`, Azure Key Vault unwrap key, Vault Transit decrypt | read, and listen or watch: Firestore read, PostgreSQL `SELECT` and `LISTEN`, Cloud Storage object read, S3 `GetObject` |
+| Administration | `KeyringAdmin` | encrypt and decrypt | read and write: Firestore write, PostgreSQL `INSERT` and `UPDATE`, which also send the `NOTIFY`, Cloud Storage and S3 object write |
+
+Sweeps run on the application's side: re-sealing a value encrypts it under a DEK the record
+already holds, and never asks the KMS to encrypt a DEK. Every call that encrypts a DEK or writes
+the record is a `KeyringAdmin` call. The exact roles per KMS are in
+[Keyring deployment](./security.md#keyring-deployment), and the permissions per store in
+[Keyring stores](./keyring/stores.md).
+
+The `admin` feature keeps the administrative calls out of the application's build, and the rights
+keep them out of its reach: without the KMS encrypt right and write access to the store, those
+calls fail in any build.
+
+An application opens only keyrings that exist: `open` on a keyring the store holds no record of
+fails with `KeyringError::RecordMissing`. So the administration creates each keyring before an
+application opens it:
+
+- from infrastructure: a job, a CLI or a deployment step, built with the `admin` feature and run
+  with the administrative rights, calls `create` or `open_or_create`;
+- or from an application that provisions lazily, such as one keyring per tenant on the tenant's
+  first request. Such an application enables `admin` and is given the administrative rights
+  deliberately, and is then trusted as the administration is, see
+  [Keyring limits](./security.md#keyring-limits).
+
+An application's own tests that create keyrings in `MemoryKeyringStore` enable `admin` for the
+tests only:
+
+```toml
+[dependencies]
+kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+
+[dev-dependencies]
+kms-aead-keyring = { version = "0.30", features = ["ring", "firestore", "admin"] }
+```
+
+Be aware Cargo unifies the features of the packages one command builds: a `cargo build` of a
+workspace with both the application and an administrative job gives the application `admin`
+too. Build and deploy the application with `cargo build -p <application>`.
+
 ## Getting started
 
 Cargo.toml:
@@ -36,6 +90,9 @@ The crate has no default features, and the backend features are those of kms-aea
 - `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto`: the crypto backends, see
   [Crypto backends](./crypto-backends.md). A keyring names its backend as a type parameter, such
   as `kms_aead::backends::Ring`;
+- `admin`: `KeyringAdmin`, the registry's `create`, `open_or_create` and `admin`, and the types
+  of the administrative calls, `Rotation`, `EncryptedKeyset`, `KeysetSelection` and the
+  `encodings` module, see [Applications and administration](#applications-and-administration);
 - `deterministic`: deterministic key versions and every call on them, `encrypt_deterministic`,
   `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`, see
   [Deterministic fields](./keyring/deterministic.md). The deterministic types exist in every
@@ -45,17 +102,17 @@ The crate has no default features, and the backend features are those of kms-aea
 - `firestore`, `postgres`, `gcs`, `s3`: the keyring stores, see
   [Keyring stores](./keyring/stores.md). `gcs` has TLS variants listed there, and `postgres`
   also binds `Encrypted` in tokio-postgres;
-- `bigquery-export`: `export_bigquery_keyset`, see
+- `bigquery-export`: `admin`, and `export_bigquery_keyset`, see
   [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 
-Beacons and `export_tink_keyset` need no feature. The KMS providers come from kms-aead and its
-provider features, and secret-vault-value's `SecretValue` is what an application type's `Plaintext`
-encodes to.
+Beacons need no feature, and `export_tink_keyset` needs `admin` only. The KMS providers come from
+kms-aead and its provider features, and secret-vault-value's `SecretValue` is what an application
+type's `Plaintext` encodes to.
 
 ## First example
 
 A keyring on the memory store with a local KEK, for an application type `Email`. It needs no
-cloud credentials:
+cloud credentials, and needs the `admin` feature for `create`, `rotate` and `promote`:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -64,7 +121,7 @@ use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring,
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
@@ -96,9 +153,11 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
     MemoryKeyringStore::new(),
     KeyringRegistryOptions::new(),
 )?;
-let keyring: Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-    .open_or_create(provider, TENANT, KeyringAlgorithms::new())
+let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+    .create(provider, TENANT, KeyringAlgorithms::new())
     .await?;
+// The application's handle on the same keyring
+let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
 // The AAD ties the value to user 42's email: `user/42/email`
 let aad: FieldAad = EMAIL.aad(&EntityId::try_from("42")?);
@@ -107,21 +166,57 @@ let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
 // A staged rotation keeps the previous version decrypting
-let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
-keyring.promote(staged).await?;
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+admin.promote(staged).await?;
 assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 registry.shutdown().await?;
 # Ok(())
 # }
 ```
 
-`KeyringRegistry::open_or_create` creates the record on the first start, with one active version
-of each purpose its `KeyringAlgorithms` name, and opens it on every later start.
-`KeyringRegistry::open` only opens, and fails with `RecordMissing` when there is no record.
-`KeyringRegistry::create` only creates, and is the call for the administrative job, see
-[Principals](#principals). The registry takes the store and the backend as the type parameters of
-`KeyringRegistry<S, B>`, and each call takes the provider, so that the handle it returns is a
-`Keyring<S, P, B>`.
+`KeyringRegistry::create` creates the record, with one active version of each purpose its
+`KeyringAlgorithms` name, and fails with `RecordExists` when there is one already.
+`open_or_create` creates it on the first start and opens it on every later one, and `admin` only
+opens it. The three return a `KeyringAdmin`. `KeyringRegistry::open` returns a `Keyring`, and
+fails with `RecordMissing` when there is no record; it is the application's call:
+
+```rust,no_run
+use firestore::FirestoreDb;
+use kms_aead::backends::Ring;
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::{Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptions};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let key_ref = GcpKmsKeyRef::new(
+#     "my-project".to_string(),
+#     "europe-north1".to_string(),
+#     "my-key-ring".to_string(),
+#     "my-key".to_string(),
+# );
+let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
+    FirestoreKeyringStore::new(FirestoreDb::new("my-project").await?),
+    KeyringRegistryOptions::new(),
+)?;
+let keyring: Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring> = registry
+    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
+    .await?;
+registry.shutdown().await?;
+# Ok(())
+# }
+```
+
+The registry takes the store and the backend as the type parameters of `KeyringRegistry<S, B>`,
+and each call takes the provider, so that the handles are `Keyring<S, P, B>` and
+`KeyringAdmin<S, P, B>`.
+
+A `Keyring` and a `KeyringAdmin` of one keyring in one registry share its cached record and its
+watch, so a write through the `KeyringAdmin` is seen by every `Keyring` at once.
+`KeyringAdmin::keyring()` returns the `Keyring` it holds, for `id`, `record`, `reload`, encryption
+and sweeps inside an administrative job. The example takes its `Keyring` there too, since the
+ephemeral local KEK has no second copy to `open` the keyring with: `LocalKmsProvider` is not
+`Clone`.
 
 `encrypt` seals under the active version, and `decrypt` opens under the version the value names.
 Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is
@@ -129,24 +224,7 @@ in the DEK cache, see [Record cache](./keyring/record-cache.md).
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs),
-run it with `cargo run -p kms-aead-keyring --example local_kms --features ring`.
-
-## Principals
-
-The keyring calls split in two groups:
-
-- serving calls: `encrypt`, `decrypt`, `beacon` and their variants, which read the record and
-  decrypt DEKs. They need the KMS's decrypt right and read access to the store;
-- administrative calls: `create`, `rotate`, `promote`, `change_algorithm`, `mark_compromised`,
-  `retire`, `reinstate`, `destroy`, `dangerously_destroy_all_versions` and `reencrypt_deks`,
-  which write the record, and the exports `export_bigquery_keyset` and `export_tink_keyset`.
-  `create`, `rotate`, `change_algorithm`, `mark_compromised`, `reencrypt_deks` and the exports
-  encrypt, so they need the KMS's encrypt right, and all but the exports need write access to the
-  store.
-
-Run the administrative calls in a job under its own principal, never in a request handler. The
-deployment rule and the IAM roles per KMS are in
-[Security considerations](./security.md#keyring-deployment).
+run it with `cargo run -p kms-aead-keyring --example local_kms --features ring,admin`.
 
 ## Chapters
 
