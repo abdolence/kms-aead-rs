@@ -239,7 +239,14 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 STANDARD
                     .decode(encoded)
                     .ok()
-                    .and_then(|bytes| EncryptedDataEncryptionKey::try_from(bytes.as_slice()).ok())
+                    .and_then(|bytes| {
+                        // With kms-aead's `legacy-formats`, `try_from` also reads the bare
+                        // layout of 0.28.1, which a keyring record never holds: only bytes
+                        // that write back unchanged are in the current layout.
+                        EncryptedDataEncryptionKey::try_from(bytes.as_slice())
+                            .ok()
+                            .filter(|dek| dek.to_bytes().is_ok_and(|written| written == bytes))
+                    })
                     .ok_or(RecordInvalidReason::MalformedWrappedDek(key_id))
             })
             .transpose()?;
