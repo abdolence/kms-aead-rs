@@ -64,7 +64,7 @@
 //! | `deterministic` | creating deterministic key versions; the deterministic types are in every build |
 //! | `legacy-formats` | kms-aead's `legacy-formats` |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
-//! | `serde-json` | `serde`, and [`Json`], a plaintext stored as its JSON |
+//! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
 //! | `postgres` | `store::PostgresKeyringStore`, and sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] as `BYTEA` |
 //! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |

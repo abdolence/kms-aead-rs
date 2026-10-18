@@ -7,7 +7,7 @@ use crate::errors::{KeyringError, KeyringResult};
 /// A type a keyring value decrypts to. The encodings are fixed, so that other readers, such as
 /// BigQuery's `AEAD.DECRYPT_STRING`, decode them: UTF-8 for `String`, the bytes themselves for
 /// `Vec<u8>` and [`SecretValue`], `true` and `false` for `bool`, and decimal ASCII for the
-/// integers, which SQL reads with `CAST`. With the `serde-json` feature, [`Json`] stores any
+/// integers, which SQL reads with `CAST`. With the `serde-json` feature, `Json` stores any
 /// serde type as compact JSON.
 ///
 /// The decrypted value belongs to the application, which protects it: only [`SecretValue`] as
@@ -18,7 +18,7 @@ pub trait Plaintext: Sized + Send + Sync {
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Plaintext`] when the value does not encode, which only [`Json`] can
+    /// [`KeyringError::Plaintext`] when the value does not encode, which only `Json` can
     /// fail to do.
     fn to_plaintext(&self) -> KeyringResult<SecretValue>;
 
