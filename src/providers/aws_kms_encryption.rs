@@ -289,10 +289,6 @@ mod tests {
         )
     }
 
-    fn data_key() -> DataEncryptionKey {
-        DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()))
-    }
-
     fn offline_provider() -> AwsKmsProvider {
         provider_for(KEY_ID, aws_sdk_kms::Config::builder())
     }
@@ -366,8 +362,9 @@ mod tests {
         let provider = offline_provider();
         let binding = DekBinding::try_from("tenant-42/3".to_string())?;
         let context = HashMap::from([("kms-aead".to_string(), "tenant-42/3".to_string())]);
+        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
 
-        let encrypt = provider.encrypt_request(&data_key(), Some(&binding));
+        let encrypt = provider.encrypt_request(&dek, Some(&binding));
         let decrypt = provider.decrypt_request(
             &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
             Some(&binding),
@@ -381,8 +378,9 @@ mod tests {
     #[test]
     fn an_unbound_wrap_builds_the_0_29_request() {
         let provider = offline_provider();
+        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
 
-        let encrypt = provider.encrypt_request(&data_key(), None);
+        let encrypt = provider.encrypt_request(&dek, None);
         let decrypt = provider.decrypt_request(
             &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
             None,
@@ -616,6 +614,7 @@ mod tests {
         );
         Ok(())
     }
+
     #[tokio::test]
     #[cfg_attr(not(feature = "ci-aws"), ignore)]
     async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
@@ -625,8 +624,9 @@ mod tests {
         );
         let provider = AwsKmsProvider::new(&key_ref).await?;
         let binding = DekBinding::try_from("tenant-42/1".to_string())?;
+        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
         let wrapped = provider
-            .encrypt_data_encryption_key(&data_key(), Some(&binding))
+            .encrypt_data_encryption_key(&dek, Some(&binding))
             .await?;
 
         let unwrapped = provider
@@ -649,7 +649,7 @@ mod tests {
             "{:?}",
             result.err()
         );
-        assert_eq!(unwrapped.value(), data_key().value());
+        assert_eq!(unwrapped, dek);
         Ok(())
     }
 }
