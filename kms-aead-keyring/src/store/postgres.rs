@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+use std::future::poll_fn;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use sqlx::postgres::{PgListener, PgPool};
-use sqlx::AssertSqlSafe;
 use tokio::sync::mpsc;
+use tokio_postgres::tls::{MakeTlsConnect, TlsConnect};
+use tokio_postgres::types::ToSql;
+use tokio_postgres::{AsyncMessage, Client, Config, Connection, Socket};
 
 use super::{
     KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
@@ -14,10 +17,15 @@ use super::{
 use crate::errors::{Identifier, IdentifierRule, KeyringResult, KeyringStoreError};
 use crate::{KeyringError, KeyringId, KeyringRecord};
 
+/// The delay before the second attempt to replace a lost listener connection. The first attempt
+/// is immediate, and the delay doubles up to [`MAX_RETRY_DELAY`].
+const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+
 /// A keyring store on PostgreSQL: one row per keyring in a table the operator creates, with a
 /// `revision` counter for the compare-and-swap and `NOTIFY` for push.
 ///
-/// The library runs no migrations. The table, `kms_keyrings` unless
+/// The library runs no migrations. The table, [`PostgresTable::DEFAULT_NAME`] unless
 /// [`with_table`](Self::with_table) names another, is:
 ///
 /// ```sql
@@ -38,14 +46,19 @@ use crate::{KeyringError, KeyringId, KeyringRecord};
 /// listener connection as [`WatchEvent::Disconnected`], replaces it, and reports
 /// [`WatchEvent::Reconnected`], on which the keyring revalidates.
 ///
-/// The [`PgPool`] is sqlx's, a deliberate integration point: the application owns the pool, its
-/// connection options and its TLS stack, which the `postgres-tls-*` features select. The watches
-/// of a store share one listener, which holds one connection of the pool from the first watch
-/// until the last one is dropped, however many keyrings watch. `Clone` shares the pool and the
-/// listener.
+/// The store opens at most two connections with `config` and `tls`, both tokio-postgres's:
+///
+/// - the query connection, opened by the first call that reads or writes, and opened again by
+///   the first call after it closes. Concurrent callers wait for one attempt and share its
+///   outcome. The call that finds the connection lost fails; the next one reconnects;
+/// - the listener connection, opened by the first watch and closed once the last watch is
+///   dropped, however many keyrings watch.
+///
+/// `Clone` shares both connections, and [`with_table`](Self::with_table) shares the query
+/// connection.
 #[derive(Clone)]
-pub struct PostgresKeyringStore {
-    pool: PgPool,
+pub struct PostgresKeyringStore<T> {
+    connections: Arc<Connections<T>>,
     table: PostgresTable,
     statements: Arc<Statements>,
     watches: Arc<Watches>,
@@ -61,6 +74,30 @@ pub struct PostgresTable(String);
 /// the record is created and incremented by every write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostgresRevision(i64);
+
+/// How a store connects, and its query connection, which the clones of a store share.
+struct Connections<T> {
+    config: Config,
+    tls: T,
+    /// The attempts to open the query connection so far. A caller reads it before it waits for
+    /// `query`, so that it takes the outcome of an attempt made meanwhile rather than repeating
+    /// a failed one.
+    attempts: AtomicU64,
+    query: tokio::sync::Mutex<QueryConnection>,
+}
+
+enum QueryConnection {
+    Unopened,
+    Open(Arc<Client>),
+    Failed(Arc<tokio_postgres::Error>),
+}
+
+/// A connection listening on a store's channel.
+struct Listener<S> {
+    /// Held so that the session stays open: dropping the last client ends it.
+    _client: Client,
+    connection: Connection<Socket, S>,
+}
 
 /// The SQL of each operation, built once, since the table name is part of it.
 struct Statements {
@@ -78,12 +115,28 @@ struct Statements {
 #[derive(Default)]
 struct Watches(Mutex<HashMap<KeyringId, Vec<mpsc::Sender<WatchEvent>>>>);
 
-impl PostgresKeyringStore {
-    /// The store on the table `kms_keyrings` of `pool`'s database.
-    pub fn new(pool: PgPool) -> Self {
-        let table = PostgresTable(String::from("kms_keyrings"));
+impl<T> PostgresKeyringStore<T>
+where
+    T: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+    T::Stream: Send + 'static,
+    T::TlsConnect: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
+    /// The store on the table [`PostgresTable::DEFAULT_NAME`] of the database `config` names,
+    /// over `tls`: `tokio_postgres::NoTls`, or a TLS connector such as tokio-postgres-rustls's
+    /// `MakeRustlsConnect`. It connects on first use, not here.
+    ///
+    /// `config` bounds each attempt to connect only with its `connect_timeout`, and callers
+    /// wait for the attempt in progress.
+    pub fn new(config: Config, tls: T) -> Self {
+        let table = PostgresTable(PostgresTable::DEFAULT_NAME.to_string());
         Self {
-            pool,
+            connections: Arc::new(Connections {
+                config,
+                tls,
+                attempts: AtomicU64::new(0),
+                query: tokio::sync::Mutex::new(QueryConnection::Unopened),
+            }),
             statements: Arc::new(Statements::new(&table)),
             table,
             watches: Arc::default(),
@@ -97,6 +150,127 @@ impl PostgresKeyringStore {
             table,
             watches: Arc::default(),
             ..self
+        }
+    }
+}
+
+impl<T> Connections<T>
+where
+    T: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+    T::Stream: Send + 'static,
+    T::TlsConnect: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
+    /// The query connection's client, opening the connection when it is not open.
+    async fn client(&self) -> Result<Arc<Client>, Arc<tokio_postgres::Error>> {
+        let seen = self.attempts.load(Ordering::Acquire);
+        let mut query = self.query.lock().await;
+        match &*query {
+            QueryConnection::Open(client) if !client.is_closed() => return Ok(client.clone()),
+            QueryConnection::Failed(error) if self.attempts.load(Ordering::Acquire) != seen => {
+                return Err(error.clone());
+            }
+            QueryConnection::Unopened | QueryConnection::Open(_) | QueryConnection::Failed(_) => {}
+        }
+        let opened = self.config.connect(self.tls.clone()).await;
+        self.attempts.fetch_add(1, Ordering::Release);
+        match opened {
+            Ok((client, connection)) => {
+                let client = Arc::new(client);
+                // The task ends with the session; the client then reports itself closed.
+                tokio::spawn(connection);
+                *query = QueryConnection::Open(client.clone());
+                Ok(client)
+            }
+            Err(error) => {
+                let error = Arc::new(error);
+                *query = QueryConnection::Failed(error.clone());
+                Err(error)
+            }
+        }
+    }
+
+    /// A new connection listening on `table`'s channel. A notification that arrives before the
+    /// `LISTEN` completes goes to `watches`.
+    async fn listen(
+        &self,
+        table: &PostgresTable,
+        watches: &Watches,
+    ) -> Result<Listener<T::Stream>, tokio_postgres::Error> {
+        let (client, mut connection) = self.config.connect(self.tls.clone()).await?;
+        let statement = format!(r#"LISTEN "{table}""#);
+        {
+            let listening = client.batch_execute(&statement);
+            tokio::pin!(listening);
+            // The connection makes progress only while its messages are polled.
+            loop {
+                tokio::select! {
+                    listened = &mut listening => {
+                        listened?;
+                        break;
+                    }
+                    message = poll_fn(|cx| connection.poll_message(cx)) => match message {
+                        Some(Ok(AsyncMessage::Notification(notification))) => {
+                            watches.signal(Some(notification.payload()), WatchEvent::Changed);
+                        }
+                        Some(Ok(_)) => {}
+                        Some(Err(error)) => return Err(error),
+                        // The session ended, and the `LISTEN` will never complete. The listener
+                        // reports the end to its watches when it is first polled.
+                        None => break,
+                    },
+                }
+            }
+        }
+        Ok(Listener {
+            _client: client,
+            connection,
+        })
+    }
+
+    /// Forwards the notifications on `table`'s channel to the watches of the keyring each one
+    /// names, until every watch is dropped. A lost connection is reported to every watch and
+    /// replaced at once, then after a delay that doubles from [`FIRST_RETRY_DELAY`] up to
+    /// [`MAX_RETRY_DELAY`] while PostgreSQL stays unreachable.
+    async fn forward(
+        self: Arc<Self>,
+        mut listener: Listener<T::Stream>,
+        table: PostgresTable,
+        watches: Arc<Watches>,
+    ) {
+        loop {
+            loop {
+                let Some(senders) = watches.live() else {
+                    return;
+                };
+                let received = tokio::select! {
+                    _ = join_all(senders.iter().map(mpsc::Sender::closed)) => continue,
+                    received = poll_fn(|cx| listener.connection.poll_message(cx)) => received,
+                };
+                match received {
+                    Some(Ok(AsyncMessage::Notification(notification))) => {
+                        watches.signal(Some(notification.payload()), WatchEvent::Changed);
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(_)) | None => break,
+                }
+            }
+            watches.signal(None, WatchEvent::Disconnected);
+            let mut delay = FIRST_RETRY_DELAY;
+            listener = loop {
+                let Some(senders) = watches.live() else {
+                    return;
+                };
+                if let Ok(listener) = self.listen(&table, &watches).await {
+                    break listener;
+                }
+                tokio::select! {
+                    _ = join_all(senders.iter().map(mpsc::Sender::closed)) => {}
+                    () = tokio::time::sleep(delay) => {}
+                }
+                delay = (delay * 2).min(MAX_RETRY_DELAY);
+            };
+            watches.signal(None, WatchEvent::Reconnected);
         }
     }
 }
@@ -200,6 +374,12 @@ impl Statements {
     }
 }
 
+impl PostgresTable {
+    /// The table of a store that [`with_table`](PostgresKeyringStore::with_table) names no
+    /// other for.
+    pub const DEFAULT_NAME: &'static str = "kms_keyrings";
+}
+
 impl TryFrom<String> for PostgresTable {
     type Error = KeyringError;
 
@@ -233,25 +413,27 @@ impl Display for PostgresRevision {
 
 /// The store error of `operation` for `error`. A server error keeps its primary message and
 /// SQLSTATE only: its detail, hint and context may quote the row, and with it the record's
-/// wrapped keys.
-fn store_error(operation: StoreOperation, error: sqlx::Error) -> KeyringError {
-    let error = match error {
-        sqlx::Error::Database(database) => {
-            let message = match database.code() {
-                Some(code) => format!("{} (SQLSTATE {code})", database.message()),
-                None => database.message().to_string(),
-            };
-            return KeyringError::Store(KeyringStoreError::new(
-                StoreKind::Postgres,
-                operation,
-                message,
-            ));
-        }
-        error => error,
-    };
+/// wrapped keys. Its `Display` and `Debug` carry all three, so it is not kept as the root cause.
+fn store_error(
+    operation: StoreOperation,
+    error: impl Into<Arc<tokio_postgres::Error>>,
+) -> KeyringError {
+    let error = error.into();
+    if let Some(database) = error.as_db_error() {
+        let message = format!(
+            "{} (SQLSTATE {})",
+            database.message(),
+            database.code().code()
+        );
+        return KeyringError::Store(KeyringStoreError::new(
+            StoreKind::Postgres,
+            operation,
+            message,
+        ));
+    }
     KeyringError::Store(
         KeyringStoreError::new(StoreKind::Postgres, operation, error.to_string())
-            .with_root_cause(Arc::new(error)),
+            .with_root_cause(error),
     )
 }
 
@@ -266,79 +448,28 @@ fn stored(
     })
 }
 
-/// A listener on `table`'s channel, on a connection of its own from `pool`.
-async fn listen(pool: &PgPool, table: &PostgresTable) -> Result<PgListener, sqlx::Error> {
-    let mut listener = PgListener::connect_with(pool).await?;
-    // `forward` replaces a lost connection itself, so that every watch hears of both ends of
-    // the gap.
-    listener.eager_reconnect(false);
-    listener.listen(&table.0).await?;
-    Ok(listener)
-}
-
-/// Forwards the notifications on `table`'s channel to the watches of the keyring each one names,
-/// until every watch is dropped or the pool is closed. A lost connection is reported to every
-/// watch and replaced at once, then after a delay that doubles up to 30 seconds while
-/// PostgreSQL stays unreachable.
-async fn forward(
-    mut listener: PgListener,
-    pool: PgPool,
-    table: PostgresTable,
-    watches: Arc<Watches>,
-) {
-    const FIRST_RETRY_DELAY: Duration = Duration::from_millis(500);
-    const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
-    loop {
-        loop {
-            let Some(senders) = watches.live() else {
-                return;
-            };
-            let received = tokio::select! {
-                _ = join_all(senders.iter().map(mpsc::Sender::closed)) => continue,
-                received = listener.try_recv() => received,
-            };
-            match received {
-                Ok(Some(notification)) => {
-                    watches.signal(Some(notification.payload()), WatchEvent::Changed);
-                }
-                Ok(None) | Err(_) => break,
-            }
-        }
-        watches.signal(None, WatchEvent::Disconnected);
-        let mut delay = FIRST_RETRY_DELAY;
-        listener = loop {
-            let Some(senders) = watches.live() else {
-                return;
-            };
-            if pool.is_closed() {
-                watches.lock().clear();
-                return;
-            }
-            if let Ok(listener) = listen(&pool, &table).await {
-                break listener;
-            }
-            tokio::select! {
-                _ = join_all(senders.iter().map(mpsc::Sender::closed)) => {}
-                () = tokio::time::sleep(delay) => {}
-            }
-            delay = (delay * 2).min(MAX_RETRY_DELAY);
-        };
-        watches.signal(None, WatchEvent::Reconnected);
-    }
-}
-
-impl KeyringStore for PostgresKeyringStore {
+impl<T> KeyringStore for PostgresKeyringStore<T>
+where
+    T: MakeTlsConnect<Socket> + Clone + Send + Sync + 'static,
+    T::Stream: Send + 'static,
+    T::TlsConnect: Send,
+    <T::TlsConnect as TlsConnect<Socket>>::Future: Send,
+{
     type Revision = PostgresRevision;
 
     const KIND: StoreKind = StoreKind::Postgres;
 
     async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<PostgresRevision>>> {
-        let row: Option<(String, i64)> =
-            sqlx::query_as(AssertSqlSafe(self.statements.load.as_str()))
-                .bind(id.as_str())
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|error| store_error(StoreOperation::Load, error))?;
+        let row: Option<(String, i64)> = async {
+            let client = self.connections.client().await?;
+            let row = client
+                .query_opt(&self.statements.load, &[&id.as_str()])
+                .await?;
+            row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+                .transpose()
+        }
+        .await
+        .map_err(|error: Arc<tokio_postgres::Error>| store_error(StoreOperation::Load, error))?;
         row.map(|(document, revision)| stored(id, &document, revision))
             .transpose()
     }
@@ -348,13 +479,18 @@ impl KeyringStore for PostgresKeyringStore {
         id: &KeyringId,
         known: &PostgresRevision,
     ) -> KeyringResult<Revalidation<PostgresRevision>> {
-        let row: Option<(Option<String>, i64)> =
-            sqlx::query_as(AssertSqlSafe(self.statements.revalidate.as_str()))
-                .bind(id.as_str())
-                .bind(known.0)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|error| store_error(StoreOperation::Revalidate, error))?;
+        let row: Option<(Option<String>, i64)> = async {
+            let client = self.connections.client().await?;
+            let row = client
+                .query_opt(&self.statements.revalidate, &[&id.as_str(), &known.0])
+                .await?;
+            row.map(|row| Ok((row.try_get(0)?, row.try_get(1)?)))
+                .transpose()
+        }
+        .await
+        .map_err(|error: Arc<tokio_postgres::Error>| {
+            store_error(StoreOperation::Revalidate, error)
+        })?;
         match row {
             None => Ok(Revalidation::Missing),
             Some((None, _)) => Ok(Revalidation::Unchanged),
@@ -370,40 +506,44 @@ impl KeyringStore for PostgresKeyringStore {
         expected: Option<&PostgresRevision>,
     ) -> KeyringResult<Swap<PostgresRevision>> {
         let document = record.to_json()?;
-        let statement = match expected {
-            None => self.statements.create.as_str(),
-            Some(_) => self.statements.update.as_str(),
+        let id = record.id().as_str();
+        let channel = self.table.0.as_str();
+        let (statement, parameters): (_, Vec<&(dyn ToSql + Sync)>) = match expected {
+            None => (&self.statements.create, vec![&id, &document, &channel]),
+            Some(expected) => (
+                &self.statements.update,
+                vec![&id, &document, &channel, &expected.0],
+            ),
         };
-        let mut query = sqlx::query_scalar(AssertSqlSafe(statement))
-            .bind(record.id().as_str())
-            .bind(document)
-            .bind(self.table.0.as_str());
-        if let Some(expected) = expected {
-            query = query.bind(expected.0);
+        let written: Option<i64> = async {
+            let client = self.connections.client().await?;
+            let row = client.query_opt(statement, &parameters).await?;
+            row.map(|row| row.try_get(0)).transpose().map_err(Arc::new)
         }
-        let written: Option<i64> = query
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|error| store_error(StoreOperation::CompareAndSwap, error))?;
+        .await
+        .map_err(|error: Arc<tokio_postgres::Error>| {
+            store_error(StoreOperation::CompareAndSwap, error)
+        })?;
         Ok(written.map_or(Swap::Conflict, |revision| {
             Swap::Written(PostgresRevision(revision))
         }))
     }
 
-    /// A watch on the store's shared listener. The first watch starts the listener on a
-    /// connection of the pool, which it returns once the last watch is dropped.
+    /// A watch on the store's shared listener. The first watch opens the listener connection,
+    /// which closes once the last watch is dropped.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
         let (events, receiver) = mpsc::channel(16);
         if let Err(events) = self.watches.join(id, events) {
-            let listener = listen(&self.pool, &self.table)
+            let listener = self
+                .connections
+                .listen(&self.table, &self.watches)
                 .await
                 .map_err(|error| store_error(StoreOperation::Watch, error))?;
             // Another watch may have started the listener meanwhile; this one is then dropped,
-            // and its connection goes back to the pool.
+            // and its connection closed.
             if self.watches.insert(id, events) {
-                tokio::spawn(forward(
+                tokio::spawn(self.connections.clone().forward(
                     listener,
-                    self.pool.clone(),
                     self.table.clone(),
                     self.watches.clone(),
                 ));
@@ -415,34 +555,37 @@ impl KeyringStore for PostgresKeyringStore {
 
 #[cfg(test)]
 mod tests {
+    use tokio_postgres::NoTls;
+
     use super::*;
     use crate::testing::TestResult;
 
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn revalidate_returns_no_payload_when_unchanged() -> TestResult {
-        let pool = PgPool::connect(&std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?).await?;
+        let (client, connection) =
+            tokio_postgres::connect(&std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?, NoTls)
+                .await?;
+        tokio::spawn(connection);
         let table =
             PostgresTable::try_from(format!("kms_keyrings_{}", uuid::Uuid::now_v7().simple()))?;
-        sqlx::raw_sql(AssertSqlSafe(format!(
-            r#"CREATE TABLE "{table}" (id TEXT PRIMARY KEY, record JSONB NOT NULL,
-                revision BIGINT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
-            INSERT INTO "{table}" (id, record, revision) VALUES ('tenant-42', '{{}}', 7)"#
-        )))
-        .execute(&pool)
-        .await?;
+        client
+            .batch_execute(&format!(
+                r#"CREATE TABLE "{table}" (id TEXT PRIMARY KEY, record JSONB NOT NULL,
+                    revision BIGINT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+                INSERT INTO "{table}" (id, record, revision) VALUES ('tenant-42', '{{}}', 7)"#
+            ))
+            .await?;
         let revalidate = Statements::new(&table).revalidate;
         for (known, payload) in [(7_i64, false), (6, true)] {
-            let (record, revision): (Option<String>, i64) =
-                sqlx::query_as(AssertSqlSafe(revalidate.as_str()))
-                    .bind("tenant-42")
-                    .bind(known)
-                    .fetch_one(&pool)
-                    .await?;
+            let row = client
+                .query_one(&revalidate, &[&"tenant-42", &known])
+                .await?;
+            let (record, revision): (Option<String>, i64) = (row.try_get(0)?, row.try_get(1)?);
             assert_eq!((record.is_some(), revision), (payload, 7));
         }
-        sqlx::query(AssertSqlSafe(format!(r#"DROP TABLE "{table}""#)))
-            .execute(&pool)
+        client
+            .batch_execute(&format!(r#"DROP TABLE "{table}""#))
             .await?;
         Ok(())
     }
