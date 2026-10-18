@@ -1,9 +1,8 @@
-use std::marker::PhantomData;
-
+use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_bytes::ByteBuf;
 
 use super::Beacon;
-use crate::encrypted::serde::StoredBytesVisitor;
 
 /// As bytes, through `serialize_bytes`: a `bytes` value in Firestore, and an array of numbers in
 /// serde_json.
@@ -17,7 +16,8 @@ impl<T> Serialize for Beacon<T> {
 /// `TryFrom<Vec<u8>>` checks them.
 impl<'de, T> Deserialize<'de> for Beacon<T> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_bytes(StoredBytesVisitor(PhantomData))
+        let bytes = ByteBuf::deserialize(deserializer)?;
+        Beacon::try_from(bytes.into_vec()).map_err(D::Error::custom)
     }
 }
 

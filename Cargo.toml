@@ -78,14 +78,13 @@ sha2 = { version = "0.11", default-features = false, optional = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
 serde = { workspace = true, optional = true }
+serde_bytes = { version = "0.11", optional = true }
 gcloud-sdk = { workspace = true, optional = true }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = { workspace = true }
 # Tink's key and keyset messages. The version gcloud-sdk depends on, so that one copy is in the tree.
 prost = "0.14"
-# Zeroizes the serialized keys inside Tink's keyset messages.
-zeroize = "1"
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
 tokio = { workspace = true, features = ["sync"] }
@@ -126,9 +125,9 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 
 [features]
 default = []
-serde = ["dep:serde", "secret-vault-value/serde"]
+serde = ["dep:serde", "dep:serde_bytes", "secret-vault-value/serde"]
 # `Json`, a plaintext stored as its JSON.
-serde-json = ["serde", "dep:serde_json"]
+serde-json = ["dep:serde", "dep:serde_json"]
 # `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`.
 postgres = ["dep:postgres-types", "dep:bytes"]
 # sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for `Encrypted` on Postgres, as `BYTEA`.

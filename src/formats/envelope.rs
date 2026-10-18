@@ -16,7 +16,7 @@ use crate::{CipherText, EncryptedDataEncryptionKey, KmsAeadResult};
 /// ```
 ///
 /// The wrapped DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
-/// DEK as Tink serializes it, 1 to 4,096 bytes, the sizes every Tink implementation reads. The
+/// DEK as Tink serializes it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink implementation reads. The
 /// rest is the [`CipherText`] of the DEK. The layout records neither the algorithm nor the KMS
 /// key version, so the writer and the reader of a value are configured with the same algorithm.
 ///
@@ -62,10 +62,10 @@ impl TryFrom<&[u8]> for EnvelopeLayout {
     }
 }
 
-impl CipherTextWithEncryptedKey {
-    /// The most bytes of a wrapped DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
-    const MAX_ENCRYPTED_KEY_LEN: u32 = 4096;
+/// The most bytes of a wrapped DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
+const MAX_ENCRYPTED_KEY_LEN: u32 = 4096;
 
+impl CipherTextWithEncryptedKey {
     /// `cipher_text` and the wrapped DEK that opens it in Tink's KMS envelope format, which
     /// [`separate`](Self::separate) reads back.
     ///
@@ -80,14 +80,14 @@ impl CipherTextWithEncryptedKey {
         let wrapped = encrypted_dek.value();
         let wrapped_len = u32::try_from(wrapped.len())
             .ok()
-            .filter(|len| (1..=Self::MAX_ENCRYPTED_KEY_LEN).contains(len))
+            .filter(|len| (1..=MAX_ENCRYPTED_KEY_LEN).contains(len))
             .ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(
                         "A wrapped key of {} bytes is not 1 to {} bytes long, the sizes Tink reads",
                         wrapped.len(),
-                        Self::MAX_ENCRYPTED_KEY_LEN
+                        MAX_ENCRYPTED_KEY_LEN
                     ),
                 )
             })?;
@@ -109,57 +109,68 @@ impl CipherTextWithEncryptedKey {
     ///   starting with `0x01`, and with [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on one
     ///   starting with four zero bytes, with or without `legacy-formats`.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let (wrapped, cipher_text) = Self::split(&self.0)?;
-        Ok((
-            CipherText(cipher_text.to_vec()),
-            EncryptedDataEncryptionKey::new(wrapped.to_vec()),
-        ))
-    }
-
-    /// The wrapped DEK and the cipher text of `value` in Tink's KMS envelope format, borrowed
-    /// from it.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`separate`](Self::separate).
-    pub(crate) fn split(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
-        match EnvelopeLayout::try_from(value)? {
-            EnvelopeLayout::Tink => {}
-            EnvelopeLayout::V1 => {
-                return Err(KmsAeadLegacyFormatError::create(
-                    KmsAeadLegacyFormat::EnvelopeV1,
-                ))
-            }
-            EnvelopeLayout::LengthPrefixed => {
-                return Err(KmsAeadLegacyFormatError::create(
-                    KmsAeadLegacyFormat::LengthPrefixedEnvelope,
-                ))
-            }
-        }
-        let invalid = || {
-            KmsAeadEncryptionError::create(
-                "INVALID_CIPHER_TEXT_FORMAT",
-                &format!(
-                    "The wrapped key length of a cipher text of {} bytes is not 1 to {} bytes \
-                     within it",
-                    value.len(),
-                    Self::MAX_ENCRYPTED_KEY_LEN
-                ),
-            )
-        };
-        let (wrapped_len, rest) = value.split_first_chunk::<4>().ok_or_else(invalid)?;
-        let wrapped_len = u32::from_be_bytes(*wrapped_len);
-        if wrapped_len > Self::MAX_ENCRYPTED_KEY_LEN {
-            return Err(invalid());
-        }
-        let wrapped_len = usize::try_from(wrapped_len).map_err(|_| invalid())?;
-        rest.split_at_checked(wrapped_len).ok_or_else(invalid)
+        separate_envelope(&self.0)
     }
 
     /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
     }
+}
+
+/// The cipher text and the wrapped DEK of the bytes of a value in Tink's KMS envelope format.
+///
+/// # Errors
+///
+/// The errors of [`separate`](CipherTextWithEncryptedKey::separate).
+pub(crate) fn separate_envelope(
+    value: &[u8],
+) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
+    let (wrapped, cipher_text) = split_envelope(value)?;
+    Ok((
+        CipherText(cipher_text.to_vec()),
+        EncryptedDataEncryptionKey::new(wrapped.to_vec()),
+    ))
+}
+
+/// The wrapped DEK and the cipher text of `value` in Tink's KMS envelope format, borrowed
+/// from it.
+///
+/// # Errors
+///
+/// The errors of [`separate`](CipherTextWithEncryptedKey::separate).
+pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
+    match EnvelopeLayout::try_from(value)? {
+        EnvelopeLayout::Tink => {}
+        EnvelopeLayout::V1 => {
+            return Err(KmsAeadLegacyFormatError::create(
+                KmsAeadLegacyFormat::EnvelopeV1,
+            ))
+        }
+        EnvelopeLayout::LengthPrefixed => {
+            return Err(KmsAeadLegacyFormatError::create(
+                KmsAeadLegacyFormat::LengthPrefixedEnvelope,
+            ))
+        }
+    }
+    let invalid = || {
+        KmsAeadEncryptionError::create(
+            "INVALID_CIPHER_TEXT_FORMAT",
+            &format!(
+                "The wrapped key length of a cipher text of {} bytes is not 1 to {} bytes \
+                 within it",
+                value.len(),
+                MAX_ENCRYPTED_KEY_LEN
+            ),
+        )
+    };
+    let (wrapped_len, rest) = value.split_first_chunk::<4>().ok_or_else(invalid)?;
+    let wrapped_len = u32::from_be_bytes(*wrapped_len);
+    if wrapped_len > MAX_ENCRYPTED_KEY_LEN {
+        return Err(invalid());
+    }
+    let wrapped_len = usize::try_from(wrapped_len).map_err(|_| invalid())?;
+    rest.split_at_checked(wrapped_len).ok_or_else(invalid)
 }
 
 /// The length only: the value holds the wrapped data encryption key.

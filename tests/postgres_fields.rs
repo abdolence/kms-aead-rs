@@ -13,7 +13,8 @@ use std::error::Error;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring, ValueStruct};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring, ValueStruct};
+use secret_vault_value::SecretValue;
 use sqlx::{Connection, PgConnection, Row};
 
 type TestResult<T> = Result<T, Box<dyn Error>>;
@@ -28,24 +29,42 @@ const SELECT_ANY: &str = "SELECT email FROM users WHERE email = ANY($1)";
 /// A first byte that starts no envelope layout.
 const SELECT_MALFORMED: &str = "SELECT '\\x02'::bytea";
 
+/// An application newtype, stored as the UTF-8 bytes of its string.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
 /// An envelope on a fresh local key, and `EMAILS` sealed under it.
-async fn sealed_emails() -> TestResult<(LocalEnvelope, Vec<Encrypted<String, Envelope>>)> {
+async fn sealed_emails() -> TestResult<(LocalEnvelope, Vec<Encrypted<Email, Envelope>>)> {
     let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("users".to_string())?)?;
     let envelope = LocalEnvelope::new(provider)?;
     let mut sealed = Vec::new();
     for email in EMAILS {
-        sealed.push(envelope.encrypt_field(AAD, &email.to_string()).await?);
+        sealed.push(
+            envelope
+                .encrypt_field(AAD, &Email(email.to_string()))
+                .await?,
+        );
     }
     Ok((envelope, sealed))
 }
 
-fn stored_bytes(values: &[Encrypted<String, Envelope>]) -> BTreeSet<Vec<u8>> {
+fn stored_bytes(values: &[Encrypted<Email, Envelope>]) -> BTreeSet<Vec<u8>> {
     values.iter().map(|value| value.value().clone()).collect()
 }
 
 /// The first two of `EMAILS`, the ones the probes select by `= ANY($1)`.
-fn selected_emails() -> BTreeSet<String> {
-    BTreeSet::from([EMAILS[0].to_string(), EMAILS[1].to_string()])
+fn selected_emails() -> BTreeSet<Email> {
+    BTreeSet::from([Email(EMAILS[0].to_string()), Email(EMAILS[1].to_string())])
 }
 
 #[tokio::test]
@@ -64,11 +83,11 @@ async fn tokio_postgres_stores_values_and_checks_them_at_decode() -> TestResult<
     let selected = rows
         .iter()
         .map(|row| row.try_get(0))
-        .collect::<Result<Vec<Encrypted<String, Envelope>>, _>>()?;
+        .collect::<Result<Vec<Encrypted<Email, Envelope>>, _>>()?;
     let malformed = client
         .query_one(SELECT_MALFORMED, &[])
         .await?
-        .try_get::<_, Encrypted<String, Envelope>>(0)
+        .try_get::<_, Encrypted<Email, Envelope>>(0)
         .err();
 
     assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
@@ -105,11 +124,11 @@ async fn sqlx_stores_values_and_checks_them_at_decode() -> TestResult<()> {
     let selected = rows
         .iter()
         .map(|row| row.try_get(0))
-        .collect::<Result<Vec<Encrypted<String, Envelope>>, _>>()?;
+        .collect::<Result<Vec<Encrypted<Email, Envelope>>, _>>()?;
     let malformed = sqlx::query(SELECT_MALFORMED)
         .fetch_one(&mut connection)
         .await?
-        .try_get::<Encrypted<String, Envelope>, _>(0);
+        .try_get::<Encrypted<Email, Envelope>, _>(0);
 
     assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
     let mut emails = BTreeSet::new();

@@ -1,6 +1,7 @@
+use super::envelope::split_envelope;
 use super::TinkOutputPrefix;
 use crate::errors::KmsAeadEncryptionError;
-use crate::{AeadAlgorithm, CipherTextWithEncryptedKey, DeterministicAlgorithm, KmsAeadResult};
+use crate::{AeadAlgorithm, DeterministicAlgorithm, KmsAeadResult};
 
 /// The format of an [`Encrypted`](crate::Encrypted) value, the byte layout its bytes are checked
 /// against when they are read: [`Envelope`], [`Randomized`] or [`Deterministic`].
@@ -64,7 +65,7 @@ impl Format for Envelope {}
 impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
     fn check(value: &[u8]) -> KmsAeadResult<()> {
-        let (_, cipher_text) = CipherTextWithEncryptedKey::split(value)?;
+        let (_, cipher_text) = split_envelope(value)?;
         if cipher_text.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",

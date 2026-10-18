@@ -41,7 +41,8 @@ impl PartialEq for CipherText {
 ///
 /// The ciphers take the key's own bytes. A provider's
 /// [`encrypt_data_encryption_key`](crate::KmsAeadEncryptionProvider::encrypt_data_encryption_key)
-/// receives the key as Tink serializes it, which is what the KMS wraps.
+/// receives the key as Tink serializes it, which is what the KMS wraps, and the Azure provider the
+/// raw key.
 #[derive(Debug, Clone)]
 pub struct DataEncryptionKey(SecretValue);
 
@@ -49,6 +50,30 @@ impl DataEncryptionKey {
     /// The key bytes.
     pub fn value(&self) -> &SecretValue {
         &self.0
+    }
+}
+
+/// The bytes of `key`, checked against `algorithm`, whose keys have `key_len` bytes, before any
+/// cipher sees them: a key of another length, such as a 64-byte deterministic key, is never cut
+/// or padded to fit.
+///
+/// # Errors
+///
+/// `INVALID_KEY_LENGTH` when `key` has another length.
+pub(crate) fn checked_key_bytes(
+    key: &DataEncryptionKey,
+    algorithm: impl Display,
+    key_len: usize,
+) -> KmsAeadResult<&[u8]> {
+    let key = key.value().ref_sensitive_value();
+    if key.len() == key_len {
+        Ok(key)
+    } else {
+        Err(KmsAeadEncryptionError::invalid_key_length(
+            key.len(),
+            algorithm,
+            key_len,
+        ))
     }
 }
 
@@ -67,67 +92,9 @@ impl PartialEq for DataEncryptionKey {
     }
 }
 
-/// The version of the KMS key that wrapped a data encryption key: 1 to 255 ASCII alphanumeric
-/// characters, such as the version of an Azure Key Vault key.
-///
-/// The same rule validates every key version read back from the Azure provider's wrapped keys
-/// and from the layouts of 0.29, so it may only ever loosen: a stricter rule makes stored data
-/// unreadable.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KmsKeyVersion(String);
-
-impl KmsKeyVersion {
-    /// The version as the KMS names it.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// The key version of `bytes`, read from storage. The error reports the length and the class
-    /// of the first rejected byte, never the bytes themselves, which end up in logs.
-    pub(crate) fn from_ascii(bytes: &[u8]) -> KmsAeadResult<Self> {
-        let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
-            Some("is not 1 to 255 bytes long")
-        } else {
-            bytes
-                .iter()
-                .find(|byte| !byte.is_ascii_alphanumeric())
-                .map(|byte| {
-                    if !byte.is_ascii() {
-                        "contains a non-ASCII byte"
-                    } else if byte.is_ascii_control() {
-                        "contains an ASCII control byte"
-                    } else {
-                        "contains ASCII punctuation or a space"
-                    }
-                })
-        };
-        match rejected {
-            Some(reason) => Err(KmsAeadEncryptionError::create(
-                "INVALID_KEY_VERSION",
-                &format!("KMS key version of {} bytes {reason}", bytes.len()),
-            )),
-            None => Ok(Self(bytes.iter().copied().map(char::from).collect())),
-        }
-    }
-}
-
-impl TryFrom<String> for KmsKeyVersion {
-    type Error = KmsAeadError;
-
-    fn try_from(value: String) -> KmsAeadResult<Self> {
-        Self::from_ascii(value.as_bytes())
-    }
-}
-
-impl Display for KmsKeyVersion {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// A data encryption key wrapped by a KMS: the bytes the provider returned, which are also the
 /// bytes to store and the bytes the provider unwraps. They are the KMS ciphertext of the key as
-/// Tink serializes it, and they name the KMS key version that wrapped it where the KMS needs one
+/// Tink serializes it, or of the raw key for Azure, and they name the KMS key version that wrapped it where the KMS needs one
 /// to unwrap; the formats chapter of the book lists each provider's bytes.
 ///
 /// Equality compares in constant time. `Debug` shows the length only.
@@ -193,29 +160,6 @@ mod tests {
 
     const WRAPPED_KEY: &[u8] = b"zq-key-marker-zq";
     const CIPHER_TEXT: &[u8] = b"zq-cipher-marker-zq";
-
-    #[test]
-    fn kms_key_version_is_1_to_255_ascii_alphanumeric_characters() {
-        assert!(KmsKeyVersion::try_from("a".repeat(255)).is_ok());
-        for invalid in [String::new(), "a".repeat(256), "1/2".into(), "v 1".into()] {
-            let result = KmsKeyVersion::try_from(invalid.clone());
-            assert!(
-                matches!(&result, Err(KmsAeadError::EncryptionError(error))
-                    if error.public.code == "INVALID_KEY_VERSION"),
-                "{invalid:?}: {result:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_key_version_error_echoes_no_stored_bytes() {
-        let error = KmsKeyVersion::from_ascii(b"marker/18").unwrap_err();
-
-        assert!(
-            !format!("{error} {error:?}").contains("marker"),
-            "{error:?}"
-        );
-    }
 
     #[test]
     fn an_encrypted_key_reads_back_from_hex() -> KmsAeadResult<()> {

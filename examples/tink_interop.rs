@@ -1,5 +1,5 @@
 //! kms-aead's typed fields against Tink's `KmsEnvelopeAead` on a Cloud KMS key and an AWS KMS
-//! key. `encrypt` writes one `Encrypted<String, Envelope>` per KMS and algorithm for
+//! key. `encrypt` writes one `Encrypted<Message, Envelope>` per KMS and algorithm for
 //! `python -I tests/tink_interop.py decrypt`, and `decrypt` reads what
 //! `python -I tests/tink_interop.py encrypt` writes. The script lists the commands and the
 //! variables that name the keys; a KMS whose variables are not set is skipped.
@@ -10,9 +10,24 @@ use kms_aead::formats::Envelope;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AwsLc, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope,
-    KmsAeadEnvelopeOptions, KmsAeadResult, ValueStruct,
+    KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext, ValueStruct,
 };
+use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
+
+/// The text each side seals for the other, an application newtype stored as the UTF-8 bytes of
+/// its string, as Tink's side writes and reads it.
+struct Message(String);
+
+impl Plaintext for Message {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Message)
+    }
+}
 
 const ALGORITHMS: [AeadAlgorithm; 4] = [
     AeadAlgorithm::Aes128Gcm,
@@ -55,7 +70,7 @@ async fn main() -> KmsAeadResult<()> {
                 let field = |name: &str| case[name].as_str().expect("the field is a string");
                 let algorithm: AeadAlgorithm = field("algorithm").parse()?;
                 let aad = hex::decode(field("aad")).expect("aad is hex");
-                let value = Encrypted::<String, Envelope>::try_from(
+                let value = Encrypted::<Message, Envelope>::try_from(
                     hex::decode(field("value")).expect("value is hex"),
                 )?;
                 let decrypted = match (field("kms"), &gcp_key, &aws_key) {
@@ -73,7 +88,7 @@ async fn main() -> KmsAeadResult<()> {
                     }
                 };
                 let expected = hex::decode(field("plain_text")).expect("plain_text is hex");
-                if decrypted.as_bytes() == expected {
+                if decrypted.0.as_bytes() == expected {
                     println!("{} {algorithm}: ok", field("kms"));
                 } else {
                     println!("{} {algorithm}: another plain text", field("kms"));
@@ -96,16 +111,16 @@ where
         KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
     )?;
     let aad = format!("orders/{kms}/{algorithm}");
-    let plain_text = format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION"));
-    let value: Encrypted<String, Envelope> =
-        envelope.encrypt_field(aad.as_bytes(), &plain_text).await?;
+    let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
+    let value: Encrypted<Message, Envelope> =
+        envelope.encrypt_field(aad.as_bytes(), &message).await?;
     println!(
         "{}",
         json!({
             "kms": kms,
             "algorithm": algorithm.to_string(),
             "aad": hex::encode(aad),
-            "plain_text": hex::encode(plain_text),
+            "plain_text": hex::encode(&message.0),
             "value": hex::encode(value.value()),
         })
     );
@@ -116,8 +131,8 @@ async fn decrypt<P>(
     provider: P,
     algorithm: AeadAlgorithm,
     aad: &[u8],
-    value: &Encrypted<String, Envelope>,
-) -> KmsAeadResult<String>
+    value: &Encrypted<Message, Envelope>,
+) -> KmsAeadResult<Message>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {

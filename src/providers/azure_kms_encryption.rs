@@ -11,6 +11,7 @@ use azure_security_keyvault_keys::models::{
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use std::sync::Arc;
 
+use super::KmsKeyVersion;
 use crate::formats::azure::AzureWrappedKey;
 use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
@@ -67,6 +68,10 @@ impl AzureKmsProviderOptions {
 /// ```
 ///
 /// An unwrap of other bytes fails with `AZURE_WRAPPED_KEY_FORMAT` before any request.
+///
+/// For the same reason, the plaintext Key Vault wraps is the raw data encryption key of 16, 32 or
+/// 64 bytes, not the key as Tink serializes it, so every wrap algorithm takes it: AES key wrap
+/// takes only multiples of 8 bytes.
 pub struct AzureKmsProvider {
     client: KeyClient,
     azure_key_ref: AzureKmsKeyRef,

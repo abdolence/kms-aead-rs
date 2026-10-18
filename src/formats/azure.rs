@@ -1,5 +1,6 @@
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::{KmsAeadResult, KmsKeyVersion};
+use crate::providers::KmsKeyVersion;
+use crate::KmsAeadResult;
 
 /// The bytes the Azure provider returns from a wrap and takes to unwrap, kms-aead's own layout,
 /// since Key Vault unwraps only with the key version that wrapped and no Tink client exists for
@@ -52,7 +53,7 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
         let [Self::LAYOUT, rest @ ..] = bytes else {
             return Err(Self::malformed());
         };
-        let (key_version, wrapped) = KmsKeyVersion::split_field(rest)
+        let (key_version, wrapped) = super::split_key_version_field(rest)
             .filter(|(key_version, _)| !key_version.is_empty())
             .ok_or_else(Self::malformed)?;
         Ok(Self {

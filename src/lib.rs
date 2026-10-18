@@ -24,10 +24,8 @@
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
 //!
-//! A wrapped DEK carries no context that the KMS authenticates: the KMS unwraps it for any
-//! principal allowed to decrypt with the KEK. Whoever can write where wrapped DEKs are stored can
-//! copy or relabel one, so write access to the stored keys is kept apart from decrypt rights, and
-//! each isolation boundary, such as a tenant or an environment, has a KEK of its own.
+//! The threat model, a copied or relabelled wrapped DEK among it, is in the book's
+//! [Security considerations](https://kms-aead-rust.abdolence.dev/security.html#threat-model).
 //!
 //! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
 //! wrapped under an alias that later moves to another key fails to unwrap with

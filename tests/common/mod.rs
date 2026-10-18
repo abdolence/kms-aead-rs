@@ -1,6 +1,18 @@
 use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
 use azure_core::time::{Duration, OffsetDateTime};
 
+/// The backend the tests seal with: the first one the build has.
+#[cfg(feature = "ring")]
+pub type Backend = kms_aead::Ring;
+#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
+pub type Backend = kms_aead::AwsLc;
+#[cfg(all(
+    not(feature = "ring"),
+    not(feature = "aws-lc-rs"),
+    feature = "rustcrypto"
+))]
+pub type Backend = kms_aead::RustCrypto;
+
 /// Hands out the same bearer token for every request, for servers that accept any token.
 #[derive(Debug)]
 pub struct FixedTokenCredential;

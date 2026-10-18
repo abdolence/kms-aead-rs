@@ -11,7 +11,7 @@ value Tink encrypts opens with `decrypt_value`.
 | Tink KMS envelope | `CipherTextWithEncryptedKey`, `Encrypted<T, Envelope>` | `[w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
 | AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink (RAW output) | every release |
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
-| Serialized DEK | the plaintext of a wrapped DEK | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
+| Serialized DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
 | TINK-prefixed value | `TinkOutputPrefix` and the value, `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>` | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
@@ -20,7 +20,8 @@ value Tink encrypts opens with `decrypt_value`.
 | Length-prefixed envelope | `CipherTextWithEncryptedKey` | `[w: u64 BE][wrapped DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
 | Raw wrapped DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead with `legacy-formats` | up to 0.29 |
 
-`k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters.
+`k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
+provider wraps the raw DEK in every release, see [Wrapped DEKs](#wrapped-deks).
 
 ## Tink's KMS envelope
 
@@ -46,7 +47,7 @@ assert_eq!(CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?, encr
 
 - `w` is 1 to 4,096 bytes, the limit of every Tink implementation, on write and on read;
 - the wrapped DEK is the provider's [`EncryptedDataEncryptionKey`](#wrapped-deks), the KMS
-  ciphertext of the [serialized DEK](#serialized-deks);
+  ciphertext of the [serialized DEK](#serialized-deks), or of the raw DEK for Azure;
 - the AAD goes to the DEK's AEAD only. The KMS wrap has no AAD, as in Tink, so Tink's AWS client
   sends no encryption context and its GCP client no additional authenticated data;
 - the rest is the `CipherText`, Tink's RAW output.
@@ -97,7 +98,9 @@ wrapped the DEK where the KMS needs one to unwrap:
 | an application's own | whatever it returns | |
 
 The Azure layout is the library's own: Key Vault unwraps only with the key version that wrapped,
-and no Tink client exists for Azure. The local KMS seals the DEK with AES-256-GCM under the KEK
+and no Tink client exists for Azure. For the same reason, the Key Vault wrapped key is the KMS
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialized DEK: AES key
+wrap, `A128KW` to `A256KW`, takes only multiples of 8 bytes, which no serialized DEK is. The local KMS seals the DEK with AES-256-GCM under the KEK
 version, with its header up to the version as the AAD, so neither the id nor the version can be
 changed without the unwrap failing.
 
@@ -108,7 +111,8 @@ or `try_from_hex_string`, see
 ## Serialized DEKs
 
 The plaintext a provider wraps is the DEK serialized as Tink serializes a key, the message of its
-Tink key type with `version` 0, which protobuf leaves out:
+Tink key type with `version` 0, which protobuf leaves out. The Azure provider wraps the raw DEK
+instead, see [Wrapped DEKs](#wrapped-deks):
 
 | Algorithm | Message | Bytes |
 |---|---|---|
@@ -118,16 +122,17 @@ Tink key type with `version` 0, which protobuf leaves out:
 | AES-256-GCM-SIV | `AesGcmSivKey` | `[0x1a][0x20][key: 32]` |
 | AES-256-SIV, deterministic | `AesSivKey` | `[0x12][0x40][key: 64]` |
 
-A beacon key of HMAC-SHA256 is wrapped as `[0x1a][0x20][key: 32]`: its 32 bytes in `key_value`,
-field 3, as in Tink's `HmacPrfKey` without its parameters, which are the bytes of a 32-byte
-`AesGcmKey`.
+A beacon key of HMAC-SHA256 is serialized as `[0x1a][0x20][key: 32]`, its 32 bytes in
+`key_value`, field 3, as in Tink's `HmacPrfKey` without its parameters: the bytes of a 32-byte
+`AesGcmKey`. It is wrapped as a DEK is, raw under an Azure key.
 
 `generate_new_dek`, `generate_new_deterministic_dek` and the `generate_wrapped_key` of both
 ciphers and of `BeaconMac` wrap their keys the same way. The message does not name its type, and
 AES-256-GCM and AES-256-GCM-SIV keys are written alike, so the algorithm of the reader decides
 how the key is used, as in Tink.
 
-An unwrapped DEK that is no serialized Tink key fails with `INVALID_KEY_FORMAT`. A wrapped Tink
+An unwrapped DEK that is no serialized Tink key, or under an Azure key no raw DEK, fails with
+`INVALID_KEY_FORMAT`. A wrapped Tink
 keyset unwraps under the same KEK too, and this is what keeps it out of the DEK cache.
 
 ## Tink keysets and the TINK prefix
@@ -328,8 +333,8 @@ A column that holds two layouts:
 The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
 
 - `decrypt_value` reads the three envelope layouts;
-- the `*_with_encrypted_dek` calls, `decrypt_deterministic_dek` and the DEK cache read the
-  encrypted key layout of 0.29 and raw wrapped DEKs.
+- the `*_with_encrypted_dek` calls and the DEK cache read the encrypted key layout of 0.29 and
+  raw wrapped DEKs.
 
 `CipherTextWithEncryptedKey::separate` never reads the older envelope layouts: for Azure, the
 wrapped DEK they hold needs the provider to become its bytes.

@@ -701,7 +701,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wrap_and_unwrap_build_the_0_29_requests() -> KmsAeadResult<()> {
+    async fn wrap_sends_only_the_key_and_unwrap_only_the_ciphertext() -> KmsAeadResult<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = local_provider(&listener);
         let data_key_base64 = data_key().value().as_sensitive_base64_str();

@@ -3,32 +3,25 @@
 //! ```sh
 //! docker run --rm -d --name lowkey-vault -p 8443:8443 docker.io/nagyesta/lowkey-vault:7.3.112
 //! AZURE_KEY_VAULT_EMULATOR_URL=https://localhost:8443 \
-//!   cargo test --features azure-kms-encryption --test azure_kms_emulator -- --ignored
+//!   cargo test --features azure-kms-encryption,aws-lc --test azure_kms_emulator -- --ignored
 //! ```
 
 use azure_core::http::{ClientOptions, RequestContent, Transport};
-use azure_security_keyvault_keys::models::{CreateKeyParameters, KeyOperation, KeyType};
+use azure_security_keyvault_keys::models::{
+    CreateKeyParameters, EncryptionAlgorithm, KeyOperation, KeyOperationParameters, KeyType,
+};
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+use kms_aead::providers::{
+    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
+};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
 use std::sync::Arc;
 
 mod common;
-use common::FixedTokenCredential;
-
-#[cfg(feature = "ring")]
-type Backend = Ring;
-#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
-type Backend = AwsLc;
-#[cfg(all(
-    not(feature = "ring"),
-    not(feature = "aws-lc-rs"),
-    feature = "rustcrypto"
-))]
-type Backend = RustCrypto;
+use common::{Backend, FixedTokenCredential};
 
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";
 
@@ -173,5 +166,50 @@ async fn value_encrypted_with_another_key_fails_to_decrypt() -> TestResult<()> {
         .await;
 
     assert!(matches!(result, Err(KmsAeadError::EncryptionError(_))));
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs the Lowkey Vault emulator, see the module docs"]
+async fn key_vault_wraps_the_raw_dek_and_the_value_round_trips() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-wrapping-key")?;
+    let key_version = emulator.create_rsa_key_version(&key_name).await?;
+    let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
+    let aad = b"test-aad";
+
+    let (dek, encrypted_dek) = encryption.generate_new_dek().await?;
+    let cipher_text =
+        encryption.encrypt_value_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
+    let decrypted = encryption
+        .decrypt_value(
+            aad,
+            &CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?,
+        )
+        .await?;
+    // The provider's bytes are `[0x01][k: u8][key version: k][Key Vault wrapped key]`.
+    let wrapped = &encrypted_dek.value()[2 + key_version.as_str().len()..];
+    let parameters = KeyOperationParameters {
+        algorithm: Some(EncryptionAlgorithm::RsaOaep256),
+        value: Some(wrapped.to_vec()),
+        ..Default::default()
+    };
+    let unwrapped = emulator
+        .client
+        .unwrap_key(
+            &key_name,
+            key_version.as_str(),
+            RequestContent::try_from(parameters)?,
+            None,
+        )
+        .await?
+        .into_model()?
+        .result;
+
+    assert_eq!(
+        unwrapped.as_deref(),
+        Some(dek.value().ref_sensitive_value().as_slice())
+    );
+    assert_eq!(decrypted.as_sensitive_str(), "test-secret");
     Ok(())
 }

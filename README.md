@@ -88,6 +88,10 @@ needs a backend feature next to it, and most names changed. See the
 read only with the deprecated `legacy-formats` feature, which also rewrites them in the new
 format, see [Formats](https://kms-aead-rust.abdolence.dev/formats.html).
 
+The default algorithm is AES-256-GCM instead of ChaCha20-Poly1305, so an envelope that reads
+values written under the default of 0.29 needs ChaCha20-Poly1305 configured, see
+[Default algorithm](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html#default-algorithm).
+
 ## Security
 
 See [Security considerations](https://kms-aead-rust.abdolence.dev/security.html) for the threat

@@ -2,7 +2,7 @@
 
 use azure_core::http::headers::{self, Headers};
 use azure_core::http::{
-    AsyncRawResponse, ClientOptions, HttpClient, Request, RetryOptions, StatusCode, Transport,
+    AsyncRawResponse, Body, ClientOptions, HttpClient, Request, RetryOptions, StatusCode, Transport,
 };
 use azure_security_keyvault_keys::models::EncryptionAlgorithm;
 use azure_security_keyvault_keys::KeyClientOptions;
@@ -12,19 +12,21 @@ use kms_aead::*;
 use std::sync::{Arc, Mutex, PoisonError};
 
 mod common;
-use common::FixedTokenCredential;
+use common::{Backend, FixedTokenCredential};
 
 const VAULT_URL: &str = "https://test-vault.vault.azure.net";
 const KEY_NAME: &str = "dek-wrapping-key";
 const KEY_VERSION: &str = "4387e9f3d6e14c459867679a90fd0f79";
 const LEAK_MARKER: &str = "body-marker-that-must-not-leak";
 
-/// Answers every request with one canned response and keeps the URL of each request.
+/// Answers every request with one canned response and keeps the URL and the body of each
+/// request.
 #[derive(Debug)]
 struct CannedHttpClient {
     status: StatusCode,
     body: String,
     urls: Mutex<Vec<String>>,
+    request_bodies: Mutex<Vec<Vec<u8>>>,
 }
 
 impl CannedHttpClient {
@@ -33,9 +35,14 @@ impl CannedHttpClient {
             status,
             body,
             urls: Mutex::new(Vec::new()),
+            request_bodies: Mutex::new(Vec::new()),
         }
     }
 }
+
+/// Key Vault's challenge to a request that carries no token, such as the first request of a
+/// client, which the SDK sends without its body.
+const CHALLENGE: &str = r#"Bearer authorization="https://login.microsoftonline.com/tenant", resource="https://vault.azure.net""#;
 
 #[async_trait::async_trait]
 impl HttpClient for CannedHttpClient {
@@ -45,6 +52,22 @@ impl HttpClient for CannedHttpClient {
             .unwrap_or_else(PoisonError::into_inner)
             .push(request.url().to_string());
         let mut headers = Headers::new();
+        match request.body() {
+            Body::Bytes(body) if !body.is_empty() => {
+                self.request_bodies
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(body.to_vec());
+            }
+            _ => {
+                headers.insert(headers::WWW_AUTHENTICATE, CHALLENGE);
+                return Ok(AsyncRawResponse::from_bytes(
+                    StatusCode::Unauthorized,
+                    headers,
+                    Vec::new(),
+                ));
+            }
+        }
         headers.insert(headers::CONTENT_TYPE, "application/json");
         Ok(AsyncRawResponse::from_bytes(
             self.status,
@@ -167,6 +190,43 @@ async fn wrap_with_the_latest_key_version_carries_the_version_from_kid() -> KmsA
         .await?;
 
     assert_eq!(encrypted_key, self::encrypted_key(&wrapped));
+    Ok(())
+}
+
+#[tokio::test]
+async fn key_vault_wraps_the_raw_key() -> Result<(), Box<dyn std::error::Error>> {
+    for algorithm in [AeadAlgorithm::Aes128Gcm, AeadAlgorithm::Aes256Gcm] {
+        let http_client = Arc::new(CannedHttpClient::new(
+            StatusCode::Ok,
+            format!(
+                r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "d3JhcHBlZA"}}"#
+            ),
+        ));
+        let provider = AzureKmsProvider::with_options(
+            &AzureKmsKeyRef::new(VAULT_URL.into(), KEY_NAME.into()),
+            options_with(http_client.clone()),
+            Arc::new(FixedTokenCredential),
+        )?;
+        let envelope = KmsAeadEnvelope::<_, Backend>::with_options(
+            provider,
+            KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
+        )?;
+
+        let (key, _) = envelope.generate_new_dek().await?;
+
+        let request_bodies = http_client.request_bodies.lock().unwrap();
+        let [request_body] = request_bodies.as_slice() else {
+            panic!("{algorithm}: {} requests", request_bodies.len());
+        };
+        let parameters: serde_json::Value = serde_json::from_slice(request_body)?;
+        let wrapped = azure_core::base64::decode_url_safe(
+            parameters["value"]
+                .as_str()
+                .ok_or("no value in the wrap request")?,
+        )?;
+        assert_eq!(wrapped.len(), algorithm.key_len(), "{algorithm}");
+        assert_eq!(wrapped, *key.value().ref_sensitive_value(), "{algorithm}");
+    }
     Ok(())
 }
 

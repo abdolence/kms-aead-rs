@@ -5,7 +5,6 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
-use crate::errors::KmsAeadEncryptionError;
 use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 
 /// Wraps and unwraps data encryption keys with a key encryption key (KEK) held by a KMS.
@@ -56,29 +55,6 @@ pub trait KmsAeadEncryptionProvider {
     async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
         let _ = len;
         Ok(None)
-    }
-}
-
-/// `len` bytes from the KMS generator of `provider`, or `None` when it does not use one. The
-/// one place that checks the length the KMS returned, for every kind of key.
-pub(crate) async fn checked_key_material<P>(
-    provider: &P,
-    len: usize,
-) -> KmsAeadResult<Option<SecretValue>>
-where
-    P: KmsAeadEncryptionProvider + Sync + ?Sized,
-{
-    match provider.generate_key_material(len).await? {
-        Some(material) if material.ref_sensitive_value().len() != len => {
-            Err(KmsAeadEncryptionError::create(
-                "INVALID_KEY_LENGTH",
-                &format!(
-                    "The KMS generator returned {} bytes for a key of {len} bytes",
-                    material.ref_sensitive_value().len()
-                ),
-            ))
-        }
-        material => Ok(material),
     }
 }
 

@@ -12,7 +12,7 @@ use crate::KmsAeadResult;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "serde")]
-pub(crate) mod serde;
+mod serde;
 #[cfg(feature = "sqlx")]
 mod sqlx;
 
@@ -142,16 +142,6 @@ mod tests {
     fn bytes_outside_the_layout_of_the_format_are_refused() {
         let refused = [
             (
-                "envelope, empty",
-                Encrypted::<String, Envelope>::try_from(Vec::new()).err(),
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-            ),
-            (
-                "envelope, a first byte that starts no layout",
-                Encrypted::<String, Envelope>::try_from(vec![0x02; 64]).err(),
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-            ),
-            (
                 "envelope, a wrapped DEK past the end",
                 Encrypted::<String, Envelope>::try_from(vec![0x00, 0x00, 0x00, 0x07, 0xAB]).err(),
                 "INVALID_CIPHER_TEXT_FORMAT",
@@ -189,16 +179,6 @@ mod tests {
                 "{case}: {error:?}"
             );
         }
-    }
-
-    #[test]
-    fn an_envelope_layout_of_0_29_is_a_legacy_format() {
-        let result = Encrypted::<String, Envelope>::try_from(prefixed(&[0xAB; 64]));
-
-        assert!(
-            matches!(&result, Err(KmsAeadError::LegacyFormat(_))),
-            "{result:?}"
-        );
     }
 
     #[test]

@@ -9,9 +9,10 @@ use subtle::ConstantTimeEq;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::TinkKeyType;
+use crate::types::checked_key_bytes;
 use crate::{
-    checked_key_material, generate_random_bytes, AeadBackend, DataEncryptionKey,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 #[cfg(feature = "postgres")]
@@ -262,14 +263,14 @@ impl<B: AeadBackend> BeaconMac<B> {
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        let key = match checked_key_material(provider, self.algorithm.key_len()).await? {
-            Some(material) => DataEncryptionKey::from(material),
-            None => self.generate_key()?,
-        };
         // Tink's `HmacPrfKey` and `AesGcmKey` both hold their key in field 3, `key_value`, so a
         // 32-byte beacon key serializes to the bytes of a 32-byte `AesGcmKey`.
-        let encrypted_key = key.wrap_with(TinkKeyType::AesGcm, provider).await?;
-        Ok((key, encrypted_key))
+        crate::formats::generate_wrapped_key::<B, P>(
+            TinkKeyType::AesGcm,
+            self.algorithm.key_len(),
+            provider,
+        )
+        .await
     }
 
     /// The beacon of `value` under `key`, the beacon key `key_id`, for the field `context`,
@@ -289,14 +290,7 @@ impl<B: AeadBackend> BeaconMac<B> {
         value: &T,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
-        let key = key.value().ref_sensitive_value();
-        if key.len() != self.algorithm.key_len() {
-            return Err(KmsAeadEncryptionError::invalid_key_length(
-                key.len(),
-                self.algorithm,
-                self.algorithm.key_len(),
-            ));
-        }
+        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
         let context_len = u32::try_from(context.len()).map_err(|_| {
             KmsAeadEncryptionError::create(
                 "INVALID_BEACON_CONTEXT",

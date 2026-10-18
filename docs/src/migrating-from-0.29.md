@@ -47,6 +47,7 @@ The crate declares `rust-version = "1.99"`.
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | removed; the `key_version` field of the KMS spans |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KmsKeyVersion`, the type of `AzureKmsKeyRef::key_version` |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
@@ -163,7 +164,7 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 
 ## Old values
 
-0.30 writes Tink's KMS envelope, and wraps every DEK as a serialized Tink key. 0.29 wrote envelope
+0.30 writes Tink's KMS envelope, and wraps every DEK but Azure's as a serialized Tink key. 0.29 wrote envelope
 layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a length-prefixed
 envelope, all with the raw DEK wrapped. 0.30 reads them only with the deprecated `legacy-formats`
 feature, and fails with `LEGACY_FORMAT` without it, see [Formats](./formats.md#values-written-by-029-and-earlier).
