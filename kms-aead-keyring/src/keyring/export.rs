@@ -397,6 +397,8 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use super::*;
+    use kms_aead::{CipherText, CipherTextWithEncryptedKey};
+
     use crate::errors::KeyVersionError;
     use crate::store::MemoryKeyringStore;
     use crate::testing::{email_of, TestProvider, TestResult, TENANT, TEST_BACKEND};
@@ -637,6 +639,33 @@ mod tests {
 
         // One unwrap per export, and one for the encrypt, which found the cache empty.
         assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
+        let (keyring, provider) = keyring(KeyringPolicy::new()).await?;
+        let wrapped = keyring
+            .export_keyset(KeysetSelection::Readable(Purpose::Randomized))
+            .await?;
+        let value = CipherTextWithEncryptedKey::join(
+            &CipherText(vec![0; 32]),
+            &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec(), None),
+        )?;
+        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+
+        for _ in 0..2 {
+            let opened = keyring
+                .decrypt_envelope_value(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
+                .await;
+            assert!(matches!(
+                opened,
+                Err(KeyringError::Kms(error)) if error.code() == "INVALID_KEY_LENGTH"
+            ));
+        }
+
+        // Each call unwraps again: the keyset was never cached as a key.
+        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 2);
         Ok(())
     }
 
