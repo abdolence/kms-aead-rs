@@ -18,7 +18,6 @@ path = "src/lib.rs"
 
 [dependencies]
 kms-aead = { version = "0.29", path = "..", default-features = false }
-async-trait = { workspace = true }
 # The major version secret-vault-value depends on, so that one copy is in the tree.
 base64 = "0.23"
 jiff = { version = "0.2", features = ["serde"] }
@@ -32,6 +31,8 @@ tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# The test provider implements kms-aead's provider trait, which is an `async_trait`.
+async-trait = { workspace = true }
 proptest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 uuid = { version = "1", features = ["v7"] }

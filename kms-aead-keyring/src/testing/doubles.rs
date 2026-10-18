@@ -148,7 +148,6 @@ impl TestStore {
     }
 }
 
-#[async_trait]
 impl KeyringStore for TestStore {
     type Revision = MemoryRevision;
 

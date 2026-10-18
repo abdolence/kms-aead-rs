@@ -1,8 +1,8 @@
 //! Where keyring records live: the [`KeyringStore`] trait, and [`MemoryKeyringStore`].
 
 use std::fmt::{Debug, Display, Formatter};
+use std::future::Future;
 
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::errors::KeyringResult;
@@ -19,13 +19,14 @@ pub use memory::*;
 ///
 /// # Implementing a store
 ///
+/// - Write each method as an `async fn`. Its future must be `Send`, so that a keyring runs on a
+///   multi-threaded runtime. A keyring is generic over its store: the trait has no `dyn` form.
 /// - Read a stored document with [`KeyringRecord::from_json`] and write one with
 ///   [`KeyringRecord::to_json`], so that every store keeps the same document and every read
 ///   checks it.
 /// - Wrap the client's errors in [`KeyringError::Store`](crate::KeyringError::Store) with the
 ///   client's error as the root cause. Never format the record or the request into an error,
 ///   and never log either: both carry wrapped data encryption keys.
-#[async_trait]
 pub trait KeyringStore: Send + Sync + 'static {
     /// The store's change marker for one record, such as a counter or an update time. Equal
     /// revisions mean an unchanged record. `Display` gives the `revision` span field.
@@ -41,7 +42,10 @@ pub trait KeyringStore: Send + Sync + 'static {
     /// [`KeyringError::Store`](crate::KeyringError::Store) when the store fails, and
     /// [`KeyringError::RecordInvalid`](crate::KeyringError::RecordInvalid) when the stored
     /// document is no valid record of `id`.
-    async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<Self::Revision>>>;
+    fn load(
+        &self,
+        id: &KeyringId,
+    ) -> impl Future<Output = KeyringResult<Option<Stored<Self::Revision>>>> + Send;
 
     /// [`Revalidation::Unchanged`] when the stored revision is `known`, otherwise the current
     /// record, or [`Revalidation::Missing`] when there is none. A store with a conditional read
@@ -50,11 +54,11 @@ pub trait KeyringStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// As [`load`](Self::load).
-    async fn revalidate(
+    fn revalidate(
         &self,
         id: &KeyringId,
         known: &Self::Revision,
-    ) -> KeyringResult<Revalidation<Self::Revision>>;
+    ) -> impl Future<Output = KeyringResult<Revalidation<Self::Revision>>> + Send;
 
     /// Writes the whole `record` when the stored revision of its id is `expected`, and returns
     /// the new revision. `None` creates the record. [`Swap::Conflict`] when the stored revision
@@ -63,11 +67,11 @@ pub trait KeyringStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// As [`load`](Self::load).
-    async fn compare_and_swap(
+    fn compare_and_swap(
         &self,
         record: &KeyringRecord,
         expected: Option<&Self::Revision>,
-    ) -> KeyringResult<Swap<Self::Revision>>;
+    ) -> impl Future<Output = KeyringResult<Swap<Self::Revision>>> + Send;
 
     /// Change signals for `id`, or `None` for a store that has no push. A signal carries no
     /// record: the keyring revalidates when it receives one.
@@ -75,7 +79,10 @@ pub trait KeyringStore: Send + Sync + 'static {
     /// # Errors
     ///
     /// [`KeyringError::Store`](crate::KeyringError::Store) when the listener cannot start.
-    async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>>;
+    fn watch(
+        &self,
+        id: &KeyringId,
+    ) -> impl Future<Output = KeyringResult<Option<KeyringWatch>>> + Send;
 }
 
 /// A record and the revision it was read or written at.

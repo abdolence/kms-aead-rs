@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap, WatchEvent};
@@ -63,7 +62,6 @@ impl MemoryDocument {
     }
 }
 
-#[async_trait]
 impl KeyringStore for MemoryKeyringStore {
     type Revision = MemoryRevision;
 
