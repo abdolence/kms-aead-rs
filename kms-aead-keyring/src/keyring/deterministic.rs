@@ -147,7 +147,7 @@ where
         .await
     }
 
-    /// `value` sealed with `aad` under every deterministic version that still decrypts, active
+    /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
     /// or decrypt-only, compromised ones included, newest first: the `IN` list of an equality
     /// query, which finds the rows sealed before a rotation as well as after it. Retired and
     /// destroyed versions give no probe. A compromised version's key is unwrapped for each

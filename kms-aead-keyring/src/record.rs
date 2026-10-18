@@ -254,8 +254,8 @@ impl KeyVersionState {
     }
 }
 
-/// `active`, `decrypt_only`, `retired`, `destroyed`: the record's JSON and the `key_state` span
-/// field.
+/// `pending`, `active`, `decrypt_only`, `retired`, `destroyed`: the record's JSON and the
+/// `key_state` span field.
 impl Display for KeyVersionState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

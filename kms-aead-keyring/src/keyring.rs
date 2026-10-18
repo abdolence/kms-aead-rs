@@ -54,8 +54,8 @@ pub use export::{KeysetSelection, WrappedKeyset};
 /// The administrative calls, `create`, `rotate`, `promote`, `mark_compromised`, `retire`,
 /// `reinstate`, `destroy`, `rewrap` and `change_algorithm`, write the record, and `create`,
 /// `rotate`, `mark_compromised`, `rewrap` and `change_algorithm` also wrap keys, so they need
-/// the KMS's encrypt right. They run under an administrative principal, in a job, while the serving
-/// processes only decrypt keys and read the store.
+/// the KMS's encrypt right. They run under an administrative principal, in a job, while the
+/// serving processes only decrypt keys and read the store.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the record's change
 /// signals for as long as the keyring lives.
