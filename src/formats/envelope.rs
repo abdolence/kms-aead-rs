@@ -109,17 +109,28 @@ impl CipherTextWithEncryptedKey {
     ///   starting with `0x01`, and with [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on one
     ///   starting with four zero bytes, with or without `legacy-formats`.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let (wrapped, cipher_text) = split_envelope(&self.0)?;
-        Ok((
-            CipherText(cipher_text.to_vec()),
-            EncryptedDataEncryptionKey::new(wrapped.to_vec()),
-        ))
+        separate_envelope(&self.0)
     }
 
     /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
     }
+}
+
+/// The cipher text and the wrapped DEK of the bytes of a value in Tink's KMS envelope format.
+///
+/// # Errors
+///
+/// The errors of [`separate`](CipherTextWithEncryptedKey::separate).
+pub(crate) fn separate_envelope(
+    value: &[u8],
+) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
+    let (wrapped, cipher_text) = split_envelope(value)?;
+    Ok((
+        CipherText(cipher_text.to_vec()),
+        EncryptedDataEncryptionKey::new(wrapped.to_vec()),
+    ))
 }
 
 /// The wrapped DEK and the cipher text of `value` in Tink's KMS envelope format, borrowed

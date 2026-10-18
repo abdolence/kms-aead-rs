@@ -179,13 +179,13 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str
     )
 }
 
-/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a key the caller stored, which never
-/// goes through the cache. `purpose` is `randomized` or `deterministic`.
+/// `KMS AEAD decrypt DEK`, around the envelope's unwrap of a deterministic key the caller
+/// stored, which never goes through the cache.
 #[cfg(feature = "deterministic")]
-pub(crate) fn decrypt_dek(purpose: &str, algorithm: impl Display, dek_cache: &DekCache) -> Span {
+pub(crate) fn decrypt_dek(algorithm: impl Display, dek_cache: &DekCache) -> Span {
     let span = debug_span!(
         "KMS AEAD decrypt DEK",
-        { PURPOSE } = purpose,
+        { PURPOSE } = "deterministic",
         { ALGORITHM } = %algorithm,
         { DEK_CACHE } = field::Empty,
         { ERROR_CODE } = field::Empty,

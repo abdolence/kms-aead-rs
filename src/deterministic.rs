@@ -300,7 +300,7 @@ mod aes_siv_cipher {
             algorithm: DeterministicAlgorithm,
             encrypted_key: &EncryptedDataEncryptionKey,
         ) -> KmsAeadResult<DataEncryptionKey> {
-            let span = spans::decrypt_dek("deterministic", algorithm, self.dek_cache());
+            let span = spans::decrypt_dek(algorithm, self.dek_cache());
             spans::in_span(span, async {
                 let (key, _) = crate::formats::unwrap_key(encrypted_key, &self.provider).await?;
                 checked_key_bytes(&key, algorithm, algorithm.key_len())?;

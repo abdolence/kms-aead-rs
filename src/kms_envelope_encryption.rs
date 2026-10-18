@@ -328,7 +328,11 @@ where
         aad: &[u8],
         cipher_text: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<SecretValue> {
-        spans::in_span(self.decrypt_span(self.mode()), self.open(aad, cipher_text)).await
+        spans::in_span(
+            self.decrypt_span(self.mode()),
+            self.open(aad, cipher_text.value()),
+        )
+        .await
     }
 
     /// Encrypts `value`, as [`Plaintext`] encodes it, as [`encrypt_value`](Self::encrypt_value)
@@ -362,8 +366,7 @@ where
         field: &Encrypted<T, Envelope>,
     ) -> KmsAeadResult<T> {
         spans::in_span(self.decrypt_span(self.mode()), async {
-            let value = CipherTextWithEncryptedKey(field.value().clone());
-            T::from_plaintext(self.open(aad, &value).await?)
+            T::from_plaintext(self.open(aad, field.value()).await?)
         })
         .await
     }
@@ -503,16 +506,12 @@ where
     }
 
     /// Opens `value` as `decrypt_value` does, in the span of the caller.
-    async fn open(
-        &self,
-        aad: &[u8],
-        value: &CipherTextWithEncryptedKey,
-    ) -> KmsAeadResult<SecretValue> {
+    async fn open(&self, aad: &[u8], value: &[u8]) -> KmsAeadResult<SecretValue> {
         #[cfg(feature = "legacy-formats")]
         let (cipher_text, encrypted_dek) =
             crate::formats::legacy::separate_any_layout(value, self.provider.kek().provider())?;
         #[cfg(not(feature = "legacy-formats"))]
-        let (cipher_text, encrypted_dek) = value.separate()?;
+        let (cipher_text, encrypted_dek) = crate::formats::envelope::separate_envelope(value)?;
         self.with_dek(&encrypted_dek, |key| {
             self.cipher.decrypt_value(aad, &cipher_text, key)
         })
