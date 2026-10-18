@@ -307,15 +307,19 @@ where
     /// [`cas_retries`](KeyringOptions::cas_retries) conflicts.
     pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), purpose), async {
+            let algorithm = self.algorithm_of(&self.record(), purpose)?;
+            let new = self.new_version(algorithm).await?;
             let staged = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
-                    let algorithm = edit
-                        .record()
-                        .algorithms()
-                        .of(purpose)
-                        .ok_or_else(|| KeyringError::no_algorithm(self.id(), purpose))?;
-                    self.stage(edit, algorithm).await
+                    let algorithm = self.algorithm_of(edit.record(), purpose)?;
+                    let new = if algorithm == new.algorithm {
+                        new.clone()
+                    } else {
+                        // Another writer changed the purpose's algorithm since the key was made.
+                        self.new_version(algorithm).await?
+                    };
+                    edit.stage(new, Timestamp::now())
                 })
                 .await?;
             spans::record_rotation(None, staged);
@@ -358,11 +362,13 @@ where
     /// does not implement `algorithm`.
     pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
+            let new = self.new_version(algorithm).await?;
             let staged = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
-                    edit.set_algorithm(algorithm, Timestamp::now());
-                    self.stage(edit, algorithm).await
+                    let now = Timestamp::now();
+                    edit.set_algorithm(algorithm, now);
+                    edit.stage(new.clone(), now)
                 })
                 .await?;
             spans::record_rotation(None, staged);
@@ -398,13 +404,33 @@ where
     ) -> KeyringResult<Option<Rotation>> {
         unreserved(key_id)?;
         spans::in_span(spans::mark_compromised(self.id(), key_id), async {
+            // `None` when the cached record has no active `key_id`, and `Some(None)` when the
+            // replacement's key could not be encrypted, which is not tried again in the write.
+            let cached = self.record();
+            let prepared = match cached.version(key_id) {
+                Some(version) if version.state() == KeyVersionState::Active => {
+                    Some(self.replacement(&cached, version).await)
+                }
+                _ => None,
+            };
             let rotation = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let record = edit.record();
                     let replacement = match record.version(key_id) {
                         Some(version) if version.state() == KeyVersionState::Active => {
-                            self.replacement(record, version).await
+                            match &prepared {
+                                Some(Some(new))
+                                    if record.algorithms().of(new.algorithm.purpose())
+                                        == Some(new.algorithm) =>
+                                {
+                                    Some(new.clone())
+                                }
+                                Some(None) => None,
+                                // The record changed since the cached one: another writer
+                                // promoted this version or changed its purpose's algorithm.
+                                _ => self.replacement(record, version).await,
+                            }
                         }
                         _ => None,
                     };
@@ -493,19 +519,25 @@ where
     /// The provider's errors, and the errors of a write as for [`rotate`](Self::rotate).
     pub async fn reencrypt_deks(&self) -> KeyringResult<usize> {
         spans::in_span(spans::reencrypt_deks(self.id()), async {
+            let mut reencrypted = Vec::new();
+            for (_, encrypted_dek) in self.record().encrypted_deks() {
+                let new_encrypted_dek = self.reencrypted(&encrypted_dek).await?;
+                reencrypted.push((encrypted_dek, new_encrypted_dek));
+            }
             let versions = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let encrypted_deks = edit.record().encrypted_deks();
                     for (key_id, encrypted_dek) in &encrypted_deks {
-                        // What the KMS decrypts is the serialised Tink key it encrypted, so it is
-                        // encrypted again as it is.
-                        let dek = self
-                            .provider
-                            .decrypt_data_encryption_key(encrypted_dek)
-                            .await?;
-                        let new_encrypted_dek =
-                            self.provider.encrypt_data_encryption_key(&dek).await?;
+                        let prepared = reencrypted
+                            .iter()
+                            .find(|(held, _)| held == encrypted_dek)
+                            .map(|(_, new_encrypted_dek)| new_encrypted_dek.clone());
+                        let new_encrypted_dek = match prepared {
+                            Some(new_encrypted_dek) => new_encrypted_dek,
+                            // A version that another writer added or encrypted again meanwhile.
+                            None => self.reencrypted(encrypted_dek).await?,
+                        };
                         edit.replace_dek(*key_id, new_encrypted_dek, Timestamp::now())?;
                     }
                     Ok(encrypted_deks.len())
@@ -720,17 +752,17 @@ where
         Ok(result)
     }
 
-    /// A new version to replace `replaced`, the active version being flagged compromised,
-    /// or `None`, with a `WARN`, when its key cannot be encrypted: the flag goes in without it.
+    /// A new version to replace `replaced`, the active version of `record` being flagged
+    /// compromised, or `None`, with a `WARN`, when its key cannot be encrypted: the flag goes in
+    /// without it.
     async fn replacement(
         &self,
         record: &KeyringRecord,
         replaced: &KeyVersion,
     ) -> Option<NewVersion> {
-        let purpose = replaced.algorithm().purpose();
-        let new = match record.algorithms().of(purpose) {
-            Some(algorithm) => self.new_version(record, algorithm).await,
-            None => Err(KeyringError::no_algorithm(self.id(), purpose)),
+        let new = match self.algorithm_of(record, replaced.algorithm().purpose()) {
+            Ok(algorithm) => self.new_version(algorithm).await,
+            Err(error) => Err(error),
         };
         new.inspect_err(|error| {
             spans::compromised_without_rotation(self.id(), replaced.id(), error)
@@ -753,20 +785,35 @@ where
             .await??)
     }
 
-    /// Stages a new version of `algorithm` in `edit`.
-    async fn stage(&self, edit: &mut RecordEdit, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
-        let new = self.new_version(edit.record(), algorithm).await?;
-        edit.stage(new, Timestamp::now())
-    }
-
-    /// The next version of `algorithm`'s purpose in `record`, with its key encrypted.
-    async fn new_version(
+    /// The algorithm `record` names for new versions of `purpose`, or `NoAlgorithm`.
+    fn algorithm_of(
         &self,
         record: &KeyringRecord,
-        algorithm: KeyAlgorithm,
-    ) -> KeyringResult<NewVersion> {
-        let key_id = record.next_key_id(algorithm.purpose())?;
-        NewVersion::generate::<P, B>(key_id, algorithm, &self.provider).await
+        purpose: Purpose,
+    ) -> KeyringResult<KeyAlgorithm> {
+        record
+            .algorithms()
+            .of(purpose)
+            .ok_or_else(|| KeyringError::no_algorithm(self.id(), purpose))
+    }
+
+    /// A new version of `algorithm`, with its key encrypted. Made before a write takes the record,
+    /// so that no KMS call runs while the record is held, and a conflict retries with the same key.
+    async fn new_version(&self, algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
+        NewVersion::generate::<P, B>(algorithm, &self.provider).await
+    }
+
+    /// `encrypted_dek` decrypted through the provider and encrypted again. What the KMS decrypts
+    /// is the serialised Tink key it encrypted, so it is encrypted again as it is.
+    async fn reencrypted(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KeyringResult<EncryptedDataEncryptionKey> {
+        let dek = self
+            .provider
+            .decrypt_data_encryption_key(encrypted_dek)
+            .await?;
+        Ok(self.provider.encrypt_data_encryption_key(&dek).await?)
     }
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
@@ -811,13 +858,9 @@ where
 }
 
 impl NewVersion {
-    /// Version `key_id` with a new key for `algorithm`, from the KMS generator when the provider
-    /// uses one and from the CSPRNG of `B` otherwise, encrypted by `provider`.
-    async fn generate<P, B>(
-        key_id: KeyId,
-        algorithm: KeyAlgorithm,
-        provider: &P,
-    ) -> KeyringResult<Self>
+    /// A version with a new key for `algorithm`, from the KMS generator when the provider uses
+    /// one and from the CSPRNG of `B` otherwise, encrypted by `provider`.
+    async fn generate<P, B>(algorithm: KeyAlgorithm, provider: &P) -> KeyringResult<Self>
     where
         P: KmsAeadEncryptionProvider + Sync,
         B: AeadBackend,
@@ -846,7 +889,6 @@ impl NewVersion {
             }
         };
         Ok(Self {
-            key_id,
             algorithm,
             encrypted_dek,
         })
@@ -912,9 +954,8 @@ impl KeyringPolicy {
         ));
         for purpose in Purpose::ALL {
             if let Some(algorithm) = algorithms.of(purpose) {
-                let key_id = edit.record().next_key_id(purpose)?;
-                let new = NewVersion::generate::<P, B>(key_id, algorithm, provider).await?;
-                edit.stage(new, now)?;
+                let new = NewVersion::generate::<P, B>(algorithm, provider).await?;
+                let key_id = edit.stage(new, now)?;
                 edit.promote(key_id, now)?;
             }
         }

@@ -41,8 +41,9 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
     Ok(EMAIL.aad(&EntityId::try_from(user)?))
 }
 
-/// A local KMS provider whose clones share counters of its calls, and whose encryptions fail while
-/// [`fail_encryptions`](ProviderCalls::fail_encryptions) is set.
+/// A local KMS provider whose clones share counters of its calls, whose encryptions fail while
+/// [`fail_encryptions`](ProviderCalls::fail_encryptions) is set, and wait while a test holds
+/// [`encryption_gate`](ProviderCalls::encryption_gate) for writing.
 #[derive(Clone)]
 pub(crate) struct TestProvider {
     kms: Arc<LocalKmsProvider<TestBackend>>,
@@ -55,6 +56,7 @@ pub(crate) struct ProviderCalls {
     pub(crate) decryptions: AtomicUsize,
     pub(crate) encryptions: AtomicUsize,
     pub(crate) fail_encryptions: AtomicBool,
+    pub(crate) encryption_gate: tokio::sync::RwLock<()>,
 }
 
 impl TestProvider {
@@ -97,6 +99,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
             ));
         }
         self.calls.encryptions.fetch_add(1, Ordering::SeqCst);
+        let _open = self.calls.encryption_gate.read().await;
         self.kms.encrypt_data_encryption_key(dek).await
     }
 

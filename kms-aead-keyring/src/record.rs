@@ -214,10 +214,11 @@ impl FromStr for KeyAlgorithm {
 /// The lifecycle state of a key version.
 ///
 /// ```text
-/// rotate ─▶ Pending ──promote──▶ Active ───▶ DecryptOnly ──retire──▶ Retired ──destroy──▶
-///              Destroyed │                   ▲                ▲                   │               
-///                  ▲ │       create ─────┘                └─────reinstate─────┘                   
-///              │ └─────────────────────────────────destroy─────────────────────────────────────┘
+///                        promote                          retire           destroy
+///   rotate ──▶ Pending ──────────▶ Active ──▶ DecryptOnly ──────▶ Retired ─────────▶ Destroyed
+///                 │                   ▲            ▲                 │                   ▲
+///                 │       create ─────┘            └────reinstate────┘                   │
+///                 └───────────────────────────────destroy────────────────────────────────┘
 /// ```
 ///
 /// A rotation stages a version as `Pending`, which decrypts and never encrypts, and `promote`
@@ -307,7 +308,7 @@ pub enum Transition {
     Destroy,
 }
 
-/// `rotate`, `mark_compromised`, `retire`, `reinstate`, `destroy`.
+/// `rotate`, `promote`, `mark_compromised`, `retire`, `reinstate`, `destroy`.
 impl Display for Transition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
@@ -492,10 +493,11 @@ impl RetainedDek {
     }
 }
 
-/// A version about to be created: its key id, the algorithm its key was made for, and the
-/// encrypted DEK.
+/// A version about to be created: the algorithm its key was made for, and the encrypted DEK. Its
+/// key id is the next one of its purpose in the record it is added to, so one key serves every
+/// attempt of a write.
+#[derive(Clone)]
 pub(crate) struct NewVersion {
-    pub(crate) key_id: KeyId,
     pub(crate) algorithm: KeyAlgorithm,
     pub(crate) encrypted_dek: EncryptedDataEncryptionKey,
 }
@@ -522,7 +524,8 @@ pub struct KeyringRecord {
 }
 
 impl KeyringRecord {
-    /// A record with no version yet: `rotate` adds the first one of each purpose.
+    /// A record with no version yet, to which the creation of a keyring stages and promotes the
+    /// first version of each purpose.
     pub(crate) fn new(id: KeyringId, kek: KekRef, algorithms: Algorithms, now: Timestamp) -> Self {
         Self {
             id,
@@ -657,12 +660,13 @@ impl RecordEdit {
         KeyringRecord::from_json(&self.0.id, &self.0.to_json()?)
     }
 
-    /// Adds `new` as the pending version of its purpose.
+    /// Adds `new` as the pending version of its purpose, under the purpose's next key id, and
+    /// returns that id.
     ///
     /// # Errors
     ///
     /// `InvalidTransition` with [`Transition::Rotate`], naming the pending version, when the
-    /// purpose has one already.
+    /// purpose has one already, and `RecordInvalid` with `KeyIdsExhausted` once its ids run out.
     pub(crate) fn stage(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
         if let Some(pending) = self.0.pending(new.algorithm.purpose()) {
             return Err(KeyringError::InvalidTransition(InvalidTransitionError {
@@ -672,9 +676,7 @@ impl RecordEdit {
                 transition: Transition::Rotate,
             }));
         }
-        let key_id = new.key_id;
-        self.push(new, VersionState::Pending, now);
-        Ok(key_id)
+        self.push(new, VersionState::Pending, now)
     }
 
     /// Makes the pending version `key_id` the active version of its purpose; the active version
@@ -742,8 +744,7 @@ impl RecordEdit {
         match replacement {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
-                let current = new.key_id;
-                self.push(new, VersionState::Active, now);
+                let current = self.push(new, VersionState::Active, now)?;
                 Ok(Some(Rotation {
                     purpose,
                     previous: Some(key_id),
@@ -811,24 +812,25 @@ impl RecordEdit {
         self.0.updated_at = now;
     }
 
-    /// Appends `new` in the state `state` makes of its encrypted DEK. A key id that does not
-    /// follow the record's, such as one computed on an older record, fails the record's checks in
-    /// [`finish`](Self::finish).
+    /// Appends `new`, under the next key id of its purpose, in the state `state` makes of its
+    /// encrypted DEK, and returns the key id.
     fn push(
         &mut self,
         new: NewVersion,
         state: fn(EncryptedDataEncryptionKey) -> VersionState,
         now: Timestamp,
-    ) {
+    ) -> KeyringResult<KeyId> {
+        let key_id = self.0.next_key_id(new.algorithm.purpose())?;
         let record = &mut self.0;
         record.versions.push(KeyVersion {
-            key_id: new.key_id,
+            key_id,
             algorithm: new.algorithm,
             created_at: now,
             state_changed_at: now,
             state: state(new.encrypted_dek),
         });
         record.updated_at = now;
+        Ok(key_id)
     }
 
     /// Moves `key_id` to the state `next` returns for its current one, or fails with

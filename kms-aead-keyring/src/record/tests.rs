@@ -513,13 +513,12 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
     Ok(())
 }
 
-/// The next version of `algorithm`'s purpose in `record`.
-fn new_version(record: &KeyringRecord, algorithm: KeyAlgorithm) -> KeyringResult<NewVersion> {
-    Ok(NewVersion {
-        key_id: record.next_key_id(algorithm.purpose())?,
+/// A new version of `algorithm`.
+fn new_version(algorithm: KeyAlgorithm) -> NewVersion {
+    NewVersion {
         algorithm,
         encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
-    })
+    }
 }
 
 #[test]
@@ -527,16 +526,16 @@ fn a_rotation_stages_the_next_key_id_of_its_purpose() -> TestResult {
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
     let now = Timestamp::now();
     let randomized = KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm);
-    let staged = edit.stage(new_version(edit.record(), randomized)?, now)?;
+    let staged = edit.stage(new_version(randomized), now)?;
     let deterministic = KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv);
-    let staged_deterministic = edit.stage(new_version(edit.record(), deterministic)?, now)?;
+    let staged_deterministic = edit.stage(new_version(deterministic), now)?;
 
     assert_eq!(
         (staged, staged_deterministic),
         (KeyId::new(3), KeyId::new(0x8000_0002))
     );
     assert!(matches!(
-        edit.stage(new_version(edit.record(), randomized)?, now),
+        edit.stage(new_version(randomized), now),
         Err(KeyringError::InvalidTransition(error))
             if error.key_id == staged
                 && error.from == KeyVersionState::Pending
@@ -594,10 +593,7 @@ fn a_promotion_moves_the_active_version_to_decrypt_only() -> TestResult {
 fn compromising_the_active_version_rotates_in_the_same_change() -> KeyringResult<()> {
     let now = Timestamp::now();
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
-    let replacement = new_version(
-        edit.record(),
-        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
-    )?;
+    let replacement = new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm));
     let rotation = edit.mark_compromised(
         KeyId::new(2),
         Compromise::new(now, Some("leaked".to_string())),
@@ -630,10 +626,7 @@ fn a_compromise_replacement_is_active_beside_a_pending_version() -> KeyringResul
         version(1, "active", false)?,
         version(2, "pending", false)?,
     ]))?);
-    let replacement = new_version(
-        edit.record(),
-        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
-    )?;
+    let replacement = new_version(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm));
     let rotation = edit.mark_compromised(
         KeyId::new(1),
         Compromise::new(now, None),

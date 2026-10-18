@@ -437,9 +437,14 @@ async fn open_with_the_wrong_kek_fails() -> TestResult {
 async fn cas_conflicts_are_retried_then_refused() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false).with_cas_retries(2)).await?;
     fixture.store.calls.conflicts.store(2, Ordering::SeqCst);
+    let encryptions = fixture.provider.calls.encryptions.load(Ordering::SeqCst);
     let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
     assert_eq!(staged, KeyId::new(2));
     assert_eq!(fixture.store.calls.loads.load(Ordering::SeqCst), 3);
+    assert_eq!(
+        fixture.provider.calls.encryptions.load(Ordering::SeqCst),
+        encryptions + 1
+    );
 
     fixture.store.calls.conflicts.store(3, Ordering::SeqCst);
     assert!(matches!(
@@ -626,6 +631,27 @@ async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> T
         (status.key_id, status.trust),
         (KeyId::new(2), KeyTrust::Trusted)
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reload_runs_while_a_write_waits_for_the_kms() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let calls = &fixture.provider.calls;
+    let held = calls.encryption_gate.write().await;
+    let encryptions = calls.encryptions.load(Ordering::SeqCst);
+
+    let (staged, reloaded) = tokio::join!(fixture.keyring.rotate(Purpose::Randomized), async {
+        while calls.encryptions.load(Ordering::SeqCst) == encryptions {
+            tokio::task::yield_now().await;
+        }
+        let reloaded = tokio::time::timeout(Duration::from_secs(1), fixture.keyring.reload()).await;
+        drop(held);
+        reloaded
+    });
+
+    assert!(matches!(reloaded, Ok(Ok(_))));
+    assert_eq!(staged?, KeyId::new(2));
     Ok(())
 }
 
