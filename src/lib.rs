@@ -51,8 +51,9 @@
 //!
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
-//! A build without a backend feature compiles, and [`LocalKmsProvider`](providers::LocalKmsProvider)
-//! is in it, but nothing that seals or wraps can be constructed: [`AeadBackend`] has no variant.
+//! A build without a backend feature compiles, and
+//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or wraps
+//! can be constructed: [`AeadBackend`] has no variant.
 //!
 //! # Store-less mode and the DEK cache
 //!
