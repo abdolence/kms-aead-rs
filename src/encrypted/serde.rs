@@ -5,6 +5,7 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::Encrypted;
+use crate::errors::KmsAeadError;
 use crate::formats::Format;
 
 /// As bytes, through `serialize_bytes`: a `bytes` value in Firestore, and an array of numbers in
@@ -19,17 +20,20 @@ impl<T, F> Serialize for Encrypted<T, F> {
 /// `TryFrom<Vec<u8>>` checks them: a malformed stored value fails here, before any decrypt.
 impl<'de, T, F: Format> Deserialize<'de> for Encrypted<T, F> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        deserializer.deserialize_bytes(EncryptedVisitor(PhantomData))
+        deserializer.deserialize_bytes(StoredBytesVisitor(PhantomData))
     }
 }
 
-struct EncryptedVisitor<T, F>(PhantomData<fn() -> (T, F)>);
+/// Reads a `V` from bytes, or from a sequence of byte numbers as serde_json writes them, through
+/// its `TryFrom<Vec<u8>>`: the stored values of the crate, [`Encrypted`] and
+/// [`Beacon`](crate::Beacon).
+pub(crate) struct StoredBytesVisitor<V>(pub(crate) PhantomData<fn() -> V>);
 
-impl<'de, T, F: Format> Visitor<'de> for EncryptedVisitor<T, F> {
-    type Value = Encrypted<T, F>;
+impl<'de, V: TryFrom<Vec<u8>, Error = KmsAeadError>> Visitor<'de> for StoredBytesVisitor<V> {
+    type Value = V;
 
     fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        formatter.write_str("the bytes of an encrypted value")
+        formatter.write_str("the bytes of a stored value")
     }
 
     fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
@@ -37,7 +41,7 @@ impl<'de, T, F: Format> Visitor<'de> for EncryptedVisitor<T, F> {
     }
 
     fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Self::Value, E> {
-        Encrypted::try_from(bytes).map_err(E::custom)
+        V::try_from(bytes).map_err(E::custom)
     }
 
     /// Grows the buffer as the bytes arrive: the sequence's length hint comes from the input, and

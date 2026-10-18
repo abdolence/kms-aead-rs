@@ -17,8 +17,8 @@ use crate::Ring;
 #[cfg(feature = "rustcrypto")]
 use crate::RustCrypto;
 use crate::{
-    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey,
-    KmsAeadResult,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconBits,
+    BeaconMac, CipherText, DataEncryptionKey, KmsAeadResult,
 };
 #[cfg(feature = "deterministic")]
 use crate::{DeterministicAlgorithm, DeterministicCipher, DeterministicCipherText};
@@ -446,6 +446,51 @@ fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
         let opened = cipher.decrypt_value(b"fixture-aad", &cipher_text, &key)?;
 
         assert_eq!(opened, SecretValue::from("fixture-secret"), "{}", B::NAME);
+        Ok(())
+    }
+
+    #[cfg(feature = "ring")]
+    check::<Ring>()?;
+    #[cfg(feature = "aws-lc-rs")]
+    check::<AwsLc>()?;
+    #[cfg(feature = "rustcrypto")]
+    check::<RustCrypto>()?;
+    Ok(())
+}
+
+/// Every backend computes the same beacons, which Python's `hmac` computes too: HMAC-SHA256 under
+/// the key 0 to 31 of `[bits: u16 BE][context length: u32 BE]user/email` and the plaintext,
+/// behind the beacon prefix of the key id 7, truncated to the bits.
+#[test]
+fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
+    fn check<B: AeadBackend>() -> KmsAeadResult<()> {
+        let key = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
+        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256);
+        for (bits, beacon) in [
+            (
+                256,
+                "010000000762ae3b56ae54b1d98b6ecd05e3da2aac35118110f25483a818cb77aa01bb1eff",
+            ),
+            (16, "010000000709c9"),
+            (12, "01000000073730"),
+        ] {
+            let bits = BeaconBits::new(bits).unwrap();
+            let computed = mac.compute(
+                7,
+                b"user/email",
+                bits,
+                &"alice@example.com".to_string(),
+                &key,
+            )?;
+            assert_eq!(
+                hex::encode(computed.value()),
+                beacon,
+                "{} bits on {}",
+                bits.get(),
+                B::NAME
+            );
+            assert_eq!(computed.key_id(), 7);
+        }
         Ok(())
     }
 

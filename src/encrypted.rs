@@ -12,7 +12,7 @@ use crate::KmsAeadResult;
 #[cfg(feature = "postgres")]
 mod postgres;
 #[cfg(feature = "serde")]
-mod serde;
+pub(crate) mod serde;
 #[cfg(feature = "sqlx")]
 mod sqlx;
 

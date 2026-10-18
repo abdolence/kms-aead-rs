@@ -13,9 +13,9 @@ use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::formats::Envelope;
 use crate::{
-    spans, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
-    DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
-    KmsAeadResult, Plaintext, ValueStruct,
+    spans, AeadAlgorithm, AeadBackend, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
+    CipherText, CipherTextWithEncryptedKey, DataEncryptionKey, Encrypted,
+    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, ValueStruct,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -435,6 +435,38 @@ where
             self.with_dek(dek, |key| self.cipher.decrypt_value(aad, cipher_text, key))
                 .await
         })
+        .await
+    }
+
+    /// The beacon of `value` under the HMAC-SHA256 beacon key `wrapped_key`, whose id is
+    /// `key_id`, for the field `context`, keeping `bits` bits: [`BeaconMac::compute`] with the key
+    /// unwrapped through the envelope's [`DekCache`]. A beacon key comes from
+    /// [`BeaconMac::generate_wrapped_key`] with this envelope's [`provider`](Self::provider).
+    ///
+    /// `context` names the field and never a row. Rotating a beacon key is the application's:
+    /// it keeps both keys while it re-indexes, writes beacons under the new one, and queries with
+    /// a beacon under each, until no stored beacon names the old key.
+    ///
+    /// # Errors
+    ///
+    /// The provider's errors, `INVALID_KEY_FORMAT` when the unwrapped key is not a serialized
+    /// Tink key, and the errors of [`BeaconMac::compute`].
+    pub async fn beacon<T: Plaintext>(
+        &self,
+        key_id: u32,
+        wrapped_key: &EncryptedDataEncryptionKey,
+        context: &[u8],
+        bits: BeaconBits,
+        value: &T,
+    ) -> KmsAeadResult<Beacon<T>> {
+        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256);
+        let span = spans::beacon(mac.algorithm(), B::NAME, &self.dek_cache);
+        spans::in_span(
+            span,
+            self.with_dek(wrapped_key, |key| {
+                mac.compute(key_id, context, bits, value, key)
+            }),
+        )
         .await
     }
 
@@ -1287,6 +1319,36 @@ mod tests {
                 .await?,
             SecretValue::from("alice@example.com")
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_beacon_unwraps_its_key_through_the_cache() -> KmsAeadResult<()> {
+        let encryption = CountingEnvelope::with_options(
+            CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
+            KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
+        )?;
+        let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
+        let (key, wrapped) = mac.generate_wrapped_key(encryption.provider()).await?;
+        let email = "alice@example.com".to_string();
+
+        let beacon = encryption
+            .beacon(7, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .await?;
+        let again = encryption
+            .beacon(7, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .await?;
+        let other_field = encryption
+            .beacon(7, &wrapped, b"user/name", BeaconBits::DEFAULT, &email)
+            .await?;
+
+        assert_eq!(beacon, again);
+        assert_eq!(
+            beacon,
+            mac.compute(7, b"user/email", BeaconBits::DEFAULT, &email, &key)?
+        );
+        assert_ne!(beacon, other_field);
+        assert_eq!(encryption.provider().unwraps(), 1);
         Ok(())
     }
 

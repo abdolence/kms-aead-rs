@@ -2,9 +2,10 @@ use aws_lc_rs::aead::{
     Aad, Algorithm, LessSafeKey, Nonce as AeadNonce, UnboundKey, AES_128_GCM, AES_256_GCM,
     AES_256_GCM_SIV, CHACHA20_POLY1305,
 };
+use aws_lc_rs::hmac;
 
 use super::private::Sealed;
-use super::{AeadBackend, AeadBackendOps, Failure, Nonce, Tag};
+use super::{AeadBackend, AeadBackendOps, Failure, HmacSha256, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 /// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` or the
@@ -76,6 +77,10 @@ impl AeadBackendOps for AwsLc {
             )
             .map(|plain_text| plain_text.len())
             .map_err(|_| Failure::Operation)
+    }
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<HmacSha256, Failure> {
+        let tag = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), message);
+        HmacSha256::try_from(tag.as_ref()).map_err(|_| Failure::Operation)
     }
 }
 

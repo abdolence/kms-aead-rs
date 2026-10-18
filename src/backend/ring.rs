@@ -2,10 +2,11 @@ use ::ring::aead::{
     Aad, Algorithm, LessSafeKey, Nonce as AeadNonce, UnboundKey, AES_128_GCM, AES_256_GCM,
     CHACHA20_POLY1305,
 };
+use ::ring::hmac;
 use ::ring::rand::{SecureRandom, SystemRandom};
 
 use super::private::Sealed;
-use super::{AeadBackend, AeadBackendOps, Failure, Nonce, Tag};
+use super::{AeadBackend, AeadBackendOps, Failure, HmacSha256, Nonce, Tag};
 use crate::AeadAlgorithm;
 
 /// The [ring](https://crates.io/crates/ring) library, with the `ring` feature: ChaCha20-Poly1305,
@@ -63,6 +64,10 @@ impl AeadBackendOps for Ring {
             )
             .map(|plain_text| plain_text.len())
             .map_err(|_| Failure::Operation)
+    }
+    fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<HmacSha256, Failure> {
+        let tag = hmac::sign(&hmac::Key::new(hmac::HMAC_SHA256, key), message);
+        HmacSha256::try_from(tag.as_ref()).map_err(|_| Failure::Operation)
     }
 }
 
