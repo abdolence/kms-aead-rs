@@ -484,11 +484,11 @@ where
     ) -> KeyringResult<Self> {
         let kek = provider.kek();
         if stored.record.kek() != kek {
-            return Err(KeyringError::KekMismatch(KekMismatchError {
+            return Err(KeyringError::KekMismatch(Box::new(KekMismatchError {
                 keyring: stored.record.id().clone(),
                 recorded: stored.record.kek().clone(),
                 provider: kek.clone(),
-            }));
+            })));
         }
         if !options.bind_keys {
             spans::keys_unbound(stored.record.id());

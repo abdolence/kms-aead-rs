@@ -44,8 +44,9 @@ pub enum KeyringError {
     RecordRegressed(RecordRegressedError),
     /// An administrative write lost every compare-and-swap to concurrent writers.
     RecordConflict(RecordConflictError),
-    /// The provider's KEK is not the one the record names.
-    KekMismatch(KekMismatchError),
+    /// The provider's KEK is not the one the record names. Boxed, since its two KEK names are
+    /// the largest payload of any variant.
+    KekMismatch(Box<KekMismatchError>),
     /// The keyring has no active version of the purpose, so nothing new is encrypted under it.
     NoActiveVersion(PurposeError),
     /// The record names no algorithm for the purpose, so no version of it can be created.
