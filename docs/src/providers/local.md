@@ -67,9 +67,10 @@ openssl rand -base64 32
 ```
 
 ```rust,no_run
-use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::backends::Ring;
 use std::num::NonZeroU32;
+
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 
 # fn example() -> kms_aead::KmsAeadResult<()> {
 let version = LocalKekVersion::from(NonZeroU32::MIN);
@@ -99,10 +100,11 @@ LoadCredentialEncrypted=kek-v1:/etc/credstore.encrypted/kek-v1
 systemd decrypts it into `$CREDENTIALS_DIRECTORY`, readable only by the service:
 
 ```rust,no_run
-use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::backends::AwsLc;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 
 # fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 let credentials = PathBuf::from(std::env::var("CREDENTIALS_DIRECTORY")?);
