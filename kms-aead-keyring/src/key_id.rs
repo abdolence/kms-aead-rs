@@ -1,10 +1,10 @@
-//! Key ids, the four bytes after the version byte of every keyring value, and the purposes
-//! they separate.
+//! Key ids, the four bytes after the version byte of every keyring value and beacon, and the
+//! purposes they separate.
 
 use std::fmt::{Display, Formatter};
 
 use kms_aead::formats::{Deterministic, Randomized, TinkOutputPrefix};
-use kms_aead::{Encrypted, ValueStruct};
+use kms_aead::{Beacon, Encrypted, ValueStruct};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{
@@ -12,7 +12,7 @@ use crate::errors::{
     ValueLayoutError,
 };
 
-/// What a key version is for. A data encryption key of one purpose never serves the other.
+/// What a key version is for. A key of one purpose never serves another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Purpose {
     /// Randomized AEAD: a random nonce per value, so equal plaintexts give different values.
@@ -20,22 +20,33 @@ pub enum Purpose {
     /// Deterministic AEAD with AES-SIV: under one version, equal plaintexts and AADs give equal
     /// values, which an equality query can match.
     Deterministic,
+    /// Beacons: a 32-byte HMAC key, under which equal plaintexts of one field give equal
+    /// [`Beacon`]s.
+    Beacon,
 }
 
-/// `randomized`, `deterministic`: the values of the `purpose` span field.
+impl Purpose {
+    /// Every purpose, for the record's checks per purpose.
+    pub(crate) const ALL: [Purpose; 3] =
+        [Purpose::Randomized, Purpose::Deterministic, Purpose::Beacon];
+}
+
+/// `randomized`, `deterministic`, `beacon`: the values of the `purpose` span field.
 impl Display for Purpose {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Purpose::Randomized => "randomized",
             Purpose::Deterministic => "deterministic",
+            Purpose::Beacon => "beacon",
         })
     }
 }
 
-/// The key id of a key version, which every keyring value carries big-endian after its version
-/// byte. Bit 31 is the purpose, set for deterministic versions; bits 0 to 30 are the ordinal,
-/// from 1, counted per purpose. Randomized versions are therefore `1, 2, 3, …` and
-/// deterministic ones `2147483649, 2147483650, …`.
+/// The key id of a key version, which every keyring value and beacon carries big-endian after
+/// its version byte. Bits 31 and 30 are the purpose: bit 31 set for deterministic versions, bit
+/// 30 for beacon versions, neither for randomized ones. Bits 0 to 29 are the ordinal, from 1,
+/// counted per purpose. Randomized versions are therefore `1, 2, 3, …`, deterministic ones
+/// `2147483649, 2147483650, …` and beacon ones `1073741825, 1073741826, …`.
 ///
 /// Ids are never reused: a destroyed version keeps its id.
 ///
@@ -46,28 +57,32 @@ pub struct KeyId(u32);
 
 impl KeyId {
     const DETERMINISTIC: u32 = 1 << 31;
-    const ORDINAL: u32 = Self::DETERMINISTIC - 1;
+    const BEACON: u32 = 1 << 30;
+    const ORDINAL: u32 = Self::BEACON - 1;
 
     /// The id of the first version of `purpose`.
     pub(crate) fn first(purpose: Purpose) -> Self {
         match purpose {
             Purpose::Randomized => Self(1),
             Purpose::Deterministic => Self(Self::DETERMINISTIC | 1),
+            Purpose::Beacon => Self(Self::BEACON | 1),
         }
     }
 
     /// The id of the next version of the same purpose, or `None` once the ordinals of the
-    /// purpose run out at 2^31 - 1.
+    /// purpose run out at 2^30 - 1.
     pub(crate) fn next(self) -> Option<Self> {
         (self.0 & Self::ORDINAL != Self::ORDINAL).then(|| Self(self.0 + 1))
     }
 
     /// The purpose of the version this id names.
     pub fn purpose(self) -> Purpose {
-        if self.0 & Self::DETERMINISTIC == 0 {
-            Purpose::Randomized
-        } else {
+        if self.0 & Self::DETERMINISTIC != 0 {
             Purpose::Deterministic
+        } else if self.0 & Self::BEACON != 0 {
+            Purpose::Beacon
+        } else {
+            Purpose::Randomized
         }
     }
 
@@ -133,15 +148,37 @@ impl<T> TryFrom<&Encrypted<T, Deterministic>> for KeyId {
     }
 }
 
+/// The version a beacon names in its prefix.
+///
+/// # Errors
+///
+/// As for a randomized value, with a key id that is not a beacon one.
+impl<T> TryFrom<&Beacon<T>> for KeyId {
+    type Error = KeyringError;
+
+    fn try_from(beacon: &Beacon<T>) -> KeyringResult<Self> {
+        let key_id = Self::try_from(beacon.key_id())
+            .map_err(|_| KeyringError::ValueLayout(ValueLayoutError::ReservedKeyId))?;
+        if key_id.purpose() != Purpose::Beacon {
+            return Err(KeyringError::KeyPurposeMismatch(KeyPurposeMismatchError {
+                expected: Purpose::Beacon,
+                key_id,
+            }));
+        }
+        Ok(key_id)
+    }
+}
+
 impl TryFrom<u32> for KeyId {
     type Error = KeyringError;
 
     /// # Errors
     ///
-    /// [`KeyringError::InvalidIdentifier`] with [`IdentifierRule::Reserved`] for 0 and
-    /// 2^31, whose ordinal is zero.
+    /// [`KeyringError::InvalidIdentifier`] with [`IdentifierRule::Reserved`] for an id whose
+    /// ordinal is zero, such as 0, 2^31 and 2^30, and for an id with both purpose bits set.
     fn try_from(id: u32) -> KeyringResult<Self> {
-        if id & Self::ORDINAL == 0 {
+        let both_purposes = Self::DETERMINISTIC | Self::BEACON;
+        if id & Self::ORDINAL == 0 || id & both_purposes == both_purposes {
             return Err(KeyringError::invalid_identifier(
                 Identifier::KeyId,
                 IdentifierRule::Reserved,
@@ -163,8 +200,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ordinal_zero_is_refused_for_both_purposes() {
-        for id in [0, 1 << 31] {
+    fn ordinal_zero_and_two_purpose_bits_are_refused() {
+        for id in [0, 1 << 31, 1 << 30, (3 << 30) | 1] {
             assert!(matches!(
                 KeyId::try_from(id),
                 Err(KeyringError::InvalidIdentifier(error))
@@ -174,9 +211,20 @@ mod tests {
     }
 
     #[test]
-    fn the_last_ordinal_has_no_next() -> KeyringResult<()> {
-        assert_eq!(KeyId::try_from(u32::MAX >> 1)?.next(), None);
-        assert_eq!(KeyId::try_from(u32::MAX)?.next(), None);
+    fn the_last_ordinal_of_each_purpose_has_no_next() -> KeyringResult<()> {
+        for last in [(1 << 30) - 1, (1 << 31) | ((1 << 30) - 1), u32::MAX >> 1] {
+            assert_eq!(KeyId::try_from(last)?.next(), None);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_purpose_bits_separate_the_purposes() -> KeyringResult<()> {
+        for purpose in Purpose::ALL {
+            let first = KeyId::first(purpose);
+            assert_eq!(first.purpose(), purpose);
+            assert_eq!(first.next().map(KeyId::purpose), Some(purpose));
+        }
         Ok(())
     }
 }

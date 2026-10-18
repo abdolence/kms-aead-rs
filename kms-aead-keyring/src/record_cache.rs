@@ -301,7 +301,7 @@ impl<S: KeyringStore> RecordCache<S> {
         for (_, dek) in withdrawn_deks(&held, &next) {
             self.dek_cache.invalidate(&self.kek, dek);
         }
-        for purpose in [Purpose::Randomized, Purpose::Deterministic] {
+        for purpose in Purpose::ALL {
             let before = held.active(purpose).map(KeyVersion::key_id);
             let after = next.active(purpose).map(KeyVersion::key_id);
             if before != after {

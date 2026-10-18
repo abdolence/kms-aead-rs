@@ -214,10 +214,12 @@ where
     fn deterministic_cipher(&self, version: &KeyVersion) -> KeyringResult<DeterministicCipher<B>> {
         match version.algorithm() {
             KeyAlgorithm::Deterministic(algorithm) => Ok(DeterministicCipher::new(algorithm)?),
-            KeyAlgorithm::Randomized(_) => Err(KeyringError::record_invalid(
-                self.id(),
-                RecordInvalidReason::PurposeMismatch(version.key_id()),
-            )),
+            KeyAlgorithm::Randomized(_) | KeyAlgorithm::Beacon(_) => {
+                Err(KeyringError::record_invalid(
+                    self.id(),
+                    RecordInvalidReason::PurposeMismatch(version.key_id()),
+                ))
+            }
         }
     }
 

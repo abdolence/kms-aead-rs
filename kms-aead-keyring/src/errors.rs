@@ -408,7 +408,7 @@ pub enum RecordInvalidReason {
     UnknownAlgorithm(Option<KeyId>),
     /// A state name this release does not know, on the version with this key id.
     UnknownState(KeyId),
-    /// A key id of 0 or 2^31, which name no version.
+    /// A key id whose ordinal is zero or that sets both purpose bits, which names no version.
     ReservedKeyId,
     /// Two versions with one key id.
     DuplicateKeyId(KeyId),
@@ -461,7 +461,7 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::UnknownState(key_id) => {
                 write!(f, "key version {key_id} names an unknown state")
             }
-            RecordInvalidReason::ReservedKeyId => f.write_str("a key id of 0 or 2147483648"),
+            RecordInvalidReason::ReservedKeyId => f.write_str("a reserved key id"),
             RecordInvalidReason::DuplicateKeyId(key_id) => {
                 write!(f, "two versions with key id {key_id}")
             }
@@ -655,7 +655,7 @@ pub struct InvalidTransitionError {
 pub enum ValueLayoutError {
     /// The value does not start with Tink's output prefix, `[0x01][key id: u32 BE]`.
     NoTinkPrefix,
-    /// The key id is 0 or 2^31, which name no version.
+    /// The key id's ordinal is zero, or it sets both purpose bits: it names no version.
     ReservedKeyId,
 }
 
@@ -663,7 +663,7 @@ impl Display for ValueLayoutError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ValueLayoutError::NoTinkPrefix => f.write_str("it does not start with Tink's prefix"),
-            ValueLayoutError::ReservedKeyId => f.write_str("its key id is 0 or 2147483648"),
+            ValueLayoutError::ReservedKeyId => f.write_str("its key id is reserved"),
         }
     }
 }

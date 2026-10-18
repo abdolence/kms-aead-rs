@@ -8,9 +8,9 @@ use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::formats::Randomized;
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
-    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KekProvider,
-    KmsAeadEncryptionProvider, Plaintext, ValueStruct,
+    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, CipherText,
+    CipherTextWithEncryptedKey, DataEncryptionKey, DeterministicAlgorithm, Encrypted,
+    EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, Plaintext, ValueStruct,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -28,6 +28,8 @@ use crate::{
     Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
     KeyringId, KeyringRecord, Purpose,
 };
+
+mod beacon;
 
 #[cfg(feature = "deterministic")]
 mod deterministic;
@@ -628,10 +630,12 @@ where
     fn cipher(&self, version: &KeyVersion) -> KeyringResult<AeadCipher<B>> {
         match version.algorithm() {
             KeyAlgorithm::Randomized(algorithm) => Ok(AeadCipher::new(algorithm)?),
-            KeyAlgorithm::Deterministic(_) => Err(KeyringError::record_invalid(
-                self.id(),
-                RecordInvalidReason::PurposeMismatch(version.key_id()),
-            )),
+            KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Beacon(_) => {
+                Err(KeyringError::record_invalid(
+                    self.id(),
+                    RecordInvalidReason::PurposeMismatch(version.key_id()),
+                ))
+            }
         }
     }
 
@@ -813,6 +817,12 @@ impl NewVersion {
             }
             #[cfg(not(feature = "deterministic"))]
             KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
+            KeyAlgorithm::Beacon(algorithm) => {
+                let (_, dek) = BeaconMac::<B>::new(algorithm)
+                    .generate_wrapped_key(provider)
+                    .await?;
+                dek
+            }
         };
         Ok(Self {
             key_id,
@@ -868,14 +878,18 @@ impl KeyringPolicy {
         B: AeadBackend,
     {
         let now = Timestamp::now();
-        let algorithms = Algorithms::new(self.randomized_algorithm, self.deterministic_algorithm);
+        let algorithms = Algorithms::new(
+            self.randomized_algorithm,
+            self.deterministic_algorithm,
+            self.beacon_algorithm,
+        );
         let mut edit = RecordEdit::from(KeyringRecord::new(
             id,
             provider.kek().clone(),
             algorithms,
             now,
         ));
-        for purpose in [Purpose::Randomized, Purpose::Deterministic] {
+        for purpose in Purpose::ALL {
             if let Some(algorithm) = algorithms.of(purpose) {
                 let key_id = edit.record().next_key_id(purpose)?;
                 let new = NewVersion::generate::<P, B>(key_id, algorithm, provider).await?;
@@ -909,6 +923,8 @@ pub struct KeyringPolicy {
     /// The algorithm of deterministic versions, or `None`, the default, for a keyring without
     /// them. Creating one needs the `deterministic` feature.
     pub deterministic_algorithm: Option<DeterministicAlgorithm>,
+    /// The algorithm of beacon versions, or `None`, the default, for a keyring without them.
+    pub beacon_algorithm: Option<BeaconAlgorithm>,
 }
 
 impl KeyringPolicy {

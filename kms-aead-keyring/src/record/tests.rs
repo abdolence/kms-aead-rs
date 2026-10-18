@@ -45,7 +45,11 @@ fn document(versions: Vec<Value>) -> Value {
         "schema": 1,
         "id": TENANT.as_str(),
         "kek": { "provider": "gcp", "key": "projects/p/locations/europe-west1/keyRings/app/cryptoKeys/keyring-kek" },
-        "algorithms": { "randomized": "aes-256-gcm", "deterministic": "aes-256-siv" },
+        "algorithms": {
+            "randomized": "aes-256-gcm",
+            "deterministic": "aes-256-siv",
+            "beacon": "hmac-sha256",
+        },
         "versions": versions,
         "created_at": CREATED,
         "updated_at": ROTATED,

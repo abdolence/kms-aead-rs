@@ -45,6 +45,7 @@ struct StoredKek {
 struct StoredAlgorithms {
     randomized: String,
     deterministic: Option<String>,
+    beacon: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -99,6 +100,10 @@ impl From<&KeyringRecord> for StoredRecord {
                     .algorithms
                     .deterministic
                     .map(|algorithm| algorithm.to_string()),
+                beacon: record
+                    .algorithms
+                    .beacon
+                    .map(|algorithm| algorithm.to_string()),
             },
             versions,
             created_at: record.created_at,
@@ -152,6 +157,11 @@ impl KeyringRecord {
                 Some(Ok(KeyAlgorithm::Deterministic(algorithm))) => Some(algorithm),
                 Some(_) => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
             },
+            beacon: match stored.algorithms.beacon.as_deref().map(str::parse) {
+                None => None,
+                Some(Ok(KeyAlgorithm::Beacon(algorithm))) => Some(algorithm),
+                Some(_) => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
+            },
         };
         let versions = stored
             .versions
@@ -180,6 +190,7 @@ impl KeyringRecord {
         let mut seen = HashSet::new();
         let mut last_randomized = None;
         let mut last_deterministic = None;
+        let mut last_beacon = None;
         for version in &self.versions {
             let key_id = version.key_id;
             if !seen.insert(key_id) {
@@ -191,13 +202,14 @@ impl KeyringRecord {
             let last = match key_id.purpose() {
                 Purpose::Randomized => &mut last_randomized,
                 Purpose::Deterministic => &mut last_deterministic,
+                Purpose::Beacon => &mut last_beacon,
             };
             if last.is_some_and(|last| last > key_id) {
                 return Err(RecordInvalidReason::OrdinalOrder(key_id));
             }
             *last = Some(key_id);
         }
-        for purpose in [Purpose::Randomized, Purpose::Deterministic] {
+        for purpose in Purpose::ALL {
             let in_state = |state| {
                 self.versions
                     .iter()

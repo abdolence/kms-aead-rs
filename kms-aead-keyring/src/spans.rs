@@ -63,6 +63,19 @@ pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<&st
     )
 }
 
+/// `Keyring beacon`, for `beacon` and `beacon_probes`; the key id, algorithm and DEK cache
+/// outcome are those of a single beacon.
+pub(crate) fn beacon(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring beacon",
+        { KEYRING } = keyring.as_str(),
+        { KEY_ID } = field::Empty,
+        { ALGORITHM } = field::Empty,
+        { DEK_CACHE } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    )
+}
+
 /// `Keyring decrypt`, for the value's key id.
 pub(crate) fn decrypt(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(

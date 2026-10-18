@@ -5,6 +5,8 @@
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 
+use kms_aead::BeaconBits;
+
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 
 /// The bytes an AAD part may hold: 1 to 255 bytes of UTF-8 without `/`, which separates the
@@ -180,22 +182,25 @@ pub enum Interop {
     BigQuery,
 }
 
-/// An encrypted field of one kind of entity: the source of the default AAD of its values, and
-/// of the interop requirement that AAD carries.
+/// An encrypted field of one kind of entity: the source of the default AAD of its values, of
+/// the interop requirement that AAD carries, and of the context and bits of its beacons.
 #[derive(Debug, Clone)]
 pub struct FieldSpec {
     kind: EntityKind,
     field: FieldName,
     interop: Interop,
+    beacon_bits: BeaconBits,
 }
 
 impl FieldSpec {
-    /// The field `field` of the entities of `kind`, with [`Interop::None`].
+    /// The field `field` of the entities of `kind`, with [`Interop::None`] and beacons of
+    /// [`BeaconBits::DEFAULT`].
     pub const fn new(kind: EntityKind, field: FieldName) -> Self {
         Self {
             kind,
             field,
             interop: Interop::None,
+            beacon_bits: BeaconBits::DEFAULT,
         }
     }
 
@@ -203,6 +208,24 @@ impl FieldSpec {
     pub const fn with_interop(mut self, interop: Interop) -> Self {
         self.interop = interop;
         self
+    }
+
+    /// The same field, with beacons that keep `bits` bits of their HMAC. A field's beacons and
+    /// the probes that look them up use the same bits.
+    pub const fn with_beacon_bits(mut self, bits: BeaconBits) -> Self {
+        self.beacon_bits = bits;
+        self
+    }
+
+    /// The bits the field's beacons keep.
+    pub(crate) fn beacon_bits(&self) -> BeaconBits {
+        self.beacon_bits
+    }
+
+    /// `<kind>/<field>` as UTF-8: the field, without an entity id, as its deterministic AAD and
+    /// its beacon context name it.
+    pub(crate) fn context(&self) -> Vec<u8> {
+        [&*self.kind.0, &*self.field.0].join("/").into_bytes()
     }
 
     /// The AAD of the field's value in the entity `id`: `<kind>/<id>/<field>` as UTF-8, for
@@ -220,7 +243,7 @@ impl FieldSpec {
     /// It holds no entity id, so that equal plaintexts in different rows give equal values.
     pub fn deterministic_aad(&self) -> DeterministicAad {
         DeterministicAad {
-            bytes: [&*self.kind.0, &*self.field.0].join("/").into_bytes(),
+            bytes: self.context(),
             interop: self.interop,
         }
     }

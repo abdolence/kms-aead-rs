@@ -249,7 +249,7 @@ type ExportedVersion<'r> = (KeyId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use kms_aead::{CipherText, CipherTextWithEncryptedKey};
+    use kms_aead::{BeaconAlgorithm, CipherText, CipherTextWithEncryptedKey};
     use secret_vault_value::SecretValue;
 
     use super::*;
@@ -566,6 +566,22 @@ mod tests {
         assert!(matches!(
             keyring.export_keyset(KeysetSelection::Single(staged)).await,
             Err(KeyringError::KeyVersionPending(KeyVersionError { key_id, .. })) if key_id == staged
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn beacon_keys_are_never_exported() -> TestResult {
+        let policy = KeyringPolicy::new().with_beacon_algorithm(BeaconAlgorithm::HmacSha256);
+        let (keyring, _) = keyring(policy).await?;
+
+        let exported = keyring
+            .export_keyset(KeysetSelection::Readable(Purpose::Beacon))
+            .await;
+
+        assert!(matches!(
+            exported,
+            Err(KeyringError::ExportAlgorithmUnsupported(_))
         ));
         Ok(())
     }

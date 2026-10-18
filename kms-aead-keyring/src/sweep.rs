@@ -60,8 +60,8 @@ use crate::{spans, KeyId, KeyTrust, KeyringId, Purpose};
 /// fields of a map, in PostgreSQL columns or a `jsonb` with an expression index, in BigQuery
 /// columns.
 ///
-/// Serialized as `{"format": "keyring", "randomized": 3, "deterministic": null}`. A key id is a
-/// number up to 2^32 - 1, so a SQL column holding one is a `BIGINT`.
+/// Serialized as `{"format": "keyring", "randomized": 3, "deterministic": null, "beacon": null}`.
+/// A key id is a number up to 2^32 - 1, so a SQL column holding one is a `BIGINT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SealMarker {
     /// The layout of the record's encrypted fields.
@@ -70,6 +70,8 @@ pub struct SealMarker {
     pub randomized: Option<KeyId>,
     /// The oldest deterministic key version among the record's fields, if any.
     pub deterministic: Option<KeyId>,
+    /// The oldest beacon key version among the record's beacons, if any.
+    pub beacon: Option<KeyId>,
 }
 
 /// The layout of a record's encrypted fields, serialized as `"envelope"` or `"keyring"`.
@@ -89,19 +91,22 @@ impl SealMarker {
         format: SealFormat::Envelope,
         randomized: None,
         deterministic: None,
+        beacon: None,
     };
 
-    /// The marker of a record whose fields are keyring values under `key_ids`.
+    /// The marker of a record whose fields are keyring values and beacons under `key_ids`.
     pub fn keyring(key_ids: impl IntoIterator<Item = KeyId>) -> Self {
         let mut marker = Self {
             format: SealFormat::Keyring,
             randomized: None,
             deterministic: None,
+            beacon: None,
         };
         for key_id in key_ids {
             let oldest = match key_id.purpose() {
                 Purpose::Randomized => &mut marker.randomized,
                 Purpose::Deterministic => &mut marker.deterministic,
+                Purpose::Beacon => &mut marker.beacon,
             };
             *oldest = Some(oldest.map_or(key_id, |oldest| oldest.min(key_id)));
         }
@@ -226,13 +231,22 @@ mod tests {
     use crate::{Compromise, KeyringError};
 
     const DETERMINISTIC: u32 = 1 << 31;
+    const BEACON: u32 = 1 << 30;
 
     #[test]
     fn marker_of_fields_takes_the_oldest_ordinal_per_purpose() -> TestResult {
-        let key_ids = [3, DETERMINISTIC | 5, 1, DETERMINISTIC | 2, 4]
-            .into_iter()
-            .map(KeyId::try_from)
-            .collect::<KeyringResult<Vec<_>>>()?;
+        let key_ids = [
+            3,
+            DETERMINISTIC | 5,
+            BEACON | 3,
+            1,
+            DETERMINISTIC | 2,
+            BEACON | 2,
+            4,
+        ]
+        .into_iter()
+        .map(KeyId::try_from)
+        .collect::<KeyringResult<Vec<_>>>()?;
 
         assert_eq!(
             SealMarker::keyring(key_ids),
@@ -240,6 +254,7 @@ mod tests {
                 format: SealFormat::Keyring,
                 randomized: Some(KeyId::try_from(1)?),
                 deterministic: Some(KeyId::try_from(DETERMINISTIC | 2)?),
+                beacon: Some(KeyId::try_from(BEACON | 2)?),
             }
         );
         assert_eq!(
@@ -248,6 +263,7 @@ mod tests {
                 format: SealFormat::Keyring,
                 randomized: Some(KeyId::try_from(7)?),
                 deterministic: None,
+                beacon: None,
             }
         );
         Ok(())
@@ -255,15 +271,23 @@ mod tests {
 
     #[test]
     fn a_marker_is_stored_as_plain_fields() -> TestResult {
-        let marker =
-            SealMarker::keyring([KeyId::try_from(2)?, KeyId::try_from(DETERMINISTIC | 1)?]);
-        let stored = json!({"format": "keyring", "randomized": 2, "deterministic": 2147483649u32});
+        let marker = SealMarker::keyring([
+            KeyId::try_from(2)?,
+            KeyId::try_from(DETERMINISTIC | 1)?,
+            KeyId::try_from(BEACON | 1)?,
+        ]);
+        let stored = json!({
+            "format": "keyring",
+            "randomized": 2,
+            "deterministic": 2147483649u32,
+            "beacon": 1073741825u32,
+        });
 
         assert_eq!(serde_json::to_value(marker)?, stored);
         assert_eq!(serde_json::from_value::<SealMarker>(stored)?, marker);
         assert_eq!(
             serde_json::to_value(SealMarker::ENVELOPE)?,
-            json!({"format": "envelope", "randomized": null, "deterministic": null})
+            json!({"format": "envelope", "randomized": null, "deterministic": null, "beacon": null})
         );
         assert!(serde_json::from_value::<SealMarker>(
             json!({"format": "keyring", "randomized": 0, "deterministic": null})

@@ -6,7 +6,9 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 use jiff::Timestamp;
-use kms_aead::{AeadAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef};
+use kms_aead::{
+    AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
+};
 
 use crate::errors::{
     Identifier, IdentifierRule, InvalidTransitionError, KeyringError, KeyringResult,
@@ -113,16 +115,19 @@ impl Display for KeyringId {
 pub struct Algorithms {
     randomized: AeadAlgorithm,
     deterministic: Option<DeterministicAlgorithm>,
+    beacon: Option<BeaconAlgorithm>,
 }
 
 impl Algorithms {
     pub(crate) fn new(
         randomized: AeadAlgorithm,
         deterministic: Option<DeterministicAlgorithm>,
+        beacon: Option<BeaconAlgorithm>,
     ) -> Self {
         Self {
             randomized,
             deterministic,
+            beacon,
         }
     }
 
@@ -136,15 +141,21 @@ impl Algorithms {
         self.deterministic
     }
 
+    /// The algorithm of new beacon versions, or `None` for a keyring without them.
+    pub fn beacon(&self) -> Option<BeaconAlgorithm> {
+        self.beacon
+    }
+
     pub(crate) fn of(&self, purpose: Purpose) -> Option<KeyAlgorithm> {
         match purpose {
             Purpose::Randomized => Some(KeyAlgorithm::Randomized(self.randomized)),
             Purpose::Deterministic => self.deterministic.map(KeyAlgorithm::Deterministic),
+            Purpose::Beacon => self.beacon.map(KeyAlgorithm::Beacon),
         }
     }
 }
 
-/// The algorithm of one key version, which also fixes its purpose. Both algorithm enums exist
+/// The algorithm of one key version, which also fixes its purpose. Every algorithm enum exists
 /// in every build, so a process without the `deterministic` feature keeps deterministic
 /// versions intact when it writes the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -153,6 +164,8 @@ pub enum KeyAlgorithm {
     Randomized(AeadAlgorithm),
     /// A deterministic AEAD algorithm.
     Deterministic(DeterministicAlgorithm),
+    /// A beacon algorithm.
+    Beacon(BeaconAlgorithm),
 }
 
 impl KeyAlgorithm {
@@ -161,6 +174,7 @@ impl KeyAlgorithm {
         match self {
             KeyAlgorithm::Randomized(_) => Purpose::Randomized,
             KeyAlgorithm::Deterministic(_) => Purpose::Deterministic,
+            KeyAlgorithm::Beacon(_) => Purpose::Beacon,
         }
     }
 }
@@ -172,11 +186,12 @@ impl Display for KeyAlgorithm {
         match self {
             KeyAlgorithm::Randomized(algorithm) => Display::fmt(algorithm, f),
             KeyAlgorithm::Deterministic(algorithm) => Display::fmt(algorithm, f),
+            KeyAlgorithm::Beacon(algorithm) => Display::fmt(algorithm, f),
         }
     }
 }
 
-/// Reads what `Display` writes, kms-aead's name of either kind of algorithm.
+/// Reads what `Display` writes, kms-aead's name of any kind of algorithm.
 ///
 /// # Errors
 ///
@@ -185,10 +200,13 @@ impl FromStr for KeyAlgorithm {
     type Err = KeyringError;
 
     fn from_str(name: &str) -> KeyringResult<Self> {
-        match name.parse() {
-            Ok(algorithm) => Ok(KeyAlgorithm::Randomized(algorithm)),
-            Err(_) => Ok(KeyAlgorithm::Deterministic(name.parse()?)),
+        if let Ok(algorithm) = name.parse() {
+            return Ok(KeyAlgorithm::Randomized(algorithm));
         }
+        if let Ok(algorithm) = name.parse() {
+            return Ok(KeyAlgorithm::Deterministic(algorithm));
+        }
+        Ok(KeyAlgorithm::Beacon(name.parse()?))
     }
 }
 
@@ -766,6 +784,7 @@ impl RecordEdit {
         match algorithm {
             KeyAlgorithm::Randomized(algorithm) => algorithms.randomized = algorithm,
             KeyAlgorithm::Deterministic(algorithm) => algorithms.deterministic = Some(algorithm),
+            KeyAlgorithm::Beacon(algorithm) => algorithms.beacon = Some(algorithm),
         }
         self.0.updated_at = now;
     }
