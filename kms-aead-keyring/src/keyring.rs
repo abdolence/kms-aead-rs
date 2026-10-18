@@ -724,8 +724,6 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::EnvelopeKeyOfKeyVersion`], before any KMS call, when the value carries the
-    /// wrapped key of a version of the keyring's record, in any purpose or state;
     /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
     /// value is not in Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement
     /// `algorithm`, the provider's error when the key does not unwrap, `INVALID_KEY_FORMAT` when
@@ -739,17 +737,6 @@ where
     ) -> KeyringResult<SecretValue> {
         spans::in_span(spans::decrypt_envelope(self.id()), async {
             let (cipher_text, dek) = value.separate()?;
-            let record = self.cache.current().await;
-            if let Some(version) = record
-                .versions()
-                .iter()
-                .find(|version| version.wrapped_dek() == Some(&dek))
-            {
-                return Err(KeyringError::EnvelopeKeyOfKeyVersion(KeyVersionError {
-                    keyring: self.id().clone(),
-                    key_id: version.key_id(),
-                }));
-            }
             let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
                 .dek_cache()

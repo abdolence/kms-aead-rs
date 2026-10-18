@@ -61,12 +61,6 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
-    /// An envelope value given to
-    /// [`decrypt_envelope_value`](crate::Keyring::decrypt_envelope_value) carries the wrapped key
-    /// of one of the keyring's versions. A version's key never opens through the envelope path,
-    /// which knows no key version, since that would get past the compromised-read policy: a
-    /// holder of a compromised version's leaked key could forge an envelope value around it.
-    EnvelopeKeyOfKeyVersion(KeyVersionError),
     /// A value whose key id belongs to the other purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
@@ -105,7 +99,6 @@ impl KeyringError {
             KeyringError::KeyVersionRetired(_) => "KEY_VERSION_RETIRED",
             KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
-            KeyringError::EnvelopeKeyOfKeyVersion(_) => "ENVELOPE_KEY_OF_KEY_VERSION",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::ValueLayout(_) => "VALUE_LAYOUT",
@@ -238,11 +231,6 @@ impl Display for KeyringError {
                 error.key_id,
                 error.keyring,
                 error.compromise.at()
-            ),
-            KeyringError::EnvelopeKeyOfKeyVersion(error) => write!(
-                f,
-                "The envelope value carries the wrapped key of the key version {} of the keyring {}",
-                error.key_id, error.keyring
             ),
             KeyringError::KeyPurposeMismatch(error) => write!(
                 f,
@@ -595,7 +583,7 @@ pub struct PurposeError {
 }
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
-/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::EnvelopeKeyOfKeyVersion`] and
+/// [`KeyringError::KeyVersionDestroyed`] and
 /// [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

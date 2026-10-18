@@ -431,49 +431,5 @@ mod tests {
             }
             Ok(())
         }
-
-        #[tokio::test]
-        async fn an_envelope_value_around_a_key_version_key_is_refused() -> TestResult {
-            use kms_aead::cache::DekCache;
-            use kms_aead::{AeadCipher, CipherTextWithEncryptedKey};
-
-            let provider = TestProvider::new("tenant-42-kek")?;
-            let keyring = keyring(provider.clone()).await?;
-            let compromised = KeyId::try_from(1)?;
-            keyring.mark_compromised(compromised, None).await?;
-            let record = keyring.record();
-            let wrapped = record
-                .version(compromised)
-                .and_then(crate::KeyVersion::wrapped_dek)
-                .ok_or("version 1 holds no key")?;
-            let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
-            let (forged, _) = DekCache::disabled()
-                .with_key(&provider, wrapped, |leaked| {
-                    cipher.encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE), leaked)
-                })
-                .await?;
-            let value = CipherTextWithEncryptedKey::join(&forged?, wrapped)?;
-
-            let result = keyring
-                .decrypt_envelope_value(ENVELOPE_AAD, &value, AeadAlgorithm::Aes256Gcm)
-                .await;
-            assert!(matches!(
-                &result,
-                Err(KeyringError::EnvelopeKeyOfKeyVersion(error)) if error.key_id == compromised
-            ));
-
-            let envelope = KmsAeadEnvelope::<TestProvider, TestBackend>::with_options(
-                provider,
-                KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
-            )?;
-            let genuine = envelope
-                .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE))
-                .await?;
-            let opened = keyring
-                .decrypt_envelope_value(ENVELOPE_AAD, &genuine, AeadAlgorithm::Aes256Gcm)
-                .await?;
-            assert_eq!(opened.as_sensitive_str(), ALICE);
-            Ok(())
-        }
     }
 }
