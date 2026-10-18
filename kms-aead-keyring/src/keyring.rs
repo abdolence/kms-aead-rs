@@ -867,44 +867,68 @@ pub struct Rotation {
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KeyringPolicy {
-    /// The algorithm of randomized versions: AES-256-GCM by default, the one Tink and BigQuery
-    /// read.
-    #[default = "AeadAlgorithm::Aes256Gcm"]
+    /// The algorithm of randomized versions:
+    /// [`DEFAULT_RANDOMIZED_ALGORITHM`](Self::DEFAULT_RANDOMIZED_ALGORITHM) by default.
+    #[default = "Self::DEFAULT_RANDOMIZED_ALGORITHM"]
     pub randomized_algorithm: AeadAlgorithm,
     /// The algorithm of deterministic versions, or `None`, the default, for a keyring without
     /// them. Creating one needs the `deterministic` feature.
     pub deterministic_algorithm: Option<DeterministicAlgorithm>,
 }
 
+impl KeyringPolicy {
+    /// The default [`randomized_algorithm`](Self::randomized_algorithm): AES-256-GCM, the one
+    /// Tink and BigQuery read.
+    pub const DEFAULT_RANDOMIZED_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
+}
+
 /// How a [`Keyring`] caches its record and writes it.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KeyringOptions {
-    /// How long the cached record serves without a store call: 5 minutes by default. The first
-    /// call after it revalidates with a conditional read, while the other calls keep using the
-    /// cached record. Where the store has no push, it bounds how late a process sees a change,
-    /// such as a compromised flag.
-    #[default = "Duration::from_secs(5 * 60)"]
+    /// How long the cached record serves without a store call:
+    /// [`DEFAULT_RECORD_TTL`](Self::DEFAULT_RECORD_TTL) by default. The first call after it
+    /// revalidates with a conditional read, while the other calls keep using the cached record.
+    /// Where the store has no push, it bounds how late a process sees a change, such as a
+    /// compromised flag.
+    #[default = "Self::DEFAULT_RECORD_TTL"]
     pub record_ttl: Duration,
     /// The least time between two store reads that an unknown key id or a change signal
-    /// triggers: 5 seconds by default. Values with random key ids, and a writer that can send
-    /// change signals, then cost at most one store read per interval.
-    #[default = "Duration::from_secs(5)"]
+    /// triggers: [`DEFAULT_RELOAD_MIN_INTERVAL`](Self::DEFAULT_RELOAD_MIN_INTERVAL) by default.
+    /// Values with random key ids, and a writer that can send change signals, then cost at most
+    /// one store read per interval.
+    #[default = "Self::DEFAULT_RELOAD_MIN_INTERVAL"]
     pub reload_min_interval: Duration,
-    /// Whether to follow the store's change signals, where it has them: `true` by default.
-    #[default = "true"]
+    /// Whether to follow the store's change signals, where it has them:
+    /// [`DEFAULT_WATCH`](Self::DEFAULT_WATCH) by default.
+    #[default = "Self::DEFAULT_WATCH"]
     pub watch: bool,
-    /// The conflicts an administrative write retries before it fails with `RecordConflict`: 5
-    /// by default.
-    #[default = "5"]
+    /// The conflicts an administrative write retries before it fails with `RecordConflict`:
+    /// [`DEFAULT_CAS_RETRIES`](Self::DEFAULT_CAS_RETRIES) by default.
+    #[default = "Self::DEFAULT_CAS_RETRIES"]
     pub cas_retries: u32,
-    /// What `decrypt` does with a value under a compromised version: `Block` by default.
-    #[default = "CompromisedReadPolicy::Block"]
+    /// What `decrypt` does with a value under a compromised version:
+    /// [`DEFAULT_COMPROMISED_READS`](Self::DEFAULT_COMPROMISED_READS) by default.
+    #[default = "Self::DEFAULT_COMPROMISED_READS"]
     pub compromised_reads: CompromisedReadPolicy,
     /// The cache of unwrapped keys, which may be shared with other keyrings and envelopes, or
-    /// `None`, the default, for `DekCache::new(DekCacheOptions::new())`: a TTL of 15 minutes
-    /// and 1024 keys.
+    /// `None`, the default, for `DekCache::new(DekCacheOptions::new())`, with kms-aead's
+    /// [`DekCacheOptions::DEFAULT_TTL`] and [`DekCacheOptions::DEFAULT_MAX_ENTRIES`].
     pub dek_cache: Option<DekCache>,
+}
+
+impl KeyringOptions {
+    /// The default [`record_ttl`](Self::record_ttl): 5 minutes.
+    pub const DEFAULT_RECORD_TTL: Duration = Duration::from_secs(5 * 60);
+    /// The default [`reload_min_interval`](Self::reload_min_interval): 5 seconds.
+    pub const DEFAULT_RELOAD_MIN_INTERVAL: Duration = Duration::from_secs(5);
+    /// The default [`watch`](Self::watch): `true`, following the store's change signals.
+    pub const DEFAULT_WATCH: bool = true;
+    /// The default [`cas_retries`](Self::cas_retries): 5.
+    pub const DEFAULT_CAS_RETRIES: u32 = 5;
+    /// The default [`compromised_reads`](Self::compromised_reads):
+    /// [`CompromisedReadPolicy::Block`].
+    pub const DEFAULT_COMPROMISED_READS: CompromisedReadPolicy = CompromisedReadPolicy::Block;
 }
 
 /// What [`Keyring::decrypt`] does with a value whose version is compromised. A leaked key

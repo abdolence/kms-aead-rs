@@ -55,11 +55,15 @@ struct WrittenDocument {
 }
 
 impl FirestoreKeyringStore {
-    /// The store in the collection `kms_keyrings` of `db`'s database.
+    /// The collection of [`new`](Self::new).
+    pub const DEFAULT_COLLECTION: &'static str = "kms_keyrings";
+
+    /// The store in the collection [`DEFAULT_COLLECTION`](Self::DEFAULT_COLLECTION) of `db`'s
+    /// database.
     pub fn new(db: FirestoreDb) -> Self {
         Self {
             db,
-            collection: "kms_keyrings".to_string(),
+            collection: Self::DEFAULT_COLLECTION.to_string(),
         }
     }
 

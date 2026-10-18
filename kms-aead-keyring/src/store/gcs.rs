@@ -87,8 +87,12 @@ pub struct GcsKeyringStore {
 }
 
 impl GcsKeyringStore {
-    /// A store of the records in `bucket` under the prefix `kms-keyrings/`, that sends its
-    /// requests with `client`.
+    /// The prefix of [`new`](Self::new): the object of a keyring is
+    /// `kms-keyrings/<keyring id>.json`.
+    pub const DEFAULT_PREFIX: &'static str = "kms-keyrings/";
+
+    /// A store of the records in `bucket` under [`DEFAULT_PREFIX`](Self::DEFAULT_PREFIX), that
+    /// sends its requests with `client`.
     ///
     /// `client` is the integration point with gcloud-sdk: the application builds it with the
     /// credentials, endpoint and TLS stack it chooses, and the store uses it as given. With the
@@ -125,7 +129,7 @@ impl GcsKeyringStore {
             client,
             bucket,
             routing,
-            prefix: "kms-keyrings/".to_string(),
+            prefix: Self::DEFAULT_PREFIX.to_string(),
         })
     }
 
