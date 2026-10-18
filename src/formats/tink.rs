@@ -159,8 +159,18 @@ impl TinkKeyId {
     }
 }
 
-/// The first byte of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`.
+/// The length of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`.
+pub(crate) const TINK_OUTPUT_PREFIX_LEN: usize = 5;
+
+/// The first byte of Tink's output prefix of type TINK.
 const TINK_OUTPUT_PREFIX_VERSION: u8 = 0x01;
+
+/// Tink's output prefix of type TINK of the key `key_id`, the first bytes of every value the key
+/// writes.
+pub(crate) fn tink_output_prefix(key_id: TinkKeyId) -> [u8; TINK_OUTPUT_PREFIX_LEN] {
+    let [a, b, c, d] = key_id.0.to_be_bytes();
+    [TINK_OUTPUT_PREFIX_VERSION, a, b, c, d]
+}
 
 /// The key id of Tink's output prefix of type TINK at the start of `value` and the bytes after
 /// it, or `None` when `value` does not start with one.
@@ -420,30 +430,6 @@ mod tests {
             DataEncryptionKey::from(SecretValue::new(key.to_vec()))
         );
         Ok(())
-    }
-
-    /// The empty plaintext sealed by tink-java's AES-SIV under a TINK-prefixed key 0x44556677,
-    /// `testCreateForEncryptConstructorForDecrypt_tinkPrefix` in
-    /// <https://github.com/tink-crypto/tink-java/blob/eadd2736490b50d80b3117a5586ffe0985c9207e/src/test/java/com/google/crypto/tink/subtle/AesSivTest.java#L396-L424>.
-    const TINK_PREFIXED_VALUE: [u8; 21] = [
-        0x01, 0x44, 0x55, 0x66, 0x77, 0x1b, 0xc4, 0x9c, 0x6a, 0x89, 0x4e, 0xf5, 0x74, 0x4a, 0x0a,
-        0x01, 0xd4, 0x66, 0x08, 0xcb, 0xcc,
-    ];
-
-    #[test]
-    fn the_output_prefix_is_tinks() {
-        let (key_id, body) = split_tink_output_prefix(&TINK_PREFIXED_VALUE).unwrap();
-
-        assert_eq!(key_id, TinkKeyId::new(0x4455_6677));
-        assert_eq!(body, &TINK_PREFIXED_VALUE[5..]);
-    }
-
-    #[test]
-    fn a_value_without_the_prefix_does_not_split() {
-        let values: [&[u8]; 4] = [&[], &[0x01, 0x44, 0x55, 0x66], &[0x00; 21], &[0x02; 21]];
-        for value in values {
-            assert_eq!(split_tink_output_prefix(value), None, "{value:02x?}");
-        }
     }
 
     // The keysets below were written by tinkey 1.14.0, from

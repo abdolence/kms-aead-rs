@@ -1,5 +1,5 @@
 use super::envelope::split_envelope;
-use super::split_tink_output_prefix;
+use super::{split_tink_output_prefix, TinkKeyId};
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DeterministicAlgorithm, KmsAeadResult};
 
@@ -23,9 +23,14 @@ mod private {
 
 /// The layout check of a [`Format`].
 pub(crate) trait FormatLayout {
-    /// Checks that `value` is framed as a value of the format. It reads the framing only: whether
-    /// the bytes are authentic is known when they are decrypted.
-    fn check(value: &[u8]) -> KmsAeadResult<()>;
+    /// The key id the framing of a value names, which the value keeps: [`TinkKeyId`] for the
+    /// TINK-prefixed formats, and none for an envelope, which carries its wrapped DEK instead.
+    type KeyId: Copy;
+
+    /// Checks that `value` is framed as a value of the format, and returns the key id the framing
+    /// names. It reads the framing only: whether the bytes are authentic is known when they are
+    /// decrypted.
+    fn check(value: &[u8]) -> KmsAeadResult<Self::KeyId>;
 }
 
 /// Tink's KMS envelope, the bytes of a
@@ -46,7 +51,7 @@ pub enum Envelope {}
 /// ```
 ///
 /// The layout of Tink's AEAD with a TINK-prefixed key, and of BigQuery's `AEAD.ENCRYPT` under
-/// AES-256-GCM. kms-aead-keyring writes it.
+/// AES-256-GCM. [`AeadCipher::encrypt_field`](crate::AeadCipher::encrypt_field) writes it.
 pub enum Randomized {}
 
 /// A deterministic value with Tink's output prefix of type TINK:
@@ -56,14 +61,16 @@ pub enum Randomized {}
 /// ```
 ///
 /// The layout of Tink's deterministic AEAD with a TINK-prefixed key, and of BigQuery's
-/// `DETERMINISTIC_ENCRYPT`. kms-aead-keyring writes it. The format exists in every build, without
-/// the `deterministic` feature too, so that such values pass through a process that does not
-/// decrypt them.
+/// `DETERMINISTIC_ENCRYPT`. `DeterministicCipher::encrypt_field` writes it. The format exists in
+/// every build, without the `deterministic` feature too, so that such values pass through a
+/// process that does not decrypt them.
 pub enum Deterministic {}
 
 impl Format for Envelope {}
 impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
+    type KeyId = ();
+
     fn check(value: &[u8]) -> KmsAeadResult<()> {
         let (_, cipher_text) = split_envelope(value)?;
         if cipher_text.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
@@ -83,7 +90,9 @@ impl FormatLayout for Envelope {
 impl Format for Randomized {}
 impl private::Sealed for Randomized {}
 impl FormatLayout for Randomized {
-    fn check(value: &[u8]) -> KmsAeadResult<()> {
+    type KeyId = TinkKeyId;
+
+    fn check(value: &[u8]) -> KmsAeadResult<TinkKeyId> {
         check_tink_prefixed(
             value,
             "a nonce and a tag",
@@ -95,7 +104,9 @@ impl FormatLayout for Randomized {
 impl Format for Deterministic {}
 impl private::Sealed for Deterministic {}
 impl FormatLayout for Deterministic {
-    fn check(value: &[u8]) -> KmsAeadResult<()> {
+    type KeyId = TinkKeyId;
+
+    fn check(value: &[u8]) -> KmsAeadResult<TinkKeyId> {
         check_tink_prefixed(
             value,
             "a synthetic IV",
@@ -104,11 +115,11 @@ impl FormatLayout for Deterministic {
     }
 }
 
-/// Checks that `value` is Tink's output prefix followed by at least `min_len` bytes, the
-/// `shortest` value of the format.
-fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<()> {
+/// The key id of `value`, checked to be Tink's output prefix followed by at least `min_len`
+/// bytes, the `shortest` value of the format.
+fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<TinkKeyId> {
     match split_tink_output_prefix(value) {
-        Some((_, after_prefix)) if after_prefix.len() >= min_len => Ok(()),
+        Some((key_id, after_prefix)) if after_prefix.len() >= min_len => Ok(key_id),
         _ => Err(KmsAeadEncryptionError::create(
             "INVALID_CIPHER_TEXT_FORMAT",
             &format!(

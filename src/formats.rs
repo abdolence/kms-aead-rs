@@ -32,7 +32,9 @@ mod field;
 pub use field::{Deterministic, Envelope, Format, Randomized};
 
 mod tink;
-pub(crate) use tink::{serialize_tink_key, split_tink_output_prefix};
+pub(crate) use tink::{
+    serialize_tink_key, split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN,
+};
 pub use tink::{TinkKeyId, TinkKeyType, TinkKeyset};
 
 pub(crate) mod local_kms;

@@ -7,7 +7,7 @@ use crate::formats::Format;
 
 /// As bytes, through `serialize_bytes`: a `bytes` value in Firestore, and an array of numbers in
 /// serde_json.
-impl<T, F> Serialize for Encrypted<T, F> {
+impl<T, F: Format> Serialize for Encrypted<T, F> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_bytes(&self.bytes)
     }

@@ -99,10 +99,12 @@ mod aes_siv_cipher {
 
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
+    use crate::formats::{tink_output_prefix, Deterministic, TinkKeyId, TINK_OUTPUT_PREFIX_LEN};
     use crate::types::checked_key_bytes;
     use crate::{
-        generate_random_bytes, spans, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey,
-        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
+        generate_random_bytes, spans, AeadBackend, DataEncryptionKey, Encrypted,
+        EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
+        Plaintext,
     };
 
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
@@ -213,11 +215,8 @@ mod aes_siv_cipher {
             plain_text: &SecretValue,
             key: &DataEncryptionKey,
         ) -> KmsAeadResult<DeterministicCipherText> {
-            let cipher_text = self
-                .siv(key)?
-                .encrypt([aad], plain_text.ref_sensitive_value())
-                .map_err(|_| KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data"))?;
-            Ok(DeterministicCipherText(cipher_text))
+            self.seal(&[], aad, plain_text.ref_sensitive_value(), key)
+                .map(DeterministicCipherText)
         }
 
         /// Opens a value [`encrypt_value`](Self::encrypt_value) sealed, into a buffer the
@@ -234,17 +233,105 @@ mod aes_siv_cipher {
             cipher_text: &DeterministicCipherText,
             key: &DataEncryptionKey,
         ) -> KmsAeadResult<SecretValue> {
+            self.open(aad, cipher_text.value(), 0, key)
+        }
+
+        /// `value`, as [`Plaintext`] encodes it, sealed under `key` in Tink's layout of a key
+        /// with the output prefix TINK and the id `key_id`:
+        ///
+        /// ```text
+        /// [0x01][key id: u32 BE][synthetic IV: 16][ciphertext]
+        /// ```
+        ///
+        /// Equal values and AADs under one key give equal bytes. Tink's deterministic AEAD opens
+        /// it with a keyset that holds `key` as the key `key_id`, and so does BigQuery's
+        /// `DETERMINISTIC_DECRYPT_STRING` or `DETERMINISTIC_DECRYPT_BYTES`.
+        ///
+        /// # Errors
+        ///
+        /// The errors of [`encrypt_value`](Self::encrypt_value), and `INVALID_PLAINTEXT` when
+        /// `value` does not encode.
+        pub fn encrypt_field<T: Plaintext>(
+            &self,
+            key_id: TinkKeyId,
+            aad: &[u8],
+            value: &T,
+            key: &DataEncryptionKey,
+        ) -> KmsAeadResult<Encrypted<T, Deterministic>> {
+            let plain_text = value.to_plaintext()?;
+            let sealed = self.seal(
+                &tink_output_prefix(key_id),
+                aad,
+                plain_text.ref_sensitive_value(),
+                key,
+            )?;
+            Encrypted::try_from(sealed)
+        }
+
+        /// Opens `value`, sealed under `key` and `aad` by [`encrypt_field`](Self::encrypt_field)
+        /// or by Tink, and decodes the plaintext as a `T`. The caller picks `key` by
+        /// [`value.key_id()`](Encrypted::key_id).
+        ///
+        /// # Errors
+        ///
+        /// The errors of [`decrypt_value`](Self::decrypt_value), and `INVALID_PLAINTEXT` when
+        /// the plaintext is not an encoding of `T`.
+        pub fn decrypt_field<T: Plaintext>(
+            &self,
+            aad: &[u8],
+            value: &Encrypted<T, Deterministic>,
+            key: &DataEncryptionKey,
+        ) -> KmsAeadResult<T> {
+            T::from_plaintext(self.open(aad, value.value(), TINK_OUTPUT_PREFIX_LEN, key)?)
+        }
+
+        /// `prefix`, then `plain_text` sealed under `key`: `[prefix][synthetic IV][ciphertext]`.
+        fn seal(
+            &self,
+            prefix: &[u8],
+            aad: &[u8],
+            plain_text: &[u8],
+            key: &DataEncryptionKey,
+        ) -> KmsAeadResult<Vec<u8>> {
             let mut siv = self.siv(key)?;
-            if cipher_text.value().len() < DeterministicAlgorithm::SYNTHETIC_IV_LEN {
-                return Err(KmsAeadEncryptionError::create(
-                    "INVALID_CIPHER_TEXT_FORMAT",
-                    &format!(
-                        "A cipher text of {} bytes is too short to hold a synthetic IV",
-                        cipher_text.value().len()
-                    ),
-                ));
-            }
-            siv.decrypt([aad], cipher_text.value())
+            let cipher_text_start = prefix.len() + DeterministicAlgorithm::SYNTHETIC_IV_LEN;
+            // Allocated once at its final size, since growing it would leave a copy of the
+            // plaintext in freed memory, and zeroized if sealing fails.
+            let mut buffer =
+                SecretValue::new(Vec::with_capacity(cipher_text_start + plain_text.len()));
+            let value = buffer.ref_sensitive_value_mut();
+            value.extend_from_slice(prefix);
+            value.extend_from_slice(&[0; DeterministicAlgorithm::SYNTHETIC_IV_LEN]);
+            value.extend_from_slice(plain_text);
+            let synthetic_iv = siv
+                .encrypt_inout_detached([aad], (&mut value[cipher_text_start..]).into())
+                .map_err(|_| KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data"))?;
+            value[prefix.len()..cipher_text_start].copy_from_slice(&synthetic_iv);
+            Ok(std::mem::take(value))
+        }
+
+        /// Opens the `[synthetic IV][ciphertext]` after the first `prefix_len` bytes of `value`.
+        fn open(
+            &self,
+            aad: &[u8],
+            value: &[u8],
+            prefix_len: usize,
+            key: &DataEncryptionKey,
+        ) -> KmsAeadResult<SecretValue> {
+            let mut siv = self.siv(key)?;
+            let sealed = value
+                .get(prefix_len..)
+                .filter(|sealed| sealed.len() >= DeterministicAlgorithm::SYNTHETIC_IV_LEN)
+                .ok_or_else(|| {
+                    KmsAeadEncryptionError::create(
+                        "INVALID_CIPHER_TEXT_FORMAT",
+                        &format!(
+                            "A cipher text of {} bytes is too short to hold a synthetic IV",
+                            value.len()
+                        ),
+                    )
+                })?;
+            siv.decrypt([aad], sealed)
                 .map(SecretValue::new)
                 .map_err(|_| KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data"))
         }
@@ -373,6 +460,34 @@ mod aes_siv_cipher {
                 assert_eq!(cipher_text.to_hex_string(), vector.cipher_text);
                 assert_eq!(cipher.decrypt_value(&aad, &cipher_text, &key)?, plain_text);
             }
+            Ok(())
+        }
+
+        /// The empty plaintext sealed by tink-java's AES-SIV under a TINK-prefixed key: key id
+        /// 0x44556677, the bytes 0 to 63 as the key, and one associated-data item, the byte
+        /// 0xFF. From `testCreateForEncryptConstructorForDecrypt_tinkPrefix` in
+        /// <https://github.com/tink-crypto/tink-java/blob/eadd2736490b50d80b3117a5586ffe0985c9207e/src/test/java/com/google/crypto/tink/subtle/AesSivTest.java#L396-L424>.
+        const TINK_VALUE: [u8; 21] = [
+            0x01, 0x44, 0x55, 0x66, 0x77, 0x1b, 0xc4, 0x9c, 0x6a, 0x89, 0x4e, 0xf5, 0x74, 0x4a,
+            0x0a, 0x01, 0xd4, 0x66, 0x08, 0xcb, 0xcc,
+        ];
+
+        #[test]
+        fn a_field_is_the_value_tink_seals() -> KmsAeadResult<()> {
+            let cipher =
+                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
+            let key = DataEncryptionKey::from(SecretValue::new((0u8..64).collect()));
+            let key_id = TinkKeyId::new(0x4455_6677);
+
+            let field = cipher.encrypt_field(key_id, &[0xFF], &Vec::<u8>::new(), &key)?;
+            let tink_value = Encrypted::<Vec<u8>, Deterministic>::try_from(TINK_VALUE.to_vec())?;
+
+            assert_eq!(*field.value(), TINK_VALUE);
+            assert_eq!(tink_value.key_id(), key_id);
+            assert_eq!(
+                cipher.decrypt_field(&[0xFF], &tink_value, &key)?,
+                Vec::<u8>::new()
+            );
             Ok(())
         }
 

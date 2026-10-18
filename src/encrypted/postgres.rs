@@ -8,7 +8,7 @@ use crate::formats::Format;
 
 /// As `BYTEA`, and as `BYTEA[]` through the slice and `Vec` impls of postgres-types, which an
 /// `= ANY($1)` takes.
-impl<T, F> ToSql for Encrypted<T, F> {
+impl<T, F: Format> ToSql for Encrypted<T, F> {
     fn to_sql(
         &self,
         ty: &Type,
