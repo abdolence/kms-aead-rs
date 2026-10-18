@@ -45,7 +45,7 @@ impl From<DeterministicAlgorithm> for TinkKeyType {
 }
 
 /// The field of `version` in every Tink key message.
-const VERSION_FIELD: u32 = 1;
+const KEY_MESSAGE_VERSION_FIELD: u32 = 1;
 
 impl TinkKeyType {
     /// The type URL of the message, `KeyData.type_url` in a keyset.
@@ -116,7 +116,7 @@ pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKe
     let mut key = None;
     while !rest.is_empty() {
         match encoding::decode_key(&mut rest).map_err(|_| invalid())? {
-            (VERSION_FIELD, WireType::Varint) => {
+            (KEY_MESSAGE_VERSION_FIELD, WireType::Varint) => {
                 if encoding::decode_varint(&mut rest).map_err(|_| invalid())? != 0 {
                     return Err(invalid());
                 }
@@ -203,11 +203,11 @@ impl TinkKeyset {
             key_data: Some(KeyData {
                 type_url: key_type.type_url().to_string(),
                 value: std::mem::take(serialize_tink_key(key_type, key).ref_sensitive_value_mut()),
-                key_material_type: SYMMETRIC,
+                key_material_type: KEY_MATERIAL_SYMMETRIC,
             }),
-            status: ENABLED,
+            status: KEY_STATUS_ENABLED,
             key_id: key_id.as_u32(),
-            output_prefix_type: TINK,
+            output_prefix_type: OUTPUT_PREFIX_TINK,
         });
         Ok(())
     }
@@ -262,11 +262,11 @@ impl Debug for TinkKeyset {
 }
 
 /// `google.crypto.tink.KeyStatusType.ENABLED`.
-const ENABLED: i32 = 1;
+const KEY_STATUS_ENABLED: i32 = 1;
 /// `google.crypto.tink.OutputPrefixType.TINK`.
-const TINK: i32 = 1;
+const OUTPUT_PREFIX_TINK: i32 = 1;
 /// `google.crypto.tink.KeyData.KeyMaterialType.SYMMETRIC`.
-const SYMMETRIC: i32 = 1;
+const KEY_MATERIAL_SYMMETRIC: i32 = 1;
 
 /// `google.crypto.tink.Keyset`, from Tink's `tink.proto`.
 #[derive(Message)]

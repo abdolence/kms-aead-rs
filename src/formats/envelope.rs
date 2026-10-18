@@ -64,7 +64,7 @@ impl TryFrom<&[u8]> for EnvelopeLayout {
 }
 
 /// The most bytes of an encrypted DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
-const MAX_ENCRYPTED_KEY_LEN: u32 = 4096;
+const MAX_ENCRYPTED_DEK_LEN: u32 = 4096;
 
 impl CipherTextWithEncryptedKey {
     /// `cipher_text` and the encrypted DEK that opens it in Tink's KMS envelope format, which
@@ -81,14 +81,14 @@ impl CipherTextWithEncryptedKey {
         let dek_bytes = encrypted_dek.value();
         let encrypted_dek_len = u32::try_from(dek_bytes.len())
             .ok()
-            .filter(|len| (1..=MAX_ENCRYPTED_KEY_LEN).contains(len))
+            .filter(|len| (1..=MAX_ENCRYPTED_DEK_LEN).contains(len))
             .ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "INVALID_CIPHER_TEXT_FORMAT",
                     &format!(
                         "An encrypted DEK of {} bytes is not 1 to {} bytes long, the sizes Tink reads",
                         dek_bytes.len(),
-                        MAX_ENCRYPTED_KEY_LEN
+                        MAX_ENCRYPTED_DEK_LEN
                     ),
                 )
             })?;
@@ -161,13 +161,13 @@ pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
                 "The encrypted DEK length of a cipher text of {} bytes is not 1 to {} bytes \
                  within it",
                 value.len(),
-                MAX_ENCRYPTED_KEY_LEN
+                MAX_ENCRYPTED_DEK_LEN
             ),
         )
     };
     let (encrypted_dek_len, rest) = value.split_first_chunk::<4>().ok_or_else(invalid)?;
     let encrypted_dek_len = u32::from_be_bytes(*encrypted_dek_len);
-    if encrypted_dek_len > MAX_ENCRYPTED_KEY_LEN {
+    if encrypted_dek_len > MAX_ENCRYPTED_DEK_LEN {
         return Err(invalid());
     }
     let encrypted_dek_len = usize::try_from(encrypted_dek_len).map_err(|_| invalid())?;

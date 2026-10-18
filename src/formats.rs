@@ -47,7 +47,7 @@ pub(crate) mod legacy;
 
 /// The first bytes of the encrypted key layout of 0.29, `[0xFF][0x01][k][key version]` before
 /// the encrypted DEK, which no built-in provider's own bytes start with.
-const LEGACY_ENCRYPTED_KEY_V1: [u8; 2] = [0xFF, 0x01];
+const LEGACY_ENCRYPTED_DEK_V1_PREFIX: [u8; 2] = [0xFF, 0x01];
 
 /// `key` encrypted by `provider` as Tink encrypts a data encryption key: the KMS ciphertext of the
 /// key serialised as a key of `key_type`, with no associated data. An Azure KEK encrypts the raw
@@ -128,7 +128,10 @@ where
 {
     if !matches!(provider.kek().provider(), KekProvider::Other(_)) {
         #[cfg(feature = "legacy-formats")]
-        if let Some(after_header) = encrypted.value().strip_prefix(&LEGACY_ENCRYPTED_KEY_V1) {
+        if let Some(after_header) = encrypted
+            .value()
+            .strip_prefix(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
+        {
             let encrypted =
                 legacy::encrypted_key_from_layout_v1(after_header, provider.kek().provider())?;
             let decrypted = provider.decrypt_data_encryption_key(&encrypted).await?;
@@ -137,7 +140,10 @@ where
             return Ok((key, Some(KmsAeadLegacyFormat::EncryptedKeyV1)));
         }
         #[cfg(not(feature = "legacy-formats"))]
-        if encrypted.value().starts_with(&LEGACY_ENCRYPTED_KEY_V1) {
+        if encrypted
+            .value()
+            .starts_with(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
+        {
             return Err(crate::errors::KmsAeadLegacyFormatError::create(
                 KmsAeadLegacyFormat::EncryptedKeyV1,
             ));
