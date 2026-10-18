@@ -1,5 +1,5 @@
 use super::envelope::split_envelope;
-use super::TinkOutputPrefix;
+use super::split_tink_output_prefix;
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DeterministicAlgorithm, KmsAeadResult};
 
@@ -107,7 +107,7 @@ impl FormatLayout for Deterministic {
 /// Checks that `value` is Tink's output prefix followed by at least `min_len` bytes, the
 /// `shortest` value of the format.
 fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<()> {
-    match TinkOutputPrefix::split(value) {
+    match split_tink_output_prefix(value) {
         Some((_, after_prefix)) if after_prefix.len() >= min_len => Ok(()),
         _ => Err(KmsAeadEncryptionError::create(
             "INVALID_CIPHER_TEXT_FORMAT",

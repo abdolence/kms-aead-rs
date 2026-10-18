@@ -25,13 +25,13 @@ impl<'de, T, F: Format> Deserialize<'de> for Encrypted<T, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::{Deterministic, Envelope, Randomized, TinkOutputPrefix};
+    use crate::formats::{Deterministic, Envelope, Randomized};
     use crate::ValueStruct;
 
     /// The shortest randomized value of the key `7`: a prefix, a nonce and a tag around an empty
     /// plaintext.
     fn randomized_bytes() -> Vec<u8> {
-        [&TinkOutputPrefix::new(7).to_bytes()[..], &[0xAB; 12 + 16]].concat()
+        [&[0x01, 0, 0, 0, 7][..], &[0xAB; 12 + 16]].concat()
     }
 
     #[test]
@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn bytes_outside_the_format_fail_to_deserialize() -> Result<(), serde_json::Error> {
         let randomized = serde_json::to_string(&randomized_bytes())?;
-        let prefix_only = serde_json::to_string(&TinkOutputPrefix::new(7).to_bytes())?;
+        let prefix_only = serde_json::to_string(&[0x01, 0, 0, 0, 7])?;
 
         let as_envelope = serde_json::from_str::<Encrypted<String, Envelope>>(&randomized);
         let as_deterministic =

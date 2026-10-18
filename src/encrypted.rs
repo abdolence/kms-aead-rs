@@ -115,14 +115,12 @@ impl<T> Hash for Encrypted<T, Deterministic> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::formats::{Envelope, Randomized, TinkOutputPrefix};
+    use crate::formats::{Envelope, Randomized};
     use crate::test_provider::renderings;
 
-    const KEY_ID: u32 = 0x4455_6677;
-
-    /// `[0x01][KEY_ID]` followed by `body`.
+    /// Tink's output prefix of the key 0x44556677 followed by `body`.
     fn prefixed(body: &[u8]) -> Vec<u8> {
-        [&TinkOutputPrefix::new(KEY_ID).to_bytes()[..], body].concat()
+        [&[0x01, 0x44, 0x55, 0x66, 0x77][..], body].concat()
     }
 
     /// A Tink envelope of a 7-byte wrapped DEK and `cipher_text`.

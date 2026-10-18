@@ -13,7 +13,7 @@ value Tink encrypts opens with `decrypt_value`.
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
 | Serialized DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
-| TINK-prefixed value | `TinkOutputPrefix` and the value, `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>` | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
+| TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
 | Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped DEK]` | kms-aead with `legacy-formats` | 0.29 |
@@ -139,8 +139,8 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 
 `kms_aead::formats` has the two Tink layouts of kms-aead-keyring:
 
-- `TinkOutputPrefix`: `[0x01][key id: u32 BE]`, Tink's output prefix of type TINK. It is the start
-  of every keyring value, and Tink and BigQuery pick the key of a keyset by it. It is not
+- `TinkKeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`. It is
+  the start of every keyring value, and Tink and BigQuery pick the key of a keyset by it. It is not
   authenticated;
 - `TinkKeyset`: a serialized `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
   keys, the bytes `tinkey` writes for the same keys. A keyring exports it wrapped by its Cloud KMS

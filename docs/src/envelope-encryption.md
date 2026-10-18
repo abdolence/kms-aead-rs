@@ -181,7 +181,7 @@ query computes the beacon of the value it looks for and matches it by equality. 
 the bytes to store, and the beacon key is a 32-byte key wrapped by the KMS, as a DEK is:
 
 ```rust
-use kms_aead::formats::Envelope;
+use kms_aead::formats::{Envelope, TinkKeyId};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
     Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KmsAeadEnvelope, KmsAeadResult,
@@ -191,6 +191,9 @@ use secret_vault_value::SecretValue;
 
 #[derive(Debug, PartialEq)]
 struct Email(String);
+
+// The application's id of its beacon key, which every beacon names
+const EMAIL_BEACON_KEY: TinkKeyId = TinkKeyId::new(1);
 
 impl Email {
     // The beacon of an email matches regardless of case
@@ -214,7 +217,7 @@ impl Plaintext for Email {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
-// Once, by an administrative job: the beacon key 1, stored beside the application's settings
+// Once, by an administrative job: the beacon key, stored beside the application's settings
 let (_, wrapped_key) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
     .generate_wrapped_key(envelope.provider())
     .await?;
@@ -224,12 +227,18 @@ let email = Email::new("Alice@Example.com");
 let encrypted: Encrypted<Email, Envelope> =
     envelope.encrypt_field(b"users/1042/email", &email).await?;
 let beacon: Beacon<Email> = envelope
-    .beacon(1, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &email)
+    .beacon(EMAIL_BEACON_KEY, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &email)
     .await?;
 
 // A lookup: the beacon of the value looked for, then a decrypt of each matching row
-let probe = envelope
-    .beacon(1, &wrapped_key, b"users/email", BeaconBits::DEFAULT, &Email::new("alice@example.com"))
+let probe: Beacon<Email> = envelope
+    .beacon(
+        EMAIL_BEACON_KEY,
+        &wrapped_key,
+        b"users/email",
+        BeaconBits::DEFAULT,
+        &Email::new("alice@example.com"),
+    )
     .await?;
 assert_eq!(probe, beacon);
 assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email);
@@ -246,8 +255,8 @@ assert_eq!(envelope.decrypt_field(b"users/1042/email", &encrypted).await?, email
 - normalisation is the application's: the beacon of `Alice@Example.com` and of
   `alice@example.com` differ unless the type normalises the value before it is sealed, as
   `Email::new` does;
-- the key id is the application's number for the beacon key, written into every beacon so that a
-  column can hold beacons of two keys at once;
+- the key id, a `TinkKeyId`, is the application's number for the beacon key, written into every
+  beacon so that a column can hold beacons of two keys at once;
 - the beacon key is unwrapped through the envelope's DEK cache, as a DEK is.
 
 A beacon column leaks which rows are likely to hold equal values, and with them how often each

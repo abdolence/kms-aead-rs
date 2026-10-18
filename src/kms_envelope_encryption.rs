@@ -11,7 +11,7 @@ use tracing::Span;
 
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
-use crate::formats::Envelope;
+use crate::formats::{Envelope, TinkKeyId};
 use crate::{
     spans, AeadAlgorithm, AeadBackend, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
     CipherText, CipherTextWithEncryptedKey, DataEncryptionKey, Encrypted,
@@ -456,7 +456,7 @@ where
     /// Tink key, and the errors of [`BeaconMac::compute`].
     pub async fn beacon<T: Plaintext>(
         &self,
-        key_id: u32,
+        key_id: TinkKeyId,
         wrapped_key: &EncryptedDataEncryptionKey,
         context: &[u8],
         bits: BeaconBits,
@@ -1329,22 +1329,23 @@ mod tests {
         )?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (key, wrapped) = mac.generate_wrapped_key(encryption.provider()).await?;
+        let key_id = TinkKeyId::new(7);
         let email = "alice@example.com".to_string();
 
         let beacon = encryption
-            .beacon(7, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .beacon(key_id, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
             .await?;
         let again = encryption
-            .beacon(7, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
+            .beacon(key_id, &wrapped, b"user/email", BeaconBits::DEFAULT, &email)
             .await?;
         let other_field = encryption
-            .beacon(7, &wrapped, b"user/name", BeaconBits::DEFAULT, &email)
+            .beacon(key_id, &wrapped, b"user/name", BeaconBits::DEFAULT, &email)
             .await?;
 
         assert_eq!(beacon, again);
         assert_eq!(
             beacon,
-            mac.compute(7, b"user/email", BeaconBits::DEFAULT, &email, &key)?
+            mac.compute(key_id, b"user/email", BeaconBits::DEFAULT, &email, &key)?
         );
         assert_ne!(beacon, other_field);
         assert_eq!(encryption.provider().unwraps(), 1);
