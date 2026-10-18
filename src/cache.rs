@@ -19,20 +19,26 @@ use crate::{
     KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
-const DEFAULT_MAX_ENTRIES: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is not zero");
-
 /// The settings of an enabled [`DekCache`].
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekCacheOptions {
-    /// How long an entry serves lookups after it was inserted, however often it is used: 15
-    /// minutes by default. Longer than zero.
-    #[default = "Duration::from_secs(15 * 60)"]
+    /// How long an entry serves lookups after it was inserted, however often it is used:
+    /// [`DEFAULT_TTL`](Self::DEFAULT_TTL) by default. Longer than zero.
+    #[default = "Self::DEFAULT_TTL"]
     pub ttl: Duration,
-    /// The entries the cache holds at most: 1024 by default. Past it, the oldest entry is
-    /// evicted.
-    #[default = "DEFAULT_MAX_ENTRIES"]
+    /// The entries the cache holds at most: [`DEFAULT_MAX_ENTRIES`](Self::DEFAULT_MAX_ENTRIES)
+    /// by default. Past it, the oldest entry is evicted.
+    #[default = "Self::DEFAULT_MAX_ENTRIES"]
     pub max_entries: NonZeroUsize,
+}
+
+impl DekCacheOptions {
+    /// The default [`ttl`](Self::ttl): 15 minutes.
+    pub const DEFAULT_TTL: Duration = Duration::from_secs(15 * 60);
+    /// The default [`max_entries`](Self::max_entries): 1024.
+    pub const DEFAULT_MAX_ENTRIES: NonZeroUsize =
+        NonZeroUsize::new(1024).expect("1024 is not zero");
 }
 
 /// Where the key of a [`DekCache::with_key`] call came from. Its `Display` is the value of the

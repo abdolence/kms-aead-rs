@@ -106,10 +106,16 @@ fn decrypt_request(
 #[non_exhaustive]
 pub struct GcpKmsProviderOptions {
     /// Generates data encryption keys with Cloud KMS `GenerateRandomBytes` at the HSM protection
-    /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key. Off by
-    /// default.
-    #[default = "false"]
+    /// level instead of the backend's CSPRNG, at the cost of one more KMS request per key.
+    /// [`DEFAULT_USE_KMS_RANDOM_GEN`](Self::DEFAULT_USE_KMS_RANDOM_GEN) by default.
+    #[default = "Self::DEFAULT_USE_KMS_RANDOM_GEN"]
     pub use_kms_random_gen: bool,
+}
+
+impl GcpKmsProviderOptions {
+    /// The default [`use_kms_random_gen`](Self::use_kms_random_gen): `false`, the backend's
+    /// CSPRNG generates the keys.
+    pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
 /// Wraps and unwraps data encryption keys with a Google Cloud KMS CryptoKey.

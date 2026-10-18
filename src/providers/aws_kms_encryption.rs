@@ -51,9 +51,16 @@ impl AwsKmsKeyRef {
 #[non_exhaustive]
 pub struct AwsKmsProviderOptions {
     /// Generates data encryption keys with AWS KMS `GenerateRandom` instead of the backend's
-    /// CSPRNG, at the cost of one more KMS request per key. Off by default.
-    #[default = "false"]
+    /// CSPRNG, at the cost of one more KMS request per key.
+    /// [`DEFAULT_USE_KMS_RANDOM_GEN`](Self::DEFAULT_USE_KMS_RANDOM_GEN) by default.
+    #[default = "Self::DEFAULT_USE_KMS_RANDOM_GEN"]
     pub use_kms_random_gen: bool,
+}
+
+impl AwsKmsProviderOptions {
+    /// The default [`use_kms_random_gen`](Self::use_kms_random_gen): `false`, the backend's
+    /// CSPRNG generates the keys.
+    pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
 /// Wraps and unwraps data encryption keys with an AWS KMS key.

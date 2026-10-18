@@ -17,8 +17,6 @@ use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
-const DEFAULT_MAX_USES: NonZeroU64 = NonZeroU64::new(1 << 24).expect("2^24 is not zero");
-
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
 /// allows 2^32 invocations of authenticated encryption under one key with random 96-bit IVs, the
 /// nonces every [`AeadAlgorithm`] draws.
@@ -54,10 +52,10 @@ pub struct KmsAeadEnvelope<P, B> {
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadEnvelopeOptions {
-    /// The AEAD algorithm, ChaCha20-Poly1305 by default. The envelope layout does not record
-    /// the algorithm, so the writer and the reader of a value must be configured with the same
-    /// one.
-    #[default = "AeadAlgorithm::ChaCha20Poly1305"]
+    /// The AEAD algorithm, [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default. The
+    /// envelope layout does not record the algorithm, so the writer and the reader of a value
+    /// must be configured with the same one.
+    #[default = "Self::DEFAULT_ALGORITHM"]
     pub algorithm: AeadAlgorithm,
     /// Store-less mode: `encrypt_value` reuses one DEK until the policy renews it. `None`, the
     /// default, encrypts every value under a new DEK.
@@ -67,6 +65,12 @@ pub struct KmsAeadEnvelopeOptions {
     /// mode, which needs an enabled cache. A cache passed here may be shared with other
     /// envelopes.
     pub dek_cache: Option<DekCache>,
+}
+
+impl KmsAeadEnvelopeOptions {
+    /// The default [`algorithm`](Self::algorithm): ChaCha20-Poly1305, the algorithm of every
+    /// release before 0.30, so that a configuration that never named one reads its values.
+    pub const DEFAULT_ALGORITHM: AeadAlgorithm = AeadAlgorithm::ChaCha20Poly1305;
 }
 
 /// When a store-less envelope renews the data encryption key (DEK) it encrypts under: at the
@@ -89,14 +93,22 @@ pub struct KmsAeadEnvelopeOptions {
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
-    /// The age at which the DEK is renewed: 24 hours by default, and longer than zero.
-    #[default = "Duration::from_secs(24 * 60 * 60)"]
+    /// The age at which the DEK is renewed: [`DEFAULT_MAX_AGE`](Self::DEFAULT_MAX_AGE) by
+    /// default, and longer than zero.
+    #[default = "Self::DEFAULT_MAX_AGE"]
     pub max_age: Duration,
-    /// The encryptions under one DEK: 2^24 by default, and 2^32 at most. Every
-    /// [`AeadAlgorithm`] seals each value with a random 96-bit nonce, which NIST SP 800-38D
-    /// allows for 2^32 values under one AES-GCM key.
-    #[default = "DEFAULT_MAX_USES"]
+    /// The encryptions under one DEK: [`DEFAULT_MAX_USES`](Self::DEFAULT_MAX_USES) by default,
+    /// and 2^32 at most. Every [`AeadAlgorithm`] seals each value with a random 96-bit nonce,
+    /// which NIST SP 800-38D allows for 2^32 values under one AES-GCM key.
+    #[default = "Self::DEFAULT_MAX_USES"]
     pub max_uses: NonZeroU64,
+}
+
+impl DekReusePolicy {
+    /// The default [`max_age`](Self::max_age): 24 hours.
+    pub const DEFAULT_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+    /// The default [`max_uses`](Self::max_uses): 2^24.
+    pub const DEFAULT_MAX_USES: NonZeroU64 = NonZeroU64::new(1 << 24).expect("2^24 is not zero");
 }
 
 /// The DEK a store-less envelope encrypts under, renewed by its policy. Its plaintext lives in

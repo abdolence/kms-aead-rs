@@ -36,12 +36,18 @@ pub struct AzureKmsProviderOptions {
     /// Wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys, `A256Kw` for
     /// Managed HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and
     /// unknown algorithms are rejected. Encrypted keys do not record the algorithm, so it stays
-    /// fixed for the life of the key.
-    #[default = "EncryptionAlgorithm::RsaOaep256"]
+    /// fixed for the life of the key. [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default.
+    #[default = "Self::DEFAULT_ALGORITHM"]
     pub algorithm: EncryptionAlgorithm,
 
     /// Client settings passed to the Azure SDK, such as a custom HTTP transport or retry policy.
     pub client_options: Option<KeyClientOptions>,
+}
+
+impl AzureKmsProviderOptions {
+    /// The default [`algorithm`](Self::algorithm): `RsaOaep256`, RSA-OAEP with SHA-256, for an
+    /// RSA key.
+    pub const DEFAULT_ALGORITHM: EncryptionAlgorithm = EncryptionAlgorithm::RsaOaep256;
 }
 
 /// Wraps and unwraps data encryption keys with an Azure Key Vault key.

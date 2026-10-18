@@ -83,9 +83,16 @@ pub struct HcVaultTransitKeyRef {
     /// The name of the Transit key.
     pub key_name: String,
 
-    /// Mount path of the Transit secrets engine.
-    #[default = "\"transit\".into()"]
+    /// Mount path of the Transit secrets engine, [`DEFAULT_MOUNT`](Self::DEFAULT_MOUNT) by
+    /// default.
+    #[default = "Self::DEFAULT_MOUNT.into()"]
     pub mount: String,
+}
+
+impl HcVaultTransitKeyRef {
+    /// The default [`mount`](Self::mount): `transit`, the path Vault mounts the engine at when
+    /// none is given.
+    pub const DEFAULT_MOUNT: &'static str = "transit";
 }
 
 /// Options for [`HcVaultTransitProvider`].
@@ -109,12 +116,15 @@ pub struct HcVaultTransitProviderOptions {
     pub ca_certificate: Option<PathBuf>,
 
     /// Time limit for one request, from opening the connection to receiving the last byte of the
-    /// response.
-    #[default = "Duration::from_secs(60)"]
+    /// response: [`DEFAULT_TIMEOUT`](Self::DEFAULT_TIMEOUT) by default.
+    #[default = "Self::DEFAULT_TIMEOUT"]
     pub timeout: Duration,
 }
 
 impl HcVaultTransitProviderOptions {
+    /// The default [`timeout`](Self::timeout): 60 seconds.
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
     /// Options from the variables the Vault CLI reads: `VAULT_ADDR` (required), `VAULT_TOKEN`,
     /// `VAULT_NAMESPACE` and `VAULT_CACERT`. An empty variable counts as unset.
     ///
