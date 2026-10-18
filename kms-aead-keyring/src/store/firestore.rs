@@ -1,37 +1,29 @@
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 use std::time::Duration;
 
 use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::Document;
-use ::firestore::gcloud_sdk::prost_types::Timestamp;
-use ::firestore::{
-    FirestoreDb, FirestoreListenEvent, FirestoreListenerTarget, FirestoreListenerTargetChangeType,
-    FirestoreMemListenStateStorage, FirestoreTimestamp, FirestoreWritePrecondition,
-};
+use ::firestore::{FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition};
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::{mpsc, watch};
 
-use super::{
-    KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
-};
+use self::listener::SharedListener;
+use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
 use crate::errors::{KeyringError, KeyringResult};
 use crate::{KeyringId, KeyringRecord};
 
-/// The one target of a watch's listener, which listens to nothing else.
-const WATCH_LISTENER_TARGET: FirestoreListenerTarget = FirestoreListenerTarget::new(1);
-/// How long a watch waits for Firestore's first state of the document. The keyring awaits the
-/// watch when it opens, and the load just before it reached Firestore.
-const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
+mod listener;
 
 /// A keyring store on Firestore. The record of a keyring is the document `<collection>/<id>`,
 /// whose fields are those of the record's JSON document, and its revision is the document's
-/// update time. `Clone` shares the client.
+/// update time. `Clone` shares the client and the listener.
 ///
 /// A create fails when the document exists, and an update carries the expected update time as
 /// its precondition, so that Firestore refuses a write over a record that changed since it was
-/// read. [`watch`](KeyringStore::watch) opens a listener on the document: each keyring holds one
-/// listen stream.
+/// read. [`watch`](KeyringStore::watch) listens to the document through the store's listener,
+/// whose single listen stream to Firestore carries every keyring that the store and its clones
+/// watch. [`shutdown`](KeyringStore::shutdown) closes it, and
+/// [`with_collection`](Self::with_collection) starts a listener of its own.
 ///
 /// [`FirestoreDb`] and [`FirestoreTimestamp`] are firestore-rs's own types, a deliberate
 /// integration point: the application builds the client, with the project, the database and the
@@ -45,6 +37,7 @@ const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct FirestoreKeyringStore {
     db: FirestoreDb,
     collection: String,
+    listener: Arc<SharedListener>,
 }
 
 /// The update time of a document Firestore returns from a write.
@@ -64,13 +57,18 @@ impl FirestoreKeyringStore {
         Self {
             db,
             collection: Self::DEFAULT_COLLECTION.to_string(),
+            listener: Arc::default(),
         }
     }
 
     /// The store in `collection` instead. Firestore's rules for a collection id apply, and
     /// Firestore checks them on the first call.
     pub fn with_collection(self, collection: String) -> Self {
-        Self { collection, ..self }
+        Self {
+            collection,
+            listener: Arc::default(),
+            ..self
+        }
     }
 
     async fn document(
@@ -160,107 +158,35 @@ impl KeyringStore for FirestoreKeyringStore {
         }
     }
 
-    /// A listener on the document, with one stream to Firestore per watch. It returns once
-    /// Firestore has sent the document's current state, so that every write after it signals,
-    /// and that state itself signals nothing. A signal is a change of the document's update
-    /// time, or its creation or deletion.
+    /// A watch on the document through the store's listener. It returns once Firestore has sent
+    /// the document's current state, so that every write after it signals, and that state itself
+    /// signals nothing. A signal is a change of the document's update time, or its creation or
+    /// deletion.
     ///
-    /// firestore-rs reconnects on its own and tells the store nothing of a lost stream, so the
-    /// watch sends [`Disconnected`](WatchEvent::Disconnected) only when Firestore removes the
-    /// target, and [`Reconnected`](WatchEvent::Reconnected) whenever a later stream opens.
+    /// firestore-rs reconnects a lost stream on its own and resumes every target, and the update
+    /// time covers what Firestore sends again, so a reconnect signals nothing. When Firestore
+    /// removes the keyring's target, the watch sends [`Disconnected`](super::WatchEvent::Disconnected),
+    /// then [`Reconnected`](super::WatchEvent::Reconnected) once firestore-rs adds the target back. A
+    /// removal that denies permission, finds no database or parent, or is unimplemented ends the
+    /// watch instead: firestore-rs does not add that target back.
+    ///
+    /// firestore-rs reports a listener that stopped on its own only when a target is added. The
+    /// first watch of a keyring the store does not watch yet then fails, every watch ends, and
+    /// every later watch fails with the error the listener stopped with.
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Store`] also when Firestore sends no state of the document within 10
-    /// seconds.
+    /// [`KeyringError::Store`] when firestore-rs refuses the target, when Firestore sends no state
+    /// of the document within 10 seconds or ends the target first, and once the listener has
+    /// stopped on its own.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
-        let failed = |error: FirestoreError| {
-            KeyringError::store_caused_by(
-                FirestoreKeyringStore::KIND,
-                StoreOperation::Watch,
-                Arc::new(error),
-            )
-        };
-        let mut listener = self
-            .db
-            .create_listener(FirestoreMemListenStateStorage::new())
-            .await
-            .map_err(failed)?;
-        self.db
-            .fluent()
-            .select()
-            .by_id_in(&self.collection)
-            .batch_listen([id.as_str()])
-            .add_target(WATCH_LISTENER_TARGET, &mut listener)
-            .map_err(failed)?;
-        let (sender, receiver) = mpsc::channel(16);
-        let signals = sender.clone();
-        // Set by the first `Current`: Firestore sends the document's state at the start of every
-        // stream, and only the first one is the state the watch starts from.
-        let (current, mut first_current) = watch::channel(false);
-        // The update time of the document as the listener last saw it, `None` while it is
-        // absent. Firestore repeats a document's state, a deletion of an absent one included,
-        // so a signal is sent only when this changes.
-        let seen = Mutex::new(None::<Timestamp>);
-        listener
-            .start(move |event| {
-                let live = *current.borrow();
-                let changed = |update_time: Option<Timestamp>| {
-                    let mut seen = seen.lock().unwrap_or_else(PoisonError::into_inner);
-                    let changed = *seen != update_time;
-                    *seen = update_time;
-                    (live && changed).then_some(WatchEvent::Changed)
-                };
-                let signal = match event {
-                    FirestoreListenEvent::DocumentChange(change) => {
-                        changed(change.document.and_then(|document| document.update_time))
-                    }
-                    FirestoreListenEvent::DocumentDelete(_)
-                    | FirestoreListenEvent::DocumentRemove(_) => changed(None),
-                    FirestoreListenEvent::TargetChange(change) => {
-                        match FirestoreListenerTargetChangeType::try_from(change.target_change_type)
-                        {
-                            Ok(FirestoreListenerTargetChangeType::Current) => {
-                                current.send_replace(true);
-                                None
-                            }
-                            Ok(FirestoreListenerTargetChangeType::Add) => {
-                                live.then_some(WatchEvent::Reconnected)
-                            }
-                            Ok(FirestoreListenerTargetChangeType::Remove) => {
-                                Some(WatchEvent::Disconnected)
-                            }
-                            _ => None,
-                        }
-                    }
-                    _ => None,
-                };
-                // A full channel already holds a signal, which covers this one; a closed one
-                // stops the listener below.
-                if let Some(signal) = signal {
-                    let _ = signals.try_send(signal);
-                }
-                std::future::ready(Ok(()))
-            })
-            .await
-            .map_err(failed)?;
-        let started =
-            tokio::time::timeout(WATCH_START_TIMEOUT, first_current.wait_for(|live| *live))
-                .await
-                .is_ok_and(|current| current.is_ok());
-        if !started {
-            let _ = listener.shutdown().await;
-            return Err(KeyringError::store(
-                Self::KIND,
-                StoreOperation::Watch,
-                "Firestore sent no state of the document",
-            ));
-        }
-        tokio::spawn(async move {
-            sender.closed().await;
-            let _ = listener.shutdown().await;
-        });
-        Ok(Some(KeyringWatch::new(receiver)))
+        self.listener.watch(&self.db, &self.collection, id).await
+    }
+
+    /// Stops the listener, which closes its stream, and joins it: every watch ends, and a later
+    /// watch is `None`. Loads and writes keep working.
+    async fn shutdown(&self, timeout: Option<Duration>) {
+        self.listener.shutdown(timeout).await;
     }
 }
 

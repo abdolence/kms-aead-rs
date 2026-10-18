@@ -303,6 +303,9 @@ async fn the_memory_store_conforms() -> TestResult {
 /// The Firestore store, on the emulator `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
 /// application default credentials when it is unset, in the project `PROJECT_ID`. The records
 /// go to the collection `kms_aead_rs_ci_keyrings`.
+///
+/// The emulator answers every resume token, a made-up one included, with a reset and the
+/// document's whole state, so a target resumed there behaves as one listened to from scratch.
 #[cfg(feature = "firestore")]
 mod firestore_store {
     use std::error::Error;
@@ -331,6 +334,196 @@ mod firestore_store {
         let misaligned =
             FirestoreTimestamp(jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 1)?);
         super::a_store_error_carries_no_record_bytes(store().await?, Some(&misaligned)).await
+    }
+
+    /// The watches of a store and its clones share one listener, so a watch per keyring starts
+    /// no task beyond those of the first.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn many_keyrings_share_one_listener() -> TestResult {
+        let store = store().await?;
+        let mut watches = vec![store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?];
+        let runtime = tokio::runtime::Handle::current().metrics();
+        let first = runtime.num_alive_tasks();
+        for _ in 0..20 {
+            let tenant = store.clone();
+            watches.push(
+                tenant
+                    .watch(&unique_keyring_id()?)
+                    .await?
+                    .ok_or("the store has no push")?,
+            );
+        }
+        let started = runtime.num_alive_tasks().saturating_sub(first);
+        assert!(started < 20, "20 more watches started {started} tasks");
+        store.shutdown(None).await;
+        Ok(())
+    }
+
+    /// A keyring's target is added to the open stream, and the targets already on it keep
+    /// listening meanwhile.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn a_write_while_another_keyring_is_added_is_signalled() -> TestResult {
+        let store = store().await?;
+        let id = unique_keyring_id()?;
+        let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
+        let other = store.clone();
+        let other_id = unique_keyring_id()?;
+        let adding = tokio::spawn(async move { other.watch(&other_id).await });
+        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
+            Some(WatchEvent::Changed)
+        );
+        adding.await??.ok_or("the store has no push")?;
+        store.shutdown(None).await;
+        Ok(())
+    }
+
+    /// Five watched keyrings are written every 100 ms while fresh watches are opened and dropped,
+    /// which adds and removes targets on the stream under the writes.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn watches_added_and_dropped_under_writes_keep_signalling() -> TestResult {
+        let store = store().await?;
+        let ids = (0..5)
+            .map(|_| unique_keyring_id())
+            .collect::<KeyringResult<Vec<_>>>()?;
+        let mut watches = Vec::new();
+        for id in &ids {
+            watches.push(store.watch(id).await?.ok_or("the store has no push")?);
+        }
+        let mut unwritten = store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?;
+
+        let churned = std::cell::Cell::new(false);
+        let churn = async {
+            for _ in 0..20 {
+                drop(store.watch(&unique_keyring_id()?).await?);
+            }
+            churned.set(true);
+            Ok::<_, Box<dyn Error>>(())
+        };
+        let writes = async {
+            let mut revisions = Vec::new();
+            for id in &ids {
+                revisions.push(written(
+                    store.compare_and_swap(&record(id, 0)?, None).await?,
+                )?);
+            }
+            let mut rotations = 0;
+            while !churned.get() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                rotations += 1;
+                for (id, revision) in ids.iter().zip(&mut revisions) {
+                    *revision = written(
+                        store
+                            .compare_and_swap(&record(id, rotations)?, Some(revision))
+                            .await?,
+                    )?;
+                }
+            }
+            Ok::<_, Box<dyn Error>>((rotations, revisions))
+        };
+        let ((), (rotations, revisions)) = tokio::try_join!(churn, writes)?;
+
+        for watch in &mut watches {
+            while tokio::time::timeout(Duration::from_millis(500), watch.next())
+                .await
+                .is_ok()
+            {}
+        }
+        for ((id, revision), watch) in ids.iter().zip(&revisions).zip(&mut watches) {
+            written(
+                store
+                    .compare_and_swap(&record(id, rotations + 1)?, Some(revision))
+                    .await?,
+            )?;
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
+                Some(WatchEvent::Changed)
+            );
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), unwritten.next())
+                .await
+                .is_err(),
+            "a keyring nobody wrote was signalled"
+        );
+        store.shutdown(None).await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn a_second_watch_of_a_keyring_shares_its_target() -> TestResult {
+        let store = store().await?;
+        let id = unique_keyring_id()?;
+        let mut first = store.watch(&id).await?.ok_or("the store has no push")?;
+        let mut second = store.watch(&id).await?.ok_or("the store has no push")?;
+        let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        for watch in [&mut first, &mut second] {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
+                Some(WatchEvent::Changed)
+            );
+        }
+        drop(first);
+        written(
+            store
+                .compare_and_swap(&record(&id, 1)?, Some(&created))
+                .await?,
+        )?;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), second.next()).await?,
+            Some(WatchEvent::Changed)
+        );
+        store.shutdown(None).await;
+        Ok(())
+    }
+
+    /// Shutdown ends every watch and starts no other, and loads keep working.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn shutdown_ends_every_watch() -> TestResult {
+        let store = store().await?;
+        let mut watches = [
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
+        store.shutdown(None).await;
+        for watch in &mut watches {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
+                None
+            );
+        }
+        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+        assert!(store.load(&unique_keyring_id()?).await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn shutdown_twice_is_a_no_op() -> TestResult {
+        let store = store().await?;
+        let _watch = store.watch(&unique_keyring_id()?).await?;
+        store.shutdown(None).await;
+        tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
+        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+        Ok(())
     }
 }
 
