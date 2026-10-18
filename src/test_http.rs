@@ -7,6 +7,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 /// A request as the server received it.
+#[cfg_attr(
+    not(feature = "hashicorp-vault-transit-kms-encryption-base"),
+    allow(dead_code, reason = "only the Vault tests read the requests")
+)]
 pub(crate) struct ReceivedRequest {
     /// The request line and the headers.
     pub(crate) head: String,
