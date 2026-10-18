@@ -22,12 +22,10 @@
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
 //!
-//! A wrap and an unwrap take an optional [`DekBinding`], which the KMS authenticates with the
-//! wrapped key: GCP as additional authenticated data, AWS as an encryption context, Vault Transit
-//! as associated data and the local KMS in its AAD. The Azure provider has no such input and
-//! refuses a binding. [`KmsAeadEnvelope`] wraps and unwraps unbound, so a DEK wrapped with a
-//! binding fails at the KMS through its `*_with_encrypted_dek` calls. A bound DEK goes to the
-//! provider and to [`cache::DekCache`] directly.
+//! A wrapped DEK carries no context that the KMS authenticates: the KMS unwraps it for any
+//! principal allowed to decrypt with the KEK. Whoever can write where wrapped DEKs are stored can
+//! copy or relabel one, so write access to the stored keys is kept apart from decrypt rights, and
+//! each isolation boundary, such as a tenant or an environment, has a KEK of its own.
 //!
 //! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
 //! wrapped under an alias that later moves to another key fails to unwrap with

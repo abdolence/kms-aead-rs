@@ -11,8 +11,7 @@ Without a cache, every read of a value unwraps its DEK with one KMS call, and ev
 ## DEK cache
 
 `kms_aead::cache::DekCache` holds plaintext DEKs a provider unwrapped, keyed by the provider's
-KEK, the `DekBinding` of the unwrap and the wrapped DEK's bytes. A per-call envelope has no cache
-unless the options give it one:
+KEK and the wrapped DEK's bytes. A per-call envelope has no cache unless the options give it one:
 
 ```rust
 use kms_aead::cache::{DekCache, DekCacheOptions};
@@ -41,8 +40,8 @@ let envelope = KmsAeadEnvelope::with_options(
 
 `decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap through
 the envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
-several KEKs: an entry serves only a lookup that names the same KEK and binding, and a key
-unwrapped under one KEK never reaches a caller with the provider of another.
+several KEKs: an entry serves only a lookup that names the same KEK, and a key unwrapped under
+one KEK never reaches a caller with the provider of another.
 
 The cache:
 
@@ -88,10 +87,10 @@ use kms_aead::KmsAeadEncryptionProvider;
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
-// One wrapped DEK, unbound as the envelope wraps it
+// One wrapped DEK
 envelope
     .dek_cache()
-    .invalidate(envelope.provider().kek(), &encrypted_dek, None);
+    .invalidate(envelope.provider().kek(), &encrypted_dek);
 
 // Every DEK
 envelope.dek_cache().clear();

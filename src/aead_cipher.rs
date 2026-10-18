@@ -4,7 +4,7 @@ use secret_vault_value::SecretValue;
 use crate::backend::{AeadBackendOps, Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::{
-    checked_key_material, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey, DekBinding,
+    checked_key_material, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey,
     EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
@@ -56,9 +56,9 @@ impl AeadCipher {
             .map(DataEncryptionKey::from)
     }
 
-    /// A new key and the same key wrapped by `provider` with `binding`, to store. The key comes
-    /// from the KMS generator when the provider is configured to use one, and from the backend's
-    /// CSPRNG otherwise.
+    /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
+    /// generator when the provider is configured to use one, and from the backend's CSPRNG
+    /// otherwise.
     ///
     /// # Errors
     ///
@@ -67,7 +67,6 @@ impl AeadCipher {
     pub async fn generate_wrapped_key<P>(
         &self,
         provider: &P,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
@@ -76,7 +75,7 @@ impl AeadCipher {
             Some(material) => DataEncryptionKey::from(material),
             None => self.generate_key()?,
         };
-        let encrypted_key = provider.encrypt_data_encryption_key(&key, binding).await?;
+        let encrypted_key = provider.encrypt_data_encryption_key(&key).await?;
         Ok((key, encrypted_key))
     }
 

@@ -102,10 +102,10 @@ async fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
     )?;
 
     provider
-        .decrypt_data_encryption_key(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()?)),
-            None,
-        )
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+            b"wrapped".to_vec(),
+            Some(key_version()?),
+        ))
         .await?;
 
     let urls = http_client.urls.lock().unwrap();
@@ -120,42 +120,6 @@ async fn unwrap_names_the_configured_kek() -> KmsAeadResult<()> {
         *provider.kek(),
         KekRef::new(KekProvider::Azure, format!("{VAULT_URL}/keys/{KEY_NAME}"))
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn a_binding_is_refused_before_any_request() -> KmsAeadResult<()> {
-    let http_client = Arc::new(CannedHttpClient::new(
-        StatusCode::Ok,
-        format!(r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "AAAA"}}"#),
-    ));
-    let provider = AzureKmsProvider::with_options(
-        &AzureKmsKeyRef::new(VAULT_URL.into(), KEY_NAME.into()),
-        options_with(http_client.clone()),
-        Arc::new(FixedTokenCredential),
-    )?;
-    let binding = DekBinding::try_from("tenant-42/3".to_string())?;
-
-    let wrapped = provider
-        .encrypt_data_encryption_key(&data_encryption_key(), Some(&binding))
-        .await;
-    let unwrapped = provider
-        .decrypt_data_encryption_key(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()?)),
-            Some(&binding),
-        )
-        .await;
-
-    assert!(
-        matches!(&wrapped, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "AZURE_BINDING_UNSUPPORTED"),
-        "{wrapped:?}"
-    );
-    assert!(
-        matches!(&unwrapped, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "AZURE_BINDING_UNSUPPORTED"),
-        "{:?}",
-        unwrapped.err()
-    );
-    assert!(http_client.urls.lock().unwrap().is_empty());
     Ok(())
 }
 
@@ -175,7 +139,7 @@ async fn provider_errors_carry_no_key_material() -> KmsAeadResult<()> {
 
     for (status, body) in responses {
         let err = provider_over(status, body)?
-            .decrypt_data_encryption_key(&encrypted_key, None)
+            .decrypt_data_encryption_key(&encrypted_key)
             .await
             .unwrap_err();
 
@@ -195,7 +159,7 @@ async fn wrap_with_the_latest_key_version_records_the_version_from_kid() -> KmsA
     );
 
     let encrypted_key = provider_over(StatusCode::Ok, body)?
-        .encrypt_data_encryption_key(&data_encryption_key(), None)
+        .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
     assert_eq!(
@@ -212,7 +176,7 @@ async fn wrapped_key_read_back_from_hex_keeps_its_key_version() -> KmsAeadResult
         azure_core::base64::encode_url_safe(b"wrapped-data-encryption-key")
     );
     let encrypted_key = provider_over(StatusCode::Ok, body)?
-        .encrypt_data_encryption_key(&data_encryption_key(), None)
+        .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
     let read_back =
@@ -233,10 +197,7 @@ async fn encrypted_key_without_a_key_version_is_rejected_before_any_request() ->
     )?;
 
     let err = provider
-        .decrypt_data_encryption_key(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
-        )
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None))
         .await
         .unwrap_err();
 
@@ -252,10 +213,10 @@ async fn error_response_body_is_absent_from_errors() -> KmsAeadResult<()> {
     // A body that is not an Azure error envelope is copied into the SDK error.
     let body = format!(r#"{{"value": "{LEAK_MARKER}"}}"#);
     let err = provider_over(StatusCode::Forbidden, body)?
-        .decrypt_data_encryption_key(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()?)),
-            None,
-        )
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+            b"wrapped".to_vec(),
+            Some(key_version()?),
+        ))
         .await
         .unwrap_err();
 
@@ -272,7 +233,7 @@ async fn server_errors_and_throttling_are_network_errors() -> KmsAeadResult<()> 
             status,
             r#"{"error": {"code": "Throttled", "message": "Try later"}}"#.into(),
         )?
-        .encrypt_data_encryption_key(&data_encryption_key(), None)
+        .encrypt_data_encryption_key(&data_encryption_key())
         .await
         .unwrap_err();
 
@@ -291,7 +252,7 @@ async fn client_errors_keep_the_key_vault_error_code() -> KmsAeadResult<()> {
         r#"{"error": {"code": "Forbidden", "message": "The user does not have keys wrapKey permission"}}"#
             .into(),
     )?
-    .encrypt_data_encryption_key(&data_encryption_key(), None)
+    .encrypt_data_encryption_key(&data_encryption_key())
     .await
     .unwrap_err();
 

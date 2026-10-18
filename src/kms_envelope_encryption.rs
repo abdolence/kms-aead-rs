@@ -299,15 +299,16 @@ where
                     // renews instead of unwrapping it again, so that `invalidate` and `clear`
                     // end its use.
                     let renew = || async {
-                        let (dek, encrypted) = self.new_dek().await?;
+                        let (dek, encrypted) =
+                            self.cipher.generate_wrapped_key(&self.provider).await?;
                         if let Some(shared) = &self.dek_cache.0 {
-                            shared.insert(self.provider.kek(), &encrypted, None, dek);
+                            shared.insert(self.provider.kek(), &encrypted, dek);
                         }
                         Ok(encrypted)
                     };
                     let dek = dek_reuse.claim_or_renew(renew).await?;
                     let sealed = self.dek_cache.0.as_ref().and_then(|shared| {
-                        shared.with_cached_key(self.provider.kek(), &dek.encrypted, None, |key| {
+                        shared.with_cached_key(self.provider.kek(), &dek.encrypted, |key| {
                             self.cipher.encrypt_value(aad, plain_text, key)
                         })
                     });
@@ -330,7 +331,8 @@ where
                     CipherTextWithEncryptedKey::join(&cipher_text, &dek.encrypted)
                 }
                 None => {
-                    let (dek, encrypted_dek) = self.new_dek().await?;
+                    let (dek, encrypted_dek) =
+                        self.cipher.generate_wrapped_key(&self.provider).await?;
                     let cipher_text = self.cipher.encrypt_value(aad, plain_text, &dek)?;
                     CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)
                 }
@@ -382,10 +384,8 @@ where
         })
     }
 
-    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and encrypts `plain_text`
-    /// under it. The caller stores the wrapped DEK beside the returned cipher text. A DEK
-    /// wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the KMS; it is
-    /// unwrapped through the provider or [`DekCache::with_key`] directly.
+    /// Unwraps `dek`, through the envelope's [`DekCache`], and encrypts `plain_text` under it.
+    /// The caller stores the wrapped DEK beside the returned cipher text.
     ///
     /// # Errors
     ///
@@ -419,9 +419,7 @@ where
         })
     }
 
-    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and opens `cipher_text` with
-    /// it. A DEK wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the
-    /// KMS; it is unwrapped through the provider or [`DekCache::with_key`] directly.
+    /// Unwraps `dek`, through the envelope's [`DekCache`], and opens `cipher_text` with it.
     ///
     /// # Errors
     ///
@@ -449,13 +447,7 @@ where
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
         let span = spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend);
-        spans::in_span(span, self.new_dek()).await
-    }
-
-    async fn new_dek(&self) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-        // Unbound, so that the values open with kms-aead 0.29 and with any envelope over the
-        // same KEK.
-        self.cipher.generate_wrapped_key(&self.provider, None).await
+        spans::in_span(span, self.cipher.generate_wrapped_key(&self.provider)).await
     }
 
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
@@ -469,7 +461,7 @@ where
     ) -> KmsAeadResult<T> {
         let result = self
             .dek_cache
-            .with_key(&self.provider, encrypted, None, use_key)
+            .with_key(&self.provider, encrypted, use_key)
             .await;
         if self.dek_cache.is_enabled() {
             spans::record_dek_cache(match &result {
@@ -709,7 +701,7 @@ mod tests {
         let cipher = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?;
         let provider = TestKmsProvider::Generating(SecretValue::new(vec![0x42; 64]));
 
-        let result = cipher.generate_wrapped_key(&provider, None).await;
+        let result = cipher.generate_wrapped_key(&provider).await;
 
         assert!(
             matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
@@ -1039,7 +1031,7 @@ mod tests {
             .1;
         envelope
             .dek_cache()
-            .invalidate(envelope.provider().kek(), &first, None);
+            .invalidate(envelope.provider().kek(), &first);
         let after_invalidate = envelope
             .encrypt_value(AAD, &plain_text)
             .await?

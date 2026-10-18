@@ -9,11 +9,6 @@ use aws_sdk_kms::operation::encrypt::builders::EncryptFluentBuilder;
 use aws_sdk_kms::primitives::Blob;
 
 use secret_vault_value::SecretValue;
-use std::collections::HashMap;
-
-/// The encryption context key a [`DekBinding`] is sent under. Changing it makes every bound key
-/// wrapped before the change fail to unwrap.
-const BINDING_CONTEXT_KEY: &str = "kms-aead";
 
 /// An AWS KMS key that wraps data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
@@ -66,11 +61,6 @@ pub struct AwsKmsProviderOptions {
 /// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
 /// message is the one AWS KMS returned. Its root cause is the SDK error.
-///
-/// A [`DekBinding`] is sent as the encryption context `{"kms-aead": <binding>}` of Encrypt and
-/// Decrypt. An unwrap that names another binding, or none, fails with
-/// `InvalidCiphertextException`. CloudTrail logs the encryption context in plain text, and a key
-/// policy can match it with the `kms:EncryptionContext:kms-aead` condition key.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
@@ -129,43 +119,24 @@ impl AwsKmsProvider {
         }
     }
 
-    /// Wraps under the configured key, with `binding` as the encryption context.
-    fn encrypt_request(
-        &self,
-        encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
-    ) -> EncryptFluentBuilder {
+    /// Wraps under the configured key.
+    fn encrypt_request(&self, encryption_key: &DataEncryptionKey) -> EncryptFluentBuilder {
         self.client
             .encrypt()
             .key_id(self.kek.key())
             .plaintext(Blob::new(
                 encryption_key.value().ref_sensitive_value().as_slice(),
             ))
-            .set_encryption_context(binding.map(binding_context))
     }
 
     /// Names the configured key: without it AWS KMS unwraps under whichever key the blob names,
-    /// for any key the principal may decrypt with. `binding` is the encryption context, which
-    /// must equal the wrap's.
-    fn decrypt_request(
-        &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
-    ) -> DecryptFluentBuilder {
+    /// for any key the principal may decrypt with.
+    fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
         self.client
             .decrypt()
             .key_id(self.kek.key())
             .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
-            .set_encryption_context(binding.map(binding_context))
     }
-}
-
-/// The one-pair encryption context that carries `binding`.
-fn binding_context(binding: &DekBinding) -> HashMap<String, String> {
-    HashMap::from([(
-        BINDING_CONTEXT_KEY.to_string(),
-        binding.as_str().to_string(),
-    )])
 }
 
 #[async_trait]
@@ -177,10 +148,9 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
-            let encrypt_response = kms::timed(self.encrypt_request(encryption_key, binding).send())
+            let encrypt_response = kms::timed(self.encrypt_request(encryption_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
@@ -204,11 +174,10 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
-            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key, binding).send())
+            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
 
@@ -300,10 +269,7 @@ mod tests {
 
     fn decrypt_key_id(configured_key_id: &str) -> Option<String> {
         provider_for(configured_key_id, aws_sdk_kms::Config::builder())
-            .decrypt_request(
-                &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-                None,
-            )
+            .decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None))
             .get_key_id()
             .clone()
     }
@@ -349,10 +315,8 @@ mod tests {
     fn unwrap_names_the_configured_kek() {
         let provider = offline_provider();
 
-        let request = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
-        );
+        let request =
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None));
 
         assert_eq!(request.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
@@ -363,33 +327,13 @@ mod tests {
     }
 
     #[test]
-    fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
-        let provider = offline_provider();
-        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
-        let context = HashMap::from([("kms-aead".to_string(), "tenant-42/3".to_string())]);
-        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
-
-        let encrypt = provider.encrypt_request(&dek, Some(&binding));
-        let decrypt = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            Some(&binding),
-        );
-
-        assert_eq!(encrypt.get_encryption_context().as_ref(), Some(&context));
-        assert_eq!(decrypt.get_encryption_context().as_ref(), Some(&context));
-        Ok(())
-    }
-
-    #[test]
-    fn an_unbound_wrap_builds_the_0_29_request() {
+    fn wrap_and_unwrap_build_the_0_29_requests() {
         let provider = offline_provider();
         let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
 
-        let encrypt = provider.encrypt_request(&dek, None);
-        let decrypt = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
-        );
+        let encrypt = provider.encrypt_request(&dek);
+        let decrypt =
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None));
 
         assert_eq!(encrypt.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
@@ -434,10 +378,7 @@ mod tests {
         .await;
 
         let error = provider
-            .encrypt_data_encryption_key(
-                &DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])),
-                None,
-            )
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])))
             .await
             .unwrap_err();
 
@@ -603,12 +544,12 @@ mod tests {
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
         let wrapped_under_other = AwsKmsProvider::new(&other)
             .await?
-            .encrypt_data_encryption_key(&dek, None)
+            .encrypt_data_encryption_key(&dek)
             .await?;
 
         let result = AwsKmsProvider::new(&configured)
             .await?
-            .decrypt_data_encryption_key(&wrapped_under_other, None)
+            .decrypt_data_encryption_key(&wrapped_under_other)
             .await;
 
         assert!(
@@ -617,40 +558,6 @@ mod tests {
             "{:?}",
             result.err()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
-        let key_ref = AwsKmsKeyRef::new(
-            std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
-            std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
-        );
-        let provider = AwsKmsProvider::new(&key_ref).await?;
-        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
-        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
-        let wrapped = provider
-            .encrypt_data_encryption_key(&dek, Some(&binding))
-            .await?;
-
-        let unwrapped = provider
-            .decrypt_data_encryption_key(&wrapped, Some(&binding))
-            .await?;
-        let result = provider
-            .decrypt_data_encryption_key(
-                &wrapped,
-                Some(&DekBinding::try_from("tenant-42/2".to_string())?),
-            )
-            .await;
-
-        assert!(
-            matches!(&result, Err(KmsAeadError::EncryptionError(e))
-                if e.public.code == "InvalidCiphertextException"),
-            "{:?}",
-            result.err()
-        );
-        assert_eq!(unwrapped, dek);
         Ok(())
     }
 }

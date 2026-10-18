@@ -91,7 +91,7 @@ mod aes_siv_cipher {
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
     use crate::{
-        checked_key_material, spans, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey,
+        checked_key_material, spans, DataEncryptionKey, EncryptedDataEncryptionKey,
         KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
     };
 
@@ -208,9 +208,9 @@ mod aes_siv_cipher {
             Ok(DeterministicDataEncryptionKey(key))
         }
 
-        /// A new key and the same key wrapped by `provider` with `binding`, to store. The key
-        /// comes from the KMS generator when the provider is configured to use one, and from the
-        /// operating system's generator otherwise.
+        /// A new key and the same key wrapped by `provider`, to store. The key comes from the
+        /// KMS generator when the provider is configured to use one, and from the operating
+        /// system's generator otherwise.
         ///
         /// # Errors
         ///
@@ -219,7 +219,6 @@ mod aes_siv_cipher {
         pub async fn generate_wrapped_key<P>(
             &self,
             provider: &P,
-            binding: Option<&DekBinding>,
         ) -> KmsAeadResult<(DeterministicDataEncryptionKey, EncryptedDataEncryptionKey)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
@@ -231,7 +230,7 @@ mod aes_siv_cipher {
             // The provider wraps a `DataEncryptionKey`, whose bytes then move into the
             // deterministic key, so that no copy of the key is left behind.
             let key = DataEncryptionKey::from(material);
-            let encrypted_key = provider.encrypt_data_encryption_key(&key, binding).await?;
+            let encrypted_key = provider.encrypt_data_encryption_key(&key).await?;
             Ok((
                 DeterministicDataEncryptionKey(key.into_value()),
                 encrypted_key,
@@ -326,7 +325,7 @@ mod aes_siv_cipher {
                 algorithm,
                 DeterministicCipher::BACKEND_NAME,
             );
-            spans::in_span(span, cipher.generate_wrapped_key(&self.provider, None)).await
+            spans::in_span(span, cipher.generate_wrapped_key(&self.provider)).await
         }
 
         /// Unwraps a key [`generate_new_deterministic_dek`](Self::generate_new_deterministic_dek)
@@ -345,7 +344,7 @@ mod aes_siv_cipher {
             spans::in_span(span, async {
                 let key = self
                     .provider
-                    .decrypt_data_encryption_key(encrypted_key, None)
+                    .decrypt_data_encryption_key(encrypted_key)
                     .await?;
                 checked_deterministic_key(key, algorithm)
             })

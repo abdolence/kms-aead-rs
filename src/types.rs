@@ -153,52 +153,6 @@ impl Display for KmsKeyVersion {
     }
 }
 
-/// Non-secret text a wrapped data encryption key is bound to. The KMS authenticates it at wrap
-/// and refuses an unwrap that names another binding, or none. 1 to 1024 bytes of UTF-8 without
-/// control characters, so that it fits every KMS and reads in a log line; `INVALID_DEK_BINDING`
-/// otherwise.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DekBinding(String);
-
-impl DekBinding {
-    /// The longest binding, in bytes, which every KMS accepts as associated data.
-    const MAX_LEN: usize = 1024;
-
-    /// The binding as the providers send it to the KMS.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl TryFrom<String> for DekBinding {
-    type Error = KmsAeadError;
-
-    /// # Errors
-    ///
-    /// `INVALID_DEK_BINDING` when `value` is empty, longer than 1024 bytes, or holds a control
-    /// character.
-    fn try_from(value: String) -> KmsAeadResult<Self> {
-        if (1..=Self::MAX_LEN).contains(&value.len()) && !value.chars().any(char::is_control) {
-            Ok(Self(value))
-        } else {
-            Err(KmsAeadSystemError::create(
-                "INVALID_DEK_BINDING",
-                &format!(
-                    "A DEK binding of {} bytes is not 1 to {} bytes without control characters",
-                    value.len(),
-                    Self::MAX_LEN
-                ),
-            ))
-        }
-    }
-}
-
-impl Display for DekBinding {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
 /// A data encryption key wrapped by a KMS, with the version of the KMS key that wrapped it when
 /// the provider records one.
 ///
@@ -684,25 +638,6 @@ mod tests {
                 error_code(KmsKeyVersion::try_from(invalid.clone())),
                 "INVALID_KEY_VERSION",
                 "{invalid:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_dek_binding_is_1_to_1024_bytes_without_control_characters() {
-        for valid in ["tenant-42/3".to_string(), "é".repeat(512), "b".repeat(1024)] {
-            assert!(DekBinding::try_from(valid.clone()).is_ok(), "{valid:?}");
-        }
-        for invalid in [
-            String::new(),
-            "b".repeat(1025),
-            "tenant-42\n3".to_string(),
-            "tenant-42\u{7f}".to_string(),
-        ] {
-            let result = DekBinding::try_from(invalid.clone());
-            assert!(
-                matches!(&result, Err(e) if e.code() == "INVALID_DEK_BINDING"),
-                "{invalid:?}: {result:?}"
             );
         }
     }

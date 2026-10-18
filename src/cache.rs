@@ -17,7 +17,7 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadSystemError};
 #[cfg(feature = "deterministic")]
 use crate::{checked_deterministic_key, DeterministicAlgorithm, DeterministicDataEncryptionKey};
 use crate::{
-    AeadAlgorithm, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef,
+    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekRef,
     KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
@@ -45,7 +45,7 @@ pub enum DekCacheOutcome {
     /// From the cache, or from a concurrent call that unwrapped the same key.
     Hit,
     /// Unwrapped by the provider for this call. It is cached unless a live entry of another KEK
-    /// or binding holds the same wrapped bytes.
+    /// holds the same wrapped bytes.
     Miss,
     /// Unwrapped by the provider for this call: the cache is disabled.
     Disabled,
@@ -66,14 +66,12 @@ impl Display for DekCacheOutcome {
 /// store-less envelope and the keyring. `Clone` shares the same cache.
 ///
 /// An entry holds the key a provider unwrapped from a wrapped key's bytes, with the provider's
-/// [`KekRef`] and the [`DekBinding`] the unwrap named, and serves only a lookup that names the
-/// same KEK and binding. A cache shared by the providers of several KEKs therefore never returns
-/// a key unwrapped under one KEK to a caller that passed the provider of another, and a key
-/// unwrapped under one binding never serves a caller that names another: that caller's provider
-/// asks its KMS, which refuses a key wrapped under a foreign KEK or binding. Such a call leaves
-/// the live entry as it is and caches nothing. The key version a wrapped key records is not
-/// part of the match. Randomized and deterministic keys are cached apart, up to
-/// [`max_entries`](DekCacheOptions::max_entries) of each.
+/// [`KekRef`], and serves only a lookup that names the same KEK. A cache shared by the providers
+/// of several KEKs therefore never returns a key unwrapped under one KEK to a caller that passed
+/// the provider of another: that caller's provider asks its KMS, which refuses a key wrapped
+/// under a foreign KEK. Such a call leaves the live entry as it is and caches nothing. The key
+/// version a wrapped key records is not part of the match. Randomized and deterministic keys are
+/// cached apart, up to [`max_entries`](DekCacheOptions::max_entries) of each.
 ///
 /// [`KekRef`] equality is therefore the cache's trust boundary. A local provider's `KekRef` is
 /// [`KekProvider::Local`](crate::KekProvider::Local) and its id, so a local KEK id must name one
@@ -143,10 +141,9 @@ struct Snapshot<K> {
 }
 
 /// An entry: the key, or the unwrap under way that the concurrent misses of the key share, and
-/// the KEK and binding that unwrap names.
+/// the KEK that unwrap names.
 struct Slot<K> {
     kek: KekRef,
-    binding: Option<DekBinding>,
     dek: OnceCell<KmsAeadResult<Arc<K>>>,
     created_at: Instant,
 }
@@ -169,16 +166,15 @@ fn publish<K>(table: &Table<K>, derive: impl FnOnce(&Snapshot<K>) -> Option<Snap
 }
 
 impl Shared {
-    /// Runs `use_key` with the key cached in `table` for `wrapped` under `kek` and `binding`, or
-    /// with the key `unwrap_key` returns on a miss, which stays cached unless its slot left the
-    /// table meanwhile. A live slot for `wrapped` under another KEK or binding is neither used
-    /// nor replaced: the call unwraps without caching.
+    /// Runs `use_key` with the key cached in `table` for `wrapped` under `kek`, or with the key
+    /// `unwrap_key` returns on a miss, which stays cached unless its slot left the table
+    /// meanwhile. A live slot for `wrapped` under another KEK is neither used nor replaced: the
+    /// call unwraps without caching.
     async fn with_key<K, T, Fut>(
         &self,
         table: &Table<K>,
         kek: &KekRef,
         wrapped: &[u8],
-        binding: Option<&DekBinding>,
         unwrap_key: impl FnOnce() -> Fut,
         use_key: impl FnOnce(&K) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
@@ -192,7 +188,6 @@ impl Shared {
         let slot = cached.unwrap_or_else(|| {
             let created = Arc::new(Slot {
                 kek: kek.clone(),
-                binding: binding.cloned(),
                 dek: OnceCell::new(),
                 created_at: now,
             });
@@ -207,7 +202,7 @@ impl Shared {
             });
             slot
         });
-        if !slot.serves(kek, binding) {
+        if !slot.serves(kek) {
             drop(slot);
             return Ok((use_key(&unwrap_key().await?), DekCacheOutcome::Miss));
         }
@@ -256,13 +251,12 @@ impl Shared {
         }
     }
 
-    /// Runs `use_key` with the randomized key cached for `encrypted` under `kek` and `binding`, or
-    /// returns `None`, without calling a provider, when the cache holds no such key.
+    /// Runs `use_key` with the randomized key cached for `encrypted` under `kek`, or returns
+    /// `None`, without calling a provider, when the cache holds no such key.
     pub(crate) fn with_cached_key<T>(
         &self,
         kek: &KekRef,
         encrypted: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> Option<T> {
         let now = Instant::now();
@@ -270,20 +264,19 @@ impl Shared {
         let snapshot = load(&self.randomized);
         let slot = snapshot
             .live(encrypted.wrapped(), self.options.ttl, now)
-            .filter(|slot| slot.serves(kek, binding))?;
+            .filter(|slot| slot.serves(kek))?;
         let dek = slot.dek.get()?.as_ref().ok()?;
         Some(use_key(dek))
     }
 
-    /// Caches `key`, which `kek` has just wrapped into `encrypted` with `binding`, as an unwrap of
-    /// `encrypted` would have, so that the first lookup of a new store-less DEK is a hit. Kept off
-    /// the public API: a key cached under the wrong wrapped bytes would seal values that no
-    /// unwrap opens. A live entry of another KEK or binding for the same bytes is kept.
+    /// Caches `key`, which `kek` has just wrapped into `encrypted`, as an unwrap of `encrypted`
+    /// would have, so that the first lookup of a new store-less DEK is a hit. Kept off the public
+    /// API: a key cached under the wrong wrapped bytes would seal values that no unwrap opens. A
+    /// live entry of another KEK for the same bytes is kept.
     pub(crate) fn insert(
         &self,
         kek: &KekRef,
         encrypted: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
         key: DataEncryptionKey,
     ) {
         let now = Instant::now();
@@ -292,13 +285,12 @@ impl Shared {
         let wrapped = encrypted.wrapped();
         let slot = Arc::new(Slot {
             kek: kek.clone(),
-            binding: binding.cloned(),
             dek: OnceCell::from(Ok(Arc::new(key))),
             created_at: now,
         });
         publish(&self.randomized, |snapshot| {
             match snapshot.live(wrapped, ttl, now) {
-                Some(live) if !live.serves(kek, binding) => None,
+                Some(live) if !live.serves(kek) => None,
                 _ => Some(snapshot.with(Arc::from(wrapped), slot, max_entries)),
             }
         });
@@ -341,17 +333,11 @@ impl<K> Snapshot<K> {
         })
     }
 
-    /// This snapshot without the slot of `wrapped` under `kek` and `binding`, or `None` when it
-    /// holds none.
-    fn without_entry(
-        &self,
-        wrapped: &[u8],
-        kek: &KekRef,
-        binding: Option<&DekBinding>,
-    ) -> Option<Self> {
+    /// This snapshot without the slot of `wrapped` under `kek`, or `None` when it holds none.
+    fn without_entry(&self, wrapped: &[u8], kek: &KekRef) -> Option<Self> {
         self.slots
             .get(wrapped)
-            .filter(|slot| slot.serves(kek, binding))
+            .filter(|slot| slot.serves(kek))
             .and_then(|_| self.without(wrapped))
     }
 
@@ -383,10 +369,9 @@ impl<K> Slot<K> {
         now.saturating_duration_since(self.created_at) >= ttl
     }
 
-    /// Whether this slot holds the unwrap of a call that names `kek` and `binding`, the only
-    /// call it serves.
-    fn serves(&self, kek: &KekRef, binding: Option<&DekBinding>) -> bool {
-        self.kek == *kek && self.binding.as_ref() == binding
+    /// Whether this slot holds the unwrap of a call that names `kek`, the only call it serves.
+    fn serves(&self, kek: &KekRef) -> bool {
+        self.kek == *kek
     }
 }
 
@@ -423,9 +408,8 @@ impl DekCache {
         self.0.is_some()
     }
 
-    /// Runs `use_key` with the key `encrypted` wraps under `provider.kek()` and `binding`,
-    /// unwrapped by `provider` with `binding` on a miss, and returns its result with where the
-    /// key came from.
+    /// Runs `use_key` with the key `encrypted` wraps under `provider.kek()`, unwrapped by
+    /// `provider` on a miss, and returns its result with where the key came from.
     ///
     /// `use_key` runs once, synchronously, after the lookup, and the key stays intact while it
     /// runs. It must not keep the key: a copy taken out of the closure outlives the cache's
@@ -440,7 +424,6 @@ impl DekCache {
         &self,
         provider: &P,
         encrypted: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
     where
@@ -449,9 +432,7 @@ impl DekCache {
         // A wrapped value of the same KEK that is no data encryption key, such as an exported
         // keyset, unwraps too: its plaintext must not reach the cache.
         let unwrap_key = || async {
-            let key = provider
-                .decrypt_data_encryption_key(encrypted, binding)
-                .await?;
+            let key = provider.decrypt_data_encryption_key(encrypted).await?;
             let len = key.value().ref_sensitive_value().len();
             if AeadAlgorithm::ALL
                 .iter()
@@ -472,7 +453,6 @@ impl DekCache {
                         &shared.randomized,
                         provider.kek(),
                         encrypted.wrapped(),
-                        binding,
                         unwrap_key,
                         use_key,
                     )
@@ -482,9 +462,9 @@ impl DekCache {
         }
     }
 
-    /// Runs `use_key` with the deterministic key `encrypted` wraps under `provider.kek()` and
-    /// `binding`, as [`with_key`](Self::with_key) does with randomized keys. The two purposes are
-    /// cached apart, so the same wrapped key unwrapped for both is two entries.
+    /// Runs `use_key` with the deterministic key `encrypted` wraps under `provider.kek()`, as
+    /// [`with_key`](Self::with_key) does with randomized keys. The two purposes are cached apart,
+    /// so the same wrapped key unwrapped for both is two entries.
     ///
     /// # Errors
     ///
@@ -497,16 +477,13 @@ impl DekCache {
         provider: &P,
         algorithm: DeterministicAlgorithm,
         encrypted: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
         use_key: impl FnOnce(&DeterministicDataEncryptionKey) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         let unwrap_key = || async {
-            let key = provider
-                .decrypt_data_encryption_key(encrypted, binding)
-                .await?;
+            let key = provider.decrypt_data_encryption_key(encrypted).await?;
             checked_deterministic_key(key, algorithm)
         };
         match &self.0 {
@@ -516,7 +493,6 @@ impl DekCache {
                         &shared.deterministic,
                         provider.kek(),
                         encrypted.wrapped(),
-                        binding,
                         unwrap_key,
                         use_key,
                     )
@@ -526,25 +502,20 @@ impl DekCache {
         }
     }
 
-    /// Drops the entries of both purposes for `encrypted` under `kek` and `binding`; an entry of
-    /// the same wrapped bytes under another KEK or binding stays. The next
-    /// [`with_key`](Self::with_key) of the key calls the provider, and an unwrap of it under way
-    /// returns its key to its callers without caching it.
-    pub fn invalidate(
-        &self,
-        kek: &KekRef,
-        encrypted: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
-    ) {
+    /// Drops the entries of both purposes for `encrypted` under `kek`; an entry of the same
+    /// wrapped bytes under another KEK stays. The next [`with_key`](Self::with_key) of the key
+    /// calls the provider, and an unwrap of it under way returns its key to its callers without
+    /// caching it.
+    pub fn invalidate(&self, kek: &KekRef, encrypted: &EncryptedDataEncryptionKey) {
         if let Some(shared) = &self.0 {
             shared.purge_expired(Instant::now());
             let wrapped = encrypted.wrapped();
             publish(&shared.randomized, |snapshot| {
-                snapshot.without_entry(wrapped, kek, binding)
+                snapshot.without_entry(wrapped, kek)
             });
             #[cfg(feature = "deterministic")]
             publish(&shared.deterministic, |snapshot| {
-                snapshot.without_entry(wrapped, kek, binding)
+                snapshot.without_entry(wrapped, kek)
             });
         }
     }
@@ -653,9 +624,7 @@ mod tests {
             .map(|_| {
                 let (cache, provider, encrypted) =
                     (cache.clone(), Arc::clone(&provider), encrypted.clone());
-                tokio::spawn(
-                    async move { cache.with_key(&*provider, &encrypted, None, |_| ()).await },
-                )
+                tokio::spawn(async move { cache.with_key(&*provider, &encrypted, |_| ()).await })
             })
             .collect();
         let_spawned_tasks_wait().await;
@@ -685,9 +654,7 @@ mod tests {
             .map(|_| {
                 let (cache, provider, encrypted) =
                     (cache.clone(), Arc::clone(&provider), encrypted.clone());
-                tokio::spawn(
-                    async move { cache.with_key(&*provider, &encrypted, None, |_| ()).await },
-                )
+                tokio::spawn(async move { cache.with_key(&*provider, &encrypted, |_| ()).await })
             })
             .collect();
         let_spawned_tasks_wait().await;
@@ -714,9 +681,9 @@ mod tests {
         let failing = CountingKmsProvider::new(TestKmsProvider::FailingToUnwrap, ORDERS_KEK);
         let working = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
-        let failed = cache.with_key(&failing, &encrypted, None, |_| ()).await;
-        let ((), first) = cache.with_key(&working, &encrypted, None, |_| ()).await?;
-        let ((), second) = cache.with_key(&working, &encrypted, None, |_| ()).await?;
+        let failed = cache.with_key(&failing, &encrypted, |_| ()).await;
+        let ((), first) = cache.with_key(&working, &encrypted, |_| ()).await?;
+        let ((), second) = cache.with_key(&working, &encrypted, |_| ()).await?;
 
         assert!(
             matches!(&failed, Err(KmsAeadError::EncryptionError(error))
@@ -739,7 +706,7 @@ mod tests {
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
         for _ in 0..2 {
-            let result = cache.with_key(&provider, &encrypted, None, |_| ()).await;
+            let result = cache.with_key(&provider, &encrypted, |_| ()).await;
             assert!(
                 matches!(&result, Err(e) if e.code() == "INVALID_KEY_LENGTH"),
                 "{:?}",
@@ -757,10 +724,10 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
-        let ((), first) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
-        let ((), second) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+        let ((), first) = cache.with_key(&provider, &encrypted, |_| ()).await?;
+        let ((), second) = cache.with_key(&provider, &encrypted, |_| ()).await?;
         tokio::time::sleep(SHORT_TTL * 2).await;
-        let ((), third) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+        let ((), third) = cache.with_key(&provider, &encrypted, |_| ()).await?;
 
         assert_eq!(
             [first, second, third],
@@ -783,7 +750,7 @@ mod tests {
         let mut randomized = Vec::new();
         for byte in 1..=3 {
             let encrypted = EncryptedDataEncryptionKey::new(vec![byte; 32], None);
-            cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+            cache.with_key(&provider, &encrypted, |_| ()).await?;
             randomized.push(cache.cached_dek(provider.kek(), &encrypted).unwrap());
         }
 
@@ -800,7 +767,7 @@ mod tests {
                 let encrypted = EncryptedDataEncryptionKey::new(vec![byte; 64], None);
                 let algorithm = DeterministicAlgorithm::Aes256Siv;
                 cache
-                    .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+                    .with_deterministic_key(&provider, algorithm, &encrypted, |_| ())
                     .await?;
                 deterministic.push(
                     cache
@@ -821,12 +788,12 @@ mod tests {
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
-        let ((), first) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
-        let ((), second) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+        let ((), first) = cache.with_key(&provider, &encrypted, |_| ()).await?;
+        let ((), second) = cache.with_key(&provider, &encrypted, |_| ()).await?;
         let cached = cache.cached_dek(provider.kek(), &encrypted).unwrap();
-        cache.invalidate(provider.kek(), &encrypted, None);
+        cache.invalidate(provider.kek(), &encrypted);
         let zeroized = cached.strong_count() == 0;
-        let ((), third) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
+        let ((), third) = cache.with_key(&provider, &encrypted, |_| ()).await?;
 
         assert!(zeroized);
         assert_eq!(
@@ -853,18 +820,16 @@ mod tests {
         );
         let algorithm = DeterministicAlgorithm::Aes256Siv;
 
+        cache.with_key(&randomized_kms, &encrypted, |_| ()).await?;
         cache
-            .with_key(&randomized_kms, &encrypted, None, |_| ())
-            .await?;
-        cache
-            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, |_| ())
             .await?;
         let kek = randomized_kms.kek();
         let randomized = cache.cached_dek(kek, &encrypted).unwrap();
         let deterministic = cache.cached_deterministic_dek(kek, &encrypted).unwrap();
-        cache.invalidate(kek, &encrypted, None);
+        cache.invalidate(kek, &encrypted);
         let ((), outcome) = cache
-            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, |_| ())
             .await?;
 
         assert_eq!(randomized.strong_count() + deterministic.strong_count(), 0);
@@ -888,14 +853,12 @@ mod tests {
         );
         let algorithm = DeterministicAlgorithm::Aes256Siv;
 
-        let ((), randomized) = cache
-            .with_key(&randomized_kms, &encrypted, None, |_| ())
-            .await?;
+        let ((), randomized) = cache.with_key(&randomized_kms, &encrypted, |_| ()).await?;
         let ((), deterministic) = cache
-            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, |_| ())
             .await?;
         let ((), again) = cache
-            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, None, |_| ())
+            .with_deterministic_key(&deterministic_kms, algorithm, &encrypted, |_| ())
             .await?;
 
         assert_eq!(
@@ -920,10 +883,10 @@ mod tests {
         let orders = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
         let billing = CountingKmsProvider::new(TestKmsProvider::Working, BILLING_KEK);
 
-        let ((), first) = cache.with_key(&orders, &encrypted, None, |_| ()).await?;
-        let ((), second) = cache.with_key(&orders, &encrypted, None, |_| ()).await?;
-        let ((), other_kek) = cache.with_key(&billing, &encrypted, None, |_| ()).await?;
-        let ((), kept) = cache.with_key(&orders, &encrypted, None, |_| ()).await?;
+        let ((), first) = cache.with_key(&orders, &encrypted, |_| ()).await?;
+        let ((), second) = cache.with_key(&orders, &encrypted, |_| ()).await?;
+        let ((), other_kek) = cache.with_key(&billing, &encrypted, |_| ()).await?;
+        let ((), kept) = cache.with_key(&orders, &encrypted, |_| ()).await?;
 
         assert_eq!(
             [first, second, other_kek, kept],
@@ -939,66 +902,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn entries_are_keyed_by_binding() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
-        let cache = DekCache::new(DekCacheOptions::new())?;
-        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
-        let first = DekBinding::try_from("tenant-42/1".to_string())?;
-        let second = DekBinding::try_from("tenant-42/2".to_string())?;
-
-        let mut outcomes = Vec::new();
-        for binding in [None, Some(&first), None, Some(&first), Some(&second)] {
-            let ((), outcome) = cache
-                .with_key(&provider, &encrypted, binding, |_| ())
-                .await?;
-            outcomes.push(outcome);
-        }
-
-        assert_eq!(
-            outcomes,
-            [
-                DekCacheOutcome::Miss,
-                DekCacheOutcome::Miss,
-                DekCacheOutcome::Hit,
-                DekCacheOutcome::Miss,
-                DekCacheOutcome::Miss
-            ]
-        );
-        assert_eq!(
-            provider.unwrap_bindings(),
-            [None, Some(first.clone()), Some(first), Some(second)]
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn invalidate_takes_the_binding() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
-        let cache = DekCache::new(DekCacheOptions::new())?;
-        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
-        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
-
-        cache
-            .with_key(&provider, &encrypted, Some(&binding), |_| ())
-            .await?;
-        cache.invalidate(provider.kek(), &encrypted, None);
-        let ((), kept) = cache
-            .with_key(&provider, &encrypted, Some(&binding), |_| ())
-            .await?;
-        cache.invalidate(provider.kek(), &encrypted, Some(&binding));
-        let ((), dropped) = cache
-            .with_key(&provider, &encrypted, Some(&binding), |_| ())
-            .await?;
-
-        assert_eq!(
-            [kept, dropped],
-            [DekCacheOutcome::Hit, DekCacheOutcome::Miss]
-        );
-        assert_eq!(provider.unwraps(), 2);
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn clear_zeroizes_every_key() -> KmsAeadResult<()> {
         let cache = DekCache::new(DekCacheOptions::new())?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
@@ -1008,7 +911,7 @@ mod tests {
 
         let mut cached = Vec::new();
         for encrypted in &encrypted {
-            cache.with_key(&provider, encrypted, None, |_| ()).await?;
+            cache.with_key(&provider, encrypted, |_| ()).await?;
             cached.push(cache.cached_dek(provider.kek(), encrypted).unwrap());
         }
         #[cfg(feature = "deterministic")]
@@ -1017,7 +920,7 @@ mod tests {
                 EncryptedDataEncryptionKey::new(ORDERS_DETERMINISTIC_DEK.to_vec(), None);
             let algorithm = DeterministicAlgorithm::Aes256Siv;
             cache
-                .with_deterministic_key(&provider, algorithm, &encrypted, None, |_| ())
+                .with_deterministic_key(&provider, algorithm, &encrypted, |_| ())
                 .await?;
             cache
                 .cached_deterministic_dek(provider.kek(), &encrypted)
@@ -1038,7 +941,7 @@ mod tests {
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
         assert!(tokio::runtime::Handle::try_current().is_err());
-        block_on(cache.with_key(&provider, &encrypted, None, |_| ()))?;
+        block_on(cache.with_key(&provider, &encrypted, |_| ()))?;
         let cached = cache.cached_dek(provider.kek(), &encrypted).unwrap();
         thread::sleep(SHORT_TTL);
         let held_until_purged = cached.strong_count();
@@ -1061,7 +964,6 @@ mod tests {
                 &provider,
                 DeterministicAlgorithm::Aes256Siv,
                 &orders,
-                None,
                 |_| (),
             )
             .await?;
@@ -1070,7 +972,7 @@ mod tests {
             .unwrap();
         tokio::time::sleep(SHORT_TTL).await;
         let held_until_lookup = deterministic.strong_count();
-        cache.with_key(&provider, &billing, None, |_| ()).await?;
+        cache.with_key(&provider, &billing, |_| ()).await?;
 
         assert_eq!([held_until_lookup, deterministic.strong_count()], [1, 0]);
         Ok(())
@@ -1090,17 +992,17 @@ mod tests {
             let in_flight = tokio::spawn({
                 let (cache, provider, encrypted) =
                     (cache.clone(), Arc::clone(&provider), encrypted.clone());
-                async move { cache.with_key(&*provider, &encrypted, None, |_| ()).await }
+                async move { cache.with_key(&*provider, &encrypted, |_| ()).await }
             });
             let_spawned_tasks_wait().await;
             if clear {
                 cache.clear();
             } else {
-                cache.invalidate(provider.kek(), &encrypted, None);
+                cache.invalidate(provider.kek(), &encrypted);
             }
             provider.open_gate();
             let ((), leader) = in_flight.await.unwrap()?;
-            let ((), after) = cache.with_key(&*provider, &encrypted, None, |_| ()).await?;
+            let ((), after) = cache.with_key(&*provider, &encrypted, |_| ()).await?;
             outcomes.push(([leader, after], provider.unwraps()));
             cache.clear();
         }
@@ -1122,7 +1024,7 @@ mod tests {
         let [unwrapping, waiting] = [(); 2].map(|()| {
             let (cache, provider, encrypted) =
                 (cache.clone(), Arc::clone(&provider), encrypted.clone());
-            tokio::spawn(async move { cache.with_key(&*provider, &encrypted, None, |_| ()).await })
+            tokio::spawn(async move { cache.with_key(&*provider, &encrypted, |_| ()).await })
         });
         let_spawned_tasks_wait().await;
         unwrapping.abort();
@@ -1130,7 +1032,7 @@ mod tests {
         provider.open_gate();
         let cancelled = unwrapping.await.is_err_and(|error| error.is_cancelled());
         let ((), took_over) = waiting.await.unwrap()?;
-        let ((), after) = cache.with_key(&*provider, &encrypted, None, |_| ()).await?;
+        let ((), after) = cache.with_key(&*provider, &encrypted, |_| ()).await?;
 
         assert!(cancelled);
         assert_eq!(
@@ -1158,7 +1060,7 @@ mod tests {
         let failures = thread::scope(|scope| {
             let churn = scope.spawn(|| {
                 while using.load(Ordering::Relaxed) {
-                    cache.invalidate(provider.kek(), &keys[0].0, None);
+                    cache.invalidate(provider.kek(), &keys[0].0);
                     cache.clear();
                 }
             });
@@ -1168,12 +1070,11 @@ mod tests {
                         (0..USES_PER_THREAD)
                             .filter(|use_index| {
                                 let (encrypted, dek) = &keys[use_index % keys.len()];
-                                let used =
-                                    block_on(cache.with_key(&provider, encrypted, None, |key| {
-                                        let before = key.value().ref_sensitive_value() == dek;
-                                        thread::yield_now();
-                                        before && key.value().ref_sensitive_value() == dek
-                                    }));
+                                let used = block_on(cache.with_key(&provider, encrypted, |key| {
+                                    let before = key.value().ref_sensitive_value() == dek;
+                                    thread::yield_now();
+                                    before && key.value().ref_sensitive_value() == dek
+                                }));
                                 !matches!(used, Ok((true, _)))
                             })
                             .count()
@@ -1212,7 +1113,7 @@ mod tests {
                 for (round, encrypted) in rounds.take_while(|_| looking_up.load(Ordering::Relaxed))
                 {
                     invalidated.extend(cache.cached_dek(provider.kek(), encrypted));
-                    cache.invalidate(provider.kek(), encrypted, None);
+                    cache.invalidate(provider.kek(), encrypted);
                     cache.purge_expired();
                     if round % CLEAR_EVERY == 0 {
                         cache.clear();
@@ -1229,7 +1130,7 @@ mod tests {
                                 let encrypted = &keys[lookup % keys.len()];
                                 let looked_up_at = Instant::now();
                                 let served =
-                                    block_on(cache.with_key(&provider, encrypted, None, |key| {
+                                    block_on(cache.with_key(&provider, encrypted, |key| {
                                         let stamped = key.value().ref_sensitive_value();
                                         let split = stamped.split_last_chunk::<8>();
                                         split.is_some_and(|(wrapped, nanos)| {
@@ -1266,9 +1167,9 @@ mod tests {
         let cache = DekCache::disabled();
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
-        let ((), first) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
-        let ((), second) = cache.with_key(&provider, &encrypted, None, |_| ()).await?;
-        cache.invalidate(provider.kek(), &encrypted, None);
+        let ((), first) = cache.with_key(&provider, &encrypted, |_| ()).await?;
+        let ((), second) = cache.with_key(&provider, &encrypted, |_| ()).await?;
+        cache.invalidate(provider.kek(), &encrypted);
         cache.clear();
 
         assert!(!cache.is_enabled());
