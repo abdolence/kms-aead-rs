@@ -18,7 +18,7 @@ use kms_aead::{
     KmsAeadEnvelope, KmsAeadEnvelopeOptions,
 };
 use kms_aead_keyring::store::MemoryKeyringStore;
-use kms_aead_keyring::sweep::{self, Candidate, Outcome};
+use kms_aead_keyring::sweep::{self, Outcome};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
     KeyringPolicy, KeyringResult, SealFormat, SealMarker,
@@ -193,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .filter(|(_, row)| row.seal.format == SealFormat::Envelope)
-        .map(|(user, _)| Candidate { id: user.clone() })
+        .map(|(user, _)| user.clone())
         .collect::<Vec<_>>();
     let report = sweep::run(
         &TENANT,
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         NonZeroUsize::MIN.saturating_add(1),
         |candidate| {
             let (keyring, table) = (&keyring, &table);
-            async move { reseal(keyring, table, &candidate.id).await }
+            async move { reseal(keyring, table, &candidate).await }
         },
     )
     .await;

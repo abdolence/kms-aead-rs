@@ -72,7 +72,7 @@ use futures_util::stream;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::AeadBackend;
 use kms_aead_keyring::store::MemoryKeyringStore;
-use kms_aead_keyring::sweep::{self, Candidate, Outcome};
+use kms_aead_keyring::sweep::{self, Outcome};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
     KeyringPolicy, KeyringResult, Purpose, SealMarker,
@@ -133,7 +133,7 @@ let candidates = table
     .unwrap()
     .iter()
     .filter(|(_, row)| row.seal.randomized < Some(rotation.current))
-    .map(|(user, _)| Candidate { id: user.clone() })
+    .map(|(user, _)| user.clone())
     .collect::<Vec<_>>();
 
 let report = sweep::run(
@@ -142,7 +142,7 @@ let report = sweep::run(
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
         let (keyring, table) = (&keyring, &table);
-        async move { reseal(keyring, table, &candidate.id).await }
+        async move { reseal(keyring, table, &candidate).await }
     },
 )
 .await;
@@ -160,8 +160,10 @@ if report.failed == 0 {
 
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
 `failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
-`WARN` with the candidate's id and the error's code, never a value. A record id is often an
-entity id, so read the sweep's log as an administrative log.
+`WARN` with the candidate's `Display` and the error's code, never a value. A candidate is the
+application's own type, such as a record id or a struct of key columns, and its `Display` names
+the record and nothing else. A record id is often an entity id, so read the sweep's log as an
+administrative log.
 
 In a real data store the re-seal is a transaction per record or per batch:
 

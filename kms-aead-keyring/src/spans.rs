@@ -439,12 +439,12 @@ pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
     span.record(FAILED, report.failed);
 }
 
-/// A record the sweep could not re-seal. The record id is the application's and often an
-/// entity id: the sweep's log is read as an administrative log.
-pub(crate) fn sweep_failed(keyring: &KeyringId, record: &str, error: &KeyringError) {
+/// A record the sweep could not re-seal, by the application's candidate for it, which is often
+/// an entity id: the sweep's log is read as an administrative log.
+pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &KeyringError) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { RECORD } = record,
+        { RECORD } = %candidate,
         { ERROR_CODE } = error.code(),
         "The sweep could not re-seal a record"
     );

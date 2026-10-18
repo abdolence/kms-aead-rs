@@ -42,6 +42,7 @@
 //! `legacy-formats` feature. The layout of a value is always the marker's, never guessed from
 //! its bytes.
 
+use std::fmt::Display;
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::pin;
@@ -115,13 +116,6 @@ impl Default for SealMarker {
     }
 }
 
-/// A record a sweep visits, by the application's id for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Candidate {
-    /// The record's id. A failure's log line carries it.
-    pub id: String,
-}
-
 /// What the re-seal of one candidate did.
 #[derive(Debug)]
 pub enum Outcome {
@@ -166,20 +160,23 @@ pub struct SweepReport {
 }
 
 /// Runs `reseal` over every candidate of `candidates`, with at most `concurrency` re-seals in
-/// flight, and counts what they did.
+/// flight, and counts what they did. A candidate is whatever the application identifies a record
+/// by, such as its id or its key columns.
 ///
 /// A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at `WARN`
-/// with the candidate's id and the error's code, never a value. The sweep opens a `Keyring sweep`
-/// span for `keyring_id`, which carries the counts once it ends.
-pub async fn run<C, F, Fut>(
+/// with the candidate's `Display` and the error's code, never a value, so a candidate's
+/// `Display` names the record and nothing else. The sweep opens a `Keyring sweep` span for
+/// `keyring_id`, which carries the counts once it ends.
+pub async fn run<T, C, F, Fut>(
     keyring_id: &KeyringId,
     candidates: C,
     concurrency: NonZeroUsize,
     mut reseal: F,
 ) -> SweepReport
 where
-    C: Stream<Item = Candidate>,
-    F: FnMut(Candidate) -> Fut,
+    T: Display,
+    C: Stream<Item = T>,
+    F: FnMut(T) -> Fut,
     Fut: Future<Output = KeyringResult<Outcome>>,
 {
     let span = spans::sweep(keyring_id);
@@ -187,12 +184,13 @@ where
         let mut report = SweepReport::default();
         let mut outcomes = pin!(candidates
             .map(|candidate| {
-                let id = candidate.id.clone();
+                // Formatted before `reseal` takes the candidate, for the log line of a failure.
+                let shown = candidate.to_string();
                 let outcome = reseal(candidate);
-                async move { (id, outcome.await) }
+                async move { (shown, outcome.await) }
             })
             .buffer_unordered(concurrency.get()));
-        while let Some((id, outcome)) = outcomes.next().await {
+        while let Some((candidate, outcome)) = outcomes.next().await {
             report.scanned += 1;
             match outcome {
                 Ok(Outcome::Resealed(resealed)) => {
@@ -204,7 +202,7 @@ where
                 Ok(Outcome::Skipped) => report.skipped += 1,
                 Err(error) => {
                     report.failed += 1;
-                    spans::sweep_failed(keyring_id, &id, &error);
+                    spans::sweep_failed(keyring_id, &candidate, &error);
                 }
             }
         }
@@ -227,18 +225,6 @@ mod tests {
     use crate::{Compromise, KeyringError};
 
     const DETERMINISTIC: u32 = 1 << 31;
-
-    fn compromised() -> KeyTrust {
-        KeyTrust::Compromised(Compromise::new(Timestamp::UNIX_EPOCH, None))
-    }
-
-    fn candidates(ids: &[&str]) -> impl Stream<Item = Candidate> {
-        stream::iter(
-            ids.iter()
-                .map(|id| Candidate { id: id.to_string() })
-                .collect::<Vec<_>>(),
-        )
-    }
 
     #[test]
     fn marker_of_fields_takes_the_oldest_ordinal_per_purpose() -> TestResult {
@@ -289,10 +275,10 @@ mod tests {
     async fn run_counts_scanned_resealed_skipped_failed() {
         let report = run(
             &TENANT,
-            candidates(&["1", "2", "3", "4", "5", "6"]),
+            stream::iter(["1", "2", "3", "4", "5", "6"]),
             NonZeroUsize::MIN.saturating_add(1),
             |candidate| async move {
-                match candidate.id.as_str() {
+                match candidate {
                     "3" => Ok(Outcome::Skipped),
                     "4" | "5" => Err(KeyringError::RecordMissing(TENANT)),
                     _ => Ok(Outcome::Resealed(
@@ -319,13 +305,15 @@ mod tests {
     async fn resealed_from_compromised_is_counted() {
         let report = run(
             &TENANT,
-            candidates(&["trusted", "one-compromised", "all-compromised", "skipped"]),
+            stream::iter(["trusted", "one-compromised", "all-compromised", "skipped"]),
             NonZeroUsize::MIN,
             |candidate| async move {
-                let trusts = match candidate.id.as_str() {
+                let compromised =
+                    KeyTrust::Compromised(Compromise::new(Timestamp::UNIX_EPOCH, None));
+                let trusts = match candidate {
                     "trusted" => vec![KeyTrust::Trusted, KeyTrust::Trusted],
-                    "one-compromised" => vec![KeyTrust::Trusted, compromised()],
-                    "all-compromised" => vec![compromised()],
+                    "one-compromised" => vec![KeyTrust::Trusted, compromised],
+                    "all-compromised" => vec![compromised],
                     _ => return Ok(Outcome::Skipped),
                 };
                 Ok(Outcome::Resealed(trusts.iter().collect()))
@@ -394,15 +382,20 @@ mod tests {
                 .await?;
             let seen = Mutex::new(Vec::new());
 
-            let report = run(&TENANT, candidates(&["42"]), NonZeroUsize::MIN, |_| async {
-                let email = keyring.decrypt_with_status(&email_aad, &email).await?;
-                let phone = keyring.decrypt_with_status(&phone_aad, &phone).await?;
-                let trusts = [email.trust, phone.trust];
-                seen.lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .extend(trusts.iter().cloned());
-                Ok(Outcome::Resealed(trusts.iter().collect()))
-            })
+            let report = run(
+                &TENANT,
+                stream::iter(["42"]),
+                NonZeroUsize::MIN,
+                |_| async {
+                    let email = keyring.decrypt_with_status(&email_aad, &email).await?;
+                    let phone = keyring.decrypt_with_status(&phone_aad, &phone).await?;
+                    let trusts = [email.trust, phone.trust];
+                    seen.lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .extend(trusts.iter().cloned());
+                    Ok(Outcome::Resealed(trusts.iter().collect()))
+                },
+            )
             .await;
 
             let seen = seen.into_inner().unwrap_or_else(PoisonError::into_inner);
