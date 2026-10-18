@@ -259,8 +259,9 @@ mod tests {
     use serde_json::json;
 
     use crate::errors::InteropRequirement;
-    use crate::store::{KeyringStore, MemoryKeyringStore};
-    use crate::testing::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::store::KeyringStore;
+    use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::testing::MemoryKeyringStore;
     use crate::{
         Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Interop,
         KeyId, KeyTrust, KeyringError, KeyringOptions, KeyringPolicy, KeyringRecord, KeyringResult,

@@ -1,5 +1,6 @@
-//! Where keyring records live: the [`KeyringStore`] trait, [`MemoryKeyringStore`], and the
-//! store of each store feature.
+//! Where keyring records live: the [`KeyringStore`] trait and the store of each store feature.
+//! The memory store, for tests, is
+//! [`testing::MemoryKeyringStore`](crate::testing::MemoryKeyringStore).
 
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -8,9 +9,6 @@ use tokio::sync::mpsc;
 
 use crate::errors::KeyringResult;
 use crate::{KeyringId, KeyringRecord};
-
-mod memory;
-pub use memory::*;
 
 #[cfg(feature = "firestore")]
 mod firestore;
@@ -173,7 +171,7 @@ pub enum WatchEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StoreKind {
-    /// [`MemoryKeyringStore`].
+    /// [`MemoryKeyringStore`](crate::testing::MemoryKeyringStore).
     Memory,
     /// `FirestoreKeyringStore`, of the `firestore` feature.
     Firestore,

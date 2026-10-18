@@ -3,9 +3,8 @@
 
 use std::time::Duration;
 
-use kms_aead_keyring::store::{
-    KeyringStore, MemoryKeyringStore, Revalidation, Stored, Swap, WatchEvent,
-};
+use kms_aead_keyring::store::{KeyringStore, Revalidation, Stored, Swap, WatchEvent};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{KeyringId, KeyringRecord, KeyringResult};
 use serde_json::json;
 

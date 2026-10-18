@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::errors::RecordInvalidError;
-use crate::testing::{TestResult, TENANT};
+use crate::test_support::{TestResult, TENANT};
 
 const CREATED: &str = "2026-01-10T09:00:00Z";
 const ROTATED: &str = "2026-04-10T09:00:00Z";

@@ -222,7 +222,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::testing::{TestResult, TENANT};
+    use crate::test_support::{TestResult, TENANT};
     use crate::{Compromise, KeyringError};
 
     const DETERMINISTIC: u32 = 1 << 31;
@@ -342,8 +342,8 @@ mod tests {
         use secret_vault_value::SecretValue;
 
         use super::*;
-        use crate::store::MemoryKeyringStore;
-        use crate::testing::{email_of, TestBackend, TestKeyring, TestProvider};
+        use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider};
+        use crate::testing::MemoryKeyringStore;
         use crate::{EntityId, EntityKind, FieldName, FieldSpec, KeyringOptions, KeyringPolicy};
 
         const ALICE: &str = "alice@example.com";

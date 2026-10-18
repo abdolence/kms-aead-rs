@@ -75,7 +75,7 @@
 //!
 //! | Store | Type | Feature |
 //! |---|---|---|
-//! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
+//! | Memory, for tests and values that never outlive the process | [`MemoryKeyringStore`](testing::MemoryKeyringStore) | none |
 //! | Firestore, with a listener for push | `store::FirestoreKeyringStore` | `firestore` |
 //! | PostgreSQL, through tokio-postgres, with push by `NOTIFY` | `store::PostgresKeyringStore` | `postgres` |
 //! | Cloud Storage, with generation preconditions and no push | `store::GcsKeyringStore` | `gcs` |
@@ -106,7 +106,7 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 //! use kms_aead::{KmsAeadResult, Ring};
-//! use kms_aead_keyring::store::MemoryKeyringStore;
+//! use kms_aead_keyring::testing::MemoryKeyringStore;
 //! use kms_aead_keyring::{
 //!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
 //!     KeyringPolicy, Plaintext, Purpose, Randomized,
@@ -202,5 +202,7 @@ pub mod store;
 pub mod sweep;
 pub use sweep::{SealFormat, SealMarker};
 
+pub mod testing;
+
 #[cfg(test)]
-mod testing;
+mod test_support;

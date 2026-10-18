@@ -246,8 +246,8 @@ mod tests {
 
     use super::*;
     use crate::errors::KeyVersionError;
-    use crate::store::MemoryKeyringStore;
-    use crate::testing::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
+    use crate::testing::MemoryKeyringStore;
     use crate::{KeyringOptions, KeyringPolicy};
 
     // The keysets below were written by tinkey 1.14.0, from

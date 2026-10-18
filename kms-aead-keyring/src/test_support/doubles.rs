@@ -13,10 +13,8 @@ use kms_aead::{
 };
 
 use crate::errors::KeyringResult;
-use crate::store::{
-    KeyringStore, KeyringWatch, MemoryKeyringStore, MemoryRevision, Revalidation, StoreKind,
-    Stored, Swap,
-};
+use crate::store::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap};
+use crate::testing::{MemoryKeyringStore, MemoryRevision};
 use crate::{
     EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringId, KeyringRecord,
 };

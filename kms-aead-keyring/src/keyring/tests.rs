@@ -13,10 +13,11 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
-use crate::store::{KeyringStore, MemoryKeyringStore};
-use crate::testing::{
+use crate::store::KeyringStore;
+use crate::test_support::{
     email_of, TestBackend, TestKeyring, TestProvider, TestResult, TestStore, TENANT,
 };
+use crate::testing::MemoryKeyringStore;
 use crate::{EntityId, EntityKind, FieldName, FieldSpec, Transition};
 
 /// A keyring created on a counting store, beside the memory store it writes to.

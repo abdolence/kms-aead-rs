@@ -6,7 +6,7 @@
 
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{AeadAlgorithm, ValueStruct};
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
     KeyVersion, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose, Randomized,

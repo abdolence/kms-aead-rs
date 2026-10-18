@@ -17,8 +17,8 @@ use kms_aead::{
     AeadAlgorithm, AeadCipher, CipherTextWithEncryptedKey, DekReusePolicy, KmsAeadEnvelope,
     KmsAeadEnvelopeOptions, KmsAeadResult, Ring, ValueStruct,
 };
-use kms_aead_keyring::store::MemoryKeyringStore;
 use kms_aead_keyring::sweep::{self, Outcome};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
     KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Randomized, SealFormat, SealMarker,

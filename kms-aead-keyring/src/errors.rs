@@ -689,7 +689,7 @@ mod tests {
     use kms_aead::errors::KmsAeadEncryptionError;
 
     use super::*;
-    use crate::testing::TENANT;
+    use crate::test_support::TENANT;
 
     #[test]
     fn a_kms_error_keeps_the_kms_aead_code() {

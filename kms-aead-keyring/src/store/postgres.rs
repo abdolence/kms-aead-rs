@@ -558,7 +558,7 @@ mod tests {
     use tokio_postgres::NoTls;
 
     use super::*;
-    use crate::testing::TestResult;
+    use crate::test_support::TestResult;
 
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
