@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let encryption = KmsAeadEnvelope::new(
         AzureKmsProvider::new(&kms_ref, credential)?,
-        AeadBackend::Ring,
+        AeadBackend::AwsLc,
     )?;
 
     let secret_value = SecretValue::from("test-secret");

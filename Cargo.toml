@@ -190,7 +190,7 @@ required-features = ["hashicorp-vault-transit-kms-encryption-base", "ring"]
 [[example]]
 name = "azure_kms"
 path = "examples/azure_kms.rs"
-required-features = ["azure-kms-encryption-base", "ring"]
+required-features = ["azure-kms-encryption-base", "aws-lc"]
 
 [[test]]
 name = "azure_kms_emulator"
