@@ -8,7 +8,7 @@ so DEKs wrapped before a rotation still unwrap afterwards.
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
@@ -19,16 +19,15 @@ let kms_ref = GcpKmsKeyRef::new(
     "my-key".to_string(),
 );
 
-let envelope = KmsAeadEnvelope::new(GcpKmsProvider::new(&kms_ref).await?, AeadBackend::AwsLc)?;
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
 
 // Or with DEKs from the Cloud KMS generator at the HSM protection level
-let envelope = KmsAeadEnvelope::new(
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(
     GcpKmsProvider::with_options(
         &kms_ref,
         GcpKmsProviderOptions::new().with_use_kms_random_gen(true),
     )
     .await?,
-    AeadBackend::AwsLc,
 )?;
 
 let cipher_text = envelope

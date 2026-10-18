@@ -11,8 +11,8 @@ encryption without a KMS:
     - A local KMS with a key the application holds, for development, tests and single-host
       installs;
 - AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
-- Crypto backends chosen at runtime: ring, aws-lc-rs (including its FIPS module) and the pure
-  Rust RustCrypto crates. A value sealed by one backend opens with any other;
+- Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
+  crates. A value sealed by one backend opens with any other;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
   keys;
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;

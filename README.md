@@ -11,8 +11,8 @@ encryption without a KMS:
 - KMS providers for Google Cloud KMS, AWS KMS, Azure Key Vault and Managed HSM, HashiCorp Vault
   Transit, and a local KMS for development, tests and single-host installs;
 - AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
-- Crypto backends chosen at runtime: ring, aws-lc-rs (including its FIPS module) and RustCrypto,
-  with values readable across all of them;
+- Crypto backends ring, aws-lc-rs (including its FIPS module) and RustCrypto, with values
+  readable across all of them;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of unwrapped data encryption
   keys;
 - Deterministic encryption with AES-SIV;
@@ -39,7 +39,7 @@ Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 #[tokio::main]
@@ -50,8 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "my-key-ring".to_string(),
         "my-key".to_string(),
     );
-    let envelope =
-        KmsAeadEnvelope::new(GcpKmsProvider::new(&kms_ref).await?, AeadBackend::AwsLc)?;
+    let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");
@@ -76,8 +75,9 @@ All examples available in the [examples](examples) directory.
 
 ## Migrating from 0.29
 
-0.30 makes ring optional and selects the crypto backend at runtime, so a provider feature needs a
-backend feature next to it, and most names changed. See the [migration guide](MIGRATION.md) and
+0.30 makes ring optional and names the crypto backend as a type parameter, so a provider feature
+needs a backend feature next to it, and most names changed. See the
+[migration guide](MIGRATION.md) and
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).
 
 Values written by 0.28.1 and earlier read only with the deprecated `legacy-formats` feature, see

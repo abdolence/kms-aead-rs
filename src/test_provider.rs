@@ -10,23 +10,21 @@ use secret_vault_value::SecretValue;
 use tokio::sync::watch;
 
 use crate::errors::KmsAeadEncryptionError;
-#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-use crate::AeadBackend;
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
     KmsAeadResult,
 };
 
 #[cfg(feature = "ring")]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
+pub(crate) type TestBackend = crate::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
+pub(crate) type TestBackend = crate::AwsLc;
 #[cfg(all(
     not(feature = "ring"),
     not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
+pub(crate) type TestBackend = crate::RustCrypto;
 
 /// How many calls the concurrency tests start at once.
 pub(crate) const CONCURRENT_CALLS: usize = 16;

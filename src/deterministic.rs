@@ -88,6 +88,7 @@ pub use aes_siv_cipher::*;
 #[cfg(feature = "deterministic")]
 mod aes_siv_cipher {
     use std::fmt::{Debug, Formatter};
+    use std::marker::PhantomData;
 
     use aes_siv::siv::Aes256Siv;
     use aes_siv::KeyInit;
@@ -99,8 +100,8 @@ mod aes_siv_cipher {
     use super::DeterministicAlgorithm;
     use crate::errors::KmsAeadEncryptionError;
     use crate::{
-        checked_key_material, spans, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey,
-        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
+        checked_key_material, generate_random_bytes, spans, AeadBackend, DataEncryptionKey,
+        EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
     };
 
     /// A value sealed by a [`DeterministicAlgorithm`]: `[synthetic IV: 16][ciphertext]`, the
@@ -131,9 +132,9 @@ mod aes_siv_cipher {
         }
     }
 
-    /// Deterministic AEAD with the backend and the algorithm it was made with, without a KMS:
-    /// equal inputs under one key give equal values, so a sealed value can be compared or looked
-    /// up without opening it, and reveals which values are equal.
+    /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
+    /// KMS: equal inputs under one key give equal values, so a sealed value can be compared or
+    /// looked up without opening it, and reveals which values are equal.
     ///
     /// Every backend seals and opens with RustCrypto's `aes-siv`, so a value sealed under one
     /// backend opens under any other. The backend's CSPRNG generates the keys, the FIPS
@@ -142,21 +143,24 @@ mod aes_siv_cipher {
     ///
     /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
     #[derive(Debug, Clone, Copy)]
-    pub struct DeterministicCipher {
-        backend: AeadBackend,
+    pub struct DeterministicCipher<B> {
         algorithm: DeterministicAlgorithm,
+        backend: PhantomData<B>,
     }
 
-    impl DeterministicCipher {
+    impl<B: AeadBackend> DeterministicCipher<B> {
         const SYNTHETIC_IV_LEN: usize = 16;
 
-        /// A cipher for `algorithm` on `backend`.
+        /// A cipher for `algorithm` on the backend `B`.
         ///
         /// # Errors
         ///
         /// None today: every backend implements every [`DeterministicAlgorithm`].
-        pub fn new(backend: AeadBackend, algorithm: DeterministicAlgorithm) -> KmsAeadResult<Self> {
-            Ok(Self { backend, algorithm })
+        pub fn new(algorithm: DeterministicAlgorithm) -> KmsAeadResult<Self> {
+            Ok(Self {
+                algorithm,
+                backend: PhantomData,
+            })
         }
 
         /// The algorithm this cipher seals and opens with.
@@ -170,9 +174,7 @@ mod aes_siv_cipher {
         ///
         /// `RANDOM_GENERATOR` when the CSPRNG fails.
         pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
-            self.backend
-                .generate_random_bytes(self.algorithm.key_len())
-                .map(DataEncryptionKey::from)
+            generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
         }
 
         /// A new key and the same key wrapped by `provider`, to store. The key comes from the
@@ -264,9 +266,10 @@ mod aes_siv_cipher {
     }
 
     /// Deterministic keys, wrapped and unwrapped by the envelope's provider.
-    impl<P> KmsAeadEnvelope<P>
+    impl<P, B> KmsAeadEnvelope<P, B>
     where
         P: KmsAeadEncryptionProvider + Send + Sync,
+        B: AeadBackend,
     {
         /// A new deterministic key and the same key wrapped by the provider, to store. The key
         /// comes from the KMS generator when the provider is configured to use one, and from the
@@ -280,9 +283,8 @@ mod aes_siv_cipher {
             &self,
             algorithm: DeterministicAlgorithm,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-            let backend = self.cipher.backend;
-            let cipher = DeterministicCipher::new(backend, algorithm)?;
-            let span = spans::generate_dek("deterministic", algorithm, backend);
+            let cipher = DeterministicCipher::<B>::new(algorithm)?;
+            let span = spans::generate_dek("deterministic", algorithm, B::NAME);
             spans::in_span(span, cipher.generate_wrapped_key(&self.provider)).await
         }
 
@@ -325,7 +327,7 @@ mod aes_siv_cipher {
     ))]
     mod tests {
         use super::*;
-        use crate::test_provider::TEST_BACKEND;
+        use crate::test_provider::TestBackend;
 
         const AAD: &[u8] = b"orders/1042";
         const PLAIN_TEXT: &str = "4111 1111 1111 1111";
@@ -370,7 +372,8 @@ mod aes_siv_cipher {
 
         #[test]
         fn seals_and_opens_the_published_vectors() -> KmsAeadResult<()> {
-            let cipher = DeterministicCipher::new(TEST_BACKEND, DeterministicAlgorithm::Aes256Siv)?;
+            let cipher =
+                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             for vector in VECTORS {
                 let key =
                     DataEncryptionKey::from(SecretValue::new(hex::decode(vector.key).unwrap()));
@@ -386,7 +389,8 @@ mod aes_siv_cipher {
 
         #[test]
         fn a_deterministic_cipher_refuses_a_key_of_another_length() -> KmsAeadResult<()> {
-            let cipher = DeterministicCipher::new(TEST_BACKEND, DeterministicAlgorithm::Aes256Siv)?;
+            let cipher =
+                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             let plain_text = SecretValue::from(PLAIN_TEXT);
             let sealed = cipher.encrypt_value(AAD, &plain_text, &cipher.generate_key()?)?;
             let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
@@ -408,7 +412,8 @@ mod aes_siv_cipher {
 
         #[test]
         fn a_value_shorter_than_the_synthetic_iv_is_invalid() -> KmsAeadResult<()> {
-            let cipher = DeterministicCipher::new(TEST_BACKEND, DeterministicAlgorithm::Aes256Siv)?;
+            let cipher =
+                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             let key = cipher.generate_key()?;
             for len in [0, 15] {
                 let short = DeterministicCipherText::from(vec![0xAA; len]);
@@ -436,7 +441,8 @@ mod aes_siv_cipher {
 
         #[test]
         fn a_different_aad_gives_a_different_value() -> KmsAeadResult<()> {
-            let cipher = DeterministicCipher::new(TEST_BACKEND, DeterministicAlgorithm::Aes256Siv)?;
+            let cipher =
+                DeterministicCipher::<TestBackend>::new(DeterministicAlgorithm::Aes256Siv)?;
             let key = cipher.generate_key()?;
             let plain_text = SecretValue::from(PLAIN_TEXT);
 
@@ -451,13 +457,13 @@ mod aes_siv_cipher {
             use super::*;
             use crate::test_provider::TestKmsProvider;
 
-            type Envelope = KmsAeadEnvelope<TestKmsProvider>;
+            type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
 
             #[tokio::test]
             async fn deterministic_dek_round_trips_through_the_provider() -> KmsAeadResult<()> {
-                let envelope = Envelope::new(TestKmsProvider::Working, TEST_BACKEND)?;
+                let envelope = Envelope::new(TestKmsProvider::Working)?;
                 let algorithm = DeterministicAlgorithm::Aes256Siv;
-                let cipher = DeterministicCipher::new(TEST_BACKEND, algorithm)?;
+                let cipher = DeterministicCipher::<TestBackend>::new(algorithm)?;
                 let plain_text = SecretValue::from(PLAIN_TEXT);
 
                 let (key, encrypted_key) =
@@ -478,7 +484,7 @@ mod aes_siv_cipher {
 
             #[tokio::test]
             async fn an_unwrapped_key_of_another_length_is_refused() -> KmsAeadResult<()> {
-                let envelope = Envelope::new(TestKmsProvider::Working, TEST_BACKEND)?;
+                let envelope = Envelope::new(TestKmsProvider::Working)?;
                 let encrypted_key = EncryptedDataEncryptionKey::new(vec![0x42; 32], None);
 
                 let result = envelope

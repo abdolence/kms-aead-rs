@@ -20,15 +20,15 @@ mod common;
 use common::FixedTokenCredential;
 
 #[cfg(feature = "ring")]
-const BACKEND: AeadBackend = AeadBackend::Ring;
+type Backend = Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
-const BACKEND: AeadBackend = AeadBackend::AwsLc;
+type Backend = AwsLc;
 #[cfg(all(
     not(feature = "ring"),
     not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
-const BACKEND: AeadBackend = AeadBackend::RustCrypto;
+type Backend = RustCrypto;
 
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";
 
@@ -100,7 +100,7 @@ impl Emulator {
         &self,
         key_name: &str,
         key_version: KmsKeyVersion,
-    ) -> TestResult<KmsAeadEnvelope<AzureKmsProvider>> {
+    ) -> TestResult<KmsAeadEnvelope<AzureKmsProvider, Backend>> {
         let key_ref = AzureKmsKeyRef::new(self.vault_url.clone(), key_name.to_string())
             .with_key_version(key_version);
         let provider = AzureKmsProvider::with_options(
@@ -108,7 +108,7 @@ impl Emulator {
             AzureKmsProviderOptions::new().with_client_options(Self::client_options()?),
             Arc::new(FixedTokenCredential),
         )?;
-        Ok(KmsAeadEnvelope::new(provider, BACKEND)?)
+        Ok(KmsAeadEnvelope::new(provider)?)
     }
 }
 

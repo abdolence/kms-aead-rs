@@ -6,20 +6,19 @@ with, and wraps the DEKs with the KEK of its provider. A call that makes no KMS 
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadAlgorithm, AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 // ChaCha20-Poly1305 by default
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
 // Or another algorithm
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::with_options(
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
 )?;
 # let _ = envelope;
@@ -39,13 +38,13 @@ the value:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, CipherTextWithEncryptedKey, KmsAeadEnvelope, ValueStruct};
+use kms_aead::{CipherTextWithEncryptedKey, KmsAeadEnvelope, Ring, ValueStruct};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope
@@ -86,13 +85,13 @@ cipher texts are `CipherText` values without a wrapped key.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
 // One KMS call: a new DEK and the same DEK wrapped
 let (dek, encrypted_dek) = envelope.generate_new_dek().await?;
@@ -132,12 +131,12 @@ them back with `TryFrom<&[u8]>` or `try_from_hex_string()`:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, EncryptedDataEncryptionKey, KmsAeadEnvelope};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-# let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
 let stored: Vec<u8> = encrypted_dek.to_bytes()?;

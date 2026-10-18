@@ -29,7 +29,7 @@ the library and span close events, every span is printed with its fields when it
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -41,11 +41,8 @@ let subscriber = tracing_subscriber::fmt()
     .finish();
 tracing::subscriber::set_global_default(subscriber)?;
 
-let provider = LocalKmsProvider::ephemeral(
-    LocalKekId::try_from("example".to_string())?,
-    AeadBackend::Ring,
-)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope.encrypt_value(aad, &SecretValue::from("secret")).await?;

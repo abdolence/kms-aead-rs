@@ -7,7 +7,7 @@ accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias 
 
 ```rust,no_run
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, AwsKmsProviderOptions};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
@@ -16,16 +16,15 @@ let kms_ref = AwsKmsKeyRef::new(
     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".to_string(),
 );
 
-let envelope = KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?, AeadBackend::AwsLc)?;
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(AwsKmsProvider::new(&kms_ref).await?)?;
 
 // Or with DEKs from AWS KMS GenerateRandom
-let envelope = KmsAeadEnvelope::new(
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(
     AwsKmsProvider::with_options(
         &kms_ref,
         AwsKmsProviderOptions::new().with_use_kms_random_gen(true),
     )
     .await?,
-    AeadBackend::AwsLc,
 )?;
 
 let cipher_text = envelope

@@ -1,42 +1,44 @@
+use std::marker::PhantomData;
+
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
-use crate::backend::{AeadBackendOps, Failure, Nonce};
+use crate::backend::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::{
-    checked_key_material, AeadAlgorithm, AeadBackend, CipherText, DataEncryptionKey,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
+    checked_key_material, generate_random_bytes, AeadAlgorithm, AeadBackend, CipherText,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// Randomized authenticated encryption with associated data (AEAD) under a data encryption key
-/// the caller holds, with the backend and the algorithm it was made with, without a KMS.
+/// the caller holds, on the backend `B` and with the algorithm it was made with, without a KMS.
 ///
 /// Values are `[nonce][ciphertext][tag]`, with a random nonce. The AAD is authenticated but not
 /// encrypted: a value opens only with the AAD it was sealed with.
 ///
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
 #[derive(Debug, Clone)]
-pub struct AeadCipher {
-    /// Read as a field, never through a method: in a build without a backend feature the type
-    /// has no value, and a call returning one makes the code after it unreachable.
-    pub(crate) backend: AeadBackend,
+pub struct AeadCipher<B> {
     algorithm: AeadAlgorithm,
+    backend: PhantomData<B>,
 }
 
-impl AeadCipher {
-    /// A cipher for `algorithm` on `backend`.
+impl<B: AeadBackend> AeadCipher<B> {
+    /// A cipher for `algorithm` on the backend `B`.
     ///
     /// # Errors
     ///
     /// [`KmsAeadError::UnsupportedAlgorithm`](crate::errors::KmsAeadError::UnsupportedAlgorithm),
-    /// code `UNSUPPORTED_ALGORITHM`, when `backend` does not implement `algorithm`: ring has no
+    /// code `UNSUPPORTED_ALGORITHM`, when `B` does not implement `algorithm`: ring has no
     /// AES-256-GCM-SIV.
-    pub fn new(backend: AeadBackend, algorithm: AeadAlgorithm) -> KmsAeadResult<Self> {
-        let ops: &dyn AeadBackendOps = backend.into();
-        if ops.supports(algorithm) {
-            Ok(Self { backend, algorithm })
+    pub fn new(algorithm: AeadAlgorithm) -> KmsAeadResult<Self> {
+        if B::supports(algorithm) {
+            Ok(Self {
+                algorithm,
+                backend: PhantomData,
+            })
         } else {
-            Err(KmsAeadUnsupportedAlgorithmError::create(algorithm, backend))
+            Err(KmsAeadUnsupportedAlgorithmError::create(algorithm, B::NAME))
         }
     }
 
@@ -51,9 +53,7 @@ impl AeadCipher {
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
-        self.backend
-            .generate_random_bytes(self.algorithm.key_len())
-            .map(DataEncryptionKey::from)
+        generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
     /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
@@ -93,12 +93,11 @@ impl AeadCipher {
         plain_text: &SecretValue,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<CipherText> {
-        let ops: &dyn AeadBackendOps = self.backend.into();
         let key = self.key_bytes(key)?;
         let plain_text = plain_text.ref_sensitive_value();
 
         let mut nonce: Nonce = [0; AeadAlgorithm::NONCE_LEN];
-        ops.fill_random(&mut nonce).map_err(|_| {
+        B::fill_random(&mut nonce).map_err(|_| {
             KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate a random nonce")
         })?;
 
@@ -110,22 +109,21 @@ impl AeadCipher {
         let value = buffer.ref_sensitive_value_mut();
         value.extend_from_slice(&nonce);
         value.extend_from_slice(plain_text);
-        let tag = ops
-            .seal_in_place(
-                self.algorithm,
-                key,
-                &nonce,
-                aad,
-                &mut value[AeadAlgorithm::NONCE_LEN..],
-            )
-            .map_err(|failure| match failure {
-                Failure::Key => {
-                    KmsAeadEncryptionError::create("ENCRYPT_KEY", "Unable to create a sealing key")
-                }
-                Failure::Operation => {
-                    KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data")
-                }
-            })?;
+        let tag = B::seal_in_place(
+            self.algorithm,
+            key,
+            &nonce,
+            aad,
+            &mut value[AeadAlgorithm::NONCE_LEN..],
+        )
+        .map_err(|failure| match failure {
+            Failure::Key => {
+                KmsAeadEncryptionError::create("ENCRYPT_KEY", "Unable to create a sealing key")
+            }
+            Failure::Operation => {
+                KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data")
+            }
+        })?;
         value.extend_from_slice(&tag);
         Ok(CipherText(std::mem::take(value)))
     }
@@ -146,7 +144,6 @@ impl AeadCipher {
         cipher_text: &CipherText,
         key: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
-        let ops: &dyn AeadBackendOps = self.backend.into();
         let key = self.key_bytes(key)?;
         let (nonce, sealed) = cipher_text
             .value()
@@ -163,22 +160,21 @@ impl AeadCipher {
             })?;
 
         let mut plain_text = SecretValue::new(sealed.to_vec());
-        let plain_text_len = ops
-            .open_in_place(
-                self.algorithm,
-                key,
-                nonce,
-                aad,
-                plain_text.ref_sensitive_value_mut(),
-            )
-            .map_err(|failure| match failure {
-                Failure::Key => {
-                    KmsAeadEncryptionError::create("DECRYPT_KEY", "Unable to create an opening key")
-                }
-                Failure::Operation => {
-                    KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data")
-                }
-            })?;
+        let plain_text_len = B::open_in_place(
+            self.algorithm,
+            key,
+            nonce,
+            aad,
+            plain_text.ref_sensitive_value_mut(),
+        )
+        .map_err(|failure| match failure {
+            Failure::Key => {
+                KmsAeadEncryptionError::create("DECRYPT_KEY", "Unable to create an opening key")
+            }
+            Failure::Operation => {
+                KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data")
+            }
+        })?;
         plain_text
             .ref_sensitive_value_mut()
             .truncate(plain_text_len);

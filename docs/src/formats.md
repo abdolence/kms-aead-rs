@@ -22,13 +22,13 @@ cipher text and a wrapped DEK. `separate` reads it back:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, CipherTextWithEncryptedKey, KmsAeadEnvelope};
+use kms_aead::{CipherTextWithEncryptedKey, KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 let encrypted = envelope.encrypt_value(b"aad", &SecretValue::from("secret")).await?;
 
 let (cipher_text, encrypted_dek) = encrypted.separate()?;

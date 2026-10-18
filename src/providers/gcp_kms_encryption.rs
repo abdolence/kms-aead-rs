@@ -438,8 +438,7 @@ mod tests {
             std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         );
-        let encryption =
-            KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
+        let encryption = KmsAeadEnvelope::<_, Ring>::new(GcpKmsProvider::new(&key_ref).await?)?;
         let envelopes = [
             #[cfg(feature = "legacy-formats")]
             ENVELOPE_FROM_0_28_1,

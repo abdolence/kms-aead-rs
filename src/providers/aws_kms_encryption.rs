@@ -511,8 +511,7 @@ mod tests {
             std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         );
-        let encryption =
-            KmsAeadEnvelope::new(AwsKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
+        let encryption = KmsAeadEnvelope::<_, Ring>::new(AwsKmsProvider::new(&key_ref).await?)?;
         let envelopes = [
             #[cfg(feature = "legacy-formats")]
             ENVELOPE_FROM_0_28_1,

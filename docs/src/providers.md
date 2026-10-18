@@ -15,7 +15,7 @@ Every provider implements `KmsAeadEncryptionProvider`, and `KmsAeadEnvelope` tak
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
 let kms_ref = GcpKmsKeyRef::new(
@@ -24,7 +24,7 @@ let kms_ref = GcpKmsKeyRef::new(
     "my-key-ring".to_string(),
     "my-key".to_string(),
 );
-let envelope = KmsAeadEnvelope::new(GcpKmsProvider::new(&kms_ref).await?, AeadBackend::AwsLc)?;
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
 # let _ = envelope;
 # Ok(())
 # }

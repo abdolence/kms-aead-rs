@@ -1,6 +1,6 @@
 # Migrating from 0.29
 
-0.30 replaces the ring-only API with crypto backends chosen at runtime, adds store-less DEK reuse,
+0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse,
 the DEK cache, deterministic encryption and the local KMS, and makes ring optional. Stored values
 need no migration: every algorithm writes the same bytes on every backend, and envelope layout v1
 is unchanged. Values written by 0.28.1 and earlier need the `legacy-formats` feature, see
@@ -27,15 +27,15 @@ The crate declares `rust-version = "1.99"`.
 
 | 0.29 | 0.30 |
 |---|---|
-| `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P>` |
-| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::new(provider, AeadBackend::Ring)?`, not `async` |
-| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::with_options(provider, AeadBackend::Ring, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
-| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::with_options(provider, backend, options)` |
+| `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P, Ring>`, with the backend as a type parameter |
+| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<_, Ring>::new(provider)?`, not `async` |
+| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
+| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, options)` |
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
 | `KmsAeadRingEncryptionProvider` | `KmsAeadEncryptionProvider`, see [Your own provider](#your-own-provider) |
-| module `kms_aead::ring_encryption` | removed; `AeadCipher` at the crate root |
-| `RingAeadEncryption::new()` | `AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)` |
-| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)` |
+| module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>` at the crate root |
+| `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)` |
+| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)` |
 | `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG, and the random nonce was the only option |
 | `RingAeadEncryptionOptions`, `RingAeadEncryptionNonceKind` | removed |
 | `RingAeadEncryption.algo` | `AeadCipher::algorithm()` |

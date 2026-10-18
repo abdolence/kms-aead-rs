@@ -10,7 +10,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
-use crate::{AeadAlgorithm, AeadBackend};
+use crate::AeadAlgorithm;
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -348,7 +348,7 @@ pub struct KmsAeadUnsupportedAlgorithmError {
 }
 
 impl KmsAeadUnsupportedAlgorithmError {
-    pub(crate) fn create(algorithm: AeadAlgorithm, backend: AeadBackend) -> KmsAeadError {
+    pub(crate) fn create(algorithm: AeadAlgorithm, backend: &str) -> KmsAeadError {
         KmsAeadError::UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError::new(
             KmsAeadErrorPublicGenericDetails::new("UNSUPPORTED_ALGORITHM".to_string()),
             algorithm,

@@ -1,19 +1,59 @@
 # Crypto backends
 
-The AEAD algorithms run on a crypto library that a feature compiles in and an `AeadBackend` value
-selects at runtime. A build may enable any number of backends, and there is no default one, so
-`AeadCipher::new`, the `KmsAeadEnvelope` constructors and `LocalKmsProvider` each take the
-backend to use.
+The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
+a type, and `AeadCipher`, `DeterministicCipher`, `KmsAeadEnvelope` and `LocalKmsProvider` take
+that type as their backend type parameter `B`. A build may enable any number of backends, and
+there is no default one.
 
-| Feature | Variant | Library |
+| Feature | Type | Library |
 |---|---|---|
-| `ring` | `AeadBackend::Ring` | [ring](https://crates.io/crates/ring) |
-| `aws-lc` | `AeadBackend::AwsLc` | [aws-lc-rs](https://crates.io/crates/aws-lc-rs) |
-| `aws-lc-fips` | `AeadBackend::AwsLc`, on the FIPS module | [aws-lc-rs](https://crates.io/crates/aws-lc-rs) |
-| `rustcrypto` | `AeadBackend::RustCrypto` | the [RustCrypto AEADs](https://github.com/RustCrypto/AEADs) |
+| `ring` | `Ring` | [ring](https://crates.io/crates/ring) |
+| `aws-lc` | `AwsLc` | [aws-lc-rs](https://crates.io/crates/aws-lc-rs) |
+| `aws-lc-fips` | `AwsLc`, on the FIPS module | [aws-lc-rs](https://crates.io/crates/aws-lc-rs) |
+| `rustcrypto` | `RustCrypto` | the [RustCrypto AEADs](https://github.com/RustCrypto/AEADs) |
 
 There is no default because Cargo unifies features: a default chosen by features would change
 for every crate in a build when one crate enables another backend.
+
+## Code generic over the backend
+
+The backend types implement `AeadBackend`, a sealed trait without methods. Code that works with
+any backend bounds its type parameter with `AeadBackend` and nothing else:
+
+```rust
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadResult, Ring};
+use secret_vault_value::SecretValue;
+
+struct Orders<B> {
+    envelope: KmsAeadEnvelope<LocalKmsProvider<B>, B>,
+}
+
+impl<B: AeadBackend> Orders<B> {
+    fn new() -> KmsAeadResult<Self> {
+        let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("orders".to_string())?)?;
+        Ok(Self {
+            envelope: KmsAeadEnvelope::new(provider)?,
+        })
+    }
+
+    async fn round_trip(&self, card: &SecretValue) -> KmsAeadResult<SecretValue> {
+        let sealed = self.envelope.encrypt_value(b"orders/1042", card).await?;
+        self.envelope.decrypt_value(b"orders/1042", &sealed).await
+    }
+}
+
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> KmsAeadResult<()> {
+let orders = Orders::<Ring>::new()?;
+let card = SecretValue::from("4111 1111 1111 1111");
+assert_eq!(orders.round_trip(&card).await?, card);
+# Ok(())
+# }
+```
+
+`generate_random_bytes::<B>(len)` returns `len` bytes from the CSPRNG of the backend `B`, for
+secrets the application generates itself.
 
 ## Algorithms
 
@@ -29,9 +69,9 @@ CSPRNG. A backend that does not implement the algorithm fails at construction, n
 `KmsAeadError::UnsupportedAlgorithm` and the code `UNSUPPORTED_ALGORITHM`:
 
 ```rust
-use kms_aead::{errors::KmsAeadError, AeadAlgorithm, AeadBackend, AeadCipher};
+use kms_aead::{errors::KmsAeadError, AeadAlgorithm, AeadCipher, Ring};
 
-let result = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256GcmSiv);
+let result = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256GcmSiv);
 assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
 ```
 
@@ -43,11 +83,11 @@ assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
 `AeadCipher` seals and opens values with a key the application holds:
 
 ```rust
-use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+use kms_aead::{AeadAlgorithm, AeadCipher, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)?;
+let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
 let key = cipher.generate_key()?;
 
 let aad = b"orders/1042";
@@ -72,12 +112,12 @@ work together, and moving an application from one backend to another needs no mi
 data:
 
 ```rust
-use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+use kms_aead::{AeadAlgorithm, AeadCipher, Ring, RustCrypto};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let writer = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
-let reader = AeadCipher::new(AeadBackend::RustCrypto, AeadAlgorithm::Aes256Gcm)?;
+let writer = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
+let reader = AeadCipher::<RustCrypto>::new(AeadAlgorithm::Aes256Gcm)?;
 
 let key = writer.generate_key()?;
 let cipher_text = writer.encrypt_value(b"aad", &SecretValue::from("secret"), &key)?;

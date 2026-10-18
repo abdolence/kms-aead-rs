@@ -22,11 +22,11 @@ such as AWS's `IncorrectKeyException`. It is also the `error_code` field of the 
 
 ```rust
 use kms_aead::errors::KmsAeadError;
-use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText};
+use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
+let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 let key = cipher.generate_key()?;
 let cipher_text = cipher.encrypt_value(b"orders/1042", &SecretValue::from("secret"), &key)?;
 

@@ -16,21 +16,20 @@ KEK and the wrapped DEK's bytes. A per-call envelope has no cache unless the opt
 ```rust
 use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let cache = DekCache::new(
     DekCacheOptions::new()
         .with_ttl(Duration::from_secs(5 * 60))
         .with_max_entries(NonZeroUsize::new(10_000).expect("not zero")),
 )?;
 
-let envelope = KmsAeadEnvelope::with_options(
+let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
     KmsAeadEnvelopeOptions::new().with_dek_cache(cache.clone()),
 )?;
 # let _ = envelope;
@@ -76,13 +75,13 @@ To drop one at once, invalidate it with the envelope's own KEK:
 ```rust
 # use kms_aead::cache::{DekCache, DekCacheOptions};
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+# use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use kms_aead::KmsAeadEncryptionProvider;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-# let envelope = KmsAeadEnvelope::with_options(provider, AeadBackend::Ring,
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# let envelope = KmsAeadEnvelope::<_, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
@@ -138,17 +137,16 @@ stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use secret_vault_value::SecretValue;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::with_options(
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
     KmsAeadEnvelopeOptions::new().with_dek_reuse(
         DekReusePolicy::new()
             .with_max_age(Duration::from_secs(60 * 60))

@@ -42,11 +42,11 @@ application keeps track of which key serves which algorithm, as kms-aead-keyring
 key ids.
 
 ```rust
-use kms_aead::{AeadBackend, DeterministicAlgorithm, DeterministicCipher};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let cipher = DeterministicCipher::new(AeadBackend::Ring, DeterministicAlgorithm::Aes256Siv)?;
+let cipher = DeterministicCipher::<Ring>::new(DeterministicAlgorithm::Aes256Siv)?;
 let key = cipher.generate_key()?;
 
 let aad = b"customers/email";
@@ -70,13 +70,13 @@ The envelope generates and unwraps deterministic keys with its provider:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, DeterministicAlgorithm, DeterministicCipher, KmsAeadEnvelope};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key wrapped, to store
@@ -85,7 +85,7 @@ let (key, encrypted_key) = envelope.generate_new_deterministic_dek(algorithm).aw
 // Later: unwrap the stored key
 let unwrapped = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
 
-let cipher = DeterministicCipher::new(AeadBackend::Ring, algorithm)?;
+let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
 let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &key)?;
 assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from("value"));
 # Ok(())

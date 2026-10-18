@@ -4,7 +4,7 @@
 //! Run with `cargo run --example tracing --features ring`.
 
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -19,11 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     // An ephemeral KEK lives as long as the process, so nothing it wraps outlives this run.
-    let provider = LocalKmsProvider::ephemeral(
-        LocalKekId::try_from("example".to_string())?,
-        AeadBackend::Ring,
-    )?;
-    let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+    let provider =
+        LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+    let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");

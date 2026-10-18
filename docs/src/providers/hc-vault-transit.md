@@ -8,14 +8,14 @@ names the key, and the mount is `transit` unless set with `with_mount`.
 
 ```rust,no_run
 use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
 // VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE and VAULT_CACERT are read by the provider
 let key_ref = HcVaultTransitKeyRef::new("orders".to_string());
 
-let envelope = KmsAeadEnvelope::new(HcVaultTransitProvider::new(&key_ref)?, AeadBackend::AwsLc)?;
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(HcVaultTransitProvider::new(&key_ref)?)?;
 
 let cipher_text = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))

@@ -2,7 +2,7 @@
 
 ## 0.30
 
-v0.30.0 replaces the ring-only API with crypto backends chosen at runtime and makes ring optional.
+v0.30.0 replaces the ring-only API with a choice of crypto backends and makes ring optional.
 Stored values need no migration, except the values written by 0.28.1 and earlier, which need the
 deprecated `legacy-formats` feature.
 
@@ -13,7 +13,8 @@ In short:
 - `vault-transit-kms-encryption*` features are `hashicorp-vault-transit-kms-encryption*`, and the
   `VaultTransit*` types are `HcVaultTransit*`;
 - `KmsAeadRingEnvelopeEncryption::new(provider).await?` is
-  `KmsAeadEnvelope::new(provider, AeadBackend::Ring)?`, and `RingAeadEncryption` is `AeadCipher`;
+  `KmsAeadEnvelope::<_, Ring>::new(provider)?`, and `RingAeadEncryption` is `AeadCipher<Ring>`.
+  The backend is a type parameter: `Ring`, `AwsLc` or `RustCrypto`;
 - the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods taking
   `aad: &[u8]`;
 - `KmsAeadError` is `#[non_exhaustive]`, the SDK error conversions are gone, and a few error

@@ -11,7 +11,7 @@ The provider takes any Azure credential, for example one from `azure_identity`:
 
 ```rust,no_run
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -24,10 +24,7 @@ let kms_ref = AzureKmsKeyRef::new(
 // use `azure_identity::ManagedIdentityCredential` in Azure deployments
 let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
-let envelope = KmsAeadEnvelope::new(
-    AzureKmsProvider::new(&kms_ref, credential)?,
-    AeadBackend::AwsLc,
-)?;
+let envelope = KmsAeadEnvelope::<_, AwsLc>::new(AzureKmsProvider::new(&kms_ref, credential)?)?;
 
 let cipher_text = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))

@@ -132,7 +132,7 @@ pub(crate) mod kms {
 pub(crate) fn aead_encrypt(
     mode: &str,
     algorithm: impl Display,
-    backend: impl Display,
+    backend: &str,
     dek_cache: &DekCache,
 ) -> Span {
     let span = debug_span!(
@@ -152,7 +152,7 @@ pub(crate) fn aead_encrypt(
 pub(crate) fn aead_decrypt(
     mode: &str,
     algorithm: impl Display,
-    backend: impl Display,
+    backend: &str,
     dek_cache: &DekCache,
     format: Option<&str>,
 ) -> Span {
@@ -187,7 +187,7 @@ pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
 
 /// `KMS AEAD generate DEK`, around the envelope's key generation. `purpose` is `randomized` or
 /// `deterministic`.
-pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: impl Display) -> Span {
+pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
     debug_span!(
         "KMS AEAD generate DEK",
         { PURPOSE } = purpose,
