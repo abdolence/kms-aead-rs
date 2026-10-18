@@ -716,9 +716,12 @@ mod tests {
 
         let ((), first) = cache.with_key(&provider, &encrypted, |_| ()).await?;
         let ((), second) = cache.with_key(&provider, &encrypted, |_| ()).await?;
+        let cached = cache.cached_dek(&provider.kek(), &encrypted).unwrap();
         cache.invalidate(&provider.kek(), &encrypted);
+        let zeroized = cached.strong_count() == 0;
         let ((), third) = cache.with_key(&provider, &encrypted, |_| ()).await?;
 
+        assert!(zeroized);
         assert_eq!(
             [first, second, third],
             [
@@ -806,21 +809,6 @@ mod tests {
             ]
         );
         assert_eq!(billing.unwraps(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn invalidate_zeroizes_the_dek_bytes() -> KmsAeadResult<()> {
-        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
-        let cache = DekCache::new(DekCacheOptions::new())?;
-        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
-
-        cache.with_key(&provider, &encrypted, |_| ()).await?;
-        let cached = cache.cached_dek(&provider.kek(), &encrypted).unwrap();
-        assert_eq!(cached.strong_count(), 1);
-        cache.invalidate(&provider.kek(), &encrypted);
-
-        assert_eq!(cached.strong_count(), 0);
         Ok(())
     }
 
