@@ -325,6 +325,20 @@ async fn reload_is_rate_limited() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn reseal_of_a_key_id_the_record_lacks_reloads_and_fails() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let unknown = relabelled(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?, 9)?;
+
+    assert!(matches!(
+        fixture.keyring.reseal(&aad, &unknown).await,
+        Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == KeyId::new(9)
+    ));
+    assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;

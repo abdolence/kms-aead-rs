@@ -151,8 +151,9 @@ where
     }
 
     /// `value` sealed again with `aad` under the active deterministic version, with the trust of
-    /// the version it was read under, or `None` when it is under the active version already, or
-    /// a newer one, as [`reseal`](Self::reseal) does for randomised values. Once no value is left
+    /// the version it was read under, or `None` when it is under the active version already, by
+    /// the rule [`reseal`](Self::reseal) follows for randomised values: any other version is
+    /// re-sealed, and a key id the cached record lacks reloads it first. Once no value is left
     /// under the old version, it is retired, and the equality queries of
     /// [`deterministic_probes`](Self::deterministic_probes) drop its probe.
     ///
@@ -167,10 +168,7 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
-        if !self
-            .is_behind_active(Purpose::Deterministic, key_id)
-            .await?
-        {
+        if self.is_active(Purpose::Deterministic, key_id).await? {
             return Ok(None);
         }
         let decrypted = self.decrypt_deterministic_with_trust(aad, value).await?;

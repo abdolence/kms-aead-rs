@@ -242,8 +242,16 @@ where
     }
 
     /// `value` sealed again with `aad` under the active randomised version, with the trust of
-    /// the version it was read under, or `None` when it is under the active version already, or
-    /// under a newer one that a process with a fresher record sealed it under.
+    /// the version it was read under, or `None` when it is under the active version already.
+    ///
+    /// Any other version is re-sealed, whatever its key id: a version that a rotation left
+    /// behind, a decrypt-only version above the active one, which `KeyringAdmin::promote` of an
+    /// older pending version leaves after `KeyringAdmin::mark_compromised`, and a version still
+    /// pending in the cached record, which a process with a fresher record promoted and sealed
+    /// under. In the last case the record keeps the older marker the caller read before the
+    /// re-seal, so the next sweep visits it again. A key id the cached record lacks reloads the
+    /// record, as [`decrypt`](Self::decrypt) does, and is compared with the reloaded record's
+    /// active version.
     ///
     /// The value is read with [`decrypt_with_trust`](Self::decrypt_with_trust), so a value under
     /// a compromised version is re-sealed too, and [`Resealed::trust`] says so: the caller
@@ -259,14 +267,15 @@ where
     ///
     /// [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`] for the value's
     /// key id, before any store or KMS call; [`KeyringError::NoActiveVersion`] before any
-    /// decryption; and the errors of `decrypt_with_trust` and [`encrypt`](Self::encrypt).
+    /// decryption; [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks the key id
+    /// too; and the errors of `decrypt_with_trust` and [`encrypt`](Self::encrypt).
     pub async fn reseal<T: Plaintext>(
         &self,
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Option<Resealed<T, Randomized>>> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
-        if !self.is_behind_active(Purpose::Randomized, key_id).await? {
+        if self.is_active(Purpose::Randomized, key_id).await? {
             return Ok(None);
         }
         let decrypted = self.decrypt_with_trust(aad, value).await?;
@@ -276,14 +285,18 @@ where
         }))
     }
 
-    /// Whether `key_id` of `purpose` is below the purpose's active version in the current
-    /// record, or [`KeyringError::NoActiveVersion`] when it has none.
-    async fn is_behind_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
-        let record = self.cache.current().await;
+    /// Whether `key_id` is the active version of `purpose`, in the cached record or, when that
+    /// lacks it, in the record reloaded for it; [`KeyringError::NoActiveVersion`] when the purpose
+    /// has none, and [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks `key_id`.
+    async fn is_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
+        let (record, _) = self.cache.find(key_id).await;
         let active = record
             .active(purpose)
             .ok_or_else(|| KeyringError::no_active_version(self.id(), purpose))?;
-        Ok(key_id.as_u32() < active.id().as_u32())
+        if record.version(key_id).is_none() {
+            return Err(KeyringError::key_version_unknown(self.id(), key_id));
+        }
+        Ok(active.id() == key_id)
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error

@@ -466,42 +466,27 @@ mod tests {
             Ok(())
         }
 
-        #[tokio::test]
-        async fn run_visits_exactly_the_records_below_the_seal_marker() -> TestResult {
-            let admin = TestRegistry::new(
-                MemoryKeyringStore::new(),
-                KeyringRegistryOptions::new().with_watch(false),
-            )?
-            .create(
-                TestProvider::new("tenant-42-kek")?,
-                TENANT,
-                KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
-            )
-            .await?;
-            let keyring = admin.keyring();
-            let users = Users::default();
-            write_user(keyring, &users, "41").await?;
-            admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
-                .await?;
-            write_user(keyring, &users, "42").await?;
-            // No user has a beacon, so this rotation leaves every value current.
-            admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
-            write_user(keyring, &users, "43").await?;
-
+        /// The users whose marker is below the keyring's: the sweep's query.
+        fn behind(keyring: &TestKeyring<MemoryKeyringStore>, users: &Users) -> Vec<&'static str> {
             let current = keyring.record().seal_marker();
-            let behind: Vec<&str> = users
+            users
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .iter()
                 .filter(|(_, row)| row.seal < current)
                 .map(|(user, _)| *user)
-                .collect();
-            assert_eq!(behind, ["41", "42"]);
+                .collect()
+        }
 
-            let report = run(&TENANT, stream::iter(behind), NonZeroUsize::MIN, |user| {
-                let users = &users;
-                async move {
+        /// One sweep over the users [`behind`] finds, re-sealing each email as an application
+        /// does and writing the marker read before the re-seal.
+        async fn sweep(keyring: &TestKeyring<MemoryKeyringStore>, users: &Users) -> SweepReport {
+            let candidates = behind(keyring, users);
+            run(
+                &TENANT,
+                stream::iter(candidates),
+                NonZeroUsize::MIN,
+                |user| async move {
                     let row = users
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -529,27 +514,94 @@ mod tests {
                         .unwrap_or_else(PoisonError::into_inner)
                         .insert(user, UserRow { email, seal });
                     Ok::<ResealOutcome, KeyringError>(outcome)
-                }
-            })
-            .await;
+                },
+            )
+            .await
+        }
+
+        fn email_in(users: &Users, user: &str) -> Option<Encrypted<String, Randomized>> {
+            users
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(user)
+                .map(|row| row.email.clone())
+        }
+
+        #[tokio::test]
+        async fn run_writes_the_marker_alone_when_a_beacon_rotation_leaves_the_value_current(
+        ) -> TestResult {
+            let admin = TestRegistry::new(
+                MemoryKeyringStore::new(),
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(
+                TestProvider::new("tenant-42-kek")?,
+                TENANT,
+                KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+            )
+            .await?;
+            let keyring = admin.keyring();
+            let users = Users::default();
+            write_user(keyring, &users, "42").await?;
+            let email = email_in(&users, "42").ok_or("the user is written")?;
+            admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
+
+            let report = sweep(keyring, &users).await;
 
             assert_eq!(
                 report,
                 SweepReport {
-                    scanned: 2,
-                    resealed: 1,
+                    scanned: 1,
+                    resealed: 0,
                     resealed_from_compromised: 0,
                     skipped: 1,
                     failed: 0,
                 }
             );
-            let users = users.into_inner().unwrap_or_else(PoisonError::into_inner);
-            assert!(users.values().all(|row| row.seal == current));
-            let active = keyring
+            assert!(behind(keyring, &users).is_empty());
+            let kept = email_in(&users, "42").ok_or("the sweep keeps the user")?;
+            assert_eq!(kept.value(), email.value());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn run_reseals_a_value_under_a_decrypt_only_version_above_the_active_one(
+        ) -> TestResult {
+            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
+            let keyring = admin.keyring();
+            let users = Users::default();
+            let first = keyring
                 .record()
                 .active(Purpose::Randomized)
-                .map(|version| version.id());
-            assert_eq!(users.get("41").map(|row| row.email.key_id()), active);
+                .map(|version| version.id())
+                .ok_or("a new keyring has an active randomised version")?;
+            let pending = admin.rotate(Purpose::Randomized).await?;
+            let replacement = admin
+                .mark_compromised(first, None)
+                .await?
+                .ok_or("the compromised active version is replaced")?
+                .current;
+            assert!(replacement.as_u32() > pending.as_u32());
+            write_user(keyring, &users, "42").await?;
+            admin.promote(pending).await?;
+
+            let report = sweep(keyring, &users).await;
+
+            assert_eq!(
+                report,
+                SweepReport {
+                    scanned: 1,
+                    resealed: 1,
+                    resealed_from_compromised: 0,
+                    skipped: 0,
+                    failed: 0,
+                }
+            );
+            assert!(behind(keyring, &users).is_empty());
+            admin.retire(replacement).await?;
+            let email = email_in(&users, "42").ok_or("the sweep keeps the user")?;
+            assert_eq!(email.key_id(), pending);
+            assert_eq!(keyring.decrypt(&email_of("42")?, &email).await?, ALICE);
             Ok(())
         }
 
