@@ -269,15 +269,6 @@ where
         Ok((dek, encrypted_dek))
     }
 
-    /// A new DEK for store-less mode, wrapped once and cached under its wrapped bytes, so that
-    /// the first value sealed under it needs no unwrap.
-    async fn renew_dek(&self) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        let (dek, encrypted) = self.new_dek().await?;
-        self.dek_cache
-            .insert_dek(self.provider.kek(), &encrypted, dek);
-        Ok(encrypted)
-    }
-
     /// Runs `use_key` with the DEK `encrypted` wraps, through the cache, and records on the
     /// current span where the key came from, whether `use_key` succeeds or not. A failed unwrap
     /// records a miss, or `disabled` without a cache.
@@ -349,7 +340,16 @@ where
         spans::in_span(self.encrypt_span(self.mode()), async {
             match &self.dek_reuse {
                 Some(dek_reuse) => {
-                    let dek = dek_reuse.claim_or_renew(|| self.renew_dek()).await?;
+                    // Caching the new DEK under its wrapped bytes saves the first value sealed
+                    // under it an unwrap.
+                    let dek = dek_reuse
+                        .claim_or_renew(|| async {
+                            let (dek, encrypted) = self.new_dek().await?;
+                            self.dek_cache
+                                .insert_dek(self.provider.kek(), &encrypted, dek);
+                            Ok(encrypted)
+                        })
+                        .await?;
                     let cipher_text = self
                         .with_dek(&dek.encrypted, |key| {
                             self.cipher.seal(aad.as_ref(), plain_text, key)
