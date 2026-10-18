@@ -901,7 +901,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "ring")]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn envelope_round_trip_survives_key_rotation() {
         let provider = live_provider();
@@ -913,7 +912,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::new(provider.clone(), AeadBackend::Ring)
+        let encryption = KmsAeadEnvelope::new(provider.clone(), crate::test_provider::TEST_BACKEND)
             .await
             .unwrap();
         let aad = "orders-aad".to_string();
