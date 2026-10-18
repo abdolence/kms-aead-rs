@@ -15,9 +15,7 @@ use tokio::sync::{mpsc, watch};
 use super::{
     KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
 };
-use crate::errors::{
-    KeyringError, KeyringResult, KeyringStoreError, MalformedRecord, RecordInvalidReason,
-};
+use crate::errors::{KeyringError, KeyringResult, KeyringStoreError};
 use crate::{KeyringId, KeyringRecord};
 
 /// The one target of a watch's listener, which listens to nothing else.
@@ -121,8 +119,8 @@ impl KeyringStore for FirestoreKeyringStore {
         expected: Option<&FirestoreTimestamp>,
     ) -> KeyringResult<Swap<FirestoreTimestamp>> {
         let id = record.id();
-        let fields: Value =
-            serde_json::from_slice(&record.to_json()?).map_err(|_| malformed(id))?;
+        let fields: Value = serde_json::from_slice(&record.to_json()?)
+            .map_err(|_| KeyringError::malformed(id, None))?;
         let written = match expected {
             None => {
                 self.db
@@ -254,8 +252,9 @@ fn stored(
     document: &Document,
     operation: StoreOperation,
 ) -> KeyringResult<Stored<FirestoreTimestamp>> {
-    let fields: Value = FirestoreDb::deserialize_doc_to(document).map_err(|_| malformed(id))?;
-    let json = serde_json::to_vec(&fields).map_err(|_| malformed(id))?;
+    let fields: Value =
+        FirestoreDb::deserialize_doc_to(document).map_err(|_| KeyringError::malformed(id, None))?;
+    let json = serde_json::to_vec(&fields).map_err(|_| KeyringError::malformed(id, None))?;
     Ok(Stored {
         record: KeyringRecord::from_json(id, &json)?,
         revision: update_time(document, operation)?,
@@ -274,18 +273,6 @@ fn update_time(
         ))
     })?;
     FirestoreTimestamp::try_from(update_time).map_err(|error| store_error(operation, error))
-}
-
-/// The `Malformed` error of `id`, without the deserializer's message, which can quote the value
-/// it refused.
-fn malformed(id: &KeyringId) -> KeyringError {
-    KeyringError::record_invalid(
-        id,
-        RecordInvalidReason::Malformed(MalformedRecord {
-            line: None,
-            column: None,
-        }),
-    )
 }
 
 /// The outcome of a write Firestore refused: [`Swap::Conflict`] when the document exists on a

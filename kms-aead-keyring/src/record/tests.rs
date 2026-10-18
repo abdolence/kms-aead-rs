@@ -708,3 +708,30 @@ fn keyring_ids_are_ascii_and_at_most_128_bytes() -> KeyringResult<()> {
     }
     Ok(())
 }
+
+#[test]
+fn state_and_algorithm_names_parse_back() -> TestResult {
+    for state in [
+        KeyVersionState::Active,
+        KeyVersionState::DecryptOnly,
+        KeyVersionState::Retired,
+        KeyVersionState::Destroyed,
+    ] {
+        assert_eq!(state.to_string().parse::<KeyVersionState>()?, state);
+    }
+    for algorithm in [
+        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
+        KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv),
+    ] {
+        assert_eq!(algorithm.to_string().parse::<KeyAlgorithm>()?, algorithm);
+    }
+    assert!(matches!(
+        "compromised".parse::<KeyVersionState>(),
+        Err(KeyringError::UnknownKeyVersionState)
+    ));
+    assert!(matches!(
+        "aes-128-siv".parse::<KeyAlgorithm>(),
+        Err(error) if error.code() == "UNKNOWN_ALGORITHM"
+    ));
+    Ok(())
+}

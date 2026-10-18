@@ -14,7 +14,7 @@ use super::{
     Algorithms, Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringId, KeyringRecord,
     RetainedDek, VersionState,
 };
-use crate::errors::{KeyringError, KeyringResult, MalformedRecord, RecordInvalidReason};
+use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
@@ -121,7 +121,7 @@ impl KeyringRecord {
     /// always do.
     pub fn to_json(&self) -> KeyringResult<Vec<u8>> {
         serde_json::to_vec(&StoredRecord::try_from(self)?)
-            .map_err(|error| malformed(&self.id, &error))
+            .map_err(|error| KeyringError::malformed(&self.id, Some(&error)))
     }
 
     /// Parses the JSON document a store holds for the keyring `id`, and checks it: at most
@@ -137,8 +137,8 @@ impl KeyringRecord {
                 RecordInvalidReason::TooLarge,
             ));
         }
-        let stored: StoredRecord =
-            serde_json::from_slice(document).map_err(|error| malformed(id, &error))?;
+        let stored: StoredRecord = serde_json::from_slice(document)
+            .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         let invalid = |reason| KeyringError::record_invalid(id, reason);
         if stored.schema != SCHEMA {
             return Err(invalid(RecordInvalidReason::UnsupportedSchema(
@@ -149,13 +149,13 @@ impl KeyringRecord {
             return Err(invalid(RecordInvalidReason::IdMismatch));
         }
         let algorithms = Algorithms {
-            randomized: match algorithm(&stored.algorithms.randomized) {
-                Some(KeyAlgorithm::Randomized(algorithm)) => algorithm,
+            randomized: match stored.algorithms.randomized.parse() {
+                Ok(KeyAlgorithm::Randomized(algorithm)) => algorithm,
                 _ => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
             },
-            deterministic: match stored.algorithms.deterministic.as_deref().map(algorithm) {
+            deterministic: match stored.algorithms.deterministic.as_deref().map(str::parse) {
                 None => None,
-                Some(Some(KeyAlgorithm::Deterministic(algorithm))) => Some(algorithm),
+                Some(Ok(KeyAlgorithm::Deterministic(algorithm))) => Some(algorithm),
                 Some(_) => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
             },
         };
@@ -222,8 +222,10 @@ impl TryFrom<StoredVersion> for KeyVersion {
     fn try_from(stored: StoredVersion) -> Result<Self, RecordInvalidReason> {
         let key_id =
             KeyId::try_from(stored.key_id).map_err(|_| RecordInvalidReason::ReservedKeyId)?;
-        let algorithm = algorithm(&stored.algorithm)
-            .ok_or(RecordInvalidReason::UnknownAlgorithm(Some(key_id)))?;
+        let algorithm: KeyAlgorithm = stored
+            .algorithm
+            .parse()
+            .map_err(|_| RecordInvalidReason::UnknownAlgorithm(Some(key_id)))?;
         let dek = stored
             .wrapped_dek
             .map(|encoded| {
@@ -244,7 +246,10 @@ impl TryFrom<StoredVersion> for KeyVersion {
         let compromised = stored
             .compromised
             .map(|compromise| Compromise::new(compromise.at, compromise.note));
-        let kind = state(&stored.state).ok_or(RecordInvalidReason::UnknownState(key_id))?;
+        let kind: KeyVersionState = stored
+            .state
+            .parse()
+            .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
         let state = match (kind, dek) {
             (KeyVersionState::Destroyed, None) => VersionState::Destroyed(compromised),
             (KeyVersionState::Destroyed, Some(_)) => {
@@ -270,35 +275,4 @@ impl TryFrom<StoredVersion> for KeyVersion {
             state,
         })
     }
-}
-
-/// The `Malformed` error of `id` at the position of serde_json's `error`, whose message is left
-/// out: it quotes the value it refused, which can be a wrapped key.
-fn malformed(id: &KeyringId, error: &serde_json::Error) -> KeyringError {
-    let position = |at: usize| (at > 0).then_some(at);
-    KeyringError::record_invalid(
-        id,
-        RecordInvalidReason::Malformed(MalformedRecord {
-            line: position(error.line()),
-            column: position(error.column()),
-        }),
-    )
-}
-
-fn algorithm(name: &str) -> Option<KeyAlgorithm> {
-    name.parse()
-        .map(KeyAlgorithm::Randomized)
-        .or_else(|_| name.parse().map(KeyAlgorithm::Deterministic))
-        .ok()
-}
-
-fn state(name: &str) -> Option<KeyVersionState> {
-    [
-        KeyVersionState::Active,
-        KeyVersionState::DecryptOnly,
-        KeyVersionState::Retired,
-        KeyVersionState::Destroyed,
-    ]
-    .into_iter()
-    .find(|state| state.to_string() == name)
 }

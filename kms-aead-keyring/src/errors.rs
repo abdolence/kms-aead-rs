@@ -83,6 +83,8 @@ pub enum KeyringError {
     /// A version selected for a BigQuery keyset export whose algorithm BigQuery does not read:
     /// neither AES-256-GCM nor AES-SIV.
     ExportAlgorithmUnsupported(KeyVersionError),
+    /// A name that is not one a [`KeyVersionState`] displays as.
+    UnknownKeyVersionState,
 }
 
 impl KeyringError {
@@ -114,6 +116,7 @@ impl KeyringError {
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
+            KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
         }
     }
 
@@ -143,6 +146,20 @@ impl KeyringError {
             keyring: keyring.clone(),
             purpose,
         })
+    }
+
+    /// A [`Malformed`](RecordInvalidReason::Malformed) record of `keyring`, at the position of
+    /// serde_json's `error` when there is one. The parser's message is left out: it quotes the
+    /// value it refused, which can be a wrapped key.
+    pub(crate) fn malformed(keyring: &KeyringId, error: Option<&serde_json::Error>) -> Self {
+        let position = |at: usize| (at > 0).then_some(at);
+        Self::record_invalid(
+            keyring,
+            RecordInvalidReason::Malformed(MalformedRecord {
+                line: error.and_then(|error| position(error.line())),
+                column: error.and_then(|error| position(error.column())),
+            }),
+        )
     }
 
     pub(crate) fn invalid_identifier(identifier: Identifier, rule: IdentifierRule) -> Self {
@@ -280,6 +297,10 @@ impl Display for KeyringError {
                 f,
                 "The key version {} of the keyring {} has an algorithm BigQuery does not read",
                 error.key_id, error.keyring
+            ),
+            KeyringError::UnknownKeyVersionState => f.write_str(
+                "Not the name of a key version state: the names are active, decrypt_only, \
+                 retired and destroyed",
             ),
         }
     }

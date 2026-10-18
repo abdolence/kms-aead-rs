@@ -3,6 +3,7 @@
 
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
+use std::str::FromStr;
 
 use jiff::Timestamp;
 use kms_aead::{
@@ -187,6 +188,22 @@ impl Display for KeyAlgorithm {
     }
 }
 
+/// Reads what `Display` writes, kms-aead's name of either kind of algorithm.
+///
+/// # Errors
+///
+/// [`KeyringError::Kms`] with code `UNKNOWN_ALGORITHM` for any other name.
+impl FromStr for KeyAlgorithm {
+    type Err = KeyringError;
+
+    fn from_str(name: &str) -> KeyringResult<Self> {
+        match name.parse() {
+            Ok(algorithm) => Ok(KeyAlgorithm::Randomized(algorithm)),
+            Err(_) => Ok(KeyAlgorithm::Deterministic(name.parse()?)),
+        }
+    }
+}
+
 /// The lifecycle state of a key version.
 ///
 /// ```text
@@ -232,6 +249,25 @@ impl Display for KeyVersionState {
             KeyVersionState::Retired => "retired",
             KeyVersionState::Destroyed => "destroyed",
         })
+    }
+}
+
+/// Reads what `Display` writes.
+///
+/// # Errors
+///
+/// [`KeyringError::UnknownKeyVersionState`] for any other name.
+impl FromStr for KeyVersionState {
+    type Err = KeyringError;
+
+    fn from_str(name: &str) -> KeyringResult<Self> {
+        match name {
+            "active" => Ok(KeyVersionState::Active),
+            "decrypt_only" => Ok(KeyVersionState::DecryptOnly),
+            "retired" => Ok(KeyVersionState::Retired),
+            "destroyed" => Ok(KeyVersionState::Destroyed),
+            _ => Err(KeyringError::UnknownKeyVersionState),
+        }
     }
 }
 
