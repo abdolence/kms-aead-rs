@@ -68,6 +68,11 @@ impl Display for DekCacheOutcome {
 /// Randomized and deterministic keys are cached apart, up to
 /// [`max_entries`](DekCacheOptions::max_entries) of each.
 ///
+/// [`KekRef`] equality is therefore the cache's trust boundary. A local provider's `KekRef` is
+/// [`KekProvider::Local`](crate::KekProvider::Local) and its id, so a local KEK id must name one
+/// set of KEK material: two [`LocalKmsProvider`](crate::providers::LocalKmsProvider)s with one
+/// id share their entries.
+///
 /// - A key reaches a caller only inside the closure of [`with_key`](Self::with_key), and stays
 ///   intact until the closure returns, whatever leaves the cache meanwhile.
 /// - Concurrent misses for one key make one provider call, and every caller receives its result:
@@ -168,8 +173,8 @@ impl<K> KeyMap<K> {
         }))
     }
 
-    /// The map state, also from a poisoned lock: no caller code runs under it, and the map
-    /// operations tolerate `entries` and `insertion_order` disagreeing.
+    /// The map state, also from a poisoned lock: nothing that runs under the lock panics, so a
+    /// poisoned lock never holds a half-done map operation.
     fn lock(&self) -> MutexGuard<'_, MapState<K>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -439,7 +444,8 @@ impl DekCache {
     }
 
     /// Drops every entry. The unwraps under way return their keys to their callers without
-    /// caching them.
+    /// caching them. A store-less renewal under way may still cache its new DEK after `clear`
+    /// returns, since the renewal started before the clear.
     pub fn clear(&self) {
         if let Some(cache) = &self.0 {
             cache.randomized.lock().clear();
