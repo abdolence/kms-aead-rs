@@ -89,17 +89,12 @@ impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
     type FramedKeyId = ();
 
-    /// With `legacy-formats`, the envelope layouts of 0.29 and earlier pass on their lengths
-    /// alone, so that a reader keeps decoding stored rows into its final types until they are
-    /// upgraded.
+    /// With `legacy-formats`, the envelope layouts of 0.29 and earlier pass too, so that a reader
+    /// keeps decoding stored rows into its final types until they are upgraded.
     fn check(value: &[u8]) -> KmsAeadResult<()> {
         #[cfg(feature = "legacy-formats")]
         {
-            let stored = super::legacy::StoredEnvelope::split(value)?;
-            match stored.layout {
-                super::envelope::EnvelopeLayout::Tink => Bare::check(stored.bare),
-                _ => Ok(()),
-            }
+            Bare::check(super::legacy::StoredEnvelope::split(value)?.bare)
         }
         #[cfg(not(feature = "legacy-formats"))]
         {

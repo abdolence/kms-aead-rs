@@ -59,7 +59,7 @@ The library's codes:
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `Json` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
-| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted key layout of 0.29 that cannot be read, with `legacy-formats` |
+| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted DEK layout v1 of 0.29 that cannot be read, with `legacy-formats` |
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
 | `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |

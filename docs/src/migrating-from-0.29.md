@@ -174,7 +174,7 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 ## Old values
 
 0.30 writes Tink's KMS envelope, and encrypts every DEK but Azure's as a serialised Tink key. 0.29
-wrote envelope layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a
+wrote envelope layout v1 and the encrypted DEK layout v1 `[0xFF][0x01]…`, and 0.28.1 and earlier a
 length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
 `legacy-formats` feature, and fails with `LEGACY_FORMAT` without it, see
 [Formats](./formats.md#values-written-by-029-and-earlier).

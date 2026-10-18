@@ -520,7 +520,7 @@ where
         dek: &DataEncryptionKey,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Vec<u8>> {
-        let header = encrypted_dek.envelope_header()?;
+        let header = crate::formats::envelope::envelope_header(encrypted_dek)?;
         self.cipher
             .seal(&header, aad, plain_text, dek.value().ref_sensitive_value())
     }
@@ -528,12 +528,20 @@ where
     /// Opens `value` as `decrypt` does, in the span of the caller.
     async fn open(&self, aad: &[u8], value: &[u8]) -> KmsAeadResult<SecretValue> {
         #[cfg(feature = "legacy-formats")]
-        let (bare, encrypted_dek) =
-            crate::formats::legacy::separate_any_layout(value, self.provider.kek().provider())?;
+        let (bare, encrypted_dek) = {
+            let stored = crate::formats::legacy::StoredEnvelope::split(value)?;
+            (
+                stored.bare,
+                stored.encrypted_dek(self.provider.kek().provider())?,
+            )
+        };
         #[cfg(not(feature = "legacy-formats"))]
         let (bare, encrypted_dek) = {
-            let (dek_bytes, bare) = crate::formats::envelope::split_envelope(value)?;
-            (bare, EncryptedDataEncryptionKey::new(dek_bytes.to_vec()))
+            let (encrypted_dek_bytes, bare) = crate::formats::envelope::split_envelope(value)?;
+            (
+                bare,
+                EncryptedDataEncryptionKey::new(encrypted_dek_bytes.to_vec()),
+            )
         };
         self.with_dek(&encrypted_dek, |dek| {
             self.cipher
