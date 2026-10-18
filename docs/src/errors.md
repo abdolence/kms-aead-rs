@@ -4,11 +4,11 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
 
 - `SystemError`: the configuration or the environment, such as invalid provider options or a KMS
   client that cannot be built;
-- `NetworkError`: a KMS that could not be reached or did not answer in time, a server error or a
-  rate limit from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS;
-- `EncryptionError`: encrypting or decrypting a value or a DEK failed, or a stored value
-  could not be read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault
-  refused;
+- `NetworkError`: a KMS that could not be reached, did not answer in time, failed on its side or
+  limited the rate of requests. The same call may succeed later;
+- `EncryptionError`: encrypting or decrypting a value or a DEK failed, a stored value could not
+  be read, or a KMS refused the request, such as a denied permission or a disabled key. The same
+  call fails the same way again;
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
 - `LegacyFormat`: a stored value in a layout of 0.29 or earlier, which only the
   `legacy-formats` feature reads, see [Formats](./formats.md#values-written-by-029-and-earlier).
@@ -81,11 +81,20 @@ error codes, such as `NotFoundException`, and Key Vault's error codes, such as `
 The library retries nothing itself. The AWS and Azure SDKs apply their own retry policies, which
 the Azure provider takes in `client_options`.
 
-A `NetworkError` is the class to consider for a retry: a KMS that was not reached, a timeout, a
-server error or a rate limit. For Google Cloud KMS every failed call is a `NetworkError`, so check
-its code as well: `Unavailable`, `DeadlineExceeded` or `ResourceExhausted` are worth a retry,
-`PermissionDenied` or `InvalidArgument` are not. An `EncryptionError` from a decrypt does not
-change on a retry.
+A `NetworkError` may be retried, with a backoff. An `EncryptionError` should not be: a revoked
+permission, a missing key or an encrypted DEK of another key fails the same way on every retry.
+The variant per provider:
+
+| Provider | `NetworkError` | `EncryptionError` |
+|---|---|---|
+| Google Cloud KMS | gRPC `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, `Internal`, `Unknown`, `Cancelled` | any other gRPC code, such as `PermissionDenied`, `Unauthenticated`, `NotFound`, `InvalidArgument`, `FailedPrecondition` |
+| AWS KMS | `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException`, `KeyUnavailableException`, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read | any other AWS error code, such as `AccessDeniedException`, `NotFoundException`, `IncorrectKeyException`, `InvalidCiphertextException`, `DisabledException`, `KMSInvalidStateException`, and a request that could not be built or signed |
+| Azure Key Vault | a 5xx or 429 status, a connection or I/O failure | any other status, such as `Forbidden` or `KeyNotFound`, and a response that does not parse |
+| Vault Transit | `VAULT_STATUS_5xx`, `VAULT_STATUS_429`, `VAULT_HTTP`, `VAULT_TIMEOUT` | any other `VAULT_STATUS_<status>`, `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE`, `VAULT_CIPHERTEXT` |
+
+Google's client libraries retry the Cloud KMS `Encrypt` and `Decrypt` calls on `Unavailable` and
+`DeadlineExceeded` only. Keep a retry on the other Google Cloud KMS network codes to a few
+attempts.
 
 ## What errors never carry
 

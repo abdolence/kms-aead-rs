@@ -117,8 +117,11 @@ impl GcpKmsProviderOptions {
 
 /// Encrypts and decrypts data encryption keys with a Google Cloud KMS CryptoKey.
 ///
-/// A failed KMS call is a [`NetworkError`](crate::errors::KmsAeadError::NetworkError) whose code
-/// is the gRPC status code, such as `PermissionDenied` or `NotFound`.
+/// The code of a failed KMS call is the gRPC status code. `Unavailable`, `DeadlineExceeded`,
+/// `ResourceExhausted`, `Aborted`, `Internal`, `Unknown` and `Cancelled` are a
+/// [`NetworkError`](crate::errors::KmsAeadError::NetworkError), any other code, such as
+/// `PermissionDenied` or `NotFound`, an
+/// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError).
 #[derive(Clone)]
 pub struct GcpKmsProvider {
     client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>,
@@ -315,15 +318,47 @@ mod tests {
     }
 
     #[test]
-    fn a_status_is_a_network_error_with_its_code() {
-        let error = KmsAeadError::from_gcp_status(Status::permission_denied(
-            "Permission 'cloudkms.cryptoKeyVersions.useToDecrypt' denied",
-        ));
+    fn transient_statuses_are_network_errors_with_their_code() {
+        for code in [
+            Code::Unavailable,
+            Code::DeadlineExceeded,
+            Code::ResourceExhausted,
+            Code::Aborted,
+            Code::Internal,
+            Code::Unknown,
+            Code::Cancelled,
+        ] {
+            let error = KmsAeadError::from_gcp_status(Status::new(code, "try again later"));
 
-        assert!(
-            matches!(&error, KmsAeadError::NetworkError(error) if error.public.code == "PermissionDenied"),
-            "{error:?}"
-        );
+            assert!(
+                matches!(&error, KmsAeadError::NetworkError(_)),
+                "{code:?}: {error:?}"
+            );
+            assert_eq!(error.code(), format!("{code:?}"));
+        }
+    }
+
+    #[test]
+    fn refused_requests_are_encryption_errors_with_their_code() {
+        for code in [
+            Code::PermissionDenied,
+            Code::Unauthenticated,
+            Code::NotFound,
+            Code::InvalidArgument,
+            Code::FailedPrecondition,
+            Code::OutOfRange,
+            Code::Unimplemented,
+            Code::AlreadyExists,
+            Code::DataLoss,
+        ] {
+            let error = KmsAeadError::from_gcp_status(Status::new(code, "refused"));
+
+            assert!(
+                matches!(&error, KmsAeadError::EncryptionError(_)),
+                "{code:?}: {error:?}"
+            );
+            assert_eq!(error.code(), format!("{code:?}"));
+        }
     }
 
     #[test]
