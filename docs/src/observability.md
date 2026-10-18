@@ -7,10 +7,10 @@ its version, and the error code.
 
 The spans are:
 
-- `KMS AEAD encrypt`: the envelope's `encrypt_value`, `encrypt_value_with_dek` and
-  `encrypt_value_with_encrypted_dek`;
-- `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_value_with_dek` and
-  `decrypt_value_with_encrypted_dek`;
+- `KMS AEAD encrypt`: the envelope's `encrypt_value`, `encrypt_field`, `encrypt_value_with_dek`
+  and `encrypt_value_with_encrypted_dek`;
+- `KMS AEAD decrypt`: the envelope's `decrypt_value`, `decrypt_field`, `decrypt_value_with_dek`
+  and `decrypt_value_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_new_dek` and `generate_new_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
 - `KMS wrap`: each provider's wrap of a DEK;

@@ -53,8 +53,9 @@ The library's codes:
 | `INVALID_KEY_LENGTH` | encryption | a key that does not fit the algorithm, or a KMS generator that returned another length |
 | `UNSUPPORTED_ALGORITHM` | unsupported algorithm | the backend does not implement the algorithm |
 | `UNKNOWN_ALGORITHM` | encryption | `FromStr` of an algorithm name it does not know |
-| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, or a length past its end |
+| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, a length past its end, or a typed field without Tink's output prefix |
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
+| `INVALID_PLAINTEXT` | encryption | a decrypted field that is not an encoding of its type, or a `Json` value that does not serialize |
 | `INVALID_KEY_FORMAT` | encryption | an unwrapped DEK that is not a serialized Tink key, such as a wrapped keyset |
 | `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted key layout of 0.29 that cannot be read, with `legacy-formats` |
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure wrapped DEK or a layout of 0.29 |

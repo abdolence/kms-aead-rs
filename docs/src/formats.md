@@ -8,12 +8,12 @@ value Tink encrypts opens with `decrypt_value`.
 
 | Layout | Type | Bytes | Read by | Written by |
 |---|---|---|---|---|
-| Tink KMS envelope | `CipherTextWithEncryptedKey` | `[w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
+| Tink KMS envelope | `CipherTextWithEncryptedKey`, `Encrypted<T, Envelope>` | `[w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink | 0.30.0 and later |
 | AEAD value | `CipherText` | `[nonce: 12][ciphertext][tag: 16]` | kms-aead, Tink (RAW output) | every release |
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
 | Serialized DEK | the plaintext of a wrapped DEK | Tink's key message, see [Serialized DEKs](#serialized-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
-| TINK-prefixed value | `TinkOutputPrefix` and the value | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
+| TINK-prefixed value | `TinkOutputPrefix` and the value, `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>` | `[0x01][key id: u32 BE][value]` | kms-aead-keyring, Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | kms-aead-keyring 0.30.0 and later |
 | Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
 | Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][wrapped DEK]` | kms-aead with `legacy-formats` | 0.29 |
@@ -136,6 +136,28 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 - `TinkKeyset`: a serialized `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
   keys, the bytes `tinkey` writes for the same keys. A keyring exports it wrapped by its Cloud KMS
   key, for BigQuery's `KEYS.KEYSET_CHAIN`.
+
+## Typed fields
+
+`Encrypted<T, F>` holds the bytes of one layout, named by its format `F`, and
+`Encrypted::try_from` checks stored bytes against it:
+
+| Format | Layout | Shortest value | Written by |
+|---|---|---|---|
+| `Envelope` | [Tink's KMS envelope](#tinks-kms-envelope) | a wrapped DEK of 1 to 4,096 bytes, then 28 bytes | `encrypt_field` |
+| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | 33 bytes | kms-aead-keyring |
+| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | 21 bytes | kms-aead-keyring |
+
+The check reads the framing only. As an `Envelope` value, the envelope layout v1 of 0.29 and the
+length-prefixed envelope fail with `LEGACY_FORMAT`, with or without `legacy-formats`: read them
+with `decrypt_value`, or rewrite them first, see [Upgrading stored values](#upgrading-stored-values).
+The layout of 32-bit targets before 0.24.0 has Tink's framing, so `decrypt_field` reads it as
+`decrypt_value` does.
+
+The plaintext inside is the encoding of the field's `Plaintext` type: UTF-8 for `String`, the
+bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
+the integers, and compact JSON for `Json<T>`. See
+[Typed fields](./envelope-encryption.md#typed-fields).
 
 ## Telling layouts apart
 

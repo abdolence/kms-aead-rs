@@ -56,8 +56,15 @@ Other features:
   [Deterministic encryption](./deterministic.md);
 - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated, see
   [Formats](./formats.md);
-- `serde`: `Serialize` and `Deserialize` for `KmsAeadErrorPublicGenericDetails` and for
-  `SecretValue`.
+- `serde`: `Serialize` and `Deserialize` for `Encrypted`, as bytes, for
+  `KmsAeadErrorPublicGenericDetails` and for `SecretValue`;
+- `serde-json`: `Json`, a typed field's plaintext of any serde type, stored as its JSON;
+- `postgres`: `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for
+  tokio-postgres;
+- `sqlx`: sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS
+  stack.
+
+See [Typed fields](./envelope-encryption.md#typed-fields).
 
 ## Choosing a backend
 

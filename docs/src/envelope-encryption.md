@@ -65,14 +65,113 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 ```
 
 `ValueStruct` is re-exported by the crate: its `value()` and `into_value()` read the bytes of
-`CipherText`, `CipherTextWithEncryptedKey`, `EncryptedDataEncryptionKey` and
-`DeterministicCipherText`. `to_hex_string()` returns them as lowercase hex.
+`CipherText`, `CipherTextWithEncryptedKey`, `EncryptedDataEncryptionKey`,
+`DeterministicCipherText` and `Encrypted`. `to_hex_string()` returns the bytes of the first four
+as lowercase hex.
 
 The value is in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads
 it with the same KMS key and algorithm, see [Formats](./formats.md#tinks-kms-envelope).
 
 A new DEK comes from the backend's CSPRNG, or from the KMS generator when the provider is
 configured to use one, see [KMS random generators](./providers.md#kms-random-generators).
+
+## Typed fields
+
+`encrypt_field` and `decrypt_field` encrypt and decrypt a value of a Rust type, the way
+`encrypt_value` and `decrypt_value` do. The value is encoded by its `Plaintext` implementation,
+and the result is an `Encrypted<T, Envelope>`, the bytes to store:
+
+```rust
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring, ValueStruct};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+// Sealed as the same UTF-8 bytes as a String
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> KmsAeadResult<()> {
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
+
+let aad = b"users/1042/email";
+let email = Email("alice@example.com".to_string());
+let encrypted: Encrypted<Email, Envelope> = envelope.encrypt_field(aad, &email).await?;
+
+// The bytes to store, and the field read back from them
+let stored: Vec<u8> = encrypted.into_value();
+let read_back = Encrypted::<Email, Envelope>::try_from(stored)?;
+
+assert_eq!(envelope.decrypt_field(aad, &read_back).await?, email);
+# Ok(())
+# }
+```
+
+- `Plaintext` is implemented for `String`, `Vec<u8>`, `SecretValue`, `bool`, `i32`, `i64`, `u32`
+  and `u64`, and with the `serde-json` feature for `Json<T>`, any serde type stored as its compact
+  JSON. An application type maps to one of them, as `Email` does;
+- the calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and unwrap
+  through the envelope's DEK cache, as `encrypt_value` and `decrypt_value` do;
+- `Encrypted::try_from` checks the stored bytes against Tink's KMS envelope layout, so a
+  truncated or foreign value fails when it is read, before any KMS call, with
+  `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_CIPHER_TEXT_FORMAT` or `LEGACY_FORMAT`. It checks the
+  framing only: a changed value fails to decrypt with `DECRYPT`;
+- `decrypt_field` fails with `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`;
+- a value written by `encrypt_value` reads as an `Encrypted<SecretValue, Envelope>`, or as the
+  type whose encoding its plaintext is, such as `String` for UTF-8 text.
+
+`Encrypted<T, Envelope>` has no `==`: two values of the same plaintext differ. `Debug` shows the
+length only. See [Formats](./formats.md#typed-fields) for its layout.
+
+### Storing typed fields
+
+Three features store `Encrypted` as bytes, and each one reads it back through `TryFrom`, so a
+malformed stored value fails in the decode:
+
+- `serde`: `Serialize` and `Deserialize`, a `bytes` value in Firestore and an array of numbers in
+  serde_json;
+- `postgres`: `ToSql` and `FromSql` of postgres-types, for tokio-postgres, as `BYTEA`, and a
+  slice as `BYTEA[]` for `= ANY($1)`;
+- `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for PostgreSQL, as `BYTEA`. It
+  depends on `sqlx-core` and `sqlx-postgres` only, so the application chooses sqlx's runtime and
+  TLS stack.
+
+With sqlx:
+
+```rust,no_run
+use kms_aead::formats::Envelope;
+use kms_aead::Encrypted;
+use sqlx::PgPool;
+
+# struct Email(String);
+async fn store(pool: &PgPool, id: i64, email: &Encrypted<Email, Envelope>) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+        .bind(id)
+        .bind(email)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn load(pool: &PgPool, id: i64) -> sqlx::Result<Encrypted<Email, Envelope>> {
+    sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+}
+```
 
 ## AAD
 
