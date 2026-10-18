@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-45561308.js";
+            window.path_to_searchindex_js = "../searchindex-fae7fd6f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8f8bc823.js"></script>
@@ -232,8 +232,10 @@ credentials.</p>
 in the <code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code> role, and <code>cloudkms.locations.generateRandomBytes</code>
 on the location when the KMS generator is on.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
-<p>A failed KMS call is a <code>NetworkError</code> whose code is the gRPC status code, such as
-<code>PermissionDenied</code> or <code>NotFound</code>.</p>
+<p>The code of a failed KMS call is the gRPC status code. <code>Unavailable</code>, <code>DeadlineExceeded</code>,
+<code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code> and <code>Cancelled</code> are a <code>NetworkError</code>, any
+other code, such as <code>PermissionDenied</code> or <code>NotFound</code>, an <code>EncryptionError</code>. See
+<a href="../errors.html#retries">Error handling</a>.</p>
 
                     </main>
 

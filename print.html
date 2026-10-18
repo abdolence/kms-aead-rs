@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-45561308.js";
+            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f8bc823.js"></script>
@@ -495,8 +495,10 @@ credentials.</p>
 in the <code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code> role, and <code>cloudkms.locations.generateRandomBytes</code>
 on the location when the KMS generator is on.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
-<p>A failed KMS call is a <code>NetworkError</code> whose code is the gRPC status code, such as
-<code>PermissionDenied</code> or <code>NotFound</code>.</p>
+<p>The code of a failed KMS call is the gRPC status code. <code>Unavailable</code>, <code>DeadlineExceeded</code>,
+<code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code> and <code>Cancelled</code> are a <code>NetworkError</code>, any
+other code, such as <code>PermissionDenied</code> or <code>NotFound</code>, an <code>EncryptionError</code>. See
+<a href="#retries">Error handling</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="aws-kms"><a class="header" href="#aws-kms">AWS KMS</a></h1>
 <p>Feature <code>aws-kms-encryption</code>.</p>
@@ -550,9 +552,17 @@ another key fails to decrypt with <code>IncorrectKeyException</code>.</p>
 an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN always starts with
 <code>arn:aws:</code>, so outside the <code>aws</code> partition, such as in GovCloud or China, give the full ARN.</p>
 <h2 id="errors-1"><a class="header" href="#errors-1">Errors</a></h2>
-<p>Every error is an <code>EncryptionError</code> whose code is the AWS error code, such as
-<code>IncorrectKeyException</code> or <code>NotFoundException</code>, and whose message is the one AWS KMS returned.
-Its root cause is the SDK error.</p>
+<p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
+<code>NotFoundException</code>, and the message AWS KMS returned. A <code>NetworkError</code>:</p>
+<ul>
+<li><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code> and
+<code>KeyUnavailableException</code>;</li>
+<li>any 5xx or 429 status;</li>
+<li>a timeout, a connection failure, or a response the SDK could not read.</li>
+</ul>
+<p>Any other error, such as <code>AccessDeniedException</code>, <code>DisabledException</code> or a request that could not
+be built or signed, is an <code>EncryptionError</code> whose root cause is the SDK error. See
+<a href="#retries">Error handling</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="azure-key-vault"><a class="header" href="#azure-key-vault">Azure Key Vault</a></h1>
 <p>Feature <code>azure-kms-encryption</code>, or one of the TLS variants in
@@ -2057,11 +2067,11 @@ older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
 <ul>
 <li><code>SystemError</code>: the configuration or the environment, such as invalid provider options or a KMS
 client that cannot be built;</li>
-<li><code>NetworkError</code>: a KMS that could not be reached or did not answer in time, a server error or a
-rate limit from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS;</li>
-<li><code>EncryptionError</code>: encrypting or decrypting a value or a DEK failed, or a stored value
-could not be read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault
-refused;</li>
+<li><code>NetworkError</code>: a KMS that could not be reached, did not answer in time, failed on its side or
+limited the rate of requests. The same call may succeed later;</li>
+<li><code>EncryptionError</code>: encrypting or decrypting a value or a DEK failed, a stored value could not
+be read, or a KMS refused the request, such as a denied permission or a disabled key. The same
+call fails the same way again;</li>
 <li><code>UnsupportedAlgorithm</code>: the backend does not implement the algorithm, from constructors only;</li>
 <li><code>LegacyFormat</code>: a stored value in a layout of 0.29 or earlier, which only the
 <code>legacy-formats</code> feature reads, see <a href="#values-written-by-029-and-earlier">Formats</a>.</li>
@@ -2130,11 +2140,25 @@ error codes, such as <code>NotFoundException</code>, and Key Vault’s error cod
 <h2 id="retries"><a class="header" href="#retries">Retries</a></h2>
 <p>The library retries nothing itself. The AWS and Azure SDKs apply their own retry policies, which
 the Azure provider takes in <code>client_options</code>.</p>
-<p>A <code>NetworkError</code> is the class to consider for a retry: a KMS that was not reached, a timeout, a
-server error or a rate limit. For Google Cloud KMS every failed call is a <code>NetworkError</code>, so check
-its code as well: <code>Unavailable</code>, <code>DeadlineExceeded</code> or <code>ResourceExhausted</code> are worth a retry,
-<code>PermissionDenied</code> or <code>InvalidArgument</code> are not. An <code>EncryptionError</code> from a decrypt does not
-change on a retry.</p>
+<p>A <code>NetworkError</code> may be retried, with a backoff. An <code>EncryptionError</code> should not be: a revoked
+permission, a missing key or an encrypted DEK of another key fails the same way on every retry.
+The variant per provider:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Provider</th><th><code>NetworkError</code></th><th><code>EncryptionError</code></th></tr>
+</thead>
+<tbody>
+<tr><td>Google Cloud KMS</td><td>gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code></td><td>any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>, <code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code></td></tr>
+<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, and a request that could not be built or signed</td></tr>
+<tr><td>Azure Key Vault</td><td>a 5xx or 429 status, a connection or I/O failure</td><td>any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that does not parse</td></tr>
+<tr><td>Vault Transit</td><td><code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code></td><td>any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Google’s client libraries retry the Cloud KMS <code>Encrypt</code> and <code>Decrypt</code> calls on <code>Unavailable</code> and
+<code>DeadlineExceeded</code> only. Keep a retry on the other Google Cloud KMS network codes to a few
+attempts.</p>
 <h2 id="what-errors-never-carry"><a class="header" href="#what-errors-never-carry">What errors never carry</a></h2>
 <p>No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in <code>Display</code> or in <code>Debug</code>. An application can log errors with <code>{}</code> and <code>{:?}</code>.</p>
@@ -2531,6 +2555,11 @@ and <code>source()</code> returns the root cause.</p>
 <p>The <code>From</code> conversions of SDK errors into <code>KmsAeadError</code> are gone: <code>gcloud_sdk::error::Error</code>,
 <code>gcloud_sdk::tonic::Status</code>, the AWS <code>SdkError</code>, the hyper client error, <code>azure_core::Error</code> and
 <code>SystemTimeError</code>. Map an SDK error in the application.</p>
+<p>The variant of a Google Cloud KMS or AWS KMS error follows its code. In 0.29 every gRPC status was
+a <code>NetworkError</code> and every AWS error an <code>EncryptionError</code>. A <code>PermissionDenied</code> or <code>NotFound</code> from
+Google Cloud KMS is an <code>EncryptionError</code> now, and a timeout, a connection failure or a
+<code>ThrottlingException</code> from AWS KMS a <code>NetworkError</code>. The codes stay the same. See
+<a href="#retries">Retries</a>.</p>
 <p><code>ConstantTimeEq</code> is no longer implemented on the public types. <code>==</code> still compares in constant
 time. The <code>Debug</code> of <code>Encrypted</code> prints only the length, and <code>==</code> is gone from randomised values:
 only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-45561308.js";
+            window.path_to_searchindex_js = "../searchindex-fae7fd6f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8f8bc823.js"></script>
@@ -229,9 +229,17 @@ another key fails to decrypt with <code>IncorrectKeyException</code>.</p>
 an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN always starts with
 <code>arn:aws:</code>, so outside the <code>aws</code> partition, such as in GovCloud or China, give the full ARN.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
-<p>Every error is an <code>EncryptionError</code> whose code is the AWS error code, such as
-<code>IncorrectKeyException</code> or <code>NotFoundException</code>, and whose message is the one AWS KMS returned.
-Its root cause is the SDK error.</p>
+<p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
+<code>NotFoundException</code>, and the message AWS KMS returned. A <code>NetworkError</code>:</p>
+<ul>
+<li><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code> and
+<code>KeyUnavailableException</code>;</li>
+<li>any 5xx or 429 status;</li>
+<li>a timeout, a connection failure, or a response the SDK could not read.</li>
+</ul>
+<p>Any other error, such as <code>AccessDeniedException</code>, <code>DisabledException</code> or a request that could not
+be built or signed, is an <code>EncryptionError</code> whose root cause is the SDK error. See
+<a href="../errors.html#retries">Error handling</a>.</p>
 
                     </main>
 

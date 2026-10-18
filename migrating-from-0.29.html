@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-45561308.js";
+            window.path_to_searchindex_js = "searchindex-fae7fd6f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f8bc823.js"></script>
@@ -303,6 +303,11 @@ and <code>source()</code> returns the root cause.</p>
 <p>The <code>From</code> conversions of SDK errors into <code>KmsAeadError</code> are gone: <code>gcloud_sdk::error::Error</code>,
 <code>gcloud_sdk::tonic::Status</code>, the AWS <code>SdkError</code>, the hyper client error, <code>azure_core::Error</code> and
 <code>SystemTimeError</code>. Map an SDK error in the application.</p>
+<p>The variant of a Google Cloud KMS or AWS KMS error follows its code. In 0.29 every gRPC status was
+a <code>NetworkError</code> and every AWS error an <code>EncryptionError</code>. A <code>PermissionDenied</code> or <code>NotFound</code> from
+Google Cloud KMS is an <code>EncryptionError</code> now, and a timeout, a connection failure or a
+<code>ThrottlingException</code> from AWS KMS a <code>NetworkError</code>. The codes stay the same. See
+<a href="./errors.html#retries">Retries</a>.</p>
 <p><code>ConstantTimeEq</code> is no longer implemented on the public types. <code>==</code> still compares in constant
 time. The <code>Debug</code> of <code>Encrypted</code> prints only the length, and <code>==</code> is gone from randomised values:
 only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>
