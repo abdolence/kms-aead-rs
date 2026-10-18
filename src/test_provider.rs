@@ -2,6 +2,7 @@
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
@@ -38,6 +39,10 @@ pub(crate) enum TestKmsProvider {
     /// Returns its key material from `generate_key_material`, as a KMS generator would.
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     Generating(SecretValue),
+    /// Unwraps a key into its wrapped bytes followed by the nanoseconds from the instant it
+    /// holds to the unwrap, as a little-endian `u64`, so that a caller can tell how old the key
+    /// it is given is.
+    Stamping(Instant),
 }
 
 #[async_trait]
@@ -72,6 +77,13 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
                 "TEST_UNWRAP",
                 "The test provider fails to unwrap",
             )),
+            TestKmsProvider::Stamping(since) => {
+                let nanos = u64::try_from(since.elapsed().as_nanos())
+                    .expect("a test runs for less than 584 years");
+                let mut key = encrypted_key.wrapped().to_vec();
+                key.extend(nanos.to_le_bytes());
+                Ok(DataEncryptionKey::from(SecretValue::new(key)))
+            }
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
                 encrypted_key.wrapped().to_vec(),
             ))),

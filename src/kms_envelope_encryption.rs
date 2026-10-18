@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
-use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome, InsertDek};
+use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
 use crate::spans;
 use crate::*;
@@ -340,8 +340,9 @@ where
                     let dek = dek_reuse
                         .claim_or_renew(|| async {
                             let (dek, encrypted) = self.new_dek().await?;
-                            self.dek_cache
-                                .insert_dek(self.provider.kek(), &encrypted, dek);
+                            if let Some(shared) = &self.dek_cache.0 {
+                                shared.insert(self.provider.kek(), &encrypted, dek);
+                            }
                             Ok(encrypted)
                         })
                         .await?;
