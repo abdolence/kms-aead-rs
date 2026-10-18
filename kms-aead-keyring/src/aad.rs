@@ -176,7 +176,7 @@ pub enum Interop {
     /// No other reader: any algorithm, any AAD and any KEK.
     None,
     /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
-    /// and AES-SIV only and unwraps with Cloud KMS only: sealing needs an AES-256-GCM version
+    /// and AES-SIV only and decrypts with Cloud KMS only: sealing needs an AES-256-GCM version
     /// for a randomised value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
     /// The AAD is the default one, which SQL rebuilds.
     BigQuery,

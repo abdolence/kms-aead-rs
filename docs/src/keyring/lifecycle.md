@@ -10,7 +10,7 @@ A keyring record holds:
   without escaping. It is an identifier, not a secret, and appears in spans and errors;
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
-- every key version ever created, in creation order, each with its wrapped DEK and its state.
+- every key version ever created, in creation order, each with its encrypted DEK and its state.
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
@@ -18,8 +18,8 @@ for the document and the rules every read checks. A record that breaks one fails
 
 The `kek` field is informational: it catches a keyring opened with the wrong provider, with
 `KekMismatch`, and is no security control, since a writer of the record sets it as freely as any
-other field. What refuses a DEK wrapped under another KEK is the KMS, since every unwrap names the
-configured KEK.
+other field. What refuses a DEK encrypted under another KEK is the KMS, since every decryption names
+the configured KEK.
 
 `Keyring::record()` returns the cached record, to inspect versions and states, such as
 `record.pending(Purpose::Randomized)` for the version a rotation staged.
@@ -48,9 +48,9 @@ its id in the record.
   per purpose;
 - `Active`: encrypts new values and decrypts. At most one per purpose;
 - `DecryptOnly`: decrypts only. Every version a promotion replaced;
-- `Retired`: refused on read with `KeyVersionRetired`. The wrapped DEK stays in the record, so
+- `Retired`: refused on read with `KeyVersionRetired`. The encrypted DEK stays in the record, so
   `reinstate` can undo it;
-- `Destroyed`: the wrapped DEK is removed from the record, and reads fail with
+- `Destroyed`: the encrypted DEK is removed from the record, and reads fail with
   `KeyVersionDestroyed`.
 
 A promotion moves the previous active version to `DecryptOnly`, and so does `mark_compromised` on an
@@ -73,7 +73,7 @@ The calls:
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
-| `rewrap()` | unwraps and wraps again every DEK in the record, under the KEK's current version; no value changes |
+| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes |
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
 version, its state and the `Transition`:
@@ -160,13 +160,13 @@ cost is the one staged rotation avoids: a process that has not seen the replacem
 record once, rate-limited, when it meets a value under it. A pending version of the purpose stays
 pending, to be promoted or destroyed as planned.
 
-The replacement needs a new DEK wrapped. When the KMS cannot wrap it, in an outage or without the
-encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`: the
-purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version is
-promoted. A compromised flag is never held back by the KMS.
+The replacement needs a new DEK encrypted. When the KMS cannot encrypt it, in an outage or without
+the encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`:
+the purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version
+is promoted. A compromised flag is never held back by the KMS.
 
-`destroy` removes the wrapped DEK from this record only. A backup of the record still holds it,
-and the KMS still unwraps it as long as the KEK version that wrapped it exists, see
+`destroy` removes the encrypted DEK from this record only. A backup of the record still holds it,
+and the KMS still decrypts it as long as the KEK version that encrypted it exists, see
 [Crypto-shredding](../operations.md#crypto-shredding).
 
 ## Reading a compromised version
@@ -175,7 +175,7 @@ and the KMS still unwraps it as long as the KEK version that wrapped it exists, 
 version:
 
 - `CompromisedReadPolicy::Block`, `KeyringOptions::DEFAULT_COMPROMISED_READS`: fails with
-  `KeyVersionCompromised`, decided on the cached record before any unwrap;
+  `KeyVersionCompromised`, decided on the cached record before any decryption;
 - `CompromisedReadPolicy::Allow`: decrypts, with one `WARN` event per value. Use it for the time
   of a sweep when availability matters more, and be aware the leaked DEK can forge values under
   that id meanwhile.
@@ -183,4 +183,4 @@ version:
 `decrypt_with_status` opens the value whatever the policy, and returns a `Decrypted` with the
 value, the `KeyVersionId` of the version that opened it and its `KeyTrust`, `Trusted` or
 `Compromised`. It is the call for a [sweep](../operations.md#sweeps). A compromised version's DEK
-is unwrapped by the provider for that call only and never returns to the DEK cache.
+is decrypted by the provider for that call only and never returns to the DEK cache.

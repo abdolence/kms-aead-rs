@@ -36,24 +36,24 @@ mod beacon;
 mod deterministic;
 
 mod export;
-pub use export::{KeysetSelection, WrappedKeyset};
+pub use export::{EncryptedKeyset, KeysetSelection};
 
 /// Field encryption under the key versions of one keyring, whose record lives in the store `S`
-/// and is cached in the process, with keys wrapped by the provider `P` and AEAD on the backend
+/// and is cached in the process, with keys encrypted by the provider `P` and AEAD on the backend
 /// `B`.
 ///
 /// `encrypt` seals under the active version of the purpose, and `decrypt` opens under the
 /// version the value names, without a call to the store while the cached record is younger than
 /// [`record_ttl`](KeyringOptions::record_ttl), and without a call to the KMS while the
-/// version's key is in the [`DekCache`]. Every unwrap of `encrypt` and `decrypt` goes through
+/// version's key is in the [`DekCache`]. Every decryption of `encrypt` and `decrypt` goes through
 /// that cache, which drops expired keys only when it is called: a process that can sit idle
 /// while it holds keys, and needs the cache's TTL to bound their time in memory, calls
 /// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
 /// The administrative calls, `create`, `rotate`, `promote`, `mark_compromised`, `retire`,
-/// `reinstate`, `destroy`, `rewrap` and `change_algorithm`, write the record, and `create`,
-/// `rotate`, `mark_compromised`, `rewrap` and `change_algorithm` also wrap keys, so they need
-/// the KMS's encrypt right. They run under an administrative principal, in a job, while the
+/// `reinstate`, `destroy`, `reencrypt_deks` and `change_algorithm`, write the record, and `create`,
+/// `rotate`, `mark_compromised`, `reencrypt_deks` and `change_algorithm` also encrypt DEKs, so they
+/// need the KMS's encrypt right. They run under an administrative principal, in a job, while the
 /// serving processes only decrypt keys and read the store.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the record's change
@@ -74,7 +74,7 @@ where
     B: AeadBackend,
 {
     /// Opens the keyring `id` from `store`: loads its record once and starts following the
-    /// store's change signals. `provider` unwraps the record's keys.
+    /// store's change signals. `provider` decrypts the record's keys.
     ///
     /// # Errors
     ///
@@ -94,7 +94,7 @@ where
     }
 
     /// Creates the record of the keyring `id`, with one active version of each purpose `policy`
-    /// names an algorithm for, and opens it. Wraps one key per version, so it needs the KMS's
+    /// names an algorithm for, and opens it. Encrypts one key per version, so it needs the KMS's
     /// encrypt right.
     ///
     /// # Errors
@@ -153,7 +153,7 @@ where
         self.cache.id()
     }
 
-    /// The cache of the unwrapped keys of this keyring's versions.
+    /// The cache of the decrypted keys of this keyring's versions.
     pub fn dek_cache(&self) -> &DekCache {
         self.cache.dek_cache()
     }
@@ -181,10 +181,10 @@ where
     /// # Errors
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has none, which follows a
-    /// `mark_compromised` whose new key could not be wrapped; [`KeyringError::Interop`] when
+    /// `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`] when
     /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::Kms`] with
     /// code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error when
-    /// the version's key is not in the [`DekCache`] and cannot be unwrapped.
+    /// the version's key is not in the [`DekCache`] and cannot be decrypted.
     pub async fn encrypt<T: Plaintext>(
         &self,
         aad: &FieldAad,
@@ -220,9 +220,9 @@ where
     ///   [`reload_min_interval`](KeyringOptions::reload_min_interval);
     /// - [`KeyringError::KeyVersionRetired`] and [`KeyringError::KeyVersionDestroyed`];
     /// - [`KeyringError::KeyVersionCompromised`] under [`CompromisedReadPolicy::Block`], before
-    ///   any unwrap;
+    ///   any decryption;
     /// - [`KeyringError::Kms`] with code `DECRYPT` when the value is not authentic under the
-    ///   version's key and `aad`, and the provider's error when the key cannot be unwrapped;
+    ///   version's key and `aad`, and the provider's error when the key cannot be decrypted;
     /// - [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`], before any
     ///   store or KMS call, when the value's key id is reserved or deterministic;
     /// - [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
@@ -244,7 +244,7 @@ where
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
     /// compromised, without applying the read policy: the call for a sweep, and for a reader
-    /// that handles untrusted values itself. A compromised version's key is unwrapped through
+    /// that handles untrusted values itself. A compromised version's key is decrypted through
     /// the provider, never through the [`DekCache`], so that it does not return to the cache.
     ///
     /// # Errors
@@ -364,10 +364,10 @@ where
     /// [`DekCache`] before returning; other processes drop it when their record refreshes.
     ///
     /// For the active version, it also adds a new version in the same write, active at once
-    /// rather than pending, and returns the rotation: every encrypt under the compromised key
+    /// rather than pending, and returns the rotation: every encryption under the compromised key
     /// stops as soon as each process refreshes, and the processes that have not seen the new
     /// version yet reload their record when they read a value under it. A pending version of the
-    /// purpose stays pending. When the KMS cannot wrap the new key, during an outage or without
+    /// purpose stays pending. When the KMS cannot encrypt the new key, during an outage or without
     /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
     /// `Ok(None)`: the purpose then has no active version, and `encrypt` fails with
     /// `NoActiveVersion` until a version is promoted. For any other version it returns
@@ -446,7 +446,7 @@ where
         .await
     }
 
-    /// Removes a retired or pending version's wrapped key from the record: the values under it
+    /// Removes a retired or pending version's encrypted DEK from the record: the values under it
     /// can never be read again, from this record. The version stays, so that its id is never
     /// reused.
     ///
@@ -464,26 +464,26 @@ where
         .await
     }
 
-    /// Unwraps and wraps again the key of every version that holds one, so that all of them sit
+    /// Decrypts and encrypts again the key of every version that holds one, so that all of them sit
     /// under the KEK's current version after the KEK rotated in the KMS. No value changes. The
-    /// keys are unwrapped through the provider, never through the [`DekCache`]. Returns the
-    /// number of versions wrapped again.
+    /// keys are decrypted through the provider, never through the [`DekCache`]. Returns the
+    /// number of versions encrypted again.
     ///
     /// # Errors
     ///
     /// The provider's errors, and the errors of a write as for [`rotate`](Self::rotate).
-    pub async fn rewrap(&self) -> KeyringResult<usize> {
-        spans::in_span(spans::rewrap(self.id()), async {
+    pub async fn reencrypt_deks(&self) -> KeyringResult<usize> {
+        spans::in_span(spans::reencrypt_deks(self.id()), async {
             let versions = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
-                    let deks = edit.record().wrapped_deks();
+                    let deks = edit.record().encrypted_deks();
                     for (key_id, dek) in &deks {
-                        // What the KMS unwraps is the serialised Tink key it wrapped, so it is
-                        // wrapped again as it is.
+                        // What the KMS decrypts is the serialised Tink key it encrypted, so it is
+                        // encrypted again as it is.
                         let key = self.provider.decrypt_data_encryption_key(dek).await?;
-                        let rewrapped = self.provider.encrypt_data_encryption_key(&key).await?;
-                        edit.replace_dek(*key_id, rewrapped, Timestamp::now())?;
+                        let reencrypted = self.provider.encrypt_data_encryption_key(&key).await?;
+                        edit.replace_dek(*key_id, reencrypted, Timestamp::now())?;
                     }
                     Ok(deks.len())
                 })
@@ -535,7 +535,7 @@ where
         })
     }
 
-    /// The version `key_id` of `record`, its wrapped key and its compromised flag, or the error
+    /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error
     /// of a read under it: unknown, retired or destroyed.
     fn readable<'r>(
         &self,
@@ -633,7 +633,7 @@ where
         }
     }
 
-    /// Opens `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with the
+    /// Opens `value` with `aad` under `version` of `record`, whose encrypted DEK is `dek`, with the
     /// key through the [`DekCache`].
     async fn open_cached<T: Plaintext>(
         &self,
@@ -653,12 +653,12 @@ where
         Ok(opened?)
     }
 
-    /// Runs `use_key` with the key `dek` wraps, through the [`DekCache`], and returns its result
-    /// and where the key came from, for the caller to record. `record` is the record `dek` was
-    /// read from, as the wrapped key of `key_id`.
+    /// Runs `use_key` with the key that `dek` holds, through the [`DekCache`], and returns its
+    /// result and where the key came from, for the caller to record. `record` is the record `dek`
+    /// was read from, as the encrypted DEK of `key_id`.
     ///
     /// A refresh evicts the keys it takes out of use once, when it takes the new record. A call
-    /// that read `dek` from the record before and unwraps it after that eviction caches it
+    /// that read `dek` from the record before and decrypts it after that eviction caches it
     /// again, so on a miss the key is evicted here when the cached record has since withdrawn
     /// it.
     async fn with_cached_key<T>(
@@ -683,7 +683,7 @@ where
         Ok((result, outcome))
     }
 
-    /// Runs `use_key` with the key `dek` wraps, which the provider unwraps for this call only
+    /// Runs `use_key` with the key that `dek` holds, which the provider decrypts for this call only
     /// and which never enters the [`DekCache`].
     async fn with_uncached_key<T>(
         &self,
@@ -698,7 +698,7 @@ where
     }
 
     /// A new version to replace the active version `key_id` that is being flagged compromised,
-    /// or `None`, with a `WARN`, when its key cannot be wrapped: the flag goes in without it.
+    /// or `None`, with a `WARN`, when its key cannot be encrypted: the flag goes in without it.
     async fn replacement(
         &self,
         record: &KeyringRecord,
@@ -713,7 +713,7 @@ where
             .ok()
     }
 
-    /// Opens `value` with a key the provider unwraps for this call only, which never enters the
+    /// Opens `value` with a key the provider decrypts for this call only, which never enters the
     /// [`DekCache`].
     async fn open_uncached<T: Plaintext>(
         &self,
@@ -738,7 +738,7 @@ where
         edit.stage(new, Timestamp::now())
     }
 
-    /// The next version of `algorithm`'s purpose in `record`, with its key wrapped.
+    /// The next version of `algorithm`'s purpose in `record`, with its key encrypted.
     async fn new_version(
         &self,
         record: &KeyringRecord,
@@ -754,7 +754,7 @@ where
     /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. The application
     /// decodes a value it stored as hex before the call.
     ///
-    /// The value's key is unwrapped by this keyring's provider, so it must have been wrapped by
+    /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
     /// values share one entry. It reads Tink's KMS envelope, the layout kms-aead 0.30 writes; a
     /// value in a layout of kms-aead 0.29 or earlier is upgraded first, with kms-aead's
@@ -764,8 +764,8 @@ where
     ///
     /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
     /// value is not in Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement
-    /// `algorithm`, the provider's error when the key does not unwrap, `INVALID_KEY_FORMAT` when
-    /// what it unwraps is not a serialised Tink key, and code `DECRYPT` when the value is not
+    /// `algorithm`, the provider's error when the key does not decrypt, `INVALID_KEY_FORMAT` when
+    /// what it decrypts is not a serialised Tink key, and code `DECRYPT` when the value is not
     /// authentic under it and `aad`.
     pub async fn decrypt_envelope_value(
         &self,
@@ -791,7 +791,7 @@ where
 
 impl NewVersion {
     /// Version `key_id` with a new key for `algorithm`, from the KMS generator when the provider
-    /// uses one and from the CSPRNG of `B` otherwise, wrapped by `provider`.
+    /// uses one and from the CSPRNG of `B` otherwise, encrypted by `provider`.
     async fn generate<P, B>(
         key_id: KeyVersionId,
         algorithm: KeyAlgorithm,
@@ -804,14 +804,14 @@ impl NewVersion {
         let dek = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
                 let (_, dek) = AeadCipher::<B>::new(algorithm)?
-                    .generate_wrapped_key(provider)
+                    .generate_dek(provider)
                     .await?;
                 dek
             }
             #[cfg(feature = "deterministic")]
             KeyAlgorithm::Deterministic(algorithm) => {
                 let (_, dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
-                    .generate_wrapped_key(provider)
+                    .generate_dek(provider)
                     .await?;
                 dek
             }
@@ -819,7 +819,7 @@ impl NewVersion {
             KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
             KeyAlgorithm::Beacon(algorithm) => {
                 let (_, dek) = BeaconMac::<B>::new(algorithm)
-                    .generate_wrapped_key(provider)
+                    .generate_dek(provider)
                     .await?;
                 dek
             }
@@ -871,7 +871,7 @@ impl Drop for WatchTask {
 
 impl KeyringPolicy {
     /// The record of a new keyring `id` under this policy, with one active version per purpose
-    /// it names an algorithm for, each wrapped by `provider`.
+    /// it names an algorithm for, each encrypted by `provider`.
     async fn new_record<P, B>(&self, id: KeyringId, provider: &P) -> KeyringResult<KeyringRecord>
     where
         P: KmsAeadEncryptionProvider + Sync,
@@ -962,7 +962,7 @@ pub struct KeyringOptions {
     /// [`DEFAULT_COMPROMISED_READS`](Self::DEFAULT_COMPROMISED_READS) by default.
     #[default = "Self::DEFAULT_COMPROMISED_READS"]
     pub compromised_reads: CompromisedReadPolicy,
-    /// The cache of unwrapped keys, which may be shared with other keyrings and envelopes, or
+    /// The cache of decrypted keys, which may be shared with other keyrings and envelopes, or
     /// `None`, the default, for `DekCache::new(DekCacheOptions::new())`, with kms-aead's
     /// [`DekCacheOptions::DEFAULT_TTL`] and [`DekCacheOptions::DEFAULT_MAX_ENTRIES`].
     pub dek_cache: Option<DekCache>,
@@ -986,7 +986,7 @@ impl KeyringOptions {
 /// forges values under its id, so such a value is untrusted data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompromisedReadPolicy {
-    /// Fails with `KeyVersionCompromised`, decided on the cached record before any unwrap, so
+    /// Fails with `KeyVersionCompromised`, decided on the cached record before any decryption, so
     /// that the key a compromised flag evicted does not come back into the [`DekCache`].
     Block,
     /// Decrypts, with one `WARN` event per value. The read goes through the [`DekCache`], which

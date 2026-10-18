@@ -39,7 +39,7 @@ const WATCH_START: Duration = Duration::from_secs(10);
 /// version is part of this crate's API under the `firestore` feature.
 ///
 /// firestore-rs logs every listen event at `trace` level on its `firestore` target, documents
-/// included, so that level writes wrapped keys to the log. Keep it off where the log leaves the
+/// included, so that level writes encrypted DEKs to the log. Keep it off where the log leaves the
 /// administrative principal's reach.
 #[derive(Clone)]
 pub struct FirestoreKeyringStore {

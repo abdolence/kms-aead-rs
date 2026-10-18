@@ -9,21 +9,21 @@ use crate::test_support::{TestResult, TENANT};
 const CREATED: &str = "2026-01-10T09:00:00Z";
 const ROTATED: &str = "2026-04-10T09:00:00Z";
 const COMPROMISED: &str = "2026-05-01T12:00:00Z";
-/// The wrapped bytes of every fixture version: distinctive, so that a test can look for them.
-const WRAPPED: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
-/// [`WRAPPED`] in standard base64, as the record stores it.
-const WRAPPED_BASE64: &str = "wP/uwP/u";
+/// The encrypted bytes of every fixture version: distinctive, so that a test can look for them.
+const ENCRYPTED_DEK: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
+/// [`ENCRYPTED_DEK`] in standard base64, as the record stores it.
+const ENCRYPTED_DEK_BASE64: &str = "wP/uwP/u";
 
-/// A version as the stored form writes it, with a wrapped key unless it is destroyed.
+/// A version as the stored form writes it, with an encrypted DEK unless it is destroyed.
 fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> {
     let algorithm = if key_id >> 31 == 1 {
         "aes-256-siv"
     } else {
         "aes-256-gcm"
     };
-    let wrapped_dek = match state {
+    let encrypted_dek = match state {
         "destroyed" => Value::Null,
-        _ => json!(WRAPPED_BASE64),
+        _ => json!(ENCRYPTED_DEK_BASE64),
     };
     let compromised = match compromised {
         true => json!({ "at": COMPROMISED, "note": "laptop lost" }),
@@ -36,7 +36,7 @@ fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> 
         "compromised": compromised,
         "created_at": CREATED,
         "state_changed_at": ROTATED,
-        "wrapped_dek": wrapped_dek,
+        "wrapped_dek": encrypted_dek,
     }))
 }
 
@@ -158,7 +158,7 @@ fn an_active_compromised_version_is_rejected() -> KeyringResult<()> {
 #[test]
 fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
     let mut destroyed = version(1, "destroyed", false)?;
-    destroyed["wrapped_dek"] = json!(WRAPPED_BASE64);
+    destroyed["wrapped_dek"] = json!(ENCRYPTED_DEK_BASE64);
     assert_eq!(
         refusal(&document(vec![destroyed, version(2, "active", false)?])),
         Some(RecordInvalidReason::DestroyedWithMaterial(
@@ -226,13 +226,13 @@ fn ordinals_out_of_creation_order_are_rejected() -> KeyringResult<()> {
 }
 
 #[test]
-fn a_wrapped_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
-    for wrapped_dek in ["not base64!", ""] {
+fn an_encrypted_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
+    for encrypted_dek in ["not base64!", ""] {
         let mut active = version(1, "active", false)?;
-        active["wrapped_dek"] = json!(wrapped_dek);
+        active["wrapped_dek"] = json!(encrypted_dek);
         assert_eq!(
             refusal(&document(vec![active])),
-            Some(RecordInvalidReason::MalformedWrappedDek(
+            Some(RecordInvalidReason::MalformedEncryptedDek(
                 KeyVersionId::try_from(1)?
             ))
         );
@@ -306,7 +306,7 @@ fn a_record_over_the_size_cap_is_invalid() -> TestResult {
 #[test]
 fn a_malformed_record_error_quotes_no_document_bytes() -> TestResult {
     let mut document = rotated()?;
-    document["versions"][0]["key_id"] = json!(WRAPPED_BASE64);
+    document["versions"][0]["key_id"] = json!(ENCRYPTED_DEK_BASE64);
     let error = parse(&document).err();
     assert!(matches!(
         error,
@@ -317,20 +317,26 @@ fn a_malformed_record_error_quotes_no_document_bytes() -> TestResult {
     ));
     let error = error.ok_or("the document parsed")?;
     for text in [format!("{error}"), format!("{error:?}")] {
-        assert!(!text.contains(WRAPPED_BASE64), "{text}");
+        assert!(!text.contains(ENCRYPTED_DEK_BASE64), "{text}");
     }
     Ok(())
 }
 
 #[test]
-fn record_debug_carries_no_wrapped_dek() -> TestResult {
+fn record_debug_carries_no_encrypted_dek() -> TestResult {
     let record = parse(&rotated()?)?;
     let debug = format!("{record:?}");
-    let byte_list = format!("{:?}", &WRAPPED[..]);
-    let lower_hex: String = WRAPPED.iter().map(|byte| format!("{byte:02x}")).collect();
-    let upper_hex: String = WRAPPED.iter().map(|byte| format!("{byte:02X}")).collect();
+    let byte_list = format!("{:?}", &ENCRYPTED_DEK[..]);
+    let lower_hex: String = ENCRYPTED_DEK
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let upper_hex: String = ENCRYPTED_DEK
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect();
     for marker in [
-        WRAPPED_BASE64,
+        ENCRYPTED_DEK_BASE64,
         &lower_hex,
         &upper_hex,
         &byte_list,
@@ -478,7 +484,7 @@ fn every_transition_of_the_lifecycle_is_accepted() -> TestResult {
                 );
             }
             assert_eq!(
-                version.wrapped_dek().is_some(),
+                version.encrypted_dek().is_some(),
                 expected_state != KeyVersionState::Destroyed
             );
             edit.finish()?;
@@ -530,7 +536,7 @@ fn new_version(record: &KeyringRecord, algorithm: KeyAlgorithm) -> KeyringResult
     Ok(NewVersion {
         key_id: record.next_key_id(algorithm.purpose())?,
         algorithm,
-        dek: EncryptedDataEncryptionKey::new(WRAPPED.to_vec()),
+        dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
     })
 }
 
@@ -810,7 +816,7 @@ fn versions_taken_out_of_use_are_withdrawn() -> TestResult {
 }
 
 #[test]
-fn a_rewrapped_key_withdraws_the_bytes_it_replaces() -> TestResult {
+fn a_reencrypted_key_withdraws_the_bytes_it_replaces() -> TestResult {
     let held_record = parse(&held()?)?;
     let mut next = held()?;
     next["versions"][1]["wrapped_dek"] = json!(STANDARD.encode([0x0B, 0xAD]));
@@ -820,7 +826,7 @@ fn a_rewrapped_key_withdraws_the_bytes_it_replaces() -> TestResult {
         withdrawn,
         [(
             KeyVersionId::try_from(2)?,
-            &EncryptedDataEncryptionKey::new(WRAPPED.to_vec())
+            &EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec())
         )]
     );
     Ok(())

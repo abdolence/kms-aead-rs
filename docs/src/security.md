@@ -95,11 +95,11 @@ and nothing signs it: its integrity rests on the keyring store's access control.
 splits two principals:
 
 - **Serving principal**: KMS decrypt on the KEK and read access to the keyring store. `encrypt`,
-  `decrypt` and `beacon` make no KMS wrap call, so it needs nothing more;
+  `decrypt` and `beacon` make no KMS encryption call, so it needs nothing more;
 - **Administrative principal**: KMS encrypt and decrypt on the KEK, and the only principal with
   write access to the keyring store. `create`, `rotate`, `promote`, `change_algorithm`,
-  `mark_compromised`, `retire`, `reinstate`, `destroy`, `rewrap` and `export_bigquery_keyset` run
-  under it, in a job, never in a request handler.
+  `mark_compromised`, `retire`, `reinstate`, `destroy`, `reencrypt_deks` and
+  `export_bigquery_keyset` run under it, in a job, never in a request handler.
 
 | KMS | Serving | Administration |
 |---|---|---|
@@ -110,20 +110,20 @@ splits two principals:
 
 The permissions of each store are in [Keyring stores](./keyring/stores.md).
 
-A writer of the keyring store can copy or relabel a wrapped DEK, between versions of one keyring
-or between keyrings under the same KEK: the KMS unwraps a wrapped DEK for any principal allowed to
-decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
+A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
+or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
+to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
 compromised or destroyed version's DEK back into use under a new key id, or point one tenant's
 version at another tenant's DEK. A writer without KMS rights cannot add a DEK of its own, since
-every unwrap names the configured KEK and the KMS refuses a DEK wrapped under another key. The
+every decryption names the configured KEK and the KMS refuses a DEK encrypted under another key. The
 controls for this are the deployment's, as in the [threat model](#threat-model):
 
 - write access to the keyring store for the administrative principal only, and read-only access
   for the serving principals;
 - one KEK per isolation boundary, such as a tenant or an environment, so a DEK copied across it
-  fails to unwrap;
+  fails to decrypt;
 - backups of the record, or versioning in the store, to compare with and restore from;
-- the KMS audit log of encrypt calls, which shows whether the administrative job wrapped a
+- the KMS audit log of encrypt calls, which shows whether the administrative job encrypted a
   version's DEK.
 
 A running process also refuses every record that moves a version backwards, with an `ERROR`, see
@@ -139,17 +139,17 @@ version.
   version or restore a destroyed one for the processes that start after the write. Running
   processes refuse such a record and log an `ERROR`; new ones take it. The record is not signed in
   this release;
-- **an RSA key on Azure Key Vault wraps for anyone.** With an RSA key the wrap is a public-key
-  operation, so whoever holds the public key wraps a DEK of their own into the record. Use an AES
-  key, from Managed HSM;
-- **`decrypt_envelope_value` knows no key version.** It unwraps the wrapped DEK an envelope value
-  carries, so a wrapped DEK kept from a version, compromised or destroyed since, still opens values
-  through it. Keep it in the read path for the migration only;
-- **a destroyed version's DEK lives as long as the KEK version that wrapped it.** A backup of the
-  record holds wrapped DEKs the KMS still opens, see
+- **an RSA key on Azure Key Vault encrypts for anyone.** With an RSA key the encryption is a
+  public-key operation, so whoever holds the public key encrypts a DEK of their own into the record.
+  Use an AES key, from Managed HSM;
+- **`decrypt_envelope_value` knows no key version.** It decrypts the encrypted DEK an envelope value
+  carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
+  values through it. Keep it in the read path for the migration only;
+- **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
+  record holds encrypted DEKs the KMS still opens, see
   [Crypto-shredding](./operations.md#crypto-shredding);
-- **an exported BigQuery keyset holds the versions' keys**, wrapped with no associated data, since
-  BigQuery unwraps it with none. Treat it as a copy of the record's readable versions, and export
+- **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
+  BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export
   again after every rotation and every `mark_compromised`;
 - **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are
   decided per record before a sweep re-seals them, see

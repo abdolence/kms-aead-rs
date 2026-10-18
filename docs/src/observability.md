@@ -151,9 +151,9 @@ The library retries nothing itself, so there is no retry field.
 
 The `kms-aead-keyring` crate follows the same rules: one `DEBUG` span per call, field names with
 the `/kms_aead_keyring/` prefix, and nothing recorded for a value nobody reported. kms-aead's spans
-nest inside them, so a `KMS unwrap` under a `Keyring decrypt` is a DEK cache miss, and a `KMS
-wrap` under a `Keyring rotate` is the new version's DEK. Enable `kms_aead_keyring=debug` in the
-filter beside `kms_aead=debug`.
+nest inside them, so a `KMS decrypt DEK` under a `Keyring decrypt` is a DEK cache miss, and a
+`KMS encrypt DEK` under a `Keyring rotate` is the new version's DEK. Enable `kms_aead_keyring=debug`
+in the filter beside `kms_aead=debug`.
 
 | Span | Opened by | Fields |
 |---|---|---|
@@ -165,7 +165,7 @@ filter beside `kms_aead=debug`.
 | `Keyring promote` | `promote` | `keyring`, `key_id`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
-| `Keyring rewrap` | `rewrap` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
+| `Keyring re-encrypt DEKs` | `reencrypt_deks` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
 | `Keyring export` | `export_bigquery_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
 | `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
 
@@ -178,7 +178,7 @@ filter beside `kms_aead=debug`.
 | `backend` | `ring`, `aws-lc` or `rustcrypto`; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring's backend |
 | `key_state` | `pending`, `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
-| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap`, the export, and a compromised version read past the cache; unrecorded for `equality_probes` and `beacon_probes` |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `reencrypt_deks`, the export, and a compromised version read past the cache; unrecorded for `equality_probes` and `beacon_probes` |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, `s3`, or an application store's name |
 | `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
@@ -186,7 +186,7 @@ filter beside `kms_aead=debug`.
 | `response_time` | milliseconds the store call took |
 | `from_key_id`, `to_key_id` | the version a promotion or a compromise replaced, and the new active one; for `rotate`, `to_key_id` is the staged version |
 | `cas_retries` | the compare-and-swap conflicts before the write landed |
-| `versions` | the versions `rewrap` wrapped again, or an export put in the keyset |
+| `versions` | the versions `reencrypt_deks` encrypted again, or an export put in the keyset |
 | `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` | the counts of the `SweepReport` |
 | `error_code` | `KeyringError::code()` of the error returned: kms-aead's code for a KMS or AEAD error, such as `DECRYPT`, and the variant's name in upper snake case otherwise, such as `KEY_VERSION_COMPROMISED` |
 
@@ -199,7 +199,7 @@ filter beside `kms_aead=debug`.
   use;
 - `ERROR`: a refreshed record refused because it moves a version backwards, with the first rule it
   breaks. Alert on it: it is the detection of a rewritten or restored record;
-- `WARN`: a compromised flag written without a rotation because the new DEK could not be wrapped;
+- `WARN`: a compromised flag written without a rotation because the new DEK could not be encrypted;
 - `INFO`: the active version of a purpose changed, with the old and new key ids;
 - `WARN`: the store's listener disconnected, reconnected, or did not start, and a keyring
   opened with no tokio runtime to follow the store's signals;

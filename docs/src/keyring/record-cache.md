@@ -1,6 +1,6 @@
 # Record cache
 
-Each `Keyring` keeps its record in the process, and the unwrapped DEKs of its versions in
+Each `Keyring` keeps its record in the process, and the decrypted DEKs of its versions in
 kms-aead's [DEK cache](../dek-caching.md). `encrypt`, `decrypt` and `beacon` read both, so the hot
 path calls neither the store nor the KMS.
 
@@ -15,7 +15,7 @@ path calls neither the store nor the KMS.
 | `watch` | `DEFAULT_WATCH`, `true` | whether to follow the store's change signals, where it has them |
 | `cas_retries` | `DEFAULT_CAS_RETRIES`, 5 | the conflicts an administrative write retries before `RecordConflict` |
 | `compromised_reads` | `DEFAULT_COMPROMISED_READS`, `Block` | what `decrypt` does with a value under a compromised version, see [Lifecycle](./lifecycle.md#reading-a-compromised-version) |
-| `dek_cache` | `None`, a new cache | the cache of unwrapped DEKs; a new one has kms-aead's `DekCacheOptions::DEFAULT_TTL` and `DekCacheOptions::DEFAULT_MAX_ENTRIES` |
+| `dek_cache` | `None`, a new cache | the cache of decrypted DEKs; a new one has kms-aead's `DekCacheOptions::DEFAULT_TTL` and `DekCacheOptions::DEFAULT_MAX_ENTRIES` |
 
 ```rust
 use std::time::Duration;
@@ -87,7 +87,7 @@ that starts after such a write has no record to compare with and takes it.
 ## DEK eviction
 
 Taking a refreshed record evicts from the DEK cache every key it takes out of use: versions
-retired, destroyed or newly compromised, and the old bytes of a rewrapped one.
+retired, destroyed or newly compromised, and the old bytes of a re-encrypted one.
 `mark_compromised` evicts the key from its own process before it returns.
 
 The DEK cache drops expired keys only when it is called. A process that can sit idle while it holds

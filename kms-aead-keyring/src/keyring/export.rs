@@ -1,4 +1,4 @@
-//! The keyset exports: a keyring's versions as a Tink keyset wrapped by the keyring's KEK, for
+//! The keyset exports: a keyring's versions as a Tink keyset encrypted by the keyring's KEK, for
 //! BigQuery's `KEYS.KEYSET_CHAIN` or for Tink's own keyset readers.
 
 use std::fmt::{Debug, Formatter, Write};
@@ -42,7 +42,7 @@ impl KeysetSelection {
     }
 }
 
-/// A Tink keyset of a keyring's versions, wrapped by the keyring's KEK with no additional
+/// A Tink keyset of a keyring's versions, encrypted by the keyring's KEK with no additional
 /// authenticated data, in the encoding `E` of the export that made it.
 ///
 /// The bytes are a KMS ciphertext. They open nothing without the KMS key's decrypt right, which a
@@ -50,16 +50,16 @@ impl KeysetSelection {
 /// the export: after a rotation, a `Readable` keyset does not read the values of the new version
 /// until it is exported again.
 ///
-/// `Debug` shows the key URI, the encoding and the key ids, never the wrapped keyset.
-pub struct WrappedKeyset<E: KeysetEncoding> {
+/// `Debug` shows the key URI, the encoding and the key ids, never the encrypted keyset.
+pub struct EncryptedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
     key_version_ids: Vec<KeyVersionId>,
     encoding: PhantomData<E>,
 }
 
-impl<E: KeysetEncoding> WrappedKeyset<E> {
-    /// The wrapped keyset, as a `BYTES` column, a query parameter or a file holds it.
+impl<E: KeysetEncoding> EncryptedKeyset<E> {
+    /// The encrypted keyset, as a `BYTES` column, a query parameter or a file holds it.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
@@ -69,7 +69,7 @@ impl<E: KeysetEncoding> WrappedKeyset<E> {
         &self.key_version_ids
     }
 
-    /// Tink's key URI of the KMS key that wraps the keyset, such as
+    /// Tink's key URI of the KMS key that encrypts the keyset, such as
     /// `gcp-kms://projects/…/cryptoKeys/…` or `aws-kms://arn:aws:kms:…`: the first argument of
     /// `KEYS.KEYSET_CHAIN`, and the URI of the KMS client a Tink keyset reader takes.
     pub fn key_uri(&self) -> &str {
@@ -77,7 +77,7 @@ impl<E: KeysetEncoding> WrappedKeyset<E> {
     }
 }
 
-impl WrappedKeyset<BigQuery> {
+impl EncryptedKeyset<BigQuery> {
     /// The keyset as a GoogleSQL bytes literal, `b'\x0a\x24…'`, for the second argument of
     /// `KEYS.KEYSET_CHAIN`, which takes a literal or a query parameter.
     pub fn to_sql_literal(&self) -> String {
@@ -92,9 +92,9 @@ impl WrappedKeyset<BigQuery> {
     }
 }
 
-impl<E: KeysetEncoding> Clone for WrappedKeyset<E> {
+impl<E: KeysetEncoding> Clone for EncryptedKeyset<E> {
     fn clone(&self) -> Self {
-        WrappedKeyset {
+        EncryptedKeyset {
             bytes: self.bytes.clone(),
             key_uri: self.key_uri.clone(),
             key_version_ids: self.key_version_ids.clone(),
@@ -103,9 +103,9 @@ impl<E: KeysetEncoding> Clone for WrappedKeyset<E> {
     }
 }
 
-impl<E: KeysetEncoding> Debug for WrappedKeyset<E> {
+impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WrappedKeyset")
+        f.debug_struct("EncryptedKeyset")
             .field("encoding", &E::ENCODING)
             .field("key_uri", &self.key_uri)
             .field("key_version_ids", &self.key_version_ids)
@@ -114,13 +114,13 @@ impl<E: KeysetEncoding> Debug for WrappedKeyset<E> {
 }
 
 /// The BigQuery export, which exists for keyrings on a Cloud KMS key alone: `KEYS.KEYSET_CHAIN`
-/// unwraps with Cloud KMS only.
+/// decrypts with Cloud KMS only.
 #[cfg(feature = "bigquery-export")]
 impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
-    /// The versions `selection` names as a Tink keyset wrapped by the keyring's KMS key, for
+    /// The versions `selection` names as a Tink keyset encrypted by the keyring's KMS key, for
     /// BigQuery's `KEYS.KEYSET_CHAIN` in the KMS key's location. An administrative call: it
-    /// unwraps every selected key through the provider, never through the
-    /// [`DekCache`](kms_aead::cache::DekCache), and wraps the keyset, so it needs the KMS key's
+    /// decrypts every selected key through the provider, never through the
+    /// [`DekCache`](kms_aead::cache::DekCache), and encrypts the keyset, so it needs the KMS key's
     /// encrypt and decrypt rights, and the process holds the selected keys for the duration of
     /// the call only.
     ///
@@ -129,7 +129,7 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     /// process flagged compromised is never exported as readable.
     ///
     /// The keys inside are the versions' own keys. The keyset never opens as a version's key:
-    /// what the KMS unwraps from it is a serialised keyset, which is no serialised Tink key.
+    /// what the KMS decrypts from it is a serialised keyset, which is no serialised Tink key.
     ///
     /// # Errors
     ///
@@ -146,7 +146,7 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     pub async fn export_bigquery_keyset(
         &self,
         selection: KeysetSelection,
-    ) -> KeyringResult<WrappedKeyset<BigQuery>> {
+    ) -> KeyringResult<EncryptedKeyset<BigQuery>> {
         self.export_keyset(selection).await
     }
 }
@@ -157,9 +157,9 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
     B: AeadBackend,
 {
-    /// The versions `selection` names as Tink's encrypted keyset, wrapped by the keyring's KEK:
+    /// The versions `selection` names as Tink's encrypted keyset, encrypted by the keyring's KEK:
     /// the bytes Tink's keyset readers take with the KMS client of
-    /// [`key_uri`](WrappedKeyset::key_uri), `KeysetHandle.read` in Java, `keyset.Read` in Go and
+    /// [`key_uri`](EncryptedKeyset::key_uri), `KeysetHandle.read` in Java, `keyset.Read` in Go and
     /// `tink.read_keyset_handle` in Python. An administrative call, with the same versions, the
     /// same fresh read of the record and the same rights as `export_bigquery_keyset`, on a KEK in
     /// any KMS that Tink has a client for: Cloud KMS, AWS KMS by key ARN, and Vault Transit in
@@ -177,7 +177,7 @@ where
     pub async fn export_tink_keyset(
         &self,
         selection: KeysetSelection,
-    ) -> KeyringResult<WrappedKeyset<Tink>> {
+    ) -> KeyringResult<EncryptedKeyset<Tink>> {
         self.export_keyset(selection).await
     }
 
@@ -186,7 +186,7 @@ where
     async fn export_keyset<E: KeysetEncoding>(
         &self,
         selection: KeysetSelection,
-    ) -> KeyringResult<WrappedKeyset<E>> {
+    ) -> KeyringResult<EncryptedKeyset<E>> {
         spans::in_span(spans::export(self.id(), selection.purpose()), async {
             let encoding = E::ENCODING;
             let kek = self.provider.kek();
@@ -216,7 +216,7 @@ where
                 Encoding::BigQuery => {
                     let plaintext = DataEncryptionKey::from(keyset.to_bytes());
                     // Zeroises the keys inside the keyset before the KMS round trip, so that the
-                    // serialised keyset is the one copy left while it is wrapped.
+                    // serialised keyset is the one copy left while it is encrypted.
                     drop(keyset);
                     self.provider
                         .encrypt_data_encryption_key(&plaintext)
@@ -226,7 +226,7 @@ where
                 Encoding::Tink => keyset.into_encrypted_bytes(&self.provider).await?,
             };
             spans::record_versions(versions.len());
-            Ok(WrappedKeyset {
+            Ok(EncryptedKeyset {
                 bytes,
                 key_uri,
                 key_version_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
@@ -237,7 +237,7 @@ where
     }
 
     /// The primary and the versions of `selection` in `record`, each with its Tink key type in
-    /// `encoding` and its wrapped key.
+    /// `encoding` and its encrypted DEK.
     fn exported_versions<'r>(
         &self,
         record: &'r KeyringRecord,
@@ -292,7 +292,7 @@ where
     }
 }
 
-/// A selected version: its key id, its Tink key type and its wrapped key.
+/// A selected version: its key id, its Tink key type and its encrypted DEK.
 type ExportedVersion<'r> = (KeyVersionId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 
 #[cfg(all(
@@ -343,7 +343,7 @@ mod tests {
             let key_id = KeyVersionId::try_from(*key_id)?;
             let dek = record
                 .version(key_id)
-                .and_then(KeyVersion::wrapped_dek)
+                .and_then(KeyVersion::encrypted_dek)
                 .ok_or("the version holds no key")?;
             let (added, _) = DekCache::disabled()
                 .with_key(provider, dek, |key| {
@@ -361,7 +361,7 @@ mod tests {
         keyring
             .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
             .await?;
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         let readable = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
@@ -376,7 +376,10 @@ mod tests {
                 if key_id == KeyVersionId::try_from(2)?
         ));
         assert_eq!(first.key_version_ids(), [KeyVersionId::try_from(1)?]);
-        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 1);
+        assert_eq!(
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions + 1
+        );
         Ok(())
     }
 
@@ -392,17 +395,17 @@ mod tests {
             .mark_compromised(KeyVersionId::try_from(2)?, None)
             .await?;
 
-        let wrapped = keyring
+        let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                wrapped.as_bytes().to_vec(),
+                exported.as_bytes().to_vec(),
             ))
             .await?;
 
         assert_eq!(
-            wrapped.key_version_ids(),
+            exported.key_version_ids(),
             [KeyVersionId::try_from(1)?, KeyVersionId::try_from(3)?]
         );
         assert_eq!(
@@ -413,9 +416,9 @@ mod tests {
     }
 
     #[test]
-    fn debug_leaves_out_the_wrapped_keyset() -> TestResult {
+    fn debug_leaves_out_the_encrypted_keyset() -> TestResult {
         let marker = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
-        let keyset = WrappedKeyset::<Tink> {
+        let keyset = EncryptedKeyset::<Tink> {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
             key_version_ids: vec![KeyVersionId::try_from(1)?],
@@ -442,16 +445,16 @@ mod tests {
         let leaked = KeyVersionId::try_from(1)?;
         administrator.mark_compromised(leaked, None).await?;
 
-        let wrapped = exporter
+        let exported = exporter
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                wrapped.as_bytes().to_vec(),
+                exported.as_bytes().to_vec(),
             ))
             .await?;
 
-        assert_eq!(wrapped.key_version_ids(), [KeyVersionId::try_from(2)?]);
+        assert_eq!(exported.key_version_ids(), [KeyVersionId::try_from(2)?]);
         assert_eq!(
             *keyset.value(),
             keyset_of(&exporter, &provider, 2, &[2]).await?
@@ -463,7 +466,7 @@ mod tests {
     async fn export_does_not_populate_the_cache() -> TestResult {
         let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
         let aad = email_of("42")?;
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
@@ -475,22 +478,25 @@ mod tests {
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
 
-        // One unwrap per export, and one for the encrypt, which found the cache empty.
-        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 3);
+        // One decryption per export, and one for the encryption, which found the cache empty.
+        assert_eq!(
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions + 3
+        );
         Ok(())
     }
 
     #[tokio::test]
     async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
         let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
-        let wrapped = keyring
+        let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let value = CipherTextWithEncryptedKey::join(
             &CipherText(vec![0; 32]),
-            &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec()),
+            &EncryptedDataEncryptionKey::new(exported.as_bytes().to_vec()),
         )?;
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         for _ in 0..2 {
             let opened = keyring
@@ -502,8 +508,11 @@ mod tests {
             ));
         }
 
-        // Each call unwraps again: the keyset was never cached as a key.
-        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps + 2);
+        // Each call decrypts again: the keyset was never cached as a key.
+        assert_eq!(
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions + 2
+        );
         Ok(())
     }
 
@@ -512,16 +521,16 @@ mod tests {
         let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
         let staged = keyring.rotate(Purpose::Randomized).await?;
 
-        let wrapped = keyring
+        let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                wrapped.as_bytes().to_vec(),
+                exported.as_bytes().to_vec(),
             ))
             .await?;
         assert_eq!(
-            wrapped.key_version_ids(),
+            exported.key_version_ids(),
             [KeyVersionId::try_from(1)?, staged]
         );
         assert_eq!(
@@ -578,8 +587,8 @@ mod tests {
     async fn tink_export_refuses_a_kek_without_a_tink_key_uri() -> TestResult {
         let (keyring, provider) =
             keyring(TestProvider::new("tenant-42-kek")?, KeyringPolicy::new()).await?;
-        let wraps = provider.calls.wraps.load(Ordering::SeqCst);
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let encryptions = provider.calls.encryptions.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         let exported = keyring
             .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
@@ -593,8 +602,14 @@ mod tests {
                 ..
             }))
         ));
-        assert_eq!(provider.calls.wraps.load(Ordering::SeqCst), wraps);
-        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps);
+        assert_eq!(
+            provider.calls.encryptions.load(Ordering::SeqCst),
+            encryptions
+        );
+        assert_eq!(
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions
+        );
         Ok(())
     }
 

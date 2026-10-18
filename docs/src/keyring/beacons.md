@@ -87,7 +87,7 @@ let email = Email::new("Alice@Example.com");
 let encrypted: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &email).await?;
 let beacon: Beacon<Email> = keyring.beacon(&EMAIL, &email).await?;
 
-// A lookup: the probes of the value looked for, then a decrypt of each matching row
+// A lookup: the probes of the value looked for, then a decryption of each matching row
 let probes: Vec<Beacon<Email>> = keyring
     .beacon_probes(&EMAIL, &Email::new("alice@example.com"))
     .await?;
@@ -132,7 +132,7 @@ every write and every lookup goes through it.
 
 ## BigQuery
 
-BigQuery's SQL has no HMAC-SHA256 with a KMS-wrapped key, so a query in BigQuery cannot compute a
+BigQuery's SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot compute a
 beacon, and the keyring never exports beacon keys to it: `export_bigquery_keyset` of the beacon
 purpose fails with `ExportAlgorithmUnsupported`. A BigQuery query matches beacons the application
 computed and passed in as query parameters.

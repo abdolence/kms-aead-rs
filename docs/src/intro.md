@@ -79,9 +79,9 @@ stored value holds:
 |---|---|---|---|
 | Crate | `kms-aead` | `kms-aead` | `kms-aead-keyring` |
 | DEKs | one per value | one per process at a time, renewed by age or count | one per key version of a scope |
-| KMS calls on write | one wrap per value | one wrap per renewed DEK | none |
-| KMS calls on read | one unwrap per value, or per DEK cache miss | one unwrap per DEK per cache TTL | one unwrap per key version per cache TTL |
-| A value carries | its wrapped DEK | its wrapped DEK | a 4-byte key id |
+| KMS calls on write | one encryption per value | one encryption per renewed DEK | none |
+| KMS calls on read | one decryption per value, or per DEK cache miss | one decryption per DEK per cache TTL | one decryption per key version per cache TTL |
+| A value carries | its encrypted DEK | its encrypted DEK | a 4-byte key id |
 | Infrastructure | a KMS | a KMS | a KMS and a keyring store |
 | Rotation | the KEK in the KMS | the KEK in the KMS, and DEK renewal per process | central: staged rotate and promote, retire, destroy, and a compromised flag every process sees |
 | Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with queries across rotations |

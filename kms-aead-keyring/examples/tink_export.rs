@@ -17,8 +17,8 @@ use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProv
 use kms_aead::{AeadAlgorithm, AwsLc, KmsAeadEncryptionProvider, ValueStruct};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringId,
-    KeyringOptions, KeyringPolicy, KeysetSelection, Purpose, WrappedKeyset,
+    encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
+    KeyringId, KeyringOptions, KeyringPolicy, KeysetSelection, Purpose,
 };
 use serde_json::json;
 
@@ -76,7 +76,7 @@ where
     keyring
         .promote(keyring.rotate(Purpose::Randomized).await?)
         .await?;
-    let keyset: WrappedKeyset<encodings::Tink> = keyring
+    let keyset: EncryptedKeyset<encodings::Tink> = keyring
         .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
     println!(

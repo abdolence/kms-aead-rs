@@ -1,5 +1,5 @@
 //! The encodings of a keyset export. An encoding names the reader that takes the bytes of a
-//! [`WrappedKeyset`](crate::WrappedKeyset): [`BigQuery`], for the `first_level_keyset` of
+//! [`EncryptedKeyset`](crate::EncryptedKeyset): [`BigQuery`], for the `first_level_keyset` of
 //! `KEYS.KEYSET_CHAIN`, or [`Tink`], for Tink's keyset readers. The export checks the keyring's
 //! versions and its KEK against the rules of that reader, and the type parameter of the keyset it
 //! returns records which reader it was made for.
@@ -11,7 +11,7 @@ use kms_aead::{AeadAlgorithm, DeterministicAlgorithm, KekProvider, KekRef};
 
 use crate::{Interop, KeyAlgorithm};
 
-/// The encoding of a [`WrappedKeyset`](crate::WrappedKeyset), which decides the reader of its
+/// The encoding of a [`EncryptedKeyset`](crate::EncryptedKeyset), which decides the reader of its
 /// bytes: [`BigQuery`] or [`Tink`].
 ///
 /// Sealed: only the encodings of this crate implement it. It has no methods, so code generic over
@@ -37,7 +37,7 @@ pub(crate) trait EncodingRules {
 
 /// The keyset of `export_bigquery_keyset`: the KMS ciphertext of the serialised `Keyset`, with no
 /// associated data, which is the `first_level_keyset` of BigQuery's `KEYS.KEYSET_CHAIN`.
-/// BigQuery unwraps it with Cloud KMS only and reads its AES-256-GCM and AES-SIV keys only.
+/// BigQuery decrypts it with Cloud KMS only and reads its AES-256-GCM and AES-SIV keys only.
 pub enum BigQuery {}
 
 /// The keyset of [`export_tink_keyset`](crate::Keyring::export_tink_keyset): Tink's
@@ -94,7 +94,7 @@ impl Encoding {
         }
     }
 
-    /// Tink's key URI of `kek`, or `None` for a KEK the reader does not unwrap with.
+    /// Tink's key URI of `kek`, or `None` for a KEK the reader does not decrypt with.
     pub(crate) fn key_uri(self, kek: &KekRef) -> Option<String> {
         let key_uri = kek.tink_key_uri();
         match self {

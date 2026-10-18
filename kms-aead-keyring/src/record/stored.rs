@@ -56,9 +56,10 @@ struct StoredVersion {
     compromised: Option<StoredCompromise>,
     created_at: Timestamp,
     state_changed_at: Timestamp,
-    /// The standard base64 of the wrapped key's bytes, as the provider returned them; `None`
+    /// The standard base64 of the encrypted DEK's bytes, as the provider returned them; `None`
     /// once destroyed.
-    wrapped_dek: Option<String>,
+    #[serde(rename = "wrapped_dek")]
+    encrypted_dek: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -82,8 +83,8 @@ impl From<&KeyringRecord> for StoredRecord {
                 }),
                 created_at: version.created_at,
                 state_changed_at: version.state_changed_at,
-                wrapped_dek: version
-                    .wrapped_dek()
+                encrypted_dek: version
+                    .encrypted_dek()
                     .map(|dek| STANDARD.encode(dek.value())),
             })
             .collect();
@@ -241,14 +242,14 @@ impl TryFrom<StoredVersion> for KeyVersion {
             .parse()
             .map_err(|_| RecordInvalidReason::UnknownAlgorithm(Some(key_id)))?;
         let dek = stored
-            .wrapped_dek
+            .encrypted_dek
             .map(|encoded| {
                 STANDARD
                     .decode(encoded)
                     .ok()
                     .filter(|bytes| !bytes.is_empty())
                     .map(EncryptedDataEncryptionKey::new)
-                    .ok_or(RecordInvalidReason::MalformedWrappedDek(key_id))
+                    .ok_or(RecordInvalidReason::MalformedEncryptedDek(key_id))
             })
             .transpose()?;
         let compromised = stored

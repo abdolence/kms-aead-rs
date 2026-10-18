@@ -5,13 +5,13 @@
 
 Field encryption with a keyring, over [kms-aead](https://crates.io/crates/kms-aead). A keyring is
 the record of one scope's key versions, such as a tenant's, kept in a keyring store. Each version
-is a data encryption key wrapped by a KEK in a KMS.
+is a data encryption key encrypted by a KEK in a KMS.
 
 The library provides:
 
-- values in Tink's wire format, with a 4-byte key id instead of a wrapped key, which Tink and
+- values in Tink's wire format, with a 4-byte key id instead of an encrypted DEK, which Tink and
   BigQuery read too;
-- no KMS call on write, and one unwrap per key version per cache TTL on read;
+- no KMS call on write, and one decryption per key version per cache TTL on read;
 - staged rotation, retirement, destruction and a compromised flag every process sees;
 - keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory for tests;
 - `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support

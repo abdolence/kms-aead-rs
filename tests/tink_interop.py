@@ -19,7 +19,7 @@ Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`
 `encrypt` and `decrypt` use Tink's KmsEnvelopeAead. `read-keysets` reads each keyset kms-aead
 exported with KeysetHandle.read and the KMS client of the key URI kms-aead gave, opens the value
 kms-aead sealed with it, and writes a value of its own sealed with the keyset for a keyset line
-with "wrapped_key"; it reports on stderr.
+with "encrypted_dek"; it reports on stderr.
 
 The keys come from the variables of the live tests: PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING
 and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS, with ACCOUNT_ID for the
@@ -133,7 +133,7 @@ def read_keysets():
     else:
       print(f'{name}: another plain text', file=sys.stderr)
       failures += 1
-    if 'wrapped_key' not in case:
+    if 'encrypted_dek' not in case:
       continue
     plain_text = f"sealed by Tink {metadata.version('tink')}".encode()
     print(json.dumps({

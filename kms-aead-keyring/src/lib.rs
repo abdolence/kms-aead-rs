@@ -1,11 +1,11 @@
 //! Field encryption with a keyring, over [kms-aead](https://docs.rs/kms-aead).
 //!
 //! A keyring is the record of one scope's key versions, such as a tenant's, held in a
-//! [`KeyringStore`](store::KeyringStore). Each version is a data encryption key (DEK) wrapped by
+//! [`KeyringStore`](store::KeyringStore). Each version is a data encryption key (DEK) encrypted by
 //! a key encryption key (KEK) in a KMS, with a lifecycle state. A [`Keyring`] encrypts fields
 //! under the active version and decrypts them under the version each value names, without a
 //! call to the store or the KMS on the hot path: the record is cached in the process, and the
-//! unwrapped keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
+//! decrypted keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
 //!
 //! # Values
 //!
@@ -78,7 +78,7 @@
 //!
 //! The record's integrity rests on the store's access control. The processes that serve
 //! requests need the KMS's decrypt right and read access to the store; only an administrative
-//! job wraps keys and writes the record. A running process takes a record from the store only
+//! job encrypts DEKs and writes the record. A running process takes a record from the store only
 //! if it moves every version forward from the one it holds, and logs an `ERROR` otherwise.
 //!
 //! # Caching

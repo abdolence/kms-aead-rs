@@ -15,11 +15,11 @@ fn unique_keyring_id() -> KeyringResult<KeyringId> {
     KeyringId::try_from(format!("conformance-{}", uuid::Uuid::now_v7()))
 }
 
-/// The wrapped key of every version of [`record`]: `[0xFF][0x01][0x00]` starts encrypted key
+/// The encrypted DEK of every version of [`record`]: `[0xFF][0x01][0x00]` starts encrypted key
 /// layout v1 with no key version, and `wrapped` follows.
-const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
+const ENCRYPTED_DEK: &str = "/wEAd3JhcHBlZA==";
 
-/// As [`WRAPPED_DEK`], with `record-bytes-marker` after the layout bytes: a wrapped key whose
+/// As [`ENCRYPTED_DEK`], with `record-bytes-marker` after the layout bytes: an encrypted DEK whose
 /// bytes a test looks for in the store's errors.
 #[cfg(any(
     feature = "firestore",
@@ -27,19 +27,19 @@ const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
     feature = "gcs",
     feature = "s3"
 ))]
-const MARKED_WRAPPED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
+const MARKED_ENCRYPTED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
 
 /// The record of `id` after `rotations` rotations: randomised versions 1 to `rotations`
 /// decrypt only, and the next one is active.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
-    record_wrapping(id, rotations, WRAPPED_DEK)
+    record_holding(id, rotations, ENCRYPTED_DEK)
 }
 
-/// As [`record`], with every version's wrapped key `wrapped_dek`, in standard base64.
-fn record_wrapping(
+/// As [`record`], with every version's encrypted DEK in `wrapped_dek`, in standard base64.
+fn record_holding(
     id: &KeyringId,
     rotations: u32,
-    wrapped_dek: &str,
+    encrypted_dek: &str,
 ) -> KeyringResult<KeyringRecord> {
     let versions: Vec<_> = (1..=rotations + 1)
         .map(|key_id| {
@@ -50,7 +50,7 @@ fn record_wrapping(
                 "compromised": null,
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
-                "wrapped_dek": wrapped_dek,
+                "wrapped_dek": encrypted_dek,
             })
         })
         .collect();
@@ -238,7 +238,7 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
     Ok(())
 }
 
-/// A store error carries none of the record it failed to write: the wrapped key appears neither
+/// A store error carries none of the record it failed to write: the encrypted DEK appears neither
 /// as text nor as bytes in the error's `Display`, its `Debug`, or those of its causes.
 /// `failing` is a store whose write at `expected` fails.
 #[cfg(any(
@@ -251,7 +251,7 @@ async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
     failing: S,
     expected: Option<&S::Revision>,
 ) -> TestResult {
-    let marked = record_wrapping(&unique_keyring_id()?, 0, MARKED_WRAPPED_DEK)?;
+    let marked = record_holding(&unique_keyring_id()?, 0, MARKED_ENCRYPTED_DEK)?;
     let error = match failing.compare_and_swap(&marked, expected).await {
         Err(error) => error,
         Ok(swap) => return Err(format!("the write did not fail: {swap:?}").into()),
@@ -270,9 +270,9 @@ async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
     };
     for leaked in [
         "record-bytes-marker".to_string(),
-        MARKED_WRAPPED_DEK.to_string(),
+        MARKED_ENCRYPTED_DEK.to_string(),
         as_bytes(marker),
-        as_bytes(MARKED_WRAPPED_DEK.as_bytes()),
+        as_bytes(MARKED_ENCRYPTED_DEK.as_bytes()),
         marker.iter().map(|byte| format!("{byte:02x}")).collect(),
     ] {
         assert!(!rendered.contains(&leaked), "the error carries {leaked}");

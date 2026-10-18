@@ -17,12 +17,12 @@ push, the record TTL bounds it, see [Record cache](./record-cache.md).
 
 The store's access control is what the record's integrity rests on: only the administrative
 principal writes the record, and the serving principals read it. Back the store up, or keep its
-history, since values cannot be read without the wrapped DEKs in the record, see
+history, since values cannot be read without the encrypted DEKs in the record, see
 [the runbook](../operations.md#the-keyring-record-was-deleted-or-corrupted).
 
 ## Memory
 
-`MemoryKeyringStore` loses its records when the process exits, and with them the wrapped DEK of
+`MemoryKeyringStore` loses its records when the process exits, and with them the encrypted DEK of
 every version: a value sealed under a keyring in it, and kept anywhere that outlives the process,
 never decrypts again. Use it for tests, or for values that never outlive the process.
 
@@ -69,7 +69,7 @@ this crate's API under the `firestore` feature.
 
 Each keyring holds one listen stream, on its document. Firestore's point-in-time recovery
 restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
-`firestore` target, documents included, so that level writes wrapped DEKs to the log. Keep it off
+`firestore` target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administrative principal's reach.
 
 ## PostgreSQL
@@ -275,9 +275,9 @@ which returns `None` for a store without push, a `Revision` type and a `KIND`, s
 - write each method as an `async fn` whose future is `Send`;
 - read a stored document with `KeyringRecord::from_json` and write one with
   `KeyringRecord::to_json`, so the document is the one every store keeps and every read checks it;
-- wrap the client's errors in `KeyringError::Store` with the client's error as the root cause.
+- return the client's errors as `KeyringError::Store`, with the client's error as the root cause.
   Never format the record or the request into an error and never log either, since both carry
-  wrapped DEKs.
+  encrypted DEKs.
 
 `MemoryKeyringStore` is the reference implementation, see
 [its source](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/src/testing.rs),

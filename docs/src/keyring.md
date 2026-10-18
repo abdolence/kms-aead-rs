@@ -2,11 +2,11 @@
 
 The `kms-aead-keyring` crate encrypts fields of application records under a keyring: the record
 of one scope's key versions, such as a tenant's, kept in a keyring store. Each key version is a
-data encryption key (DEK) wrapped by a KEK in the KMS, with a lifecycle state.
+data encryption key (DEK) encrypted by a KEK in the KMS, with a lifecycle state.
 
-Compared to an envelope, a keyring value carries a 4-byte key id instead of its wrapped DEK:
+Compared to an envelope, a keyring value carries a 4-byte key id instead of its encrypted DEK:
 
-- no KMS call on write, and on read only one unwrap per key version per DEK cache TTL;
+- no KMS call on write, and on read only one decryption per key version per DEK cache TTL;
 - 33 bytes of overhead per value, 21 for deterministic values, see
   [Typed fields](./formats.md#typed-fields);
 - central staged rotation, retirement, destruction and a compromised flag, for every process
@@ -45,8 +45,9 @@ The crate has no default features, and the backend features are those of kms-aea
 - `bigquery-export`: `export_bigquery_keyset`, see
   [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 
-Beacons and `export_tink_keyset` need no feature. The KMS providers come from kms-aead and its provider features, and
-secret-vault-value's `SecretValue` is what an application type's `Plaintext` encodes to.
+Beacons and `export_tink_keyset` need no feature. The KMS providers come from kms-aead and its
+provider features, and secret-vault-value's `SecretValue` is what an application type's `Plaintext`
+encodes to.
 
 ## First example
 
@@ -119,7 +120,8 @@ the provider and the backend as the type parameters of `Keyring<S, P, B>`.
 Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is
 in the DEK cache, see [Record cache](./keyring/record-cache.md).
 
-Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs),
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs),
 run it with `cargo run -p kms-aead-keyring --example local_kms --features ring`.
 
 ## Principals
@@ -127,12 +129,12 @@ run it with `cargo run -p kms-aead-keyring --example local_kms --features ring`.
 The keyring calls split in two groups:
 
 - serving calls: `encrypt`, `decrypt`, `beacon` and their variants, which read the record and
-  unwrap DEKs. They need the KMS's decrypt right and read access to the store;
+  decrypt DEKs. They need the KMS's decrypt right and read access to the store;
 - administrative calls: `create`, `rotate`, `promote`, `change_algorithm`, `mark_compromised`,
-  `retire`, `reinstate`, `destroy` and `rewrap`, which write the record, and
-  `export_bigquery_keyset`. `create`, `rotate`, `change_algorithm`, `mark_compromised`, `rewrap`
-  and the export wrap, so they need the KMS's encrypt right, and all but the export need write
-  access to the store.
+  `retire`, `reinstate`, `destroy` and `reencrypt_deks`, which write the record, and
+  `export_bigquery_keyset`. `create`, `rotate`, `change_algorithm`, `mark_compromised`,
+  `reencrypt_deks` and the export encrypt, so they need the KMS's encrypt right, and all but the
+  export need write access to the store.
 
 Run the administrative calls in a job under its own principal, never in a request handler. The
 deployment rule and the IAM roles per KMS are in

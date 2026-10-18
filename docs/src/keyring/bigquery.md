@@ -38,7 +38,7 @@ The [plaintext encodings](./fields.md#encrypted-values) are the ones SQL reads: 
 ## Fields BigQuery reads
 
 BigQuery decrypts through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM and AES-SIV only and
-unwraps with Cloud KMS only. A field BigQuery also decrypts is declared with
+decrypts with Cloud KMS only. A field BigQuery also decrypts is declared with
 `FieldSpec::with_interop(Interop::BigQuery)`, and the keyring then refuses to seal it unless:
 
 - a randomised value is sealed under an AES-256-GCM version, the default of a new keyring;
@@ -82,7 +82,7 @@ const EMAIL: FieldSpec = FieldSpec::new(
 
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-// A local KEK, which BigQuery cannot unwrap with
+// A local KEK, which BigQuery cannot decrypt with
 let provider =
     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
 let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
@@ -128,18 +128,19 @@ Feature `bigquery-export`. It builds on kms-aead's GCP provider with no TLS root
 application also enables kms-aead's `gcp-kms-encryption`, or another root store feature of
 kms-aead's GCP provider.
 
-BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink keyset wrapped by a
+BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink keyset encrypted by a
 Cloud KMS key. `export_bigquery_keyset` builds that keyset from the keyring's versions, on a
 keyring whose provider is `GcpKmsProvider`. The bytes it returns are the Cloud KMS ciphertext of
-Tink's serialised `Keyset` message, wrapped with no associated data, without the `EncryptedKeyset`
-message Tink's own keyset readers take, see [Exporting a keyset to Tink](#exporting-a-keyset-to-tink):
+Tink's serialised `Keyset` message, encrypted with no associated data, without the `EncryptedKeyset`
+message Tink's own keyset readers take, see [Exporting a keyset to
+Tink](#exporting-a-keyset-to-tink):
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,
 };
 
 # #[tokio::main]
@@ -158,7 +159,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset<encodings::BigQuery> = keyring
+let keyset: EncryptedKeyset<encodings::BigQuery> = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 let literal: String = keyset.to_sql_literal();
@@ -184,13 +185,13 @@ Beacon versions are never exported: a selection of the beacon purpose fails with
 `ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
 [Beacons](./beacons.md#bigquery).
 
-The type parameter of a `WrappedKeyset` is its encoding, from the `encodings` module, which names
-the reader of its bytes. The `WrappedKeyset<encodings::BigQuery>` this export returns:
+The type parameter of a `EncryptedKeyset` is its encoding, from the `encodings` module, which names
+the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export returns:
 
-- `as_bytes()`: the wrapped keyset, as a `BYTES` column or query parameter holds it;
+- `as_bytes()`: the encrypted keyset, as a `BYTES` column or query parameter holds it;
 - `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`. Only a
-  `WrappedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
-  `WrappedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
+  `EncryptedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
+  `EncryptedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`;
 - `key_version_ids()`: the versions inside, in ascending order.
@@ -250,13 +251,14 @@ The crate's live test runs the export and the queries against Cloud KMS and BigQ
 
 - a value whose key id is not in the keyset fails to decrypt, and reads as `NULL` under
   `SAFE.AEAD.DECRYPT_STRING`;
-- the keyset is wrapped with no associated data, since `KEYS.KEYSET_CHAIN` unwraps with none. What
-  the KMS unwraps from it is a serialised Tink keyset, which is no serialised Tink key, so copied
-  into a record as a version's wrapped DEK it opens nothing and fails with `INVALID_KEY_FORMAT`;
-- the export unwraps each selected version through the provider and never through the DEK cache,
+- the keyset is encrypted with no associated data, since `KEYS.KEYSET_CHAIN` decrypts with none.
+  What the KMS decrypts from it is a serialised Tink keyset, which is no serialised Tink key, so
+  copied into a record as a version's encrypted DEK it opens nothing and fails with
+  `INVALID_KEY_FORMAT`;
+- the export decrypts each selected version through the provider and never through the DEK cache,
   so the keys stay in the process for the call only. Its span records `dek_cache` as `bypassed`.
 
-Cloud KMS wraps at most 64 KiB of plaintext, which a keyset reaches at several hundred versions.
+Cloud KMS encrypts at most 64 KiB of plaintext, which a keyset reaches at several hundred versions.
 
 ## Exporting a keyset to Tink
 
@@ -282,7 +284,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+    encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,
 };
 
 # #[tokio::main]
@@ -301,7 +303,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset<encodings::Tink> = keyring
+let keyset: EncryptedKeyset<encodings::Tink> = keyring
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 std::fs::write("tenant-42.keyset", keyset.as_bytes())?;

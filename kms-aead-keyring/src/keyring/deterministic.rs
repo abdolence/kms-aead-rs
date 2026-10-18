@@ -41,11 +41,11 @@ where
     /// # Errors
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has no deterministic version, or lost
-    /// it to a `mark_compromised` whose new key could not be wrapped; [`KeyringError::Interop`]
+    /// it to a `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`]
     /// when sealing breaks the [`Interop`](crate::Interop) requirement `aad` carries;
     /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode; and
     /// the provider's error when the version's key is not in the
-    /// [`DekCache`](kms_aead::cache::DekCache) and cannot be unwrapped.
+    /// [`DekCache`](kms_aead::cache::DekCache) and cannot be decrypted.
     pub async fn encrypt_deterministic<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
@@ -99,7 +99,7 @@ where
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
     /// compromised, without applying the read policy, as
     /// [`decrypt_with_status`](Self::decrypt_with_status) does for randomised values. A
-    /// compromised version's key is unwrapped through the provider, never through the
+    /// compromised version's key is decrypted through the provider, never through the
     /// [`DekCache`](kms_aead::cache::DekCache).
     ///
     /// # Errors
@@ -142,7 +142,7 @@ where
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
     /// or decrypt-only, compromised ones included, newest first: the `IN` list of an equality
     /// query, which finds the rows sealed before a rotation as well as after it. Retired and
-    /// destroyed versions give no probe. A compromised version's key is unwrapped for each
+    /// destroyed versions give no probe. A compromised version's key is decrypted for each
     /// call, never through the [`DekCache`](kms_aead::cache::DekCache).
     ///
     /// A query that sends the list links the values of one plaintext across the versions for
@@ -150,10 +150,10 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Interop`], before any unwrap, when sealing under any of the versions
+    /// [`KeyringError::Interop`], before any decryption, when sealing under any of the versions
     /// breaks the [`Interop`](crate::Interop) requirement `aad` carries; [`KeyringError::Kms`]
     /// with code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error
-    /// when a version's key cannot be unwrapped.
+    /// when a version's key cannot be decrypted.
     pub async fn equality_probes<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
@@ -207,7 +207,7 @@ where
         }
     }
 
-    /// Seals `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with the
+    /// Seals `value` with `aad` under `version` of `record`, whose encrypted DEK is `dek`, with the
     /// key through the [`DekCache`](kms_aead::cache::DekCache), and returns where the key came
     /// from.
     async fn seal_cached<T: Plaintext>(
@@ -334,7 +334,7 @@ mod tests {
     async fn probes_refuse_a_field_whose_interop_the_keyring_breaks() -> TestResult {
         let provider = TestProvider::new("tenant-42-kek")?;
         let keyring = deterministic_keyring(provider.clone()).await?;
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         let probes = keyring
             .equality_probes(
@@ -348,7 +348,10 @@ mod tests {
             Err(KeyringError::Interop(error))
                 if error.requirement == InteropRequirement::Kek(KekProvider::Local)
         ));
-        assert_eq!(provider.calls.unwraps.load(Ordering::SeqCst), unwraps);
+        assert_eq!(
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions
+        );
         keyring
             .equality_probes(&EMAIL.deterministic_aad(), &ALICE.to_string())
             .await?;
@@ -412,12 +415,12 @@ mod tests {
         );
         assert_eq!(probes[1], first);
 
-        let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
+        let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
         keyring.equality_probes(&aad, &ALICE.to_string()).await?;
         assert_eq!(
-            provider.calls.unwraps.load(Ordering::SeqCst),
-            unwraps + 1,
-            "the compromised key is unwrapped for each call, and never cached"
+            provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions + 1,
+            "the compromised key is decrypted for each call, and never cached"
         );
         Ok(())
     }

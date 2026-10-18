@@ -79,7 +79,7 @@ pub struct SealMarker {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SealFormat {
-    /// Envelope values of kms-aead, each carrying its wrapped key.
+    /// Envelope values of kms-aead, each carrying its encrypted DEK.
     Envelope,
     /// Keyring values, each carrying its key id.
     Keyring,

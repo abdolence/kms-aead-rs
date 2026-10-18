@@ -1,4 +1,4 @@
-//! The keyring record: every key version of one keyring, each with its wrapped data encryption
+//! The keyring record: every key version of one keyring, each with its encrypted data encryption
 //! key and its state, and the lifecycle that moves the states.
 
 use std::borrow::Cow;
@@ -213,10 +213,10 @@ impl FromStr for KeyAlgorithm {
 /// The lifecycle state of a key version.
 ///
 /// ```text
-/// rotate ─▶ Pending ──promote──▶ Active ───▶ DecryptOnly ──retire──▶ Retired ──destroy──▶ Destroyed
-///              │                   ▲                ▲                   │                    ▲
-///              │       create ─────┘                └─────reinstate─────┘                    │
-///              └─────────────────────────────────destroy─────────────────────────────────────┘
+/// rotate ─▶ Pending ──promote──▶ Active ───▶ DecryptOnly ──retire──▶ Retired ──destroy──▶
+///              Destroyed │                   ▲                ▲                   │               
+///                  ▲ │       create ─────┘                └─────reinstate─────┘                   
+///              │ └─────────────────────────────────destroy─────────────────────────────────────┘
 /// ```
 ///
 /// A rotation stages a version as `Pending`, which decrypts and never encrypts, and `promote`
@@ -233,9 +233,9 @@ pub enum KeyVersionState {
     Active,
     /// Decrypts only: every version a rotation replaced.
     DecryptOnly,
-    /// Refused on read. The wrapped key is kept, so that `reinstate` can undo a retirement.
+    /// Refused on read. The encrypted DEK is kept, so that `reinstate` can undo a retirement.
     Retired,
-    /// The wrapped key is gone. The version stays, so that its id is never reused.
+    /// The encrypted DEK is gone. The version stays, so that its id is never reused.
     Destroyed,
 }
 
@@ -302,7 +302,7 @@ pub enum Transition {
     Retire,
     /// A retired version decrypts again.
     Reinstate,
-    /// A retired or pending version's wrapped key is removed.
+    /// A retired or pending version's encrypted DEK is removed.
     Destroy,
 }
 
@@ -343,9 +343,9 @@ impl Compromise {
     }
 }
 
-/// One data encryption key of a keyring, wrapped by the KEK, with its state.
+/// One data encryption key of a keyring, encrypted by the KEK, with its state.
 ///
-/// `Debug` shows the id, the algorithm, the state and the times, never the wrapped key.
+/// `Debug` shows the id, the algorithm, the state and the times, never the encrypted DEK.
 pub struct KeyVersion {
     key_id: KeyVersionId,
     algorithm: KeyAlgorithm,
@@ -391,11 +391,11 @@ impl KeyVersion {
         matches!(self.state, VersionState::Pending(_)).then_some(self.state_changed_at)
     }
 
-    pub(crate) fn wrapped_dek(&self) -> Option<&EncryptedDataEncryptionKey> {
+    pub(crate) fn encrypted_dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         self.state.dek()
     }
 
-    /// The wrapped key that opens values under this version, with its compromised flag, or
+    /// The encrypted DEK that opens values under this version, with its compromised flag, or
     /// `None` for a retired or destroyed version, which opens nothing.
     pub(crate) fn readable_dek(
         &self,
@@ -462,7 +462,7 @@ impl VersionState {
     }
 }
 
-/// The wrapped key of a version past `Active`, which may be compromised.
+/// The encrypted DEK of a version past `Active`, which may be compromised.
 #[derive(Clone)]
 struct RetainedDek {
     dek: EncryptedDataEncryptionKey,
@@ -481,24 +481,24 @@ impl RetainedDek {
 }
 
 /// A version about to be created: its key id, the algorithm its key was made for, and the
-/// wrapped key.
+/// encrypted DEK.
 pub(crate) struct NewVersion {
     pub(crate) key_id: KeyVersionId,
     pub(crate) algorithm: KeyAlgorithm,
     pub(crate) dek: EncryptedDataEncryptionKey,
 }
 
-/// The record of one keyring: the KEK its keys are wrapped under, the algorithms of new
+/// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new
 /// versions, and every version ever created, in creation order. It is stored as one JSON
 /// document, the same in every store; see [`to_json`](Self::to_json).
 ///
 /// Every record that exists holds its invariants: at most one active and one pending version
-/// per purpose, neither of them compromised, a wrapped key on every version but the destroyed ones,
-/// unique key ids of the purpose of their algorithm, increasing within a purpose in creation
-/// order, and at most 1 MiB of JSON: at about 400 bytes per version with its wrapped key, about
+/// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
+/// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
+/// order, and at most 1 MiB of JSON: at about 400 bytes per version with its encrypted DEK, about
 /// 2,600 versions.
 ///
-/// `Debug` shows identifiers, states and times, never a wrapped key.
+/// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]
 pub struct KeyringRecord {
     id: KeyringId,
@@ -529,8 +529,8 @@ impl KeyringRecord {
 
     /// The KEK of the provider the keyring was created with. It is informational: it catches a
     /// keyring opened with the wrong configuration, and is no security control, since a writer
-    /// of the record sets it as freely as any other field. What refuses a key wrapped under
-    /// another KEK is the KMS, which every unwrap names the configured KEK to.
+    /// of the record sets it as freely as any other field. What refuses a key encrypted under
+    /// another KEK is the KMS, which every decryption names the configured KEK to.
     pub fn kek(&self) -> &KekRef {
         &self.kek
     }
@@ -564,7 +564,7 @@ impl KeyringRecord {
         })
     }
 
-    /// The active version of `purpose` and its wrapped key.
+    /// The active version of `purpose` and its encrypted DEK.
     pub(crate) fn active_dek(
         &self,
         purpose: Purpose,
@@ -613,11 +613,11 @@ impl KeyringRecord {
         }
     }
 
-    /// The wrapped key of every version that holds one, by key id.
-    pub(crate) fn wrapped_deks(&self) -> Vec<(KeyVersionId, EncryptedDataEncryptionKey)> {
+    /// The encrypted DEK of every version that holds one, by key id.
+    pub(crate) fn encrypted_deks(&self) -> Vec<(KeyVersionId, EncryptedDataEncryptionKey)> {
         self.versions
             .iter()
-            .filter_map(|version| Some((version.key_id, version.wrapped_dek()?.clone())))
+            .filter_map(|version| Some((version.key_id, version.encrypted_dek()?.clone())))
             .collect()
     }
 }
@@ -761,7 +761,7 @@ impl RecordEdit {
         })
     }
 
-    /// Puts `dek`, the same key wrapped again, in place of `key_id`'s wrapped key, in whatever
+    /// Puts `dek`, the same key encrypted again, in place of `key_id`'s encrypted DEK, in whatever
     /// state the version is.
     pub(crate) fn replace_dek(
         &mut self,
@@ -793,7 +793,7 @@ impl RecordEdit {
         self.0.updated_at = now;
     }
 
-    /// Appends `new` in the state `state` makes of its wrapped key. A key id that does not
+    /// Appends `new` in the state `state` makes of its encrypted DEK. A key id that does not
     /// follow the record's, such as one computed on an older record, fails the record's checks in
     /// [`finish`](Self::finish).
     fn push(
@@ -852,7 +852,7 @@ impl RecordEdit {
 /// `held` is still there, with the same algorithm and creation time, its compromised flag kept
 /// with its time, and its state moved along the lifecycle. New versions are free.
 ///
-/// The wrapped key is left out: a changed one under an unchanged id is a rewrap.
+/// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
 pub(crate) fn check_successor(
     held: &KeyringRecord,
     next: &KeyringRecord,
@@ -879,9 +879,9 @@ pub(crate) fn check_successor(
     Ok(())
 }
 
-/// The wrapped keys `held` reads under that `next` takes out of use, with their key ids: their
-/// version is gone, retired or destroyed, newly flagged compromised, or holds another wrapped
-/// key, as after a rewrap, which leaves the cached plaintext of the old bytes orphaned.
+/// The encrypted DEKs `held` reads under that `next` takes out of use, with their key ids: their
+/// version is gone, retired or destroyed, newly flagged compromised, or holds another encrypted
+/// key, as after a re-encryption, which leaves the cached plaintext of the old bytes orphaned.
 pub(crate) fn withdrawn_deks<'a>(
     held: &'a KeyringRecord,
     next: &'a KeyringRecord,

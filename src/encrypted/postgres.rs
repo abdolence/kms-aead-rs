@@ -25,7 +25,7 @@ impl<T, F: Format> ToSql for Encrypted<T, F> {
 }
 
 /// From `BYTEA`, checked as `TryFrom<Vec<u8>>` checks the bytes: a malformed stored value fails
-/// here, before any decrypt.
+/// here, before any decryption.
 impl<'a, T, F: Format> FromSql<'a> for Encrypted<T, F> {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
         Ok(Encrypted::try_from(Vec::<u8>::from_sql(ty, raw)?)?)

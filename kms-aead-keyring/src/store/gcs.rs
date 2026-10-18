@@ -17,7 +17,7 @@ use crate::{KeyringId, KeyringRecord};
 
 /// The most a read returns of an object: one byte past the record cap, so that an object over
 /// the cap still reads as over it, and a read never buffers more than that. The cap is 1 MiB, so
-/// the cast cannot wrap.
+/// the cast cannot overflow.
 const READ_LIMIT: i64 = MAX_DOCUMENT_LEN as i64 + 1;
 
 /// The name of a Cloud Storage bucket, such as `my-keyrings`: lowercase ASCII letters, digits,

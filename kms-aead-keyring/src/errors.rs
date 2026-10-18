@@ -1,6 +1,6 @@
 //! The error type of every fallible operation, [`KeyringError`].
 //!
-//! No error carries plaintext, a data encryption key in any form, wrapped or not, KEK material,
+//! No error carries plaintext, a data encryption key in any form, encrypted or not, KEK material,
 //! AAD content, cipher text bytes, or the length of a value or of its AAD, in `Display` or in
 //! `Debug`. Keyring ids, key ids, KEK names and store names are identifiers and appear.
 
@@ -26,8 +26,8 @@ pub type KeyringResult<T> = Result<T, KeyringError>;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KeyringError {
-    /// An operation of kms-aead failed: an unwrap, a wrap, a value that is not authentic under
-    /// its key and AAD (code `DECRYPT`), or a plaintext that does not encode or decode as its
+    /// An operation of kms-aead failed: a decryption, an encryption, a value that is not authentic
+    /// under its key and AAD (code `DECRYPT`), or a plaintext that does not encode or decode as its
     /// type (code `INVALID_PLAINTEXT`).
     Kms(KmsAeadError),
     /// The keyring store failed.
@@ -160,7 +160,7 @@ impl KeyringError {
 
     /// A [`Malformed`](RecordInvalidReason::Malformed) record of `keyring`, at the position of
     /// serde_json's `error` when there is one. The parser's message is left out: it quotes the
-    /// value it refused, which can be a wrapped key.
+    /// value it refused, which can be an encrypted DEK.
     pub(crate) fn malformed(keyring: &KeyringId, error: Option<&serde_json::Error>) -> Self {
         let position = |at: usize| (at > 0).then_some(at);
         Self::record_invalid(
@@ -218,7 +218,7 @@ impl Display for KeyringError {
             ),
             KeyringError::KekMismatch(error) => write!(
                 f,
-                "The keyring record of {} names the KEK {}, and the provider wraps with {}",
+                "The keyring record of {} names the KEK {}, and the provider encrypts with {}",
                 error.keyring, error.recorded, error.provider
             ),
             KeyringError::NoActiveVersion(error) => write!(
@@ -304,7 +304,7 @@ impl Error for KeyringError {
 }
 
 /// See [`KeyringError::Store`]. A store implementation builds it with the client's error as
-/// the root cause, and never formats the record or the request into it: both carry wrapped
+/// the root cause, and never formats the record or the request into it: both carry encrypted
 /// data encryption keys.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
@@ -439,14 +439,14 @@ pub enum RecordInvalidReason {
     CompromisedActive(KeyVersionId),
     /// A pending version flagged compromised.
     CompromisedPending(KeyVersionId),
-    /// A destroyed version that still holds a wrapped key.
+    /// A destroyed version that still holds an encrypted DEK.
     DestroyedWithMaterial(KeyVersionId),
-    /// A version that is not destroyed and holds no wrapped key.
+    /// A version that is not destroyed and holds no encrypted DEK.
     MissingMaterial(KeyVersionId),
     /// A version whose ordinal is not above every earlier version of its purpose.
     OrdinalOrder(KeyVersionId),
-    /// A wrapped key that is not standard base64 of one byte or more.
-    MalformedWrappedDek(KeyVersionId),
+    /// An encrypted DEK that is not standard base64 of one byte or more.
+    MalformedEncryptedDek(KeyVersionId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
 }
@@ -499,17 +499,23 @@ impl Display for RecordInvalidReason {
                 write!(f, "the pending key version {key_id} is compromised")
             }
             RecordInvalidReason::DestroyedWithMaterial(key_id) => {
-                write!(f, "the destroyed key version {key_id} holds a wrapped key")
+                write!(
+                    f,
+                    "the destroyed key version {key_id} holds an encrypted DEK"
+                )
             }
             RecordInvalidReason::MissingMaterial(key_id) => {
-                write!(f, "key version {key_id} holds no wrapped key")
+                write!(f, "key version {key_id} holds no encrypted DEK")
             }
             RecordInvalidReason::OrdinalOrder(key_id) => write!(
                 f,
                 "key version {key_id} is not above every earlier version of its purpose"
             ),
-            RecordInvalidReason::MalformedWrappedDek(key_id) => {
-                write!(f, "the wrapped key of key version {key_id} does not parse")
+            RecordInvalidReason::MalformedEncryptedDek(key_id) => {
+                write!(
+                    f,
+                    "the encrypted DEK of key version {key_id} does not parse"
+                )
             }
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
                 write!(f, "every {purpose} key id is taken")
@@ -519,7 +525,7 @@ impl Display for RecordInvalidReason {
 }
 
 /// Where a document stopped parsing as a keyring record. The parser's own message is not kept:
-/// it quotes the value it refused, which can be a wrapped key.
+/// it quotes the value it refused, which can be an encrypted DEK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MalformedRecord {
@@ -543,7 +549,7 @@ pub struct RecordRegressedError {
 /// names the version of the held record that it concerns.
 ///
 /// Two more properties hold whenever these do, so they need no rule of their own: a destroyed
-/// version never regains a wrapped key, since `Destroyed` moves nowhere and holds none, and the
+/// version never regains an encrypted DEK, since `Destroyed` moves nowhere and holds none, and the
 /// highest key id of a purpose never decreases, since no version goes missing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -684,7 +690,7 @@ pub struct InteropError {
 pub enum InteropRequirement {
     /// The active version of the purpose uses an algorithm the reader does not implement.
     Algorithm(KeyAlgorithm),
-    /// The KEK is in a KMS the reader does not unwrap with, or has no key URI the reader
+    /// The KEK is in a KMS the reader does not decrypt with, or has no key URI the reader
     /// addresses it by, such as an AWS key named without its ARN.
     Kek(KekProvider),
 }
@@ -696,7 +702,7 @@ impl Display for InteropRequirement {
                 write!(f, "the reader does not implement {algorithm}")
             }
             InteropRequirement::Kek(provider) => {
-                write!(f, "the reader does not unwrap keys with {provider}")
+                write!(f, "the reader does not decrypt keys with {provider}")
             }
         }
     }

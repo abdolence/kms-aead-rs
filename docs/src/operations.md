@@ -42,11 +42,11 @@ Rotation does not touch values already written. To stop reading them under the o
 
 ## Rotating the KEK
 
-The KEK rotates in the KMS on its own schedule. After a rotation, `rewrap()` unwraps every DEK in
-the record and wraps it again under the KEK's current version. No value changes. A keyring that is
-not rewrapped keeps working as long as the old KEK versions stay enabled in the KMS.
+The KEK rotates in the KMS on its own schedule. After a rotation, `reencrypt_deks()` decrypts every
+DEK in the record and encrypts it again under the KEK's current version. No value changes. A keyring
+that is not re-encrypted keeps working as long as the old KEK versions stay enabled in the KMS.
 
-`rewrap` runs in the administrative job, like every call that wraps.
+`reencrypt_deks` runs in the administrative job, like every call that encrypts.
 
 ## Sweeps
 
@@ -244,18 +244,19 @@ five steps:
    keyring marker;
 5. once that query returns nothing, the read path drops its envelope branch.
 
-The keyring's provider unwraps the envelope values, so they must have been wrapped by the
+The keyring's provider decrypts the envelope values, so they must have been encrypted by the
 keyring's KEK. `decrypt_envelope_value` reads Tink's KMS envelope, the layout kms-aead 0.30 writes.
 Values written by kms-aead 0.29 or earlier are upgraded in place first, with
 `KmsAeadEnvelope::upgrade_legacy_value(aad, value)` under kms-aead's `legacy-formats` feature, see
 [Upgrading stored values](./formats.md#upgrading-stored-values). The layout of a value is always
 the marker's, never inferred from its bytes.
 
-`decrypt_envelope_value` unwraps whatever wrapped DEK an envelope value carries, under the
+`decrypt_envelope_value` decrypts whatever encrypted DEK an envelope value carries, under the
 keyring's KEK. It knows no key version, and so no compromised flag and no destroyed state: keep its
 branch in the read path for the migration only.
 
-Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs),
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs),
 run it with `cargo run -p kms-aead-keyring --example migrate --features ring`.
 
 ## Emergency runbook
@@ -270,7 +271,7 @@ Or is suspected to have.
    by a version that is active at once. The replacement skips the staged wait on purpose: sealing
    under the leaked key stops at each process's next refresh, and a process that has not seen the
    replacement yet reloads its record once, rate-limited, when it meets a value under it. When the
-   KMS cannot wrap a new DEK, the flag lands alone and `encrypt` fails with `NoActiveVersion`;
+   KMS cannot encrypt a new DEK, the flag lands alone and `encrypt` fails with `NoActiveVersion`;
    once the KMS answers, `rotate` and `promote` at once, since nothing seals under the purpose
    meanwhile, or `promote` the pending version if the purpose has one. A pending version itself
    is never compromised: `destroy` it instead;
@@ -292,14 +293,14 @@ hold values the leaked DEK opens. Treat them as exposed and revoke the secrets i
 
 1. Fix the IAM binding, back to the split in
    [Keyring deployment](./security.md#keyring-deployment);
-2. rotate the KEK in the KMS and `rewrap()`;
+2. rotate the KEK in the KMS and `reencrypt_deks()`;
 3. with KMS data-access logs enabled in advance, list the `Decrypt` calls the wrong principal
-   made: every wrapped DEK they unwrapped is a leaked DEK, see above. Without those logs, every
+   made: every encrypted DEK they decrypted is a leaked DEK, see above. Without those logs, every
    version is a leaked DEK.
 
-### A wrapped DEK or the keyring record leaked
+### An encrypted DEK or the keyring record leaked
 
-Harmless by itself, since unwrapping needs the KMS. If the attacker may also gain `Decrypt` on the
+Harmless by itself, since decrypting needs the KMS. If the attacker may also gain `Decrypt` on the
 KEK, follow the IAM over-grant steps. If the attacker may also write the keyring store, see
 [the next case](#a-version-the-administrative-job-did-not-create) and the store-writer threat in
 [Keyring deployment](./security.md#keyring-deployment).
@@ -315,9 +316,9 @@ store.
 1. If the version is active, `mark_compromised` it, so that nothing new is sealed under it from
    each process's next refresh. If it is pending, `destroy` it;
 2. `retire` and then `destroy` the version, after a sweep if values were sealed under it;
-3. check the KMS audit log for the `Encrypt` call that wrapped its DEK. None means its wrapped
+3. check the KMS audit log for the `Encrypt` call that encrypted its DEK. None means its encrypted
    DEK was copied or relabelled from another version, of this keyring or of another under the
-   same KEK, which the KMS unwraps as it would the original; one from a principal other than the
+   same KEK, which the KMS decrypts as it would the original; one from a principal other than the
    administrative job is an IAM over-grant, see above;
 4. audit who can write the keyring store: the serving principal has no write, and only the
    administrative job should.
@@ -327,7 +328,7 @@ store.
 Running processes keep their cached record and log a `WARN`; new processes fail at `open`.
 
 1. Restore the record from the store's backup: Firestore point-in-time recovery, a PostgreSQL
-   backup, or a noncurrent version of the Cloud Storage or S3 object. The wrapped DEKs inside are
+   backup, or a noncurrent version of the Cloud Storage or S3 object. The encrypted DEKs inside are
    still valid under the KEK;
 2. repeat on the restored record every administrative call made after the copy was taken, from
    the administrative job's log, before starting new processes.
@@ -341,12 +342,12 @@ table.
 
 To make a scope's values unrecoverable:
 
-- with a KEK per scope: destroy the KEK's versions in the KMS. Every wrapped DEK of the scope is
+- with a KEK per scope: destroy the KEK's versions in the KMS. Every encrypted DEK of the scope is
   then unrecoverable, backups included;
 - with a shared KEK: `retire` and `destroy` every version of the keyring. A backup of the record
-  still holds the wrapped DEKs, which the KMS opens as long as the KEK version that wrapped them
-  exists. On GCP, Vault Transit and the local KMS, rotate the KEK, `rewrap`, then destroy the
-  previous KEK version. On AWS rotated key material is never destroyed, so only the deletion of
+  still holds the encrypted DEKs, which the KMS opens as long as the KEK version that encrypted them
+  exists. On GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks`, then destroy
+  the previous KEK version. On AWS rotated key material is never destroyed, so only the deletion of
   the KMS key itself shreds.
 
 A deployment that needs shredding guarantees uses a KEK per scope.
@@ -354,5 +355,6 @@ A deployment that needs shredding guarantees uses a KEK per scope.
 ### A KMS outage
 
 DEKs in the cache serve reads and writes until their TTL. A longer DEK cache TTL buys time at the
-cost of a longer life of plaintext keys in memory. No unwrap, wrap or rotation succeeds until the
-KMS returns, and errors carry the provider's message. `mark_compromised` still lands the flag.
+cost of a longer life of plaintext keys in memory. No decryption, encryption or rotation succeeds
+until the KMS returns, and errors carry the provider's message. `mark_compromised` still lands the
+flag.

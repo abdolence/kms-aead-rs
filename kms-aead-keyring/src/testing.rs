@@ -14,7 +14,7 @@ use crate::{KeyringId, KeyringRecord};
 /// A keyring store in the process's memory, for tests and for values that never outlive the
 /// process. `Clone` shares the same records.
 ///
-/// Its records are lost when the process exits, and with them the wrapped keys of every version:
+/// Its records are lost when the process exits, and with them the encrypted DEKs of every version:
 /// a value encrypted under a keyring in this store, and kept anywhere that outlives the process,
 /// never decrypts again.
 ///

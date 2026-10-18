@@ -230,7 +230,7 @@ a SQL column holding one is a `BIGINT`.
 
 kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
 record with deterministic and beacon versions, after one randomised rotation and with another one
-staged, with the wrapped DEKs shortened:
+staged, with the encrypted DEKs shortened:
 
 ```json
 {
@@ -303,15 +303,15 @@ staged, with the wrapped DEKs shortened:
 - `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
   `state_changed_at` is the time it was staged;
 - `compromised` is `null`, or `{"at": "<time>", "note": "<the operator's note, or null>"}`;
-- `wrapped_dek` is the standard base64 of the [wrapped DEK](#wrapped-deks), the bytes the provider
-  returned, here the local KMS layout. It is `null` for a destroyed version;
+- `wrapped_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
+  provider returned, here the local KMS layout. It is `null` for a destroyed version;
 - the times are RFC 3339, in UTC.
 
 A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
 fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
-- a wrapped DEK on every version but the destroyed ones;
+- an encrypted DEK on every version but the destroyed ones;
 - unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.
 
 ## Telling layouts apart

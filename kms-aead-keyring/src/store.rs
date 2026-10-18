@@ -43,9 +43,9 @@ pub use s3::*;
 /// - Read a stored document with [`KeyringRecord::from_json`] and write one with
 ///   [`KeyringRecord::to_json`], so that every store keeps the same document and every read
 ///   checks it.
-/// - Wrap the client's errors in [`KeyringError::Store`](crate::KeyringError::Store) with the
+/// - Return the client's errors as [`KeyringError::Store`](crate::KeyringError::Store) with the
 ///   client's error as the root cause. Never format the record or the request into an error,
-///   and never log either: both carry wrapped data encryption keys.
+///   and never log either: both carry encrypted data encryption keys.
 pub trait KeyringStore: Send + Sync + 'static {
     /// The store's change marker for one record, such as a counter or an update time. Equal
     /// revisions mean an unchanged record. `Display` gives the `revision` span field.

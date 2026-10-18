@@ -33,7 +33,7 @@ where
     /// [`KeyringError::NoActiveVersion`] when the keyring has no active beacon version;
     /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode; and
     /// the provider's error when the version's key is not in the
-    /// [`DekCache`](kms_aead::cache::DekCache) and cannot be unwrapped.
+    /// [`DekCache`](kms_aead::cache::DekCache) and cannot be decrypted.
     pub async fn beacon<T: Plaintext>(
         &self,
         field: &FieldSpec,
@@ -67,13 +67,13 @@ where
     /// The beacon of `value` in `field` under every beacon version that is pending, active or
     /// decrypt-only, compromised ones included, newest first: the `IN` list of a lookup, which
     /// finds the rows whose beacons were computed before a rotation as well as after it. Retired
-    /// and destroyed versions give no probe. A compromised version's key is unwrapped for each
+    /// and destroyed versions give no probe. A compromised version's key is decrypted for each
     /// call, never through the [`DekCache`](kms_aead::cache::DekCache).
     ///
     /// # Errors
     ///
     /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode, and
-    /// the provider's error when a version's key cannot be unwrapped.
+    /// the provider's error when a version's key cannot be decrypted.
     pub async fn beacon_probes<T: Plaintext>(
         &self,
         field: &FieldSpec,
@@ -182,7 +182,7 @@ mod tests {
         let record = keyring.record();
         let dek = record
             .version(first)
-            .and_then(KeyVersion::wrapped_dek)
+            .and_then(KeyVersion::encrypted_dek)
             .ok_or("the first beacon version holds no key")?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (expected, _) = DekCache::disabled()

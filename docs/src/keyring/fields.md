@@ -12,7 +12,7 @@ application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes 
 - `value()` and `into_value()`, of `kms_aead::ValueStruct`, return the bytes;
 - `KeyVersionId::try_from(&value)` returns the version that sealed it;
 - `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
-  when the value is made, and fail on bytes that are no keyring value before any decrypt;
+  when the value is made, and fail on bytes that are no keyring value before any decryption;
 - `decrypt` checks the key id first, and fails with `ReservedKeyId` on a reserved id and with
   `KeyPurposeMismatch` on a deterministic one, before any store or KMS call;
 - `Debug` shows the length only. A randomised value has no `==`: two values of one plaintext
@@ -154,7 +154,7 @@ async fn email_of(
 # fn main() {}
 ```
 
-A column holding a value that is no keyring value fails in the decode, before any decrypt.
+A column holding a value that is no keyring value fails in the decode, before any decryption.
 kms-aead's `sqlx` feature binds `Encrypted` in sqlx the same way, see
 [Storing typed fields](../envelope-encryption.md#storing-typed-fields).
 

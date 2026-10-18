@@ -41,8 +41,8 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
     Ok(EMAIL.aad(&EntityId::try_from(user)?))
 }
 
-/// A local KMS provider whose clones share counters of its calls, and whose wraps fail while
-/// [`fail_wraps`](ProviderCalls::fail_wraps) is set.
+/// A local KMS provider whose clones share counters of its calls, and whose encryptions fail while
+/// [`fail_encryptions`](ProviderCalls::fail_encryptions) is set.
 #[derive(Clone)]
 pub(crate) struct TestProvider {
     kms: Arc<LocalKmsProvider<TestBackend>>,
@@ -52,9 +52,9 @@ pub(crate) struct TestProvider {
 
 #[derive(Default)]
 pub(crate) struct ProviderCalls {
-    pub(crate) unwraps: AtomicUsize,
-    pub(crate) wraps: AtomicUsize,
-    pub(crate) fail_wraps: AtomicBool,
+    pub(crate) decryptions: AtomicUsize,
+    pub(crate) encryptions: AtomicUsize,
+    pub(crate) fail_encryptions: AtomicBool,
 }
 
 impl TestProvider {
@@ -90,13 +90,13 @@ impl KmsAeadEncryptionProvider for TestProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        if self.calls.fail_wraps.load(Ordering::SeqCst) {
+        if self.calls.fail_encryptions.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
                 "UNAVAILABLE",
                 "The test KMS is down",
             ));
         }
-        self.calls.wraps.fetch_add(1, Ordering::SeqCst);
+        self.calls.encryptions.fetch_add(1, Ordering::SeqCst);
         self.kms.encrypt_data_encryption_key(encryption_key).await
     }
 
@@ -104,7 +104,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        self.calls.unwraps.fetch_add(1, Ordering::SeqCst);
+        self.calls.decryptions.fetch_add(1, Ordering::SeqCst);
         self.kms.decrypt_data_encryption_key(encrypted_key).await
     }
 }

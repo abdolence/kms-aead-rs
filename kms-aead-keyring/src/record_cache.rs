@@ -52,7 +52,7 @@ struct Cached<R> {
 
 impl<S: KeyringStore> RecordCache<S> {
     /// The cache of `stored`, the record of its keyring as just read or written. `kek` is the
-    /// provider's, under which `dek_cache` holds the unwrapped keys of the record's versions.
+    /// provider's, under which `dek_cache` holds the decrypted keys of the record's versions.
     pub(crate) fn new(
         store: S,
         kek: KekRef,

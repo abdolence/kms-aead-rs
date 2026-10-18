@@ -3,7 +3,7 @@
 //!
 //! Every span opens at `DEBUG` with all its fields declared, records a field once its value is
 //! known, and leaves a value nobody reported unrecorded. kms-aead's spans nest inside them: a
-//! `KMS unwrap` under a `Keyring decrypt` on a DEK cache miss, a `KMS wrap` under a
+//! `KMS decrypt DEK` under a `Keyring decrypt` on a DEK cache miss, a `KMS encrypt DEK` under a
 //! `Keyring rotate`. No field carries plaintext, key material in any form, AAD content, cipher
 //! text bytes, or the length of a value or of its AAD.
 
@@ -43,8 +43,9 @@ const SKIPPED: &str = "/kms_aead_keyring/skipped";
 const FAILED: &str = "/kms_aead_keyring/failed";
 const RECORD: &str = "/kms_aead_keyring/record";
 
-/// The `dek_cache` value of a call that unwraps through the provider although the keyring has a
-/// cache: `rewrap`, a keyset export, and a compromised version read by `decrypt_with_status`.
+/// The `dek_cache` value of a call that decrypts through the provider although the keyring has a
+/// cache: `reencrypt_deks`, a keyset export, and a compromised version read by
+/// `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// `Keyring encrypt`, with the name of the keyring's AEAD backend for a randomised call. A
@@ -185,10 +186,10 @@ pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
     )
 }
 
-/// `Keyring rewrap`, which unwraps through the provider and never through the DEK cache.
-pub(crate) fn rewrap(keyring: &KeyringId) -> Span {
+/// `Keyring re-encrypt DEKs`, which decrypts through the provider and never through the DEK cache.
+pub(crate) fn reencrypt_deks(keyring: &KeyringId) -> Span {
     debug_span!(
-        "Keyring rewrap",
+        "Keyring re-encrypt DEKs",
         { KEYRING } = keyring.as_str(),
         { VERSIONS } = field::Empty,
         { DEK_CACHE } = DEK_CACHE_BYPASSED,
@@ -242,7 +243,7 @@ pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
     Span::current().record(DEK_CACHE, field::display(outcome));
 }
 
-/// Records on the current span that the key was unwrapped past the DEK cache.
+/// Records on the current span that the key was decrypted past the DEK cache.
 pub(crate) fn record_dek_cache_bypassed() {
     Span::current().record(DEK_CACHE, DEK_CACHE_BYPASSED);
 }
@@ -261,7 +262,7 @@ pub(crate) fn record_cas_retries(conflicts: u32) {
     Span::current().record(CAS_RETRIES, conflicts);
 }
 
-/// Records on the current span how many versions were wrapped again.
+/// Records on the current span how many versions were encrypted again.
 pub(crate) fn record_versions(versions: usize) {
     Span::current().record(VERSIONS, versions);
 }
@@ -342,7 +343,7 @@ pub(crate) fn record_regressed(keyring: &KeyringId, rule: RegressionRule) {
     );
 }
 
-/// A compromised flag written without a rotation, because the new key could not be wrapped.
+/// A compromised flag written without a rotation, because the new key could not be encrypted.
 pub(crate) fn compromised_without_rotation(
     keyring: &KeyringId,
     key_id: KeyVersionId,
@@ -353,7 +354,7 @@ pub(crate) fn compromised_without_rotation(
         { KEY_ID } = %key_id,
         { ERROR_CODE } = error.code(),
         "Flagged the active key version compromised without a new one, since the new key could \
-         not be wrapped: nothing encrypts until rotate succeeds"
+         not be encrypted: nothing encrypts until rotate succeeds"
     );
 }
 

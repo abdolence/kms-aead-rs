@@ -85,7 +85,7 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
     let record = fixture.keyring.record();
     let dek = record
         .version(KeyVersionId::try_from(1)?)
-        .and_then(KeyVersion::wrapped_dek)
+        .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let (opened, _) = DekCache::disabled()
@@ -214,7 +214,7 @@ async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call()
         )
     };
     let before = store_calls();
-    let unwraps = fixture.provider.calls.unwraps.load(Ordering::SeqCst);
+    let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     assert!(matches!(
         fixture.keyring.decrypt(&aad, &relabelled(&value, 0)?).await,
@@ -226,8 +226,8 @@ async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call()
     ));
     assert_eq!(store_calls(), before);
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
-        unwraps
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
+        decryptions
     );
     Ok(())
 }
@@ -447,7 +447,7 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     fixture.keyring.decrypt(&aad, &value).await?;
-    assert_eq!(fixture.provider.calls.unwraps.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 1);
 
     let rotation = fixture
         .keyring
@@ -459,13 +459,13 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
     );
     assert_eq!(fixture.keyring.decrypt(&aad, &value).await?, ALICE);
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         2,
         "the key was evicted, so the read missed"
     );
     fixture.keyring.decrypt(&aad, &value).await?;
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         2,
         "Allow reads through the cache"
     );
@@ -473,12 +473,12 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_key_unwrapped_under_a_superseded_record_is_evicted() -> TestResult {
+async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
     let dek = held
         .version(KeyVersionId::try_from(1)?)
-        .and_then(KeyVersion::wrapped_dek)
+        .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     fixture
         .other_process()
@@ -501,7 +501,7 @@ async fn a_key_unwrapped_under_a_superseded_record_is_evicted() -> TestResult {
 }
 
 #[tokio::test]
-async fn block_refuses_before_unwrapping() -> TestResult {
+async fn block_refuses_before_decrypting() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -509,7 +509,7 @@ async fn block_refuses_before_unwrapping() -> TestResult {
         .keyring
         .mark_compromised(KeyVersionId::try_from(1)?, None)
         .await?;
-    let unwraps = fixture.provider.calls.unwraps.load(Ordering::SeqCst);
+    let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     assert!(matches!(
         fixture.keyring.decrypt(&aad, &value).await,
@@ -521,8 +521,8 @@ async fn block_refuses_before_unwrapping() -> TestResult {
         Err(KeyringError::KeyVersionCompromised(_))
     ));
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
-        unwraps
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
+        decryptions
     );
     Ok(())
 }
@@ -534,7 +534,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let record = fixture.keyring.record();
     let dek = record
         .version(KeyVersionId::try_from(1)?)
-        .and_then(KeyVersion::wrapped_dek)
+        .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let first = KeyVersionId::try_from(1)?;
@@ -569,7 +569,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
 }
 
 #[tokio::test]
-async fn decrypt_with_status_unwraps_a_compromised_version_past_the_cache() -> TestResult {
+async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> TestResult {
     let fixture = Fixture::new(
         KeyringOptions::new()
             .with_watch(false)
@@ -582,20 +582,20 @@ async fn decrypt_with_status_unwraps_a_compromised_version_past_the_cache() -> T
         .keyring
         .mark_compromised(KeyVersionId::try_from(1)?, None)
         .await?;
-    let unwraps = fixture.provider.calls.unwraps.load(Ordering::SeqCst);
+    let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     for read in 1..=2 {
         let status = fixture.keyring.decrypt_with_status(&aad, &value).await?;
         assert!(matches!(status.trust, KeyTrust::Compromised(_)));
         assert_eq!(
-            fixture.provider.calls.unwraps.load(Ordering::SeqCst),
-            unwraps + read
+            fixture.provider.calls.decryptions.load(Ordering::SeqCst),
+            decryptions + read
         );
     }
     fixture.keyring.decrypt(&aad, &value).await?;
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
-        unwraps + 3,
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
+        decryptions + 3,
         "the reads above cached nothing"
     );
 
@@ -609,13 +609,13 @@ async fn decrypt_with_status_unwraps_a_compromised_version_past_the_cache() -> T
 }
 
 #[tokio::test]
-async fn mark_compromised_writes_the_flag_when_the_wrap_fails() -> TestResult {
+async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     fixture
         .provider
         .calls
-        .fail_wraps
+        .fail_encryptions
         .store(true, Ordering::SeqCst);
 
     assert_eq!(
@@ -648,7 +648,7 @@ async fn mark_compromised_writes_the_flag_when_the_wrap_fails() -> TestResult {
     fixture
         .provider
         .calls
-        .fail_wraps
+        .fail_encryptions
         .store(false, Ordering::SeqCst);
     let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
     assert!(matches!(
@@ -705,7 +705,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
         .version(KeyVersionId::try_from(1)?)
         .ok_or("version 1 is gone")?;
     assert_eq!(destroyed.state(), KeyVersionState::Destroyed);
-    assert!(destroyed.wrapped_dek().is_none());
+    assert!(destroyed.encrypted_dek().is_none());
     Ok(())
 }
 
@@ -767,24 +767,24 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
 }
 
 #[tokio::test]
-async fn rewrap_wraps_every_version_again_and_values_still_open() -> TestResult {
+async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     keyring.rotate(Purpose::Randomized).await?;
-    let before = keyring.record().wrapped_deks();
-    let unwraps = fixture.provider.calls.unwraps.load(Ordering::SeqCst);
+    let before = keyring.record().encrypted_deks();
+    let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
-    assert_eq!(keyring.rewrap().await?, 2);
+    assert_eq!(keyring.reencrypt_deks().await?, 2);
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
-        unwraps + 2
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
+        decryptions + 2
     );
-    let after = keyring.record().wrapped_deks();
-    for ((key_id, wrapped), (rewrapped_id, rewrapped)) in before.iter().zip(&after) {
-        assert_eq!(key_id, rewrapped_id);
-        assert_ne!(wrapped, rewrapped);
+    let after = keyring.record().encrypted_deks();
+    for ((key_id, encrypted), (reencrypted_id, reencrypted)) in before.iter().zip(&after) {
+        assert_eq!(key_id, reencrypted_id);
+        assert_ne!(encrypted, reencrypted);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     Ok(())
@@ -927,7 +927,7 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
     .await?;
     let aad = email_of("42")?;
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(fixture.provider.calls.unwraps.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 1);
 
     fixture
         .other_process()
@@ -939,10 +939,10 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
         KeyVersionId::try_from(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?)?,
         KeyVersionId::try_from(2)?
     );
-    assert_eq!(fixture.provider.calls.unwraps.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 2);
     fixture.keyring.decrypt(&aad, &value).await?;
     assert_eq!(
-        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
+        fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         3,
         "the refresh evicted version 1's key"
     );

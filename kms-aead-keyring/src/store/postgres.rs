@@ -413,7 +413,7 @@ impl Display for PostgresRevision {
 
 /// The store error of `operation` for `error`. A server error keeps its primary message and
 /// SQLSTATE only: its detail, hint and context may quote the row, and with it the record's
-/// wrapped keys. Its `Display` and `Debug` carry all three, so it is not kept as the root cause.
+/// encrypted DEKs. Its `Display` and `Debug` carry all three, so it is not kept as the root cause.
 fn store_error(
     operation: StoreOperation,
     error: impl Into<Arc<tokio_postgres::Error>>,
