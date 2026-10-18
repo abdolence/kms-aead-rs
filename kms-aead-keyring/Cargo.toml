@@ -20,6 +20,8 @@ path = "src/lib.rs"
 kms-aead = { version = "0.29", path = "..", default-features = false }
 # The major version secret-vault-value depends on, so that one copy is in the tree.
 base64 = "0.23"
+# `Stream` and the bounded concurrency of a sweep.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 jiff = { version = "0.2", features = ["serde"] }
 rsb_derive = { workspace = true }
 secret-vault-value = { workspace = true }
@@ -91,4 +93,9 @@ features = [
 [[example]]
 name = "local_kms"
 path = "examples/local_kms.rs"
+required-features = ["ring"]
+
+[[example]]
+name = "migrate"
+path = "examples/migrate.rs"
 required-features = ["ring"]

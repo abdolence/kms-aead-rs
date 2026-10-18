@@ -6,8 +6,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, DekBinding,
-    DeterministicAlgorithm, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
+    DataEncryptionKey, DekBinding, DeterministicAlgorithm, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -668,6 +669,44 @@ where
             self.backend,
             binding.as_ref(),
         )
+        .await
+    }
+
+    /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
+    /// store-less, with the `aad` the application gave it and the `algorithm` of the envelope
+    /// that wrote it: the read of a record whose [`SealMarker`](crate::SealMarker) says
+    /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. The application
+    /// decodes a value it stored as hex before the call.
+    ///
+    /// The value's key is unwrapped unbound by this keyring's provider, so it must have been
+    /// wrapped by the keyring's KEK, and through the keyring's [`DekCache`], where a store-less
+    /// envelope's values share one entry. Values written by kms-aead 0.28.1 or earlier need the
+    /// `legacy-formats` feature.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
+    /// value is not in a layout this build reads, `UNSUPPORTED_ALGORITHM` when the backend does
+    /// not implement `algorithm`, the provider's error when the key does not unwrap, and code
+    /// `DECRYPT` when the value is not authentic under it and `aad`.
+    pub async fn decrypt_envelope_value(
+        &self,
+        aad: &[u8],
+        value: &CipherTextWithEncryptedKey,
+        algorithm: AeadAlgorithm,
+    ) -> KeyringResult<SecretValue> {
+        spans::in_span(spans::decrypt_envelope(self.id()), async {
+            let (cipher_text, dek) = value.separate()?;
+            let cipher = AeadCipher::new(self.backend, algorithm)?;
+            let (opened, outcome) = self
+                .dek_cache()
+                .with_key(&self.provider, &dek, None, |key| {
+                    cipher.decrypt_value(aad, &cipher_text, key)
+                })
+                .await?;
+            spans::record_dek_cache(outcome);
+            Ok(opened?)
+        })
         .await
     }
 }

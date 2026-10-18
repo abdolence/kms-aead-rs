@@ -3,6 +3,8 @@
 
 use std::fmt::{Display, Formatter};
 
+use serde::{Deserialize, Serialize};
+
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 
 /// What a key version is for. A data encryption key of one purpose never serves the other.
@@ -42,7 +44,10 @@ impl Display for Purpose {
 /// deterministic ones `2147483649, 2147483650, …`.
 ///
 /// Ids are never reused: a destroyed version keeps its id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// It serializes as its number, and deserializes through [`TryFrom<u32>`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
 pub struct KeyId(u32);
 
 impl KeyId {
