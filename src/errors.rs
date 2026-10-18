@@ -181,14 +181,16 @@ impl Display for KmsAeadError {
     }
 }
 
+/// The root cause of the inner error, when there is one. The inner error is not a link of the
+/// chain: its `Display` is this error's.
 impl std::error::Error for KmsAeadError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            KmsAeadError::SystemError(err) => Some(err),
-            KmsAeadError::NetworkError(err) => Some(err),
-            KmsAeadError::EncryptionError(err) => Some(err),
-            KmsAeadError::UnsupportedAlgorithm(err) => Some(err),
-            KmsAeadError::LegacyFormat(err) => Some(err),
+            KmsAeadError::SystemError(err) => err.source(),
+            KmsAeadError::NetworkError(err) => err.source(),
+            KmsAeadError::EncryptionError(err) => err.source(),
+            KmsAeadError::UnsupportedAlgorithm(err) => err.source(),
+            KmsAeadError::LegacyFormat(err) => err.source(),
         }
     }
 }
@@ -430,7 +432,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_root_cause_is_the_source_of_the_inner_error() {
+    fn the_root_cause_is_the_source() {
         let root_cause = || Arc::new(std::io::Error::other("connection reset"));
         let errors = [
             KmsAeadError::EncryptionError(
@@ -450,9 +452,10 @@ mod tests {
         ];
 
         for error in errors {
-            let source = error.source().and_then(Error::source);
             assert!(
-                source.is_some_and(|source| source.is::<std::io::Error>()),
+                error
+                    .source()
+                    .is_some_and(|source| source.is::<std::io::Error>()),
                 "{error:?}"
             );
         }
