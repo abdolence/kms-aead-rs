@@ -35,6 +35,10 @@
 //! | `aws-lc-fips` | `AeadBackend::AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
 //! | `rustcrypto` | `AeadBackend::RustCrypto` | every [`AeadAlgorithm`] |
 //!
+//! `aws-lc-fips` builds only the FIPS module, and does not need `aws-lc`. A build with both
+//! compiles both C libraries, and aws-lc-rs runs on the FIPS module. The `aws-lc-rs` feature
+//! both of them enable is not a backend choice: on its own, aws-lc-rs's build fails.
+//!
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
 //! # Store-less mode and the DEK cache
@@ -148,10 +152,10 @@ extern crate core;
         feature = "azure-kms-encryption-base",
         feature = "hashicorp-vault-transit-kms-encryption-base"
     ),
-    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))
+    not(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))
 ))]
 compile_error!(
-    "kms-aead needs a crypto backend for its KMS providers: enable \"ring\", \"aws-lc\" or \"rustcrypto\""
+    "kms-aead needs a crypto backend for its KMS providers: enable \"ring\", \"aws-lc\", \"aws-lc-fips\" or \"rustcrypto\""
 );
 
 #[cfg(all(

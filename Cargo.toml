@@ -85,9 +85,6 @@ azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-fea
 # version azure_core depends on.
 reqwest = { version = "0.13.2", optional = true, default-features = false }
 
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "1", default-features = false, features = ["std", "fs", "process"] }
-
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 futures = "0.3"
@@ -104,10 +101,15 @@ default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
 # AEAD backends: any number of them in one build.
 ring = ["dep:ring"]
-aws-lc = ["dep:aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
-# Moves every aws-lc-rs user in the build, the rustls aws-lc-rs provider included, to the FIPS
-# module. Needs CMake and Go to build.
-aws-lc-fips = ["aws-lc", "aws-lc-rs/fips"]
+# `aws-lc-rs` is the implicit feature of the optional dependency, the one gate of the AwsLc
+# backend for both features below. Enabled alone it fails aws-lc-rs's build: "one of the following
+# features must be specified: `aws-lc-sys`, `non-fips`, or `fips`". Enable `aws-lc` or
+# `aws-lc-fips` instead.
+aws-lc = ["aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
+# The AwsLc backend on the FIPS module, without the non-FIPS aws-lc-sys. Moves every aws-lc-rs
+# user in the build, the rustls aws-lc-rs provider included, to the FIPS module. Needs CMake and
+# Go to build. With `aws-lc` as well, both C libraries are built and aws-lc-rs runs on the FIPS one.
+aws-lc-fips = ["aws-lc-rs", "aws-lc-rs/fips"]
 rustcrypto = [
     "dep:aes-gcm",
     "dep:aes-gcm-siv",
@@ -209,4 +211,9 @@ required-features = ["azure-kms-encryption-base"]
 [[example]]
 name = "only_aead"
 path = "examples/only_aead.rs"
+required-features = ["ring"]
+
+[[example]]
+name = "tracing"
+path = "examples/tracing.rs"
 required-features = ["ring"]

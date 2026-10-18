@@ -628,6 +628,7 @@ fn trusted_roots(
 mod tests {
     use super::*;
     use crate::test_http::answer_with;
+    use crate::test_provider::TEST_BACKEND;
     use tokio::net::TcpListener;
 
     const TOKEN: &str = "hvs.token-marker-value";
@@ -901,7 +902,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "ring")]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn envelope_round_trip_survives_key_rotation() {
         let provider = live_provider();
@@ -913,7 +913,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::new(provider.clone(), AeadBackend::Ring)
+        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND)
             .await
             .unwrap();
         let aad = "orders-aad".to_string();

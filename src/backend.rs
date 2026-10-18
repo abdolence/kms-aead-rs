@@ -9,7 +9,7 @@ use crate::AeadAlgorithm;
 #[cfg(feature = "ring")]
 mod ring;
 
-#[cfg(feature = "aws-lc")]
+#[cfg(feature = "aws-lc-rs")]
 mod aws_lc;
 
 #[cfg(feature = "rustcrypto")]
@@ -17,7 +17,7 @@ mod rust_crypto;
 
 #[cfg(all(
     test,
-    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+    any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")
 ))]
 mod contract;
 
@@ -35,11 +35,12 @@ pub enum AeadBackend {
     /// zeroize its expanded key schedules, so they stay in freed memory after each call.
     #[cfg(feature = "ring")]
     Ring,
-    /// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` feature:
-    /// every [`AeadAlgorithm`].
+    /// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` or the
+    /// `aws-lc-fips` feature: every [`AeadAlgorithm`].
     ///
-    /// With the `aws-lc-fips` feature it runs on the AWS-LC FIPS module, and so does every other
-    /// user of aws-lc-rs in the build. AES-256-GCM is the algorithm for FIPS deployments.
+    /// With `aws-lc-fips` it runs on the AWS-LC FIPS module, and so does every other user of
+    /// aws-lc-rs in the build, even when `aws-lc` is enabled too. AES-256-GCM is the algorithm
+    /// for FIPS deployments.
     ///
     /// aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own
     /// allocator, which overwrites every allocation with zeros before freeing it
@@ -48,7 +49,7 @@ pub enum AeadBackend {
     /// installed through `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on
     /// its own whether freed memory is cleared. The record keys AES-256-GCM-SIV derives from the
     /// key and the nonce for each call live on the stack, and AWS-LC does not clear them.
-    #[cfg(feature = "aws-lc")]
+    #[cfg(feature = "aws-lc-rs")]
     AwsLc,
     /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the
     /// `rustcrypto` feature: every [`AeadAlgorithm`], with `getrandom` as the CSPRNG. Needs no C
@@ -72,7 +73,7 @@ impl From<AeadBackend> for &'static dyn AeadBackendOps {
         match backend {
             #[cfg(feature = "ring")]
             AeadBackend::Ring => &ring::RingOps,
-            #[cfg(feature = "aws-lc")]
+            #[cfg(feature = "aws-lc-rs")]
             AeadBackend::AwsLc => &aws_lc::AwsLcOps,
             #[cfg(feature = "rustcrypto")]
             AeadBackend::RustCrypto => &rust_crypto::RustCryptoOps,
@@ -86,7 +87,7 @@ pub(crate) type Tag = [u8; AeadAlgorithm::TAG_LEN];
 /// Crypto libraries report no detail on failure, and none is lost here.
 // Only the backends construct it, and a build without a backend feature has none.
 #[cfg_attr(
-    not(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")),
+    not(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")),
     allow(dead_code)
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

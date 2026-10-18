@@ -20,9 +20,13 @@ use common::FixedTokenCredential;
 
 #[cfg(feature = "ring")]
 const BACKEND: AeadBackend = AeadBackend::Ring;
-#[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
+#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
 const BACKEND: AeadBackend = AeadBackend::AwsLc;
-#[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
+#[cfg(all(
+    not(feature = "ring"),
+    not(feature = "aws-lc-rs"),
+    feature = "rustcrypto"
+))]
 const BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";

@@ -1,11 +1,13 @@
 //! The cache of plaintext data encryption keys, [`DekCache`], which the store-less envelope and
 //! the keyring share.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+#[cfg(test)]
+use std::sync::Weak;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
 use rsb_derive::Builder;
@@ -80,16 +82,17 @@ impl Display for DekCacheOutcome {
 ///   waiting on it makes the call instead.
 /// - A failed unwrap leaves no entry, so that under a KMS outage every call fails as fast as the
 ///   KMS does.
-/// - An entry serves lookups for [`ttl`](DekCacheOptions::ttl) after it was inserted, however
-///   often it is used.
+/// - An entry is inserted by the miss that unwraps its key, before the unwrap, and serves lookups
+///   for [`ttl`](DekCacheOptions::ttl) after that, however often it is used. An unwrap under way
+///   counts against [`max_entries`](DekCacheOptions::max_entries).
 ///
 /// # Key lifetime
 ///
 /// A key is dropped, which zeroizes its bytes, when its entry leaves the cache: once the entry
 /// is evicted for capacity, invalidated, cleared or purged after it expired. A `with_key` call
-/// that already holds the key keeps it until its closure returns, and a call waiting on an
-/// unwrap that started before an [`invalidate`](Self::invalidate) or a [`clear`](Self::clear)
-/// receives that unwrap's key, which is not cached.
+/// that looked the key up before its entry left keeps it until its closure returns, and a call
+/// waiting on an unwrap that started before an [`invalidate`](Self::invalidate) or a
+/// [`clear`](Self::clear) receives that unwrap's key, which is not cached.
 ///
 /// A lookup never returns an entry older than the TTL. The cache runs no thread and no task of
 /// its own: the expired entries of both purposes are dropped at the next call on the cache, for
@@ -108,200 +111,220 @@ impl Display for DekCacheOutcome {
 /// envelope has no cache unless it is given one; the store-less envelope and the keyring use
 /// `DekCache::new(DekCacheOptions::new())` unless they are given another.
 #[derive(Clone)]
-pub struct DekCache(Option<Arc<EnabledCache>>);
+pub struct DekCache(pub(crate) Option<Arc<Shared>>);
 
-/// The maps of an enabled cache.
-struct EnabledCache {
+/// What every clone of an enabled cache shares.
+pub(crate) struct Shared {
     options: DekCacheOptions,
-    randomized: KeyMap<DataEncryptionKey>,
+    randomized: Table<DataEncryptionKey>,
     #[cfg(feature = "deterministic")]
-    deterministic: KeyMap<DeterministicDataEncryptionKey>,
+    deterministic: Table<DeterministicDataEncryptionKey>,
 }
 
-/// The key of an entry. Wrapped keys are not secret, so they hash and compare in variable time.
-#[derive(Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    kek: KekRef,
-    wrapped: Vec<u8>,
+/// The entries of one purpose. A change publishes a new snapshot under the write lock, and a
+/// lookup holds the read lock only to clone the current one.
+type Table<K> = RwLock<Arc<Snapshot<K>>>;
+
+/// The entries of one purpose at one moment, never changed once a table holds it.
+struct Snapshot<K> {
+    slots: HashMap<CacheKey, Arc<Slot<K>>>,
+    /// The slot created first: every slot lives for the same TTL, so it is the next to expire,
+    /// and the one evicted when the table is full.
+    oldest: Option<Arc<Slot<K>>>,
 }
 
-impl CacheKey {
-    fn new(kek: KekRef, encrypted: &EncryptedDataEncryptionKey) -> Self {
-        Self {
-            kek,
-            wrapped: encrypted.wrapped().to_vec(),
-        }
+/// An entry: the key, or the unwrap under way that the concurrent misses of the key share.
+struct Slot<K> {
+    dek: OnceCell<KmsAeadResult<Arc<K>>>,
+    created_at: Instant,
+}
+
+/// The provider's KEK and the wrapped key's bytes. Wrapped keys are not secret, so they hash and
+/// compare in variable time.
+type CacheKey = (KekRef, Vec<u8>);
+
+/// The snapshot `table` holds.
+///
+/// A snapshot is replaced only once its successor is built, so a panic under a table's lock
+/// leaves a whole snapshot behind: a poisoned lock is recovered, here and in [`publish`].
+fn load<K>(table: &Table<K>) -> Arc<Snapshot<K>> {
+    Arc::clone(&table.read().unwrap_or_else(PoisonError::into_inner))
+}
+
+/// Replaces the snapshot `table` holds with the one `derive` builds from it, unless it builds
+/// none. The replaced snapshot is dropped before this returns, unless a lookup still holds it.
+fn publish<K>(table: &Table<K>, derive: impl FnOnce(&Snapshot<K>) -> Option<Snapshot<K>>) {
+    let mut current = table.write().unwrap_or_else(PoisonError::into_inner);
+    if let Some(derived) = derive(&current) {
+        *current = Arc::new(derived);
     }
 }
 
-/// The entries of one purpose. The lock is held for map operations only, never across an
-/// `.await`, a provider call or a caller's closure.
-struct KeyMap<K>(Mutex<MapState<K>>);
-
-struct MapState<K> {
-    entries: HashMap<CacheKey, CachedDek<K>>,
-    /// The keys of `entries` in insertion order. Every entry lives for the same TTL, so the
-    /// front one is always the next to expire.
-    insertion_order: VecDeque<CacheKey>,
-    /// The unwraps under way, which concurrent misses for the same key wait on. An unwrap
-    /// whose callers were all cancelled leaves a dangling entry, which the next miss of its key
-    /// replaces and the next purge removes.
-    unwraps: HashMap<CacheKey, Weak<SharedUnwrap<K>>>,
-}
-
-struct CachedDek<K> {
-    dek: Arc<K>,
-    inserted_at: Instant,
-}
-
-impl<K> CachedDek<K> {
-    fn is_expired(&self, ttl: Duration, now: Instant) -> bool {
-        now.saturating_duration_since(self.inserted_at) >= ttl
-    }
-}
-
-/// The result of one provider call, shared by every caller that missed the same key while it
-/// ran.
-type SharedUnwrap<K> = OnceCell<KmsAeadResult<Arc<K>>>;
-
-impl<K> KeyMap<K> {
-    fn new() -> Self {
-        Self(Mutex::new(MapState {
-            entries: HashMap::new(),
-            insertion_order: VecDeque::new(),
-            unwraps: HashMap::new(),
-        }))
-    }
-
-    /// The map state, also from a poisoned lock: nothing that runs under the lock panics, so a
-    /// poisoned lock never holds a half-done map operation.
-    fn lock(&self) -> MutexGuard<'_, MapState<K>> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The key cached under `cache_key`, or the key `unwrap_key` returns on a miss, which is
-    /// cached unless an invalidation or a clear of the key came while it was unwrapped.
-    async fn get_or_unwrap<F, Fut>(
+impl Shared {
+    /// Runs `use_key` with the key cached under `cache_key` in `table`, or with the key
+    /// `unwrap_key` returns on a miss, which stays cached unless its slot left the table
+    /// meanwhile.
+    async fn with_key<K, T, Fut>(
         &self,
+        table: &Table<K>,
         cache_key: CacheKey,
-        options: &DekCacheOptions,
-        unwrap_key: F,
-    ) -> KmsAeadResult<(Arc<K>, DekCacheOutcome)>
+        unwrap_key: impl FnOnce() -> Fut,
+        use_key: impl FnOnce(&K) -> T,
+    ) -> KmsAeadResult<(T, DekCacheOutcome)>
     where
-        F: FnOnce() -> Fut,
         Fut: Future<Output = KmsAeadResult<K>>,
     {
-        let shared = {
-            let mut state = self.lock();
-            let live = state
-                .entries
-                .get(&cache_key)
-                .filter(|cached| !cached.is_expired(options.ttl, Instant::now()));
-            if let Some(cached) = live {
-                return Ok((Arc::clone(&cached.dek), DekCacheOutcome::Hit));
-            }
-            state.shared_unwrap(&cache_key)
-        };
+        let now = Instant::now();
+        self.purge_expired(now);
+        let (ttl, max_entries) = (self.options.ttl, self.options.max_entries);
+        let cached = load(table).live(&cache_key, ttl, now).map(Arc::clone);
+        let slot = cached.unwrap_or_else(|| {
+            let created = Arc::new(Slot {
+                dek: OnceCell::new(),
+                created_at: now,
+            });
+            // Of concurrent misses, the slot published first wins, and they all wait on it.
+            let mut slot = Arc::clone(&created);
+            publish(table, |snapshot| {
+                match snapshot.live(&cache_key, ttl, now) {
+                    Some(published) => {
+                        slot = Arc::clone(published);
+                        None
+                    }
+                    None => Some(snapshot.with(cache_key.clone(), created, max_entries)),
+                }
+            });
+            slot
+        });
+
         let mut unwrapped_here = false;
-        let result = shared
+        let unwrapped = slot
+            .dek
             .get_or_init(|| {
                 unwrapped_here = true;
-                let unwrapping = unwrap_key();
-                async move { unwrapping.await.map(Arc::new) }
+                async move { unwrap_key().await.map(Arc::new) }
             })
             .await
             .clone();
-        if !unwrapped_here {
-            return result.map(|dek| (dek, DekCacheOutcome::Hit));
-        }
-        let mut state = self.lock();
-        if state.finish_unwrap(&cache_key, &shared) {
-            if let Ok(dek) = &result {
-                state.insert(cache_key, Arc::clone(dek), options.max_entries);
+        let outcome = if unwrapped_here {
+            DekCacheOutcome::Miss
+        } else {
+            DekCacheOutcome::Hit
+        };
+        match unwrapped {
+            Ok(dek) => Ok((use_key(&dek), outcome)),
+            Err(error) => {
+                // The caller that made the failed unwrap removes its slot, unless the slot has
+                // already left the table, so that no failure is served from the cache.
+                if unwrapped_here {
+                    publish(table, |snapshot| {
+                        let failed = snapshot.slots.get(&cache_key);
+                        let failed = failed.filter(|failed| Arc::ptr_eq(failed, &slot));
+                        failed.and_then(|_| snapshot.without(&cache_key))
+                    });
+                }
+                Err(error)
             }
         }
-        result.map(|dek| (dek, DekCacheOutcome::Miss))
     }
 
-    /// Drops the expired entries, and forgets the unwraps whose callers were all cancelled. An
-    /// unwrap with a caller still waiting on it stays registered.
-    fn purge(&self, ttl: Duration) {
-        let mut state = self.lock();
-        state.drop_expired(ttl, Instant::now());
-        state.unwraps.retain(|_, shared| shared.strong_count() > 0);
+    fn purge_expired(&self, now: Instant) {
+        self.purge(&self.randomized, now);
+        #[cfg(feature = "deterministic")]
+        self.purge(&self.deterministic, now);
+    }
+
+    fn purge<K>(&self, table: &Table<K>, now: Instant) {
+        let ttl = self.options.ttl;
+        if load(table).has_expired(ttl, now) {
+            publish(table, |snapshot| snapshot.unexpired(ttl, now));
+        }
+    }
+
+    /// Caches `key`, which `kek` has just wrapped into `encrypted`, as an unwrap of `encrypted`
+    /// would have, so that the first lookup of a new store-less DEK is a hit. Kept off the public
+    /// API: a key cached under the wrong wrapped bytes would seal values that no unwrap opens.
+    pub(crate) fn insert(
+        &self,
+        kek: KekRef,
+        encrypted: &EncryptedDataEncryptionKey,
+        key: DataEncryptionKey,
+    ) {
+        let now = Instant::now();
+        self.purge_expired(now);
+        let slot = Arc::new(Slot {
+            dek: OnceCell::from(Ok(Arc::new(key))),
+            created_at: now,
+        });
+        let cache_key = (kek, encrypted.wrapped().to_vec());
+        publish(&self.randomized, |snapshot| {
+            Some(snapshot.with(cache_key, slot, self.options.max_entries))
+        });
     }
 }
 
-impl<K> MapState<K> {
-    fn drop_expired(&mut self, ttl: Duration, now: Instant) {
-        while let Some(oldest) = self.insertion_order.front() {
-            let expired = self
-                .entries
-                .get(oldest)
-                .is_none_or(|cached| cached.is_expired(ttl, now));
-            if !expired {
-                return;
-            }
-            if let Some(oldest) = self.insertion_order.pop_front() {
-                self.entries.remove(&oldest);
-            }
-        }
-    }
-
-    /// The unwrap under way for `cache_key`, or a new one registered for it.
-    fn shared_unwrap(&mut self, cache_key: &CacheKey) -> Arc<SharedUnwrap<K>> {
-        if let Some(shared) = self.unwraps.get(cache_key).and_then(Weak::upgrade) {
-            return shared;
-        }
-        let shared = Arc::new(OnceCell::new());
-        self.unwraps
-            .insert(cache_key.clone(), Arc::downgrade(&shared));
-        shared
-    }
-
-    /// Unregisters `shared`, and returns whether it was still registered for `cache_key`: an
-    /// invalidation or a clear unregisters the unwraps under way, so that their keys are not
-    /// cached.
-    fn finish_unwrap(&mut self, cache_key: &CacheKey, shared: &Arc<SharedUnwrap<K>>) -> bool {
-        let registered = self
-            .unwraps
+impl<K> Snapshot<K> {
+    fn live(&self, cache_key: &CacheKey, ttl: Duration, now: Instant) -> Option<&Arc<Slot<K>>> {
+        self.slots
             .get(cache_key)
-            .is_some_and(|registered| Weak::ptr_eq(registered, &Arc::downgrade(shared)));
-        if registered {
-            self.unwraps.remove(cache_key);
-        }
-        registered
+            .filter(|slot| !slot.is_expired(ttl, now))
     }
 
-    /// Inserts `dek` as the newest entry, then evicts the oldest past `max_entries`.
-    fn insert(&mut self, cache_key: CacheKey, dek: Arc<K>, max_entries: NonZeroUsize) {
-        let cached = CachedDek {
-            dek,
-            inserted_at: Instant::now(),
-        };
-        if self.entries.insert(cache_key.clone(), cached).is_some() {
-            self.insertion_order.retain(|listed| *listed != cache_key);
-        }
-        self.insertion_order.push_back(cache_key);
-        while self.entries.len() > max_entries.get() {
-            let Some(oldest) = self.insertion_order.pop_front() else {
-                return;
-            };
-            self.entries.remove(&oldest);
-        }
+    fn has_expired(&self, ttl: Duration, now: Instant) -> bool {
+        self.oldest
+            .as_ref()
+            .is_some_and(|oldest| oldest.is_expired(ttl, now))
     }
 
-    fn remove(&mut self, cache_key: &CacheKey) {
-        if self.entries.remove(cache_key).is_some() {
-            self.insertion_order.retain(|listed| listed != cache_key);
+    /// This snapshot with `slot` under `cache_key`, which evicts the oldest slot of a snapshot
+    /// that already holds `max_entries`.
+    fn with(&self, cache_key: CacheKey, slot: Arc<Slot<K>>, max_entries: NonZeroUsize) -> Self {
+        let mut slots = self.slots.clone();
+        slots.remove(&cache_key);
+        if let Some(oldest) = self.oldest.as_ref() {
+            if slots.len() >= max_entries.get() {
+                slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
+            }
         }
-        self.unwraps.remove(cache_key);
+        slots.insert(cache_key, slot);
+        slots.into()
     }
 
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.insertion_order.clear();
-        self.unwraps.clear();
+    /// This snapshot without the slot of `cache_key`, or `None` when it holds none.
+    fn without(&self, cache_key: &CacheKey) -> Option<Self> {
+        self.slots.contains_key(cache_key).then(|| {
+            let mut slots = self.slots.clone();
+            slots.remove(cache_key);
+            slots.into()
+        })
+    }
+
+    /// This snapshot without the slots older than `ttl` at `now`, or `None` when it holds none.
+    fn unexpired(&self, ttl: Duration, now: Instant) -> Option<Self> {
+        self.has_expired(ttl, now).then(|| {
+            let mut slots = self.slots.clone();
+            slots.retain(|_, slot| !slot.is_expired(ttl, now));
+            slots.into()
+        })
+    }
+}
+
+impl<K> From<HashMap<CacheKey, Arc<Slot<K>>>> for Snapshot<K> {
+    fn from(slots: HashMap<CacheKey, Arc<Slot<K>>>) -> Self {
+        let oldest = slots.values().min_by_key(|slot| slot.created_at).cloned();
+        Self { slots, oldest }
+    }
+}
+
+impl<K> Default for Snapshot<K> {
+    fn default() -> Self {
+        HashMap::new().into()
+    }
+}
+
+impl<K> Slot<K> {
+    fn is_expired(&self, ttl: Duration, now: Instant) -> bool {
+        now.saturating_duration_since(self.created_at) >= ttl
     }
 }
 
@@ -318,11 +341,11 @@ impl DekCache {
                 "A DEK cache TTL of zero caches nothing: use DekCache::disabled",
             ));
         }
-        Ok(Self(Some(Arc::new(EnabledCache {
+        Ok(Self(Some(Arc::new(Shared {
             options,
-            randomized: KeyMap::new(),
+            randomized: Table::default(),
             #[cfg(feature = "deterministic")]
-            deterministic: KeyMap::new(),
+            deterministic: Table::default(),
         }))))
     }
 
@@ -359,20 +382,14 @@ impl DekCache {
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         let unwrap_key = || provider.decrypt_data_encryption_key(encrypted);
-        self.purge_expired();
         match &self.0 {
-            Some(cache) => {
-                let cache_key = CacheKey::new(provider.kek(), encrypted);
-                let (dek, outcome) = cache
-                    .randomized
-                    .get_or_unwrap(cache_key, &cache.options, unwrap_key)
-                    .await?;
-                Ok((use_key(&dek), outcome))
+            Some(shared) => {
+                let cache_key = (provider.kek(), encrypted.wrapped().to_vec());
+                shared
+                    .with_key(&shared.randomized, cache_key, unwrap_key, use_key)
+                    .await
             }
-            None => {
-                let dek = unwrap_key().await?;
-                Ok((use_key(&dek), DekCacheOutcome::Disabled))
-            }
+            None => Ok((use_key(&unwrap_key().await?), DekCacheOutcome::Disabled)),
         }
     }
 
@@ -400,20 +417,14 @@ impl DekCache {
             let key = provider.decrypt_data_encryption_key(encrypted).await?;
             checked_deterministic_key(key, algorithm)
         };
-        self.purge_expired();
         match &self.0 {
-            Some(cache) => {
-                let cache_key = CacheKey::new(provider.kek(), encrypted);
-                let (dek, outcome) = cache
-                    .deterministic
-                    .get_or_unwrap(cache_key, &cache.options, unwrap_key)
-                    .await?;
-                Ok((use_key(&dek), outcome))
+            Some(shared) => {
+                let cache_key = (provider.kek(), encrypted.wrapped().to_vec());
+                shared
+                    .with_key(&shared.deterministic, cache_key, unwrap_key, use_key)
+                    .await
             }
-            None => {
-                let dek = unwrap_key().await?;
-                Ok((use_key(&dek), DekCacheOutcome::Disabled))
-            }
+            None => Ok((use_key(&unwrap_key().await?), DekCacheOutcome::Disabled)),
         }
     }
 
@@ -421,12 +432,14 @@ impl DekCache {
     /// [`with_key`](Self::with_key) of the key calls the provider, and an unwrap of it under way
     /// returns its key to its callers without caching it.
     pub fn invalidate(&self, kek: &KekRef, encrypted: &EncryptedDataEncryptionKey) {
-        self.purge_expired();
-        if let Some(cache) = &self.0 {
-            let cache_key = CacheKey::new(kek.clone(), encrypted);
-            cache.randomized.lock().remove(&cache_key);
+        if let Some(shared) = &self.0 {
+            shared.purge_expired(Instant::now());
+            let cache_key = (kek.clone(), encrypted.wrapped().to_vec());
+            publish(&shared.randomized, |snapshot| snapshot.without(&cache_key));
             #[cfg(feature = "deterministic")]
-            cache.deterministic.lock().remove(&cache_key);
+            publish(&shared.deterministic, |snapshot| {
+                snapshot.without(&cache_key)
+            });
         }
     }
 
@@ -436,10 +449,8 @@ impl DekCache {
     /// its own, on whatever runtime it uses, to drop them at the TTL; see "Key lifetime" on
     /// [`DekCache`].
     pub fn purge_expired(&self) {
-        if let Some(cache) = &self.0 {
-            cache.randomized.purge(cache.options.ttl);
-            #[cfg(feature = "deterministic")]
-            cache.deterministic.purge(cache.options.ttl);
+        if let Some(shared) = &self.0 {
+            shared.purge_expired(Instant::now());
         }
     }
 
@@ -447,41 +458,10 @@ impl DekCache {
     /// caching them. A store-less renewal under way may still cache its new DEK after `clear`
     /// returns, since the renewal started before the clear.
     pub fn clear(&self) {
-        if let Some(cache) = &self.0 {
-            cache.randomized.lock().clear();
+        if let Some(shared) = &self.0 {
+            publish(&shared.randomized, |_| Some(Snapshot::default()));
             #[cfg(feature = "deterministic")]
-            cache.deterministic.lock().clear();
-        }
-    }
-}
-
-/// Filling the cache for the crate's own callers, kept off the public API of [`DekCache`]: a
-/// key inserted under the wrong wrapped bytes would seal values that no unwrap opens.
-pub(crate) trait InsertDek {
-    /// Caches `key`, which `kek` has just wrapped into `encrypted`, as an unwrap of `encrypted`
-    /// would have. A disabled cache drops it.
-    fn insert_dek(
-        &self,
-        kek: KekRef,
-        encrypted: &EncryptedDataEncryptionKey,
-        key: DataEncryptionKey,
-    );
-}
-
-impl InsertDek for DekCache {
-    fn insert_dek(
-        &self,
-        kek: KekRef,
-        encrypted: &EncryptedDataEncryptionKey,
-        key: DataEncryptionKey,
-    ) {
-        self.purge_expired();
-        if let Some(cache) = &self.0 {
-            cache.randomized.lock().insert(
-                CacheKey::new(kek, encrypted),
-                Arc::new(key),
-                cache.options.max_entries,
-            );
+            publish(&shared.deterministic, |_| Some(Snapshot::default()));
         }
     }
 }
@@ -490,49 +470,43 @@ impl InsertDek for DekCache {
 impl Debug for DekCache {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("DekCache")
-            .field(&self.0.as_ref().map(|cache| &cache.options))
+            .field(&self.0.as_ref().map(|shared| &shared.options))
             .finish()
     }
 }
 
 #[cfg(test)]
-impl<K> KeyMap<K> {
+impl<K> Snapshot<K> {
     /// The key cached under `cache_key`, as a `Weak` that stops upgrading once the key is
     /// dropped, and its bytes with it zeroized.
     fn cached(&self, cache_key: &CacheKey) -> Option<Weak<K>> {
-        let state = self.lock();
-        state
-            .entries
-            .get(cache_key)
-            .map(|cached| Arc::downgrade(&cached.dek))
+        let unwrapped = self.slots.get(cache_key)?.dek.get()?;
+        unwrapped.as_ref().ok().map(Arc::downgrade)
     }
 }
 
 #[cfg(test)]
 impl DekCache {
-    /// The randomized key cached for `encrypted` under `kek`, as [`KeyMap::cached`] gives it.
+    /// The randomized key cached for `encrypted` under `kek`, as [`Snapshot::cached`] gives it.
     pub(crate) fn cached_dek(
         &self,
         kek: &KekRef,
         encrypted: &EncryptedDataEncryptionKey,
     ) -> Option<Weak<DataEncryptionKey>> {
-        let cache = self.0.as_ref()?;
-        cache
-            .randomized
-            .cached(&CacheKey::new(kek.clone(), encrypted))
+        let shared = self.0.as_ref()?;
+        load(&shared.randomized).cached(&(kek.clone(), encrypted.wrapped().to_vec()))
     }
 
-    /// The deterministic key cached for `encrypted` under `kek`, as [`KeyMap::cached`] gives it.
+    /// The deterministic key cached for `encrypted` under `kek`, as [`Snapshot::cached`] gives
+    /// it.
     #[cfg(feature = "deterministic")]
     fn cached_deterministic_dek(
         &self,
         kek: &KekRef,
         encrypted: &EncryptedDataEncryptionKey,
     ) -> Option<Weak<DeterministicDataEncryptionKey>> {
-        let cache = self.0.as_ref()?;
-        cache
-            .deterministic
-            .cached(&CacheKey::new(kek.clone(), encrypted))
+        let shared = self.0.as_ref()?;
+        load(&shared.deterministic).cached(&(kek.clone(), encrypted.wrapped().to_vec()))
     }
 }
 
@@ -921,6 +895,37 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn a_waiter_unwraps_when_the_unwrapping_caller_is_cancelled() -> KmsAeadResult<()> {
+        let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let cache = DekCache::new(DekCacheOptions::new())?;
+        let provider = Arc::new(CountingKmsProvider::gated(
+            TestKmsProvider::Working,
+            ORDERS_KEK,
+        ));
+
+        let [unwrapping, waiting] = [(); 2].map(|()| {
+            let (cache, provider, encrypted) =
+                (cache.clone(), Arc::clone(&provider), encrypted.clone());
+            tokio::spawn(async move { cache.with_key(&*provider, &encrypted, |_| ()).await })
+        });
+        let_spawned_tasks_wait().await;
+        unwrapping.abort();
+        let_spawned_tasks_wait().await;
+        provider.open_gate();
+        let cancelled = unwrapping.await.is_err_and(|error| error.is_cancelled());
+        let ((), took_over) = waiting.await.unwrap()?;
+        let ((), after) = cache.with_key(&*provider, &encrypted, |_| ()).await?;
+
+        assert!(cancelled);
+        assert_eq!(
+            [took_over, after],
+            [DekCacheOutcome::Miss, DekCacheOutcome::Hit]
+        );
+        assert_eq!(provider.unwraps(), 2);
+        Ok(())
+    }
+
     #[test]
     fn a_key_in_use_is_never_zeroized_mid_use() -> KmsAeadResult<()> {
         const USING_THREADS: usize = 4;
@@ -966,6 +971,75 @@ mod tests {
         });
 
         assert_eq!(failures, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn lookups_racing_removals_get_only_live_keys_and_drop_the_removed() -> KmsAeadResult<()> {
+        const LOOKUP_THREADS: usize = 4;
+        const LOOKUPS_PER_THREAD: usize = 20_000;
+        const CLEAR_EVERY: usize = 8;
+        let ttl = Duration::from_micros(500);
+        let cache = DekCache::new(DekCacheOptions::new().with_ttl(ttl))?;
+        let started = Instant::now();
+        let provider = CountingKmsProvider::new(TestKmsProvider::Stamping(started), ORDERS_KEK);
+        let keys: Vec<_> = (1..=3)
+            .map(|byte| EncryptedDataEncryptionKey::new(vec![byte; 32], None))
+            .collect();
+        let looking_up = AtomicBool::new(true);
+
+        let (failures, invalidated) = thread::scope(|scope| {
+            let churn = scope.spawn(|| {
+                let mut invalidated = Vec::new();
+                let rounds = keys.iter().cycle().enumerate();
+                for (round, encrypted) in rounds.take_while(|_| looking_up.load(Ordering::Relaxed))
+                {
+                    invalidated.extend(cache.cached_dek(&provider.kek(), encrypted));
+                    cache.invalidate(&provider.kek(), encrypted);
+                    cache.purge_expired();
+                    if round % CLEAR_EVERY == 0 {
+                        cache.clear();
+                    }
+                    thread::sleep(Duration::from_micros(200));
+                }
+                invalidated
+            });
+            let lookups: Vec<_> = (0..LOOKUP_THREADS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        (0..LOOKUPS_PER_THREAD)
+                            .filter(|lookup| {
+                                let encrypted = &keys[lookup % keys.len()];
+                                let looked_up_at = Instant::now();
+                                let served =
+                                    block_on(cache.with_key(&provider, encrypted, |key| {
+                                        let stamped = key.value().ref_sensitive_value();
+                                        let split = stamped.split_last_chunk::<8>();
+                                        split.is_some_and(|(wrapped, nanos)| {
+                                            let since =
+                                                Duration::from_nanos(u64::from_le_bytes(*nanos));
+                                            let age = looked_up_at
+                                                .saturating_duration_since(started + since);
+                                            wrapped == encrypted.wrapped() && age < ttl
+                                        })
+                                    }));
+                                !matches!(served, Ok((true, _)))
+                            })
+                            .count()
+                    })
+                })
+                .collect();
+            let failures: usize = lookups
+                .into_iter()
+                .map(|lookup| lookup.join().unwrap())
+                .sum();
+            looking_up.store(false, Ordering::Relaxed);
+            (failures, churn.join().unwrap())
+        });
+
+        assert_eq!(failures, 0);
+        assert!(!invalidated.is_empty());
+        assert!(invalidated.iter().all(|key| key.strong_count() == 0));
         Ok(())
     }
 

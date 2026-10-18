@@ -2,13 +2,14 @@
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 use tokio::sync::watch;
 
 use crate::errors::KmsAeadEncryptionError;
-#[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 use crate::AeadBackend;
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
@@ -17,9 +18,13 @@ use crate::{
 
 #[cfg(feature = "ring")]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
-#[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
+#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
-#[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
+#[cfg(all(
+    not(feature = "ring"),
+    not(feature = "aws-lc-rs"),
+    feature = "rustcrypto"
+))]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 /// How many calls the concurrency tests start at once.
@@ -28,12 +33,16 @@ pub(crate) const CONCURRENT_CALLS: usize = 16;
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {
     Working,
-    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     FailingToWrap,
     FailingToUnwrap,
     /// Returns its key material from `generate_key_material`, as a KMS generator would.
-    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     Generating(SecretValue),
+    /// Unwraps a key into its wrapped bytes followed by the nanoseconds from the instant it
+    /// holds to the unwrap, as a little-endian `u64`, so that a caller can tell how old the key
+    /// it is given is.
+    Stamping(Instant),
 }
 
 #[async_trait]
@@ -47,7 +56,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
-            #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+            #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
             TestKmsProvider::FailingToWrap => Err(KmsAeadEncryptionError::create(
                 "TEST_WRAP",
                 "The test provider fails to wrap",
@@ -68,6 +77,13 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
                 "TEST_UNWRAP",
                 "The test provider fails to unwrap",
             )),
+            TestKmsProvider::Stamping(since) => {
+                let nanos = u64::try_from(since.elapsed().as_nanos())
+                    .expect("a test runs for less than 584 years");
+                let mut key = encrypted_key.wrapped().to_vec();
+                key.extend(nanos.to_le_bytes());
+                Ok(DataEncryptionKey::from(SecretValue::new(key)))
+            }
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
                 encrypted_key.wrapped().to_vec(),
             ))),
@@ -76,7 +92,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
 
     async fn generate_key_material(&self, _len: usize) -> KmsAeadResult<Option<SecretValue>> {
         match self {
-            #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+            #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
             TestKmsProvider::Generating(key_material) => Ok(Some(key_material.clone())),
             _ => Ok(None),
         }
@@ -116,7 +132,7 @@ impl CountingKmsProvider {
         self.gate.send_replace(true);
     }
 
-    #[cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     pub(crate) fn wraps(&self) -> usize {
         self.wraps.load(Ordering::SeqCst)
     }
