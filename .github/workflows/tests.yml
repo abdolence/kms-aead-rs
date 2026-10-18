@@ -4,33 +4,61 @@ on:
   pull_request:
     types: [opened]
 jobs:
-  # One row per Vault Transit TLS root store and crypto provider pair, and one per TLS stack
-  # the Azure provider builds with. gcloud-sdk's TLS features select reqwest's TLS stack too:
-  # `gcp-kms-encryption` turns on native-tls and `gcloud-sdk/tls-webpki-roots` turns on rustls
-  # with aws-lc-rs, so each Azure row picks the GCP features that leave the Azure choice in
-  # effect.
+  # The provider rows: one per Vault Transit TLS root store and crypto provider pair, and one per
+  # TLS stack the Azure provider builds with. gcloud-sdk's TLS features select reqwest's TLS stack
+  # too: `gcp-kms-encryption` turns on native-tls and `gcloud-sdk/tls-webpki-roots` turns on
+  # rustls with aws-lc-rs, so each Azure row picks the GCP features that leave the Azure choice in
+  # effect. The provider builds already compile aws-lc-rs for TLS, so they run on the aws-lc
+  # backend and must not pull in ring; the ring Vault rows are the exception their names state.
+  #
+  # The backend rows build each AEAD backend alone, so that one backend never hides a missing
+  # feature gate in another, and all of them together, which runs the cross-backend contract
+  # tests and the legacy-format readers. `absent` lists the crates a row's normal dependency
+  # tree must not contain.
   build:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - name: no-vault
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring
-          - name: vault-roots-aws-lc-rs
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
-          - name: vault-webpki-aws-lc-rs
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
-          - name: vault-roots-ring
+          - name: gcp, aws on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc
+            absent: ring
+          - name: vault roots, aws-lc-rs TLS on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
+            absent: ring
+          - name: vault webpki, aws-lc-rs TLS on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
+            absent: ring
+          - name: vault roots, ring TLS on ring
             features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-ring
-          - name: vault-webpki-ring
+          - name: vault webpki, ring TLS on ring, legacy formats
             features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
-          - name: azure-native-tls
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,azure-kms-encryption-native-tls
-          - name: azure-rustls-aws-lc-rs
-            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,ring,azure-kms-encryption-tls-aws-lc-rs
-          - name: azure-rustls-no-provider
-            features: aws-kms-encryption,serde,ring,azure-kms-encryption-tls-no-provider
+          - name: azure native-tls on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-native-tls
+            absent: ring
+          - name: azure rustls aws-lc-rs on aws-lc
+            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-tls-aws-lc-rs
+            absent: ring
+          - name: azure rustls no-provider on aws-lc
+            features: aws-kms-encryption,serde,aws-lc,azure-kms-encryption-tls-no-provider
+            absent: ring
+          - name: backend ring
+            features: ring
+            absent: aws-lc-rs
+          - name: backend aws-lc
+            features: aws-lc
+            absent: ring
+          - name: backend rustcrypto, deterministic
+            features: rustcrypto,deterministic
+            absent: ring aws-lc-rs
+          - name: all backends, legacy formats
+            features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
+          - name: backend aws-lc FIPS
+            features: aws-lc-fips
+            absent: ring
+            fips: true
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rs/toolchain@v1
@@ -38,17 +66,63 @@ jobs:
           profile: minimal
           toolchain: stable
           components: rustfmt, clippy
+      # The FIPS module builds from source with CMake and Go.
+      - if: matrix.fips
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - if: matrix.fips
+        name: Check the FIPS build tools
+        run: |
+          cmake --version
+          go version
       - name: Run checks
         env:
           FEATURES: ${{ matrix.features }}
+          ABSENT: ${{ matrix.absent }}
         run: |
           cargo fmt -- --check
           if cargo tree -e normal --features "$FEATURES" -d --depth 0 | grep -q '^reqwest '; then
             echo "Two reqwest versions: the Azure TLS features would configure the one azure_core does not use"
             exit 1
           fi
+          for crate in $ABSENT; do
+            if cargo tree -e normal --features "$FEATURES" --prefix none -f '{p}' | grep -q "^$crate v"; then
+              echo "$crate is in the dependency tree of $FEATURES"
+              exit 1
+            fi
+          done
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
+      # A test name filter that matches nothing passes, so the FIPS check is looked up by name.
+      - if: matrix.fips
+        name: Check the FIPS module is in use
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: cargo test --features "$FEATURES" --lib backend::aws_lc::tests::fips_mode_is_on -- --exact | grep 'fips_mode_is_on ... ok'
+  # A provider build that names no AEAD backend must stop at the crate's own message, not at an
+  # unresolved item further down.
+  backend-guard:
+    name: provider without a backend is refused
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+      - run: |
+          if output=$(cargo check --features aws-kms-encryption 2>&1); then
+            echo "cargo check --features aws-kms-encryption built without a backend"
+            exit 1
+          fi
+          grep -F 'kms-aead needs a crypto backend for its KMS providers' <<< "$output" || { echo "$output"; exit 1; }
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
   vault-live:
     name: vault-live
     runs-on: ubuntu-latest
@@ -78,4 +152,4 @@ jobs:
           done
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
-      - run: cargo test --features hashicorp-vault-transit-kms-encryption,ring --lib -- --ignored hc_vault_transit
+      - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
