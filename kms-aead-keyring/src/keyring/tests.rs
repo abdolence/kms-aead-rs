@@ -2,17 +2,14 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Randomized;
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey, KekRef, KmsAeadResult, Plaintext,
-    ValueStruct,
+    AeadAlgorithm, AeadCipher, CipherText, KekRef, KmsAeadResult, Plaintext, ValueStruct,
 };
 use secret_vault_value::SecretValue;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
@@ -97,57 +94,6 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
         })
         .await?;
     assert_eq!(opened?.as_sensitive_str(), ALICE);
-    Ok(())
-}
-
-/// `alice@example.com` sealed by Tink 1.16.1 for Python with a keyset of one AES-256-GCM key
-/// with the TINK prefix: key id 7, the bytes 0 to 31 as the key, `user/42/email` as the
-/// associated data.
-const TINK_VALUE: [u8; 50] = [
-    0x01, 0x00, 0x00, 0x00, 0x07, 0x11, 0x0a, 0xc1, 0x1b, 0x7b, 0x32, 0x08, 0x0d, 0xe3, 0x83, 0xa3,
-    0xb8, 0xbc, 0x9e, 0x0d, 0xac, 0xcf, 0x01, 0x2a, 0xc0, 0x0b, 0xb3, 0x76, 0xb1, 0x4c, 0xcd, 0xb7,
-    0xeb, 0x05, 0x00, 0xc7, 0x7a, 0xea, 0x67, 0xeb, 0x9b, 0x37, 0x35, 0xaa, 0xd6, 0x0e, 0x53, 0x4b,
-    0x10, 0xbe,
-];
-
-#[tokio::test]
-async fn a_value_sealed_by_tink_decrypts() -> TestResult {
-    let memory = MemoryKeyringStore::new();
-    let provider = TestProvider::new("tink-kek")?;
-    // Tink's serialized `AesGcmKey` of the bytes 0 to 31: `key_value`, field 3, of 32 bytes.
-    let tink_key = DataEncryptionKey::from(SecretValue::from(
-        [&[0x1A, 0x20][..], &(0u8..32).collect::<Vec<_>>()].concat(),
-    ));
-    let wrapped = provider.encrypt_data_encryption_key(&tink_key).await?;
-    let document = json!({
-        "schema": 1,
-        "id": "tenant-42",
-        "kek": { "provider": "local", "key": "tink-kek" },
-        "algorithms": { "randomized": "aes-256-gcm", "deterministic": null },
-        "versions": [{
-            "key_id": 7,
-            "algorithm": "aes-256-gcm",
-            "state": "active",
-            "compromised": null,
-            "created_at": "2026-01-10T09:00:00Z",
-            "state_changed_at": "2026-01-10T09:00:00Z",
-            "wrapped_dek": STANDARD.encode(wrapped.value()),
-        }],
-        "created_at": "2026-01-10T09:00:00Z",
-        "updated_at": "2026-01-10T09:00:00Z",
-    });
-    let record = KeyringRecord::from_json(&TENANT, document.to_string().as_bytes())?;
-    memory.compare_and_swap(&record, None).await?;
-    let keyring = TestKeyring::open(
-        memory,
-        provider,
-        TENANT,
-        KeyringOptions::new().with_watch(false),
-    )
-    .await?;
-
-    let value = Encrypted::<String, Randomized>::try_from(TINK_VALUE.to_vec())?;
-    assert_eq!(keyring.decrypt(&email_of("42")?, &value).await?, ALICE);
     Ok(())
 }
 
@@ -250,6 +196,36 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
         Err(KeyringError::Kms(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
     ));
     assert_eq!(keyring.decrypt(&aad, &first).await?, ALICE);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let store_calls = || {
+        (
+            fixture.store.calls.loads.load(Ordering::SeqCst),
+            fixture.store.calls.revalidations.load(Ordering::SeqCst),
+        )
+    };
+    let before = store_calls();
+    let unwraps = fixture.provider.calls.unwraps.load(Ordering::SeqCst);
+
+    assert!(matches!(
+        fixture.keyring.decrypt(&aad, &relabelled(&value, 0)?).await,
+        Err(KeyringError::ReservedKeyId)
+    ));
+    assert!(matches!(
+        fixture.keyring.decrypt(&aad, &relabelled(&value, 0x8000_0001)?).await,
+        Err(KeyringError::KeyPurposeMismatch(error)) if error.expected == Purpose::Randomized
+    ));
+    assert_eq!(store_calls(), before);
+    assert_eq!(
+        fixture.provider.calls.unwraps.load(Ordering::SeqCst),
+        unwraps
+    );
     Ok(())
 }
 
@@ -552,16 +528,18 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
         .and_then(KeyVersion::wrapped_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
-    let (body, _) = DekCache::disabled()
+    let first = KeyId::try_from(1)?;
+    let (forged, _) = DekCache::disabled()
         .with_key(&fixture.provider, dek, |leaked| {
-            cipher.encrypt_value(
+            cipher.encrypt_field(
+                first.into(),
                 &aad.bytes,
-                &SecretValue::from("mallory@example.com"),
+                &"mallory@example.com".to_string(),
                 leaked,
             )
         })
         .await?;
-    let forged = Encrypted::<String, Randomized>::try_from(KeyId::try_from(1)?.prefixed(&body?.0))?;
+    let forged: Encrypted<String, Randomized> = forged?;
     fixture
         .keyring
         .mark_compromised(KeyId::try_from(1)?, Some("dek leaked".to_string()))

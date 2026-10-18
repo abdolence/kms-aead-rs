@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use kms_aead::formats::Randomized;
+use kms_aead::formats::{Randomized, TinkKeyType};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, CipherText,
-    CipherTextWithEncryptedKey, DataEncryptionKey, DeterministicAlgorithm, Encrypted,
-    EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, Plaintext, ValueStruct,
+    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, CipherTextWithEncryptedKey,
+    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KekProvider,
+    KmsAeadEncryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -200,16 +200,13 @@ where
             spans::record_sealing_version(version);
             self.check_interop(aad.interop, version)?;
             let cipher = self.cipher(version)?;
-            let plaintext = value.to_plaintext()?;
             let (sealed, outcome) = self
                 .with_cached_key(&record, version.key_id(), dek, |key| {
-                    cipher.encrypt_value(&aad.bytes, &plaintext, key)
+                    cipher.encrypt_field(version.key_id().into(), &aad.bytes, value, key)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
-            Ok(Encrypted::try_from(
-                version.key_id().prefixed(sealed?.value()),
-            )?)
+            Ok(sealed?)
         })
         .await
     }
@@ -227,7 +224,7 @@ where
     ///   any unwrap;
     /// - [`KeyringError::Kms`] with code `DECRYPT` when the value is not authentic under the
     ///   version's key and `aad`, and the provider's error when the key cannot be unwrapped;
-    /// - [`KeyringError::ValueLayout`] and [`KeyringError::KeyPurposeMismatch`], before any
+    /// - [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`], before any
     ///   store or KMS call, when the value's key id is reserved or deterministic;
     /// - [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
     pub async fn decrypt<T: Plaintext>(
@@ -235,15 +232,13 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
-        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Randomized)?;
+        let key_id = KeyId::try_from(value)?;
         spans::in_span(spans::decrypt(self.id(), key_id), async {
             let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
             let (version, dek, compromise) = self.readable(&record, key_id)?;
             self.apply_read_policy(version, compromise)?;
-            Ok(T::from_plaintext(
-                self.open_cached(&record, version, dek, aad, body).await?,
-            )?)
+            self.open_cached(&record, version, dek, aad, value).await
         })
         .await
     }
@@ -261,23 +256,23 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
-        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Randomized)?;
+        let key_id = KeyId::try_from(value)?;
         spans::in_span(spans::decrypt(self.id(), key_id), async {
             let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
             let (version, dek, compromise) = self.readable(&record, key_id)?;
-            let (plaintext, trust) = match compromise {
+            let (opened, trust) = match compromise {
                 None => (
-                    self.open_cached(&record, version, dek, aad, body).await?,
+                    self.open_cached(&record, version, dek, aad, value).await?,
                     KeyTrust::Trusted,
                 ),
                 Some(compromise) => (
-                    self.open_uncached(version, dek, aad, body).await?,
+                    self.open_uncached(version, dek, aad, value).await?,
                     KeyTrust::Compromised(compromise.clone()),
                 ),
             };
             Ok(Decrypted {
-                value: T::from_plaintext(plaintext)?,
+                value: opened,
                 key_id: version.key_id(),
                 trust,
             })
@@ -608,12 +603,11 @@ where
             Interop::None => None,
             Interop::BigQuery => {
                 let kek = self.provider.kek().provider();
-                match version.algorithm() {
-                    KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm)
-                    | KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => {
+                match bigquery_key_type(version.algorithm()) {
+                    Some(_) => {
                         (*kek != KekProvider::Gcp).then(|| InteropRequirement::Kek(kek.clone()))
                     }
-                    algorithm => Some(InteropRequirement::Algorithm(algorithm)),
+                    None => Some(InteropRequirement::Algorithm(version.algorithm())),
                 }
             }
         };
@@ -639,21 +633,20 @@ where
         }
     }
 
-    /// Opens `body`, the bytes after a value's prefix, with `aad` under `version` of `record`,
-    /// whose wrapped key is `dek`, with the key through the [`DekCache`].
-    async fn open_cached(
+    /// Opens `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with the
+    /// key through the [`DekCache`].
+    async fn open_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
-        body: &[u8],
-    ) -> KeyringResult<SecretValue> {
+        value: &Encrypted<T, Randomized>,
+    ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
-        let body = CipherText(body.to_vec());
         let (opened, outcome) = self
             .with_cached_key(record, version.key_id(), dek, |key| {
-                cipher.decrypt_value(&aad.bytes, &body, key)
+                cipher.decrypt_field(&aad.bytes, value, key)
             })
             .await?;
         spans::record_dek_cache(outcome);
@@ -716,19 +709,18 @@ where
             .ok()
     }
 
-    /// Opens `body` with a key the provider unwraps for this call only, which never enters the
+    /// Opens `value` with a key the provider unwraps for this call only, which never enters the
     /// [`DekCache`].
-    async fn open_uncached(
+    async fn open_uncached<T: Plaintext>(
         &self,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
-        body: &[u8],
-    ) -> KeyringResult<SecretValue> {
+        value: &Encrypted<T, Randomized>,
+    ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
-        let body = CipherText(body.to_vec());
         Ok(self
-            .with_uncached_key(dek, |key| cipher.decrypt_value(&aad.bytes, &body, key))
+            .with_uncached_key(dek, |key| cipher.decrypt_field(&aad.bytes, value, key))
             .await??)
     }
 
@@ -829,6 +821,18 @@ impl NewVersion {
             algorithm,
             dek,
         })
+    }
+}
+
+/// The Tink key type BigQuery reads values of `algorithm` with, or `None` for an algorithm it
+/// does not read: BigQuery reads AES-256-GCM and AES-SIV keys only.
+fn bigquery_key_type(algorithm: KeyAlgorithm) -> Option<TinkKeyType> {
+    match algorithm {
+        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm) => Some(TinkKeyType::AesGcm),
+        KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => Some(TinkKeyType::AesSiv),
+        KeyAlgorithm::Randomized(_) | KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Beacon(_) => {
+            None
+        }
     }
 }
 

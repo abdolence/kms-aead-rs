@@ -50,7 +50,7 @@ where
             let (beacon, outcome) = self
                 .with_cached_key(&record, version.key_id(), dek, |key| {
                     mac.compute(
-                        version.key_id().as_u32(),
+                        version.key_id().into(),
                         &context,
                         field.beacon_bits(),
                         value,
@@ -98,7 +98,7 @@ where
                 let mac = self.beacon_mac(version)?;
                 let compute = |key: &_| {
                     mac.compute(
-                        version.key_id().as_u32(),
+                        version.key_id().into(),
                         &context,
                         field.beacon_bits(),
                         value,
@@ -188,7 +188,7 @@ mod tests {
         let (expected, _) = DekCache::disabled()
             .with_key(&provider, dek, |key| {
                 mac.compute(
-                    first.as_u32(),
+                    first.into(),
                     b"user/email",
                     BeaconBits::DEFAULT,
                     &alice,

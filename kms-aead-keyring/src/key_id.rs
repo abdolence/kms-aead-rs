@@ -3,13 +3,12 @@
 
 use std::fmt::{Display, Formatter};
 
-use kms_aead::formats::{Deterministic, Randomized, TinkOutputPrefix};
-use kms_aead::{Beacon, Encrypted, ValueStruct};
+use kms_aead::formats::{Deterministic, Randomized, TinkKeyId};
+use kms_aead::{Beacon, Encrypted};
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{
     Identifier, IdentifierRule, KeyPurposeMismatchError, KeyringError, KeyringResult,
-    ValueLayoutError,
 };
 
 /// What a key version is for. A key of one purpose never serves another.
@@ -92,31 +91,22 @@ impl KeyId {
         self.0
     }
 
-    /// The bytes of a value under this version: Tink's output prefix of this id, then `body`.
-    pub(crate) fn prefixed(self, body: &[u8]) -> Vec<u8> {
-        [&TinkOutputPrefix::new(self.0).to_bytes()[..], body].concat()
-    }
-
-    /// The key id of `value`, a value of `purpose` in Tink's TINK-prefixed layout, and the
-    /// bytes after the prefix.
+    /// The id `key_id` names when it is one of `purpose`: the check of a value's or beacon's
+    /// prefix before the keyring reads its version.
     ///
     /// # Errors
     ///
-    /// [`KeyringError::ValueLayout`] when `value` does not start with the prefix or its key id
-    /// is reserved, and [`KeyringError::KeyPurposeMismatch`] when the key id is of another
-    /// purpose.
-    pub(crate) fn split_value(value: &[u8], purpose: Purpose) -> KeyringResult<(Self, &[u8])> {
-        let (prefix, body) = TinkOutputPrefix::split(value)
-            .ok_or(KeyringError::ValueLayout(ValueLayoutError::NoTinkPrefix))?;
-        let key_id = Self::try_from(prefix.key_id())
-            .map_err(|_| KeyringError::ValueLayout(ValueLayoutError::ReservedKeyId))?;
+    /// [`KeyringError::ReservedKeyId`] when the id is reserved, and
+    /// [`KeyringError::KeyPurposeMismatch`] when it is of another purpose.
+    fn of_purpose(key_id: TinkKeyId, purpose: Purpose) -> KeyringResult<Self> {
+        let key_id = Self::try_from(key_id)?;
         if key_id.purpose() != purpose {
             return Err(KeyringError::KeyPurposeMismatch(KeyPurposeMismatchError {
                 expected: purpose,
                 key_id,
             }));
         }
-        Ok((key_id, body))
+        Ok(key_id)
     }
 }
 
@@ -125,13 +115,13 @@ impl KeyId {
 ///
 /// # Errors
 ///
-/// [`KeyringError::ValueLayout`] when the key id is reserved, and
+/// [`KeyringError::ReservedKeyId`] when the key id is reserved, and
 /// [`KeyringError::KeyPurposeMismatch`] when it is not a randomized key id.
 impl<T> TryFrom<&Encrypted<T, Randomized>> for KeyId {
     type Error = KeyringError;
 
     fn try_from(value: &Encrypted<T, Randomized>) -> KeyringResult<Self> {
-        Self::split_value(value.value(), Purpose::Randomized).map(|(key_id, _)| key_id)
+        Self::of_purpose(value.key_id(), Purpose::Randomized)
     }
 }
 
@@ -144,7 +134,7 @@ impl<T> TryFrom<&Encrypted<T, Deterministic>> for KeyId {
     type Error = KeyringError;
 
     fn try_from(value: &Encrypted<T, Deterministic>) -> KeyringResult<Self> {
-        Self::split_value(value.value(), Purpose::Deterministic).map(|(key_id, _)| key_id)
+        Self::of_purpose(value.key_id(), Purpose::Deterministic)
     }
 }
 
@@ -157,15 +147,7 @@ impl<T> TryFrom<&Beacon<T>> for KeyId {
     type Error = KeyringError;
 
     fn try_from(beacon: &Beacon<T>) -> KeyringResult<Self> {
-        let key_id = Self::try_from(beacon.key_id())
-            .map_err(|_| KeyringError::ValueLayout(ValueLayoutError::ReservedKeyId))?;
-        if key_id.purpose() != Purpose::Beacon {
-            return Err(KeyringError::KeyPurposeMismatch(KeyPurposeMismatchError {
-                expected: Purpose::Beacon,
-                key_id,
-            }));
-        }
-        Ok(key_id)
+        Self::of_purpose(beacon.key_id(), Purpose::Beacon)
     }
 }
 
@@ -185,6 +167,28 @@ impl TryFrom<u32> for KeyId {
             ));
         }
         Ok(Self(id))
+    }
+}
+
+/// The id in a value's prefix, read by the keyring's rules, as kms-aead's calls return it.
+///
+/// # Errors
+///
+/// [`KeyringError::ReservedKeyId`] for an id whose ordinal is zero, or that sets both purpose
+/// bits: no version has it.
+impl TryFrom<TinkKeyId> for KeyId {
+    type Error = KeyringError;
+
+    fn try_from(key_id: TinkKeyId) -> KeyringResult<Self> {
+        Self::try_from(key_id.as_u32()).map_err(|_| KeyringError::ReservedKeyId)
+    }
+}
+
+/// The id kms-aead writes into the prefix of the version's values and beacons, and into a
+/// keyset.
+impl From<KeyId> for TinkKeyId {
+    fn from(key_id: KeyId) -> Self {
+        TinkKeyId::new(key_id.0)
     }
 }
 

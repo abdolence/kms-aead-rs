@@ -69,8 +69,9 @@ pub enum KeyringError {
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
     InvalidTransition(InvalidTransitionError),
-    /// Bytes that are not a keyring value.
-    ValueLayout(ValueLayoutError),
+    /// A value or beacon whose key id is reserved: its ordinal is zero, or it sets both purpose
+    /// bits, so no version has it.
+    ReservedKeyId,
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
     /// A field's [`Interop`] requirement that sealing would break, checked before sealing.
@@ -106,7 +107,7 @@ impl KeyringError {
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
-            KeyringError::ValueLayout(_) => "VALUE_LAYOUT",
+            KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
@@ -252,7 +253,7 @@ impl Display for KeyringError {
                 "The key version {} of the keyring {} is {}: {} does not apply",
                 error.key_id, error.keyring, error.from, error.transition
             ),
-            KeyringError::ValueLayout(error) => write!(f, "Not a keyring value: {error}"),
+            KeyringError::ReservedKeyId => f.write_str("The key id of the value is reserved"),
             KeyringError::DeterministicDisabled => {
                 f.write_str("Creating a deterministic key version needs the deterministic feature")
             }
@@ -648,25 +649,6 @@ pub struct InvalidTransitionError {
     pub from: KeyVersionState,
     /// The operation.
     pub transition: Transition,
-}
-
-/// See [`KeyringError::ValueLayout`]. No variant carries a byte of the value or its length.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ValueLayoutError {
-    /// The value does not start with Tink's output prefix, `[0x01][key id: u32 BE]`.
-    NoTinkPrefix,
-    /// The key id's ordinal is zero, or it sets both purpose bits: it names no version.
-    ReservedKeyId,
-}
-
-impl Display for ValueLayoutError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ValueLayoutError::NoTinkPrefix => f.write_str("it does not start with Tink's prefix"),
-            ValueLayoutError::ReservedKeyId => f.write_str("its key id is reserved"),
-        }
-    }
 }
 
 /// See [`KeyringError::Interop`].

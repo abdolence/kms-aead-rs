@@ -127,12 +127,12 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .await?;
     let randomized_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
-        randomized_keyset.kms_resource_name(),
+        randomized_keyset.key_uri(),
         randomized_keyset.to_sql_literal()
     );
     let deterministic_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
-        deterministic_keyset.kms_resource_name(),
+        deterministic_keyset.key_uri(),
         deterministic_keyset.to_sql_literal()
     );
 

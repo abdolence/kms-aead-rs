@@ -5,13 +5,15 @@
 A keyring value is kms-aead's `Encrypted<T, Randomized>`, re-exported by the keyring: the bytes
 to store, which decrypt to a `T`. `T` is any type that implements `Plaintext`, usually an
 application newtype such as `Email`, so a field names what it holds. Its layout is in
-[Typed fields](../formats.md#typed-fields).
+[Typed fields](../formats.md#typed-fields). The keyring seals and opens it with kms-aead's
+`AeadCipher::encrypt_field` and `decrypt_field` under the key of the version, the calls an
+application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes itself.
 
 - `value()` and `into_value()`, of `kms_aead::ValueStruct`, return the bytes;
 - `KeyId::try_from(&value)` returns the version that sealed it;
 - `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
   when the value is made, and fail on bytes that are no keyring value before any decrypt;
-- `decrypt` checks the key id first, and fails with `ValueLayout` on a reserved id and with
+- `decrypt` checks the key id first, and fails with `ReservedKeyId` on a reserved id and with
   `KeyPurposeMismatch` on a deterministic one, before any store or KMS call;
 - `Debug` shows the length only. A randomized value has no `==`: two values of one plaintext
   differ.

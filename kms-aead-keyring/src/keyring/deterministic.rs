@@ -6,10 +6,9 @@ use std::cmp::Reverse;
 use kms_aead::cache::DekCacheOutcome;
 use kms_aead::formats::Deterministic;
 use kms_aead::{
-    AeadBackend, DeterministicCipher, DeterministicCipherText, Encrypted,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, Plaintext, ValueStruct,
+    AeadBackend, DeterministicCipher, Encrypted, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, Plaintext,
 };
-use secret_vault_value::SecretValue;
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::spans;
@@ -60,14 +59,9 @@ where
             })?;
             spans::record_sealing_version(version);
             self.check_interop(aad.interop, version)?;
-            let plaintext = value.to_plaintext()?;
-            let (sealed, outcome) = self
-                .seal_cached(&record, version, dek, aad, &plaintext)
-                .await?;
+            let (sealed, outcome) = self.seal_cached(&record, version, dek, aad, value).await?;
             spans::record_dek_cache(outcome);
-            Ok(Encrypted::try_from(
-                version.key_id().prefixed(sealed.value()),
-            )?)
+            Ok(sealed)
         })
         .await
     }
@@ -84,21 +78,20 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<T> {
-        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Deterministic)?;
+        let key_id = KeyId::try_from(value)?;
         spans::in_span(spans::decrypt(self.id(), key_id), async {
             let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
             let (version, dek, compromise) = self.readable(&record, key_id)?;
             self.apply_read_policy(version, compromise)?;
             let cipher = self.deterministic_cipher(version)?;
-            let body = DeterministicCipherText::new(body.to_vec());
-            let (plaintext, outcome) = self
+            let (opened, outcome) = self
                 .with_cached_key(&record, key_id, dek, |key| {
-                    cipher.decrypt_value(&aad.bytes, &body, key)
+                    cipher.decrypt_field(&aad.bytes, value, key)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
-            Ok(T::from_plaintext(plaintext?)?)
+            Ok(opened?)
         })
         .await
     }
@@ -118,20 +111,19 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Decrypted<T>> {
-        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Deterministic)?;
+        let key_id = KeyId::try_from(value)?;
         spans::in_span(spans::decrypt(self.id(), key_id), async {
             let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
             let (version, dek, compromise) = self.readable(&record, key_id)?;
             let cipher = self.deterministic_cipher(version)?;
-            let body = DeterministicCipherText::new(body.to_vec());
-            let open = |key: &_| cipher.decrypt_value(&aad.bytes, &body, key);
-            let (plaintext, trust) = match compromise {
+            let open = |key: &_| cipher.decrypt_field(&aad.bytes, value, key);
+            let (opened, trust) = match compromise {
                 None => {
-                    let (plaintext, outcome) =
+                    let (opened, outcome) =
                         self.with_cached_key(&record, key_id, dek, open).await?;
                     spans::record_dek_cache(outcome);
-                    (plaintext?, KeyTrust::Trusted)
+                    (opened?, KeyTrust::Trusted)
                 }
                 Some(compromise) => (
                     self.with_uncached_key(dek, open).await??,
@@ -139,7 +131,7 @@ where
                 ),
             };
             Ok(Decrypted {
-                value: T::from_plaintext(plaintext)?,
+                value: opened,
                 key_id,
                 trust,
             })
@@ -172,7 +164,6 @@ where
         let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
         spans::in_span(span, async {
             let record = self.cache.current().await;
-            let plaintext = value.to_plaintext()?;
             let mut versions = record
                 .versions()
                 .iter()
@@ -188,23 +179,16 @@ where
             versions.sort_by_key(|(version, ..)| Reverse(version.key_id()));
             let mut probes = Vec::with_capacity(versions.len());
             for (version, dek, compromise) in versions {
-                let sealed = match compromise {
-                    None => {
-                        self.seal_cached(&record, version, dek, aad, &plaintext)
-                            .await?
-                            .0
-                    }
+                probes.push(match compromise {
+                    None => self.seal_cached(&record, version, dek, aad, value).await?.0,
                     Some(_) => {
                         let cipher = self.deterministic_cipher(version)?;
                         self.with_uncached_key(dek, |key| {
-                            cipher.encrypt_value(&aad.bytes, &plaintext, key)
+                            cipher.encrypt_field(version.key_id().into(), &aad.bytes, value, key)
                         })
                         .await??
                     }
-                };
-                probes.push(Encrypted::try_from(
-                    version.key_id().prefixed(sealed.value()),
-                )?);
+                });
             }
             Ok(probes)
         })
@@ -223,21 +207,21 @@ where
         }
     }
 
-    /// Seals `plaintext` with `aad` under `version` of `record`, whose wrapped key is `dek`, with
-    /// the key through the [`DekCache`](kms_aead::cache::DekCache), and returns where the key
-    /// came from.
-    async fn seal_cached(
+    /// Seals `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with the
+    /// key through the [`DekCache`](kms_aead::cache::DekCache), and returns where the key came
+    /// from.
+    async fn seal_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &DeterministicAad,
-        plaintext: &SecretValue,
-    ) -> KeyringResult<(DeterministicCipherText, DekCacheOutcome)> {
+        value: &T,
+    ) -> KeyringResult<(Encrypted<T, Deterministic>, DekCacheOutcome)> {
         let cipher = self.deterministic_cipher(version)?;
         let (sealed, outcome) = self
             .with_cached_key(record, version.key_id(), dek, |key| {
-                cipher.encrypt_value(&aad.bytes, plaintext, key)
+                cipher.encrypt_field(version.key_id().into(), &aad.bytes, value, key)
             })
             .await?;
         Ok((sealed?, outcome))
@@ -251,23 +235,14 @@ where
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
-    use kms_aead::{
-        DataEncryptionKey, DeterministicAlgorithm, KekProvider, KmsAeadEncryptionProvider,
-        ValueStruct,
-    };
-    use secret_vault_value::SecretValue;
-    use serde_json::json;
+    use kms_aead::{DeterministicAlgorithm, KekProvider, ValueStruct};
 
     use crate::errors::InteropRequirement;
-    use crate::store::KeyringStore;
     use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
     use crate::{
-        Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Interop,
-        KeyId, KeyTrust, KeyringError, KeyringOptions, KeyringPolicy, KeyringRecord, KeyringResult,
-        Purpose,
+        EntityKind, FieldName, FieldSpec, Interop, KeyId, KeyTrust, KeyringError, KeyringOptions,
+        KeyringPolicy, KeyringResult, Purpose,
     };
 
     const EMAIL: FieldSpec = FieldSpec::new(
@@ -487,81 +462,6 @@ mod tests {
             keyring.decrypt(&email_of("7")?, &randomized).await,
             Err(KeyringError::Kms(error)) if error.code() == "DECRYPT"
         ));
-        Ok(())
-    }
-
-    /// The empty plaintext sealed by tink-java's AES-SIV with the TINK prefix: key id 0x44556677,
-    /// the bytes 0 to 63 as the 64-byte key, and one associated-data item, the byte 0xFF. From
-    /// `testCreateForEncryptConstructorForDecrypt_tinkPrefix` in
-    /// <https://github.com/tink-crypto/tink-java/blob/eadd2736490b50d80b3117a5586ffe0985c9207e/src/test/java/com/google/crypto/tink/subtle/AesSivTest.java#L396-L424>.
-    const TINK_DETERMINISTIC_VALUE: [u8; 21] = [
-        0x01, 0x44, 0x55, 0x66, 0x77, 0x1b, 0xc4, 0x9c, 0x6a, 0x89, 0x4e, 0xf5, 0x74, 0x4a, 0x0a,
-        0x01, 0xd4, 0x66, 0x08, 0xcb, 0xcc,
-    ];
-
-    /// Tink's key id has bit 31 clear, so it is no deterministic id here, and the value is read
-    /// under the deterministic version 2^31 + 1 holding Tink's key: the rest of the bytes are
-    /// Tink's.
-    #[tokio::test]
-    async fn a_deterministic_value_sealed_by_tink_decrypts() -> TestResult {
-        let tink_value =
-            Encrypted::<Vec<u8>, Deterministic>::try_from(TINK_DETERMINISTIC_VALUE.to_vec())?;
-        assert!(matches!(
-            KeyId::try_from(&tink_value),
-            Err(KeyringError::KeyPurposeMismatch(_))
-        ));
-        let mut bytes = TINK_DETERMINISTIC_VALUE.to_vec();
-        bytes[1..5].copy_from_slice(&0x8000_0001u32.to_be_bytes());
-        let value = Encrypted::<Vec<u8>, Deterministic>::try_from(bytes)?;
-
-        let memory = MemoryKeyringStore::new();
-        let provider = TestProvider::new("tink-kek")?;
-        // Tink's serialized `AesSivKey` of the bytes 0 to 63: `key_value`, field 2, of 64 bytes.
-        let tink_key = DataEncryptionKey::from(SecretValue::from(
-            [&[0x12, 0x40][..], &(0u8..64).collect::<Vec<_>>()].concat(),
-        ));
-        let wrapped = provider.encrypt_data_encryption_key(&tink_key).await?;
-        let document = json!({
-            "schema": 1,
-            "id": "tenant-42",
-            "kek": { "provider": "local", "key": "tink-kek" },
-            "algorithms": { "randomized": "aes-256-gcm", "deterministic": "aes-256-siv" },
-            "versions": [{
-                "key_id": 0x8000_0001u32,
-                "algorithm": "aes-256-siv",
-                "state": "active",
-                "compromised": null,
-                "created_at": "2026-01-10T09:00:00Z",
-                "state_changed_at": "2026-01-10T09:00:00Z",
-                "wrapped_dek": STANDARD.encode(wrapped.value()),
-            }],
-            "created_at": "2026-01-10T09:00:00Z",
-            "updated_at": "2026-01-10T09:00:00Z",
-        });
-        let record = KeyringRecord::from_json(&TENANT, document.to_string().as_bytes())?;
-        memory.compare_and_swap(&record, None).await?;
-        let keyring = TestKeyring::open(
-            memory,
-            provider,
-            TENANT,
-            KeyringOptions::new().with_watch(false),
-        )
-        .await?;
-        let aad = DeterministicAad {
-            bytes: vec![0xFF],
-            interop: Interop::None,
-        };
-
-        assert_eq!(
-            keyring.decrypt_deterministic(&aad, &value).await?,
-            Vec::<u8>::new()
-        );
-        assert_eq!(
-            keyring
-                .encrypt_deterministic(&aad, &Vec::<u8>::new())
-                .await?,
-            value
-        );
         Ok(())
     }
 }

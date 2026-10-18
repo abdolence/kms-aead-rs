@@ -116,7 +116,9 @@ kms-aead's GCP provider.
 
 BigQuery reads keyring values through `KEYS.KEYSET_CHAIN`, which takes a Tink keyset wrapped by a
 Cloud KMS key. `export_bigquery_keyset` builds that keyset from the keyring's versions, on a
-keyring whose provider is `GcpKmsProvider`:
+keyring whose provider is `GcpKmsProvider`. The bytes it returns are the Cloud KMS ciphertext of
+Tink's serialized `Keyset` message, wrapped with no associated data, without the `EncryptedKeyset`
+message Tink's own keyset readers take:
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
@@ -147,7 +149,7 @@ let keyset: WrappedKeyset = keyring
     .await?;
 let chain = format!(
     "KEYS.KEYSET_CHAIN('{}', {})",
-    keyset.kms_resource_name(),
+    keyset.key_uri(),
     keyset.to_sql_literal()
 );
 # let _ = chain;
@@ -175,8 +177,8 @@ The `WrappedKeyset` it returns:
 
 - `as_bytes()`: the wrapped keyset, as a `BYTES` column or query parameter holds it;
 - `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`;
-- `kms_resource_name()`: `gcp-kms://projects/…/cryptoKeys/…`, the first argument of
-  `KEYS.KEYSET_CHAIN`;
+- `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
+  first argument of `KEYS.KEYSET_CHAIN`;
 - `key_ids()`: the versions inside, in ascending order.
 
 The export selects its versions from the record in the store, read at the time of the call, not

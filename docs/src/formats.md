@@ -211,10 +211,10 @@ So the ids of each purpose are:
 - beacon: `1073741825`, `1073741826`, ….
 
 An id whose ordinal is 0, such as `0`, `2^30` and `2^31`, and an id with both high bits set are
-reserved: a value that carries one fails with `ValueLayout`. A value whose id is of another purpose
-than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. Ids are
-never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so a
-SQL column holding one is a `BIGINT`.
+reserved: a value that carries one fails with `ReservedKeyId`. A value whose id is of another
+purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. Ids
+are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
+a SQL column holding one is a `BIGINT`.
 
 ## Keyring records
 
