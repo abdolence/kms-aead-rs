@@ -153,11 +153,12 @@ where
             for (key_id, key_type, dek) in &versions {
                 // Uncached, so that the export leaves no key in the cache of a process that
                 // serves no reads under it.
-                DekCache::disabled()
+                let (added, _) = DekCache::disabled()
                     .with_key(&self.provider, dek, |key| {
                         keyset.add_key(key_id.as_u32(), *key_type, key)
                     })
                     .await?;
+                added?;
             }
             let plaintext = DataEncryptionKey::from(keyset.to_bytes());
             // Zeroizes the keys inside the keyset before the KMS round trip, so that the
@@ -341,24 +342,24 @@ mod tests {
     }
 
     #[test]
-    fn keysets_are_the_ones_tinkey_writes() {
+    fn keysets_are_the_ones_tinkey_writes() -> TestResult {
         let mut aes_gcm = TinkKeyset::new(TINKEY_AES_GCM_PRIMARY);
         aes_gcm.add_key(
             TINKEY_AES_GCM_PRIMARY,
             TinkKeyType::AesGcm,
             &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_PRIMARY_KEY.to_vec())),
-        );
+        )?;
         aes_gcm.add_key(
             TINKEY_AES_GCM_SECOND,
             TinkKeyType::AesGcm,
             &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_SECOND_KEY.to_vec())),
-        );
+        )?;
         let mut aes_siv = TinkKeyset::new(TINKEY_AES_SIV);
         aes_siv.add_key(
             TINKEY_AES_SIV,
             TinkKeyType::AesSiv,
             &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_SIV_KEY.to_vec())),
-        );
+        )?;
 
         assert_eq!(
             *aes_gcm.to_bytes().ref_sensitive_value(),
@@ -368,6 +369,7 @@ mod tests {
             *aes_siv.to_bytes().ref_sensitive_value(),
             TINKEY_AES_SIV_KEYSET
         );
+        Ok(())
     }
 
     /// The keyset of `keyring`'s randomized versions `key_ids` with `primary` as the primary, as
@@ -385,11 +387,12 @@ mod tests {
                 .version(KeyId::try_from(*key_id)?)
                 .and_then(KeyVersion::wrapped_dek)
                 .ok_or("the version holds no key")?;
-            DekCache::disabled()
+            let (added, _) = DekCache::disabled()
                 .with_key(provider, dek, |key| {
                     keyset.add_key(*key_id, TinkKeyType::AesGcm, key)
                 })
                 .await?;
+            added?;
         }
         Ok(keyset.to_bytes())
     }
