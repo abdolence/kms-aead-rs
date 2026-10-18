@@ -30,13 +30,13 @@ pub use rust_crypto::RustCrypto;
 ))]
 mod contract;
 
-/// The crypto library that runs the [`AeadAlgorithm`]s: [`Ring`], [`AwsLc`] or [`RustCrypto`],
-/// each added by its feature. A build may enable any number of them, and the backend is the `B`
-/// of [`AeadCipher<B>`](crate::AeadCipher), [`DeterministicCipher<B>`](crate::DeterministicCipher),
+/// The crypto library that runs the [`AeadAlgorithm`]s: `Ring`, `AwsLc` or `RustCrypto`, each
+/// added by its feature. A build may enable any number of them, and the backend is the `B` of
+/// [`AeadCipher<B>`](crate::AeadCipher), `DeterministicCipher<B>`,
 /// [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope) and
 /// [`LocalKmsProvider<B>`](crate::providers::LocalKmsProvider).
 ///
-/// Sealed: only the backend types of this crate implement it. It has no methods, only its
+/// Sealed: only the backend types of kms-aead implement it. It has no methods, only its
 /// [`NAME`](Self::NAME), so code generic over the backend names this trait and nothing else:
 ///
 /// ```rust
