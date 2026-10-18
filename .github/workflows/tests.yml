@@ -287,3 +287,57 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # The keyring without a store, one row per AEAD backend alone so that one backend never hides a
+  # missing feature gate in another, plus the optional encodings. The legacy-formats row is the
+  # only keyring build that parses the records kms-aead 0.28.1 wrote.
+  keyring-core:
+    name: keyring ${{ matrix.features }}
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ring
+          - aws-lc
+          - rustcrypto
+          - ring,deterministic,serde-json
+          - ring,serde,legacy-formats,deterministic
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run checks
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+          cargo test -p kms-aead-keyring --features "$FEATURES"
+  # The keyring's docs.rs feature set, every store at once. The tests that need a store's service
+  # stay ignored here; the store jobs above run them. The store clients belong to the keyring, so
+  # kms-aead's own tree, with its docs.rs feature set, must not contain them. gcloud-sdk and prost
+  # are there legitimately, for the GCP provider.
+  keyring-all:
+    name: keyring docs.rs feature set
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      FEATURES: ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
+      ABSENT: firestore sqlx
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Keep the store clients out of kms-aead
+        run: |
+          for crate in $ABSENT; do
+            if cargo tree -p kms-aead -e normal --features "$KMS_AEAD_FEATURES" --prefix none -f '{p}' | grep -q "^$crate v"; then
+              echo "$crate is in kms-aead's dependency tree"
+              exit 1
+            fi
+          done
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES"
