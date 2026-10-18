@@ -412,8 +412,6 @@ pub struct RecordInvalidError {
 pub enum RecordInvalidReason {
     /// The stored document is larger than 1 MiB.
     TooLarge,
-    /// The record holds more than 10,000 versions.
-    TooManyVersions,
     /// The document is not the JSON of a keyring record.
     Malformed(MalformedRecord),
     /// The record's schema is not 1, the only one this release reads.
@@ -451,9 +449,6 @@ impl Display for RecordInvalidReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             RecordInvalidReason::TooLarge => f.write_str("the document is larger than 1 MiB"),
-            RecordInvalidReason::TooManyVersions => {
-                f.write_str("the record holds more than 10000 versions")
-            }
             RecordInvalidReason::Malformed(malformed) => {
                 f.write_str("the document is not a keyring record")?;
                 if let Some(line) = malformed.line {

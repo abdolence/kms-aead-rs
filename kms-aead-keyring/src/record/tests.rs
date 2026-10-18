@@ -2,7 +2,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use serde_json::{json, Value};
 
-use super::stored::StoredRecord;
 use super::*;
 use crate::errors::RecordInvalidError;
 use crate::testing::{TestResult, TENANT};
@@ -258,27 +257,6 @@ fn a_record_over_the_size_cap_is_invalid() -> TestResult {
     ));
     document.pop();
     KeyringRecord::from_json(&TENANT, &document)?;
-    Ok(())
-}
-
-#[test]
-fn a_record_over_the_version_cap_is_invalid() -> TestResult {
-    let destroyed = version(1, "destroyed", false)?;
-    let versions = (1..=10_001)
-        .map(|id| {
-            let mut version = destroyed.clone();
-            version["key_id"] = json!(id);
-            version
-        })
-        .collect();
-    let stored: StoredRecord = serde_json::from_value(document(versions))?;
-    assert!(matches!(
-        KeyringRecord::from_stored(&TENANT, stored),
-        Err(KeyringError::RecordInvalid(RecordInvalidError {
-            reason: RecordInvalidReason::TooManyVersions,
-            ..
-        }))
-    ));
     Ok(())
 }
 

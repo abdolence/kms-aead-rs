@@ -61,9 +61,8 @@ keyring opened with the wrong provider, with `KekMismatch`, and is no security c
 writer of the record sets it as freely as any other field. What refuses a DEK wrapped under
 another KEK is the KMS, since every unwrap names the configured KEK.
 
-A record holds at most 1 MiB of JSON and 10,000 versions. At about 400 bytes per version the size
-cap is the one that binds, at about 2,600 versions. Every read checks the document and its
-invariants:
+A record holds at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version. Every
+read checks the document and its invariants:
 
 - at most one active version per purpose, and never a compromised one;
 - a wrapped DEK on every version but the destroyed ones;
