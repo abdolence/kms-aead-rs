@@ -38,9 +38,10 @@
 //!    its keyring marker;
 //! 5. once that query returns nothing, the read path drops its envelope branch.
 //!
-//! Values written by kms-aead 0.28.1 or earlier read through the same call with the
-//! `legacy-formats` feature. The layout of a value is always the marker's, never guessed from
-//! its bytes.
+//! Values written by kms-aead 0.29 or earlier are in layouts this call does not read: they are
+//! upgraded in place first, with kms-aead's `legacy-formats` feature and
+//! `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD. The layout of a value
+//! is always the marker's, never guessed from its bytes.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -342,10 +343,8 @@ mod tests {
 
         use super::*;
         use crate::store::MemoryKeyringStore;
-        use crate::testing::{email_of, TestProvider, TEST_BACKEND};
-        use crate::{
-            EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringOptions, KeyringPolicy,
-        };
+        use crate::testing::{email_of, TestBackend, TestKeyring, TestProvider};
+        use crate::{EntityId, EntityKind, FieldName, FieldSpec, KeyringOptions, KeyringPolicy};
 
         const ALICE: &str = "alice@example.com";
         const ALICE_PHONE: &str = "+44 20 7946 0000";
@@ -356,13 +355,10 @@ mod tests {
         /// The AAD an application gave its envelope values.
         const ENVELOPE_AAD: &[u8] = b"users:42:email";
 
-        async fn keyring(
-            provider: TestProvider,
-        ) -> KeyringResult<Keyring<MemoryKeyringStore, TestProvider>> {
-            Keyring::create(
+        async fn keyring(provider: TestProvider) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
+            TestKeyring::create(
                 MemoryKeyringStore::new(),
                 provider,
-                TEST_BACKEND,
                 TENANT,
                 KeyringPolicy::new(),
                 KeyringOptions::new().with_watch(false),
@@ -376,7 +372,9 @@ mod tests {
             let email_aad = email_of("42")?;
             let phone_aad = PHONE.aad(&EntityId::try_from("42")?);
             let email = keyring.encrypt(&email_aad, &ALICE.to_string()).await?;
-            keyring.mark_compromised(email.key_id(), None).await?;
+            keyring
+                .mark_compromised(KeyId::try_from(&email)?, None)
+                .await?;
             let phone = keyring
                 .encrypt(&phone_aad, &ALICE_PHONE.to_string())
                 .await?;
@@ -411,9 +409,8 @@ mod tests {
         #[tokio::test]
         async fn a_store_less_value_opens_through_the_keyring() -> TestResult {
             let provider = TestProvider::new("tenant-42-kek")?;
-            let envelope = KmsAeadEnvelope::with_options(
+            let envelope = KmsAeadEnvelope::<TestProvider, TestBackend>::with_options(
                 provider.clone(),
-                TEST_BACKEND,
                 KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
             )?;
             let values = [
@@ -428,7 +425,7 @@ mod tests {
 
             for value in &values {
                 let opened = keyring
-                    .decrypt_envelope_value(ENVELOPE_AAD, value, AeadAlgorithm::ChaCha20Poly1305)
+                    .decrypt_envelope_value(ENVELOPE_AAD, value, AeadAlgorithm::Aes256Gcm)
                     .await?;
                 assert_eq!(opened.as_sensitive_str(), ALICE);
             }
@@ -437,23 +434,11 @@ mod tests {
 
         #[tokio::test]
         async fn an_envelope_value_around_a_key_version_key_is_refused() -> TestResult {
-            use kms_aead::{
-                AeadCipher, CipherTextWithEncryptedKey, EncryptedDataEncryptionKey,
-                KmsAeadEncryptionProvider, KmsKeyVersion,
-            };
+            use kms_aead::cache::DekCache;
+            use kms_aead::{AeadCipher, CipherTextWithEncryptedKey};
 
             let provider = TestProvider::new("tenant-42-kek")?;
-            let keyring = Keyring::create(
-                MemoryKeyringStore::new(),
-                provider.clone(),
-                TEST_BACKEND,
-                TENANT,
-                KeyringPolicy::new(),
-                KeyringOptions::new()
-                    .with_watch(false)
-                    .with_bind_keys(false),
-            )
-            .await?;
+            let keyring = keyring(provider.clone()).await?;
             let compromised = KeyId::try_from(1)?;
             keyring.mark_compromised(compromised, None).await?;
             let record = keyring.record();
@@ -461,66 +446,32 @@ mod tests {
                 .version(compromised)
                 .and_then(crate::KeyVersion::wrapped_dek)
                 .ok_or("version 1 holds no key")?;
-            let leaked = provider.decrypt_data_encryption_key(wrapped, None).await?;
-            let forged = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::ChaCha20Poly1305)?
-                .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE), &leaked)?;
-            let relabelled = EncryptedDataEncryptionKey::new(
-                wrapped.wrapped().to_vec(),
-                Some(KmsKeyVersion::try_from("7".to_string())?),
-            );
+            let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
+            let (forged, _) = DekCache::disabled()
+                .with_key(&provider, wrapped, |leaked| {
+                    cipher.encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE), leaked)
+                })
+                .await?;
+            let value = CipherTextWithEncryptedKey::join(&forged?, wrapped)?;
 
-            for dek in [wrapped, &relabelled] {
-                let value = CipherTextWithEncryptedKey::join(&forged, dek)?;
-                let result = keyring
-                    .decrypt_envelope_value(ENVELOPE_AAD, &value, AeadAlgorithm::ChaCha20Poly1305)
-                    .await;
-                assert!(matches!(
-                    &result,
-                    Err(KeyringError::EnvelopeKeyOfKeyVersion(error)) if error.key_id == compromised
-                ));
-            }
+            let result = keyring
+                .decrypt_envelope_value(ENVELOPE_AAD, &value, AeadAlgorithm::Aes256Gcm)
+                .await;
+            assert!(matches!(
+                &result,
+                Err(KeyringError::EnvelopeKeyOfKeyVersion(error)) if error.key_id == compromised
+            ));
 
-            let envelope = KmsAeadEnvelope::with_options(
+            let envelope = KmsAeadEnvelope::<TestProvider, TestBackend>::with_options(
                 provider,
-                TEST_BACKEND,
                 KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
             )?;
             let genuine = envelope
                 .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE))
                 .await?;
             let opened = keyring
-                .decrypt_envelope_value(ENVELOPE_AAD, &genuine, AeadAlgorithm::ChaCha20Poly1305)
+                .decrypt_envelope_value(ENVELOPE_AAD, &genuine, AeadAlgorithm::Aes256Gcm)
                 .await?;
-            assert_eq!(opened.as_sensitive_str(), ALICE);
-            Ok(())
-        }
-
-        /// `[length: u64 BE][wrapped key][cipher text]`, as kms-aead 0.28.1 wrote it.
-        #[cfg(feature = "legacy-formats")]
-        #[tokio::test]
-        async fn a_0_28_1_value_opens_with_legacy_formats() -> TestResult {
-            use kms_aead::{AeadCipher, CipherTextWithEncryptedKey, KmsAeadEncryptionProvider};
-
-            let provider = TestProvider::new("tenant-42-kek")?;
-            let cipher = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::ChaCha20Poly1305)?;
-            let key = cipher.generate_key()?;
-            let wrapped = provider.encrypt_data_encryption_key(&key, None).await?;
-            let sealed = cipher.encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE), &key)?;
-            let mut stored = u64::try_from(wrapped.wrapped().len())?
-                .to_be_bytes()
-                .to_vec();
-            stored.extend_from_slice(wrapped.wrapped());
-            stored.extend_from_slice(&sealed.0);
-            let keyring = keyring(provider).await?;
-
-            let opened = keyring
-                .decrypt_envelope_value(
-                    ENVELOPE_AAD,
-                    &CipherTextWithEncryptedKey::from(stored),
-                    AeadAlgorithm::ChaCha20Poly1305,
-                )
-                .await?;
-
             assert_eq!(opened.as_sensitive_str(), ALICE);
             Ok(())
         }

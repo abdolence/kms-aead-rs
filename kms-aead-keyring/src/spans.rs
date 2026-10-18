@@ -11,7 +11,6 @@ use std::fmt::Display;
 use std::future::Future;
 
 use kms_aead::cache::DekCacheOutcome;
-use kms_aead::AeadBackend;
 use tracing::{debug_span, field, Instrument, Span};
 
 use crate::errors::{KeyringResult, RegressionRule};
@@ -48,9 +47,10 @@ const RECORD: &str = "/kms_aead_keyring/record";
 /// cache: `rewrap`, a keyset export, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
-/// `Keyring encrypt`, with the keyring's AEAD backend for a randomized call. A deterministic call
-/// leaves `backend` unrecorded: AES-SIV runs on RustCrypto whatever the keyring's backend.
-pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<AeadBackend>) -> Span {
+/// `Keyring encrypt`, with the name of the keyring's AEAD backend for a randomized call. A
+/// deterministic call leaves `backend` unrecorded: AES-SIV runs on RustCrypto whatever the
+/// keyring's backend.
+pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: Option<&str>) -> Span {
     debug_span!(
         "Keyring encrypt",
         { KEYRING } = keyring.as_str(),
@@ -380,16 +380,6 @@ pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
         { ERROR_CODE } = error.code(),
         "The keyring store's change listener did not start: the record TTL alone bounds how late \
          this process sees a change"
-    );
-}
-
-/// A keyring opened with `bind_keys` off: a writer of its store can bring a leaked key back
-/// into use under a new id.
-pub(crate) fn keys_unbound(keyring: &KeyringId) {
-    tracing::warn!(
-        { KEYRING } = keyring.as_str(),
-        "The keyring's keys are not bound to their key ids at the KMS: its record's integrity \
-         rests on the keyring store's access control alone"
     );
 }
 

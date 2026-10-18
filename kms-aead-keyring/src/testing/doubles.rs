@@ -6,11 +6,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use kms_aead::errors::{KmsAeadEncryptionError, KmsAeadNetworkError};
+use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    AeadBackend, DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -18,15 +17,20 @@ use crate::store::{
     KeyringStore, KeyringWatch, MemoryKeyringStore, MemoryRevision, Revalidation, StoreKind,
     Stored, Swap,
 };
-use crate::{EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyringId, KeyringRecord};
+use crate::{
+    EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringId, KeyringRecord,
+};
 
 /// The backend of the build: the gate runs each backend feature on its own.
 #[cfg(feature = "ring")]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
+pub(crate) type TestBackend = kms_aead::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
+pub(crate) type TestBackend = kms_aead::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
+pub(crate) type TestBackend = kms_aead::RustCrypto;
+
+/// A keyring on the store `S`, the test provider and the backend of the build.
+pub(crate) type TestKeyring<S> = Keyring<S, TestProvider, TestBackend>;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -38,13 +42,11 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
     Ok(EMAIL.aad(&EntityId::try_from(user)?))
 }
 
-/// A local KMS provider whose clones share counters of its calls, whose wraps fail while
-/// [`fail_wraps`](ProviderCalls::fail_wraps) is set, and which refuses every bound call with
-/// `BINDING_UNSUPPORTED` while [`refuse_bindings`](ProviderCalls::refuse_bindings) is set, as a
-/// KMS without associated data at wrap does.
+/// A local KMS provider whose clones share counters of its calls, and whose wraps fail while
+/// [`fail_wraps`](ProviderCalls::fail_wraps) is set.
 #[derive(Clone)]
 pub(crate) struct TestProvider {
-    kms: Arc<LocalKmsProvider>,
+    kms: Arc<LocalKmsProvider<TestBackend>>,
     kek: KekRef,
     pub(crate) calls: Arc<ProviderCalls>,
 }
@@ -54,27 +56,12 @@ pub(crate) struct ProviderCalls {
     pub(crate) unwraps: AtomicUsize,
     pub(crate) wraps: AtomicUsize,
     pub(crate) fail_wraps: AtomicBool,
-    pub(crate) refuse_bindings: AtomicBool,
-}
-
-impl ProviderCalls {
-    fn refused(&self, binding: Option<&DekBinding>) -> KmsAeadResult<()> {
-        if binding.is_some() && self.refuse_bindings.load(Ordering::SeqCst) {
-            Err(KmsAeadEncryptionError::create(
-                "BINDING_UNSUPPORTED",
-                "The test KMS binds nothing",
-            ))
-        } else {
-            Ok(())
-        }
-    }
 }
 
 impl TestProvider {
     /// A provider for a random local KEK named `kek`.
     pub(crate) fn new(kek: &str) -> KmsAeadResult<Self> {
-        let kms =
-            LocalKmsProvider::ephemeral(LocalKekId::try_from(kek.to_string())?, TEST_BACKEND)?;
+        let kms = LocalKmsProvider::ephemeral(LocalKekId::try_from(kek.to_string())?)?;
         Ok(Self {
             kek: kms.kek().clone(),
             kms: Arc::new(kms),
@@ -97,7 +84,6 @@ impl KmsAeadEncryptionProvider for TestProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         if self.calls.fail_wraps.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
@@ -105,23 +91,16 @@ impl KmsAeadEncryptionProvider for TestProvider {
                 "The test KMS is down",
             ));
         }
-        self.calls.refused(binding)?;
         self.calls.wraps.fetch_add(1, Ordering::SeqCst);
-        self.kms
-            .encrypt_data_encryption_key(encryption_key, binding)
-            .await
+        self.kms.encrypt_data_encryption_key(encryption_key).await
     }
 
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        self.calls.refused(binding)?;
         self.calls.unwraps.fetch_add(1, Ordering::SeqCst);
-        self.kms
-            .decrypt_data_encryption_key(encrypted_key, binding)
-            .await
+        self.kms.decrypt_data_encryption_key(encrypted_key).await
     }
 }
 
@@ -191,13 +170,10 @@ impl KeyringStore for TestStore {
         record: &KeyringRecord,
         expected: Option<&MemoryRevision>,
     ) -> KeyringResult<Swap<MemoryRevision>> {
-        // `try_update`, the name Rust 1.99 gives `fetch_update`, is above the keyring's
-        // `rust-version`, 1.94.
-        #[allow(deprecated)]
         let conflict = self
             .calls
             .conflicts
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                 left.checked_sub(1)
             })
             .is_ok();

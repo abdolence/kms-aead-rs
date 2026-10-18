@@ -38,9 +38,6 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
 tokio-stream = { version = "0.1", optional = true, default-features = false }
-# The version gcloud-sdk depends on, so that the Tink keyset messages add no crate.
-prost = { version = "0.14", optional = true }
-zeroize = { version = "1", optional = true }
 # The features kms-aead's aws-sdk-kms has, so that both share one HTTPS client and runtime.
 aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 
@@ -62,12 +59,10 @@ aws-lc-fips = ["kms-aead/aws-lc-fips"]
 rustcrypto = ["kms-aead/rustcrypto"]
 # Creates deterministic key versions. The deterministic types exist in every build.
 deterministic = ["kms-aead/deterministic"]
-# Deprecated in kms-aead: reads the layouts written up to kms-aead 0.28.1.
-legacy-formats = ["kms-aead/legacy-formats"]
 # `Serialize` and `Deserialize` for `Encrypted`.
 serde = ["kms-aead/serde"]
 # `Json<T>`, a plaintext stored as its JSON.
-serde-json = ["serde"]
+serde-json = ["serde", "kms-aead/serde-json"]
 # `FirestoreKeyringStore`, on firestore-rs with its default TLS roots and crypto provider.
 firestore = ["dep:firestore"]
 # `PostgresKeyringStore`, and `Type`, `Encode` and `Decode` for `Encrypted` as `BYTEA`. The
@@ -86,7 +81,7 @@ gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default
 s3 = ["dep:aws-sdk-s3"]
 # `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider without a TLS root store or crypto
 # provider: the application enables kms-aead's `gcp-kms-encryption` to build it.
-bigquery-export = ["kms-aead/gcp-kms-encryption-base", "dep:prost", "dep:zeroize"]
+bigquery-export = ["kms-aead/gcp-kms-encryption-base"]
 # The live test of the keyset export: BigQuery's `jobs.query`, and a root store and crypto provider
 # for its Cloud KMS and BigQuery clients.
 ci-bigquery = [

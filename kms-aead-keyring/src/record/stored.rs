@@ -7,7 +7,7 @@ use std::str::FromStr;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use jiff::Timestamp;
-use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef};
+use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef, ValueStruct};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -55,8 +55,8 @@ struct StoredVersion {
     compromised: Option<StoredCompromise>,
     created_at: Timestamp,
     state_changed_at: Timestamp,
-    /// The standard base64 of `EncryptedDataEncryptionKey::to_bytes`, so that the KEK version
-    /// travels with the wrapped key; `None` once destroyed.
+    /// The standard base64 of the wrapped key's bytes, as the provider returned them; `None`
+    /// once destroyed.
     wrapped_dek: Option<String>,
 }
 
@@ -66,32 +66,27 @@ struct StoredCompromise {
     note: Option<String>,
 }
 
-impl TryFrom<&KeyringRecord> for StoredRecord {
-    type Error = KeyringError;
-
-    fn try_from(record: &KeyringRecord) -> KeyringResult<Self> {
+impl From<&KeyringRecord> for StoredRecord {
+    fn from(record: &KeyringRecord) -> Self {
         let versions = record
             .versions
             .iter()
-            .map(|version| {
-                Ok(StoredVersion {
-                    key_id: version.key_id.as_u32(),
-                    algorithm: version.algorithm.to_string(),
-                    state: version.state().to_string(),
-                    compromised: version.compromised().map(|compromise| StoredCompromise {
-                        at: compromise.at,
-                        note: compromise.note.clone(),
-                    }),
-                    created_at: version.created_at,
-                    state_changed_at: version.state_changed_at,
-                    wrapped_dek: version
-                        .wrapped_dek()
-                        .map(|dek| dek.to_bytes().map(|bytes| STANDARD.encode(bytes)))
-                        .transpose()?,
-                })
+            .map(|version| StoredVersion {
+                key_id: version.key_id.as_u32(),
+                algorithm: version.algorithm.to_string(),
+                state: version.state().to_string(),
+                compromised: version.compromised().map(|compromise| StoredCompromise {
+                    at: compromise.at,
+                    note: compromise.note.clone(),
+                }),
+                created_at: version.created_at,
+                state_changed_at: version.state_changed_at,
+                wrapped_dek: version
+                    .wrapped_dek()
+                    .map(|dek| STANDARD.encode(dek.value())),
             })
-            .collect::<KeyringResult<_>>()?;
-        Ok(Self {
+            .collect();
+        Self {
             schema: SCHEMA,
             id: record.id.to_string(),
             kek: StoredKek {
@@ -108,7 +103,7 @@ impl TryFrom<&KeyringRecord> for StoredRecord {
             versions,
             created_at: record.created_at,
             updated_at: record.updated_at,
-        })
+        }
     }
 }
 
@@ -117,10 +112,9 @@ impl KeyringRecord {
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Kms`] when a wrapped key does not encode, which kms-aead's wrapped keys
-    /// always do.
+    /// [`KeyringError::RecordInvalid`] when serde_json fails to write the document.
     pub fn to_json(&self) -> KeyringResult<Vec<u8>> {
-        serde_json::to_vec(&StoredRecord::try_from(self)?)
+        serde_json::to_vec(&StoredRecord::from(self))
             .map_err(|error| KeyringError::malformed(&self.id, Some(&error)))
     }
 
@@ -232,14 +226,8 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 STANDARD
                     .decode(encoded)
                     .ok()
-                    .and_then(|bytes| {
-                        // With kms-aead's `legacy-formats`, `try_from` also reads the bare
-                        // layout of 0.28.1, which a keyring record never holds: only bytes
-                        // that write back unchanged are in the current layout.
-                        EncryptedDataEncryptionKey::try_from(bytes.as_slice())
-                            .ok()
-                            .filter(|dek| dek.to_bytes().is_ok_and(|written| written == bytes))
-                    })
+                    .filter(|bytes| !bytes.is_empty())
+                    .map(EncryptedDataEncryptionKey::new)
                     .ok_or(RecordInvalidReason::MalformedWrappedDek(key_id))
             })
             .transpose()?;

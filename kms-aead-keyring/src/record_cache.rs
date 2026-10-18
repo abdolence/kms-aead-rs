@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use kms_aead::cache::DekCache;
-use kms_aead::{DekBinding, KekRef};
+use kms_aead::KekRef;
 use tokio::time::Instant;
 
 use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, RegressionRule};
@@ -32,7 +32,6 @@ pub(crate) struct RecordCache<S: KeyringStore> {
     id: KeyringId,
     kek: KekRef,
     dek_cache: DekCache,
-    bind_keys: bool,
     record_ttl: Duration,
     reload_min_interval: Duration,
     cached: Mutex<Cached<S::Revision>>,
@@ -53,13 +52,11 @@ struct Cached<R> {
 
 impl<S: KeyringStore> RecordCache<S> {
     /// The cache of `stored`, the record of its keyring as just read or written. `kek` is the
-    /// provider's, under which `dek_cache` holds the unwrapped keys of the record's versions,
-    /// each under its version's binding when `bind_keys` is set and unbound otherwise.
+    /// provider's, under which `dek_cache` holds the unwrapped keys of the record's versions.
     pub(crate) fn new(
         store: S,
         kek: KekRef,
         dek_cache: DekCache,
-        bind_keys: bool,
         record_ttl: Duration,
         reload_min_interval: Duration,
         stored: Stored<S::Revision>,
@@ -69,7 +66,6 @@ impl<S: KeyringStore> RecordCache<S> {
             id: stored.record.id().clone(),
             kek,
             dek_cache,
-            bind_keys,
             record_ttl,
             reload_min_interval,
             cached: Mutex::new(Cached {
@@ -92,14 +88,6 @@ impl<S: KeyringStore> RecordCache<S> {
 
     pub(crate) fn dek_cache(&self) -> &DekCache {
         &self.dek_cache
-    }
-
-    /// What the wrapped key of version `key_id` is wrapped and unwrapped with: its
-    /// [`dek_binding`](KeyringId::dek_binding), or `None` on a keyring that does not bind keys.
-    pub(crate) fn binding(&self, key_id: KeyId) -> KeyringResult<Option<DekBinding>> {
-        self.bind_keys
-            .then(|| self.id.dek_binding(key_id))
-            .transpose()
     }
 
     pub(crate) fn reload_min_interval(&self) -> Duration {
@@ -310,11 +298,8 @@ impl<S: KeyringStore> RecordCache<S> {
             },
         )
         .record;
-        for (key_id, dek) in withdrawn_deks(&held, &next) {
-            // A binding that cannot be built never filled a cache entry, so it has none to evict.
-            if let Ok(binding) = self.binding(key_id) {
-                self.dek_cache.invalidate(&self.kek, dek, binding.as_ref());
-            }
+        for (_, dek) in withdrawn_deks(&held, &next) {
+            self.dek_cache.invalidate(&self.kek, dek);
         }
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
             let before = held.active(purpose).map(KeyVersion::key_id);

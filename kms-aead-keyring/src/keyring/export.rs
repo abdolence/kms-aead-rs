@@ -3,14 +3,13 @@
 
 use std::fmt::{Debug, Formatter, Write};
 
+use kms_aead::cache::DekCache;
+use kms_aead::formats::{TinkKeyType, TinkKeyset};
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{
-    AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
-    KmsAeadEncryptionProvider,
+    AeadAlgorithm, AeadBackend, DataEncryptionKey, DeterministicAlgorithm,
+    EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider, ValueStruct,
 };
-use prost::Message;
-use secret_vault_value::SecretValue;
-use zeroize::Zeroize;
 
 use crate::errors::{KeyVersionError, KeyringError, KeyringResult};
 use crate::spans;
@@ -97,7 +96,7 @@ impl Debug for WrappedKeyset {
 
 /// The export, which exists for keyrings on a Cloud KMS key alone: `KEYS.KEYSET_CHAIN` unwraps
 /// with Cloud KMS only.
-impl<S: KeyringStore> Keyring<S, GcpKmsProvider> {
+impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     /// The versions `selection` names as a Tink keyset wrapped by the keyring's KMS key, for
     /// BigQuery's `KEYS.KEYSET_CHAIN` in the KMS key's location. An administrative call: it
     /// unwraps every selected key through the provider, never through the
@@ -109,9 +108,8 @@ impl<S: KeyringStore> Keyring<S, GcpKmsProvider> {
     /// forward-only as a revalidation is, and taken as the cached record: a version another
     /// process flagged compromised is never exported as readable.
     ///
-    /// The keys inside are the versions' own keys. Their wrapped forms in the record are bound
-    /// to their keyring and key ids; the keyset is wrapped unbound, since BigQuery unwraps it with
-    /// no additional authenticated data, so it never opens as a version's key.
+    /// The keys inside are the versions' own keys. The keyset never opens as a version's key:
+    /// what the KMS unwraps from it is a serialized keyset, which is no serialized Tink key.
     ///
     /// # Errors
     ///
@@ -132,10 +130,11 @@ impl<S: KeyringStore> Keyring<S, GcpKmsProvider> {
     }
 }
 
-impl<S, P> Keyring<S, P>
+impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    B: AeadBackend,
 {
     /// The body of [`export_bigquery_keyset`](Keyring::export_bigquery_keyset), on any provider
     /// so that the unit tests run it on a local KMS.
@@ -148,30 +147,27 @@ where
             // flagged compromised since this process last refreshed is never exported.
             let record = self.cache.reload("export").await?;
             let (primary, versions) = self.exported_versions(&record, selection)?;
-            let mut keys = Vec::with_capacity(versions.len());
+            let mut keyset = TinkKeyset::new(primary.as_u32());
             for (key_id, key_type, dek) in &versions {
-                let binding = self.cache.binding(*key_id)?;
-                let key = self
-                    .provider
-                    .decrypt_data_encryption_key(dek, binding.as_ref())
+                // Uncached, so that the export leaves no key in the cache of a process that
+                // serves no reads under it.
+                DekCache::disabled()
+                    .with_key(&self.provider, dek, |key| {
+                        keyset.add_key(key_id.as_u32(), *key_type, key)
+                    })
                     .await?;
-                keys.push(Key::new(*key_id, *key_type, &key));
             }
-            let keyset = Keyset {
-                primary_key_id: primary.as_u32(),
-                key: keys,
-            };
-            let plaintext = DataEncryptionKey::from(SecretValue::from(keyset.encode_to_vec()));
-            // Zeroizes the keys' copies in the messages before the KMS round trip, so that the
-            // encoded keyset inside a `SecretValue` is the one copy left while it is wrapped.
+            let plaintext = DataEncryptionKey::from(keyset.to_bytes());
+            // Zeroizes the keys inside the keyset before the KMS round trip, so that the
+            // serialized keyset is the one copy left while it is wrapped.
             drop(keyset);
             let wrapped = self
                 .provider
-                .encrypt_data_encryption_key(&plaintext, None)
+                .encrypt_data_encryption_key(&plaintext)
                 .await?;
             spans::record_versions(versions.len());
             Ok(WrappedKeyset {
-                bytes: wrapped.wrapped().to_vec(),
+                bytes: wrapped.into_value(),
                 kek: self.provider.kek().clone(),
                 key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
             })
@@ -238,157 +234,6 @@ where
 /// A selected version: its key id, its Tink key type and its wrapped key.
 type ExportedVersion<'r> = (KeyId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 
-/// A Tink key type BigQuery reads.
-#[derive(Debug, Clone, Copy)]
-enum TinkKeyType {
-    AesGcm,
-    AesSiv,
-}
-
-impl TinkKeyType {
-    /// `key` as the key data of a key of this type.
-    fn key_data(self, key: &DataEncryptionKey) -> KeyData {
-        let key_value = key.value().ref_sensitive_value().clone();
-        let (type_url, value) = match self {
-            TinkKeyType::AesGcm => (
-                "type.googleapis.com/google.crypto.tink.AesGcmKey",
-                AesGcmKey {
-                    version: 0,
-                    key_value,
-                }
-                .encode_to_vec(),
-            ),
-            TinkKeyType::AesSiv => (
-                "type.googleapis.com/google.crypto.tink.AesSivKey",
-                AesSivKey {
-                    version: 0,
-                    key_value,
-                }
-                .encode_to_vec(),
-            ),
-        };
-        KeyData {
-            type_url: type_url.to_string(),
-            value,
-            key_material_type: SYMMETRIC,
-        }
-    }
-}
-
-/// `google.crypto.tink.KeyStatusType.ENABLED`.
-const ENABLED: i32 = 1;
-/// `google.crypto.tink.OutputPrefixType.TINK`: `[0x01][key id: u32 BE]` before every value.
-const TINK: i32 = 1;
-/// `google.crypto.tink.KeyData.KeyMaterialType.SYMMETRIC`.
-const SYMMETRIC: i32 = 1;
-
-/// `google.crypto.tink.Keyset`, from Tink's `tink.proto`.
-#[derive(Message)]
-struct Keyset {
-    #[prost(uint32, tag = "1")]
-    primary_key_id: u32,
-    #[prost(message, repeated, tag = "2")]
-    key: Vec<Key>,
-}
-
-/// `google.crypto.tink.Keyset.Key`.
-#[derive(Message)]
-struct Key {
-    #[prost(message, optional, tag = "1")]
-    key_data: Option<KeyData>,
-    #[prost(int32, tag = "2")]
-    status: i32,
-    #[prost(uint32, tag = "3")]
-    key_id: u32,
-    #[prost(int32, tag = "4")]
-    output_prefix_type: i32,
-}
-
-impl Key {
-    /// The enabled, TINK-prefixed key `key_id` of `key_type`, holding `key`.
-    fn new(key_id: KeyId, key_type: TinkKeyType, key: &DataEncryptionKey) -> Self {
-        Self {
-            key_data: Some(key_type.key_data(key)),
-            status: ENABLED,
-            key_id: key_id.as_u32(),
-            output_prefix_type: TINK,
-        }
-    }
-}
-
-/// `google.crypto.tink.KeyData`. `value` is the serialized key message, so it holds the key: it
-/// is zeroized on drop and left out of `Debug`.
-#[derive(Message)]
-#[prost(skip_debug)]
-struct KeyData {
-    #[prost(string, tag = "1")]
-    type_url: String,
-    #[prost(bytes = "vec", tag = "2")]
-    value: Vec<u8>,
-    #[prost(int32, tag = "3")]
-    key_material_type: i32,
-}
-
-impl Debug for KeyData {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeyData")
-            .field("type_url", &self.type_url)
-            .finish_non_exhaustive()
-    }
-}
-
-impl Drop for KeyData {
-    fn drop(&mut self) {
-        self.value.zeroize();
-    }
-}
-
-/// `google.crypto.tink.AesGcmKey`, from Tink's `aes_gcm.proto`. Zeroized on drop and left out
-/// of `Debug`.
-#[derive(Message)]
-#[prost(skip_debug)]
-struct AesGcmKey {
-    #[prost(uint32, tag = "1")]
-    version: u32,
-    #[prost(bytes = "vec", tag = "3")]
-    key_value: Vec<u8>,
-}
-
-impl Debug for AesGcmKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AesGcmKey").finish_non_exhaustive()
-    }
-}
-
-impl Drop for AesGcmKey {
-    fn drop(&mut self) {
-        self.key_value.zeroize();
-    }
-}
-
-/// `google.crypto.tink.AesSivKey`, from Tink's `aes_siv.proto`. Zeroized on drop and left out
-/// of `Debug`.
-#[derive(Message)]
-#[prost(skip_debug)]
-struct AesSivKey {
-    #[prost(uint32, tag = "1")]
-    version: u32,
-    #[prost(bytes = "vec", tag = "2")]
-    key_value: Vec<u8>,
-}
-
-impl Debug for AesSivKey {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AesSivKey").finish_non_exhaustive()
-    }
-}
-
-impl Drop for AesSivKey {
-    fn drop(&mut self) {
-        self.key_value.zeroize();
-    }
-}
-
 #[cfg(all(
     test,
     any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
@@ -396,12 +241,13 @@ impl Drop for AesSivKey {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use super::*;
     use kms_aead::{CipherText, CipherTextWithEncryptedKey};
+    use secret_vault_value::SecretValue;
 
+    use super::*;
     use crate::errors::KeyVersionError;
     use crate::store::MemoryKeyringStore;
-    use crate::testing::{email_of, TestProvider, TestResult, TENANT, TEST_BACKEND};
+    use crate::testing::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::{KeyringOptions, KeyringPolicy};
 
     // The keysets below were written by tinkey 1.14.0, from
@@ -473,12 +319,11 @@ mod tests {
     /// A keyring on a local KMS with one version of each purpose the policy names.
     async fn keyring(
         policy: KeyringPolicy,
-    ) -> KeyringResult<(Keyring<MemoryKeyringStore, TestProvider>, TestProvider)> {
+    ) -> KeyringResult<(TestKeyring<MemoryKeyringStore>, TestProvider)> {
         let provider = TestProvider::new("tenant-42-kek")?;
-        let keyring = Keyring::create(
+        let keyring = TestKeyring::create(
             MemoryKeyringStore::new(),
             provider.clone(),
-            TEST_BACKEND,
             TENANT,
             policy,
             KeyringOptions::new().with_watch(false),
@@ -488,36 +333,57 @@ mod tests {
     }
 
     #[test]
-    fn keysets_are_the_ones_tinkey_writes() -> TestResult {
-        let aes_gcm = Keyset {
-            primary_key_id: TINKEY_AES_GCM_PRIMARY,
-            key: vec![
-                Key::new(
-                    KeyId::try_from(TINKEY_AES_GCM_PRIMARY)?,
-                    TinkKeyType::AesGcm,
-                    &DataEncryptionKey::from(SecretValue::from(
-                        TINKEY_AES_GCM_PRIMARY_KEY.to_vec(),
-                    )),
-                ),
-                Key::new(
-                    KeyId::try_from(TINKEY_AES_GCM_SECOND)?,
-                    TinkKeyType::AesGcm,
-                    &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_SECOND_KEY.to_vec())),
-                ),
-            ],
-        };
-        let aes_siv = Keyset {
-            primary_key_id: TINKEY_AES_SIV,
-            key: vec![Key::new(
-                KeyId::try_from(TINKEY_AES_SIV)?,
-                TinkKeyType::AesSiv,
-                &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_SIV_KEY.to_vec())),
-            )],
-        };
+    fn keysets_are_the_ones_tinkey_writes() {
+        let mut aes_gcm = TinkKeyset::new(TINKEY_AES_GCM_PRIMARY);
+        aes_gcm.add_key(
+            TINKEY_AES_GCM_PRIMARY,
+            TinkKeyType::AesGcm,
+            &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_PRIMARY_KEY.to_vec())),
+        );
+        aes_gcm.add_key(
+            TINKEY_AES_GCM_SECOND,
+            TinkKeyType::AesGcm,
+            &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_GCM_SECOND_KEY.to_vec())),
+        );
+        let mut aes_siv = TinkKeyset::new(TINKEY_AES_SIV);
+        aes_siv.add_key(
+            TINKEY_AES_SIV,
+            TinkKeyType::AesSiv,
+            &DataEncryptionKey::from(SecretValue::from(TINKEY_AES_SIV_KEY.to_vec())),
+        );
 
-        assert_eq!(aes_gcm.encode_to_vec(), TINKEY_AES_GCM_KEYSET);
-        assert_eq!(aes_siv.encode_to_vec(), TINKEY_AES_SIV_KEYSET);
-        Ok(())
+        assert_eq!(
+            *aes_gcm.to_bytes().ref_sensitive_value(),
+            TINKEY_AES_GCM_KEYSET
+        );
+        assert_eq!(
+            *aes_siv.to_bytes().ref_sensitive_value(),
+            TINKEY_AES_SIV_KEYSET
+        );
+    }
+
+    /// The keyset of `keyring`'s randomized versions `key_ids` with `primary` as the primary, as
+    /// an export of them writes it.
+    async fn keyset_of(
+        keyring: &TestKeyring<MemoryKeyringStore>,
+        provider: &TestProvider,
+        primary: u32,
+        key_ids: &[u32],
+    ) -> Result<SecretValue, Box<dyn std::error::Error>> {
+        let record = keyring.record();
+        let mut keyset = TinkKeyset::new(primary);
+        for key_id in key_ids {
+            let dek = record
+                .version(KeyId::try_from(*key_id)?)
+                .and_then(KeyVersion::wrapped_dek)
+                .ok_or("the version holds no key")?;
+            DekCache::disabled()
+                .with_key(provider, dek, |key| {
+                    keyset.add_key(*key_id, TinkKeyType::AesGcm, key)
+                })
+                .await?;
+        }
+        Ok(keyset.to_bytes())
     }
 
     #[tokio::test]
@@ -556,19 +422,18 @@ mod tests {
             .export_keyset(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
-            .decrypt_data_encryption_key(
-                &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec(), None),
-                None,
-            )
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                wrapped.as_bytes().to_vec(),
+            ))
             .await?;
-        let keyset = Keyset::decode(keyset.value().ref_sensitive_value().as_slice())?;
 
-        let expected = [KeyId::try_from(1)?, KeyId::try_from(3)?];
-        assert_eq!(wrapped.key_ids(), expected);
-        assert_eq!(keyset.primary_key_id, 3);
         assert_eq!(
-            keyset.key.iter().map(|key| key.key_id).collect::<Vec<_>>(),
-            [1, 3]
+            wrapped.key_ids(),
+            [KeyId::try_from(1)?, KeyId::try_from(3)?]
+        );
+        assert_eq!(
+            *keyset.value(),
+            keyset_of(&keyring, &provider, 3, &[1, 3]).await?
         );
         Ok(())
     }
@@ -594,10 +459,9 @@ mod tests {
     #[tokio::test]
     async fn readable_follows_a_compromise_by_another_process() -> TestResult {
         let (exporter, provider) = keyring(KeyringPolicy::new()).await?;
-        let administrator = Keyring::open(
+        let administrator = TestKeyring::open(
             exporter.cache.store().clone(),
             provider.clone(),
-            TEST_BACKEND,
             TENANT,
             KeyringOptions::new().with_watch(false),
         )
@@ -609,15 +473,16 @@ mod tests {
             .export_keyset(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
-            .decrypt_data_encryption_key(
-                &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec(), None),
-                None,
-            )
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                wrapped.as_bytes().to_vec(),
+            ))
             .await?;
-        let keyset = Keyset::decode(keyset.value().ref_sensitive_value().as_slice())?;
 
         assert_eq!(wrapped.key_ids(), [KeyId::try_from(2)?]);
-        assert_eq!(keyset.primary_key_id, 2);
+        assert_eq!(
+            *keyset.value(),
+            keyset_of(&exporter, &provider, 2, &[2]).await?
+        );
         Ok(())
     }
 
@@ -650,7 +515,7 @@ mod tests {
             .await?;
         let value = CipherTextWithEncryptedKey::join(
             &CipherText(vec![0; 32]),
-            &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec(), None),
+            &EncryptedDataEncryptionKey::new(wrapped.as_bytes().to_vec()),
         )?;
         let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
 
@@ -660,7 +525,7 @@ mod tests {
                 .await;
             assert!(matches!(
                 opened,
-                Err(KeyringError::Kms(error)) if error.code() == "INVALID_KEY_LENGTH"
+                Err(KeyringError::Kms(error)) if error.code() == "INVALID_KEY_FORMAT"
             ));
         }
 

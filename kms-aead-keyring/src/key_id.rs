@@ -3,9 +3,14 @@
 
 use std::fmt::{Display, Formatter};
 
+use kms_aead::formats::{Deterministic, Randomized, TinkOutputPrefix};
+use kms_aead::{Encrypted, ValueStruct};
 use serde::{Deserialize, Serialize};
 
-use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
+use crate::errors::{
+    Identifier, IdentifierRule, KeyPurposeMismatchError, KeyringError, KeyringResult,
+    ValueLayoutError,
+};
 
 /// What a key version is for. A data encryption key of one purpose never serves the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -15,17 +20,6 @@ pub enum Purpose {
     /// Deterministic AEAD with AES-SIV: under one version, equal plaintexts and AADs give equal
     /// values, which an equality query can match.
     Deterministic,
-}
-
-impl Purpose {
-    /// The length of a value of this purpose around an empty plaintext: the prefix, and a nonce
-    /// and a tag for a randomized value, a synthetic IV for a deterministic one.
-    pub(crate) fn min_value_len(self) -> usize {
-        match self {
-            Purpose::Randomized => 5 + 12 + 16,
-            Purpose::Deterministic => 5 + 16,
-        }
-    }
 }
 
 /// `randomized`, `deterministic`: the values of the `purpose` span field.
@@ -83,9 +77,59 @@ impl KeyId {
         self.0
     }
 
-    /// The id as a keyring value carries it.
-    pub(crate) fn to_be_bytes(self) -> [u8; 4] {
-        self.0.to_be_bytes()
+    /// The bytes of a value under this version: Tink's output prefix of this id, then `body`.
+    pub(crate) fn prefixed(self, body: &[u8]) -> Vec<u8> {
+        [&TinkOutputPrefix::new(self.0).to_bytes()[..], body].concat()
+    }
+
+    /// The key id of `value`, a value of `purpose` in Tink's TINK-prefixed layout, and the
+    /// bytes after the prefix.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::ValueLayout`] when `value` does not start with the prefix or its key id
+    /// is reserved, and [`KeyringError::KeyPurposeMismatch`] when the key id is of another
+    /// purpose.
+    pub(crate) fn split_value(value: &[u8], purpose: Purpose) -> KeyringResult<(Self, &[u8])> {
+        let (prefix, body) = TinkOutputPrefix::split(value)
+            .ok_or(KeyringError::ValueLayout(ValueLayoutError::NoTinkPrefix))?;
+        let key_id = Self::try_from(prefix.key_id())
+            .map_err(|_| KeyringError::ValueLayout(ValueLayoutError::ReservedKeyId))?;
+        if key_id.purpose() != purpose {
+            return Err(KeyringError::KeyPurposeMismatch(KeyPurposeMismatchError {
+                expected: purpose,
+                key_id,
+            }));
+        }
+        Ok((key_id, body))
+    }
+}
+
+/// The version a randomized value names in its prefix, such as for a
+/// [`SealMarker`](crate::SealMarker).
+///
+/// # Errors
+///
+/// [`KeyringError::ValueLayout`] when the key id is 0 or 2^31, and
+/// [`KeyringError::KeyPurposeMismatch`] when it is not a randomized key id.
+impl<T> TryFrom<&Encrypted<T, Randomized>> for KeyId {
+    type Error = KeyringError;
+
+    fn try_from(value: &Encrypted<T, Randomized>) -> KeyringResult<Self> {
+        Self::split_value(value.value(), Purpose::Randomized).map(|(key_id, _)| key_id)
+    }
+}
+
+/// The version a deterministic value names in its prefix.
+///
+/// # Errors
+///
+/// As for a randomized value, with a key id that is not a deterministic one.
+impl<T> TryFrom<&Encrypted<T, Deterministic>> for KeyId {
+    type Error = KeyringError;
+
+    fn try_from(value: &Encrypted<T, Deterministic>) -> KeyringResult<Self> {
+        Self::split_value(value.value(), Purpose::Deterministic).map(|(key_id, _)| key_id)
     }
 }
 

@@ -6,9 +6,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 use jiff::Timestamp;
-use kms_aead::{
-    AeadAlgorithm, DekBinding, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
-};
+use kms_aead::{AeadAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef};
 
 use crate::errors::{
     Identifier, IdentifierRule, InvalidTransitionError, KeyringError, KeyringResult,
@@ -107,16 +105,6 @@ impl TryFrom<&str> for KeyringId {
 impl Display for KeyringId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
-    }
-}
-
-impl KeyringId {
-    /// What the KMS binds the wrapped key of version `key_id` to: `<keyring id>/<key id>`, the
-    /// key id in decimal. `/` is outside the keyring id's alphabet, so a binding names one
-    /// version of one keyring. This string is a wire format: changing it strands every wrapped
-    /// key until a rewrap that unwraps with the old form and wraps with the new.
-    pub(crate) fn dek_binding(&self, key_id: KeyId) -> KeyringResult<DekBinding> {
-        Ok(DekBinding::try_from(format!("{self}/{key_id}"))?)
     }
 }
 
@@ -452,8 +440,8 @@ impl RetainedDek {
     }
 }
 
-/// A version about to be created: its key id, the algorithm its key was made for, and the key
-/// wrapped with the binding of that id.
+/// A version about to be created: its key id, the algorithm its key was made for, and the
+/// wrapped key.
 pub(crate) struct NewVersion {
     pub(crate) key_id: KeyId,
     pub(crate) algorithm: KeyAlgorithm,
@@ -782,8 +770,7 @@ impl RecordEdit {
 /// `held` is still there, with the same algorithm and creation time, its compromised flag kept
 /// with its time, and its state moved along the lifecycle. New versions are free.
 ///
-/// The wrapped key is left out: a changed one under an unchanged id is a rewrap, and a copied or
-/// foreign one fails at the KMS, which refuses it under any binding but its own.
+/// The wrapped key is left out: a changed one under an unchanged id is a rewrap.
 pub(crate) fn check_successor(
     held: &KeyringRecord,
     next: &KeyringRecord,

@@ -6,12 +6,13 @@
 //! ```
 
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::AeadBackend;
+use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::store::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy,
-    Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId, KeyringOptions,
+    KeyringPolicy, Plaintext, Purpose,
 };
+use secret_vault_value::SecretValue;
 
 const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 const EMAIL: FieldSpec = FieldSpec::new(
@@ -19,15 +20,27 @@ const EMAIL: FieldSpec = FieldSpec::new(
     FieldName::from_static("email"),
 );
 
+/// The application's email type, sealed as the UTF-8 of the address.
+#[derive(Debug)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let backend = AeadBackend::Ring;
     let provider =
-        LocalKmsProvider::ephemeral(LocalKekId::try_from("orders-kek".to_string())?, backend)?;
-    let keyring = Keyring::open_or_create(
+        LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("orders-kek".to_string())?)?;
+    let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
         MemoryKeyringStore::new(),
         provider,
-        backend,
         TENANT,
         KeyringPolicy::new(),
         KeyringOptions::new(),
@@ -35,14 +48,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
 
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
+    let alice = Email("alice@example.com".to_string());
 
-    let before = keyring
-        .encrypt(&aad, &"alice@example.com".to_string())
-        .await?;
+    let before = keyring.encrypt(&aad, &alice).await?;
     let rotation = keyring.rotate(Purpose::Randomized).await?;
-    let after = keyring
-        .encrypt(&aad, &"alice@example.com".to_string())
-        .await?;
+    let after = keyring.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
         Some(previous) => println!(
@@ -51,15 +61,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         None => println!("created key version {}", rotation.current),
     }
-    println!(
-        "value under {}: {}",
-        before.key_id(),
-        keyring.decrypt(&aad, &before).await?
-    );
-    println!(
-        "value under {}: {}",
-        after.key_id(),
-        keyring.decrypt(&aad, &after).await?
-    );
+    for value in [before, after] {
+        let Email(email) = keyring.decrypt(&aad, &value).await?;
+        println!("value under {}: {email}", KeyId::try_from(&value)?);
+    }
     Ok(())
 }

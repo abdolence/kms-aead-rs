@@ -1,14 +1,16 @@
 //! [`Keyring`]: field encryption under the key versions of one keyring record.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
+use kms_aead::formats::Randomized;
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey, DekBinding,
-    DeterministicAlgorithm, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
+    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KekProvider,
+    KmsAeadEncryptionProvider, Plaintext, ValueStruct,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
@@ -23,8 +25,8 @@ use crate::record_cache::RecordCache;
 use crate::spans;
 use crate::store::{KeyringStore, Stored, Swap};
 use crate::{
-    Algorithms, Compromise, Encrypted, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion,
-    KeyVersionState, KeyringId, KeyringRecord, Plaintext, Purpose,
+    Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
+    KeyringId, KeyringRecord, Purpose,
 };
 
 #[cfg(feature = "deterministic")]
@@ -35,8 +37,9 @@ mod export;
 #[cfg(feature = "bigquery-export")]
 pub use export::{KeysetSelection, WrappedKeyset};
 
-/// Field encryption under the key versions of one keyring, whose record lives in a
-/// [`KeyringStore`] and is cached in the process.
+/// Field encryption under the key versions of one keyring, whose record lives in the store `S`
+/// and is cached in the process, with keys wrapped by the provider `P` and AEAD on the backend
+/// `B`.
 ///
 /// `encrypt` seals under the active version of the purpose, and `decrypt` opens under the
 /// version the value names, without a call to the store while the cached record is younger than
@@ -54,23 +57,23 @@ pub use export::{KeysetSelection, WrappedKeyset};
 ///
 /// Where the store has push, a task on the current tokio runtime follows the record's change
 /// signals for as long as the keyring lives.
-pub struct Keyring<S: KeyringStore, P> {
+pub struct Keyring<S: KeyringStore, P, B> {
     cache: Arc<RecordCache<S>>,
     provider: P,
-    backend: AeadBackend,
     compromised_reads: CompromisedReadPolicy,
     cas_retries: u32,
     _watch: Option<WatchTask>,
+    backend: PhantomData<B>,
 }
 
-impl<S, P> Keyring<S, P>
+impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    B: AeadBackend,
 {
     /// Opens the keyring `id` from `store`: loads its record once and starts following the
-    /// store's change signals. `provider` unwraps the record's keys and `backend` runs the
-    /// AEAD.
+    /// store's change signals. `provider` unwraps the record's keys.
     ///
     /// # Errors
     ///
@@ -80,14 +83,13 @@ where
     pub async fn open(
         store: S,
         provider: P,
-        backend: AeadBackend,
         id: KeyringId,
         options: KeyringOptions,
     ) -> KeyringResult<Self> {
         let stored = RecordCache::read(&store, &id)
             .await?
             .ok_or(KeyringError::RecordMissing(id))?;
-        Self::start(store, provider, backend, options, stored).await
+        Self::start(store, provider, options, stored).await
     }
 
     /// Creates the record of the keyring `id`, with one active version of each purpose `policy`
@@ -97,30 +99,20 @@ where
     /// # Errors
     ///
     /// The provider's and the store's errors, [`KeyringError::RecordExists`] when the store
-    /// already holds a record, `UNSUPPORTED_ALGORITHM` from kms-aead when `backend` does not
-    /// implement the policy's algorithm, and [`KeyringError::DeterministicDisabled`] for a
-    /// deterministic algorithm without the `deterministic` feature.
+    /// already holds a record, `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement
+    /// the policy's algorithm, and [`KeyringError::DeterministicDisabled`] for a deterministic
+    /// algorithm without the `deterministic` feature.
     pub async fn create(
         store: S,
         provider: P,
-        backend: AeadBackend,
         id: KeyringId,
         policy: KeyringPolicy,
         options: KeyringOptions,
     ) -> KeyringResult<Self> {
-        let record = policy
-            .new_record(id, &provider, backend, options.bind_keys)
-            .await?;
+        let record = policy.new_record::<P, B>(id, &provider).await?;
         match store.compare_and_swap(&record, None).await? {
             Swap::Written(revision) => {
-                Self::start(
-                    store,
-                    provider,
-                    backend,
-                    options,
-                    Stored { record, revision },
-                )
-                .await
+                Self::start(store, provider, options, Stored { record, revision }).await
             }
             Swap::Conflict => Err(KeyringError::RecordExists(record.id().clone())),
         }
@@ -136,7 +128,6 @@ where
     pub async fn open_or_create(
         store: S,
         provider: P,
-        backend: AeadBackend,
         id: KeyringId,
         policy: KeyringPolicy,
         options: KeyringOptions,
@@ -144,9 +135,7 @@ where
         let stored = match RecordCache::read(&store, &id).await? {
             Some(stored) => stored,
             None => {
-                let record = policy
-                    .new_record(id.clone(), &provider, backend, options.bind_keys)
-                    .await?;
+                let record = policy.new_record::<P, B>(id.clone(), &provider).await?;
                 match store.compare_and_swap(&record, None).await? {
                     Swap::Written(revision) => Stored { record, revision },
                     Swap::Conflict => RecordCache::read(&store, &id)
@@ -155,7 +144,7 @@ where
                 }
             }
         };
-        Self::start(store, provider, backend, options, stored).await
+        Self::start(store, provider, options, stored).await
     }
 
     /// The keyring's id.
@@ -192,15 +181,15 @@ where
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has none, which follows a
     /// `mark_compromised` whose new key could not be wrapped; [`KeyringError::Interop`] when
-    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::Plaintext`]
-    /// when the value does not encode; and the provider's error when the version's key is not in
-    /// the [`DekCache`] and cannot be unwrapped.
+    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::Kms`] with
+    /// code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error when
+    /// the version's key is not in the [`DekCache`] and cannot be unwrapped.
     pub async fn encrypt<T: Plaintext>(
         &self,
         aad: &FieldAad,
         value: &T,
-    ) -> KeyringResult<Encrypted<T>> {
-        let span = spans::encrypt(self.id(), Purpose::Randomized, Some(self.backend));
+    ) -> KeyringResult<Encrypted<T, Randomized>> {
+        let span = spans::encrypt(self.id(), Purpose::Randomized, Some(B::NAME));
         spans::in_span(span, async {
             let record = self.cache.current().await;
             let (version, dek) = record
@@ -211,16 +200,14 @@ where
             let cipher = self.cipher(version)?;
             let plaintext = value.to_plaintext()?;
             let (sealed, outcome) = self
-                .with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
-                    cache
-                        .with_key(&self.provider, dek, binding, |key| {
-                            cipher.encrypt_value(&aad.bytes, &plaintext, key)
-                        })
-                        .await
+                .with_cached_key(&record, version.key_id(), dek, |key| {
+                    cipher.encrypt_value(&aad.bytes, &plaintext, key)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
-            Ok(Encrypted::new(version.key_id(), &sealed?.0))
+            Ok(Encrypted::try_from(
+                version.key_id().prefixed(sealed?.value()),
+            )?)
         })
         .await
     }
@@ -238,19 +225,23 @@ where
     ///   any unwrap;
     /// - [`KeyringError::Kms`] with code `DECRYPT` when the value is not authentic under the
     ///   version's key and `aad`, and the provider's error when the key cannot be unwrapped;
-    /// - [`KeyringError::Plaintext`] when the bytes do not decode as `T`.
+    /// - [`KeyringError::ValueLayout`] and [`KeyringError::KeyPurposeMismatch`], before any
+    ///   store or KMS call, when the value's key id is reserved or deterministic;
+    /// - [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
     pub async fn decrypt<T: Plaintext>(
         &self,
         aad: &FieldAad,
-        value: &Encrypted<T>,
+        value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
-        let span = spans::decrypt(self.id(), value.key_id());
-        spans::in_span(span, async {
-            let (record, reload) = self.cache.find(value.key_id()).await;
+        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Randomized)?;
+        spans::in_span(spans::decrypt(self.id(), key_id), async {
+            let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, value.key_id())?;
+            let (version, dek, compromise) = self.readable(&record, key_id)?;
             self.apply_read_policy(version, compromise)?;
-            T::from_plaintext(self.open_cached(&record, version, dek, aad, value).await?)
+            Ok(T::from_plaintext(
+                self.open_cached(&record, version, dek, aad, body).await?,
+            )?)
         })
         .await
     }
@@ -266,20 +257,20 @@ where
     pub async fn decrypt_with_status<T: Plaintext>(
         &self,
         aad: &FieldAad,
-        value: &Encrypted<T>,
+        value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
-        let span = spans::decrypt(self.id(), value.key_id());
-        spans::in_span(span, async {
-            let (record, reload) = self.cache.find(value.key_id()).await;
+        let (key_id, body) = KeyId::split_value(value.value(), Purpose::Randomized)?;
+        spans::in_span(spans::decrypt(self.id(), key_id), async {
+            let (record, reload) = self.cache.find(key_id).await;
             spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, value.key_id())?;
+            let (version, dek, compromise) = self.readable(&record, key_id)?;
             let (plaintext, trust) = match compromise {
                 None => (
-                    self.open_cached(&record, version, dek, aad, value).await?,
+                    self.open_cached(&record, version, dek, aad, body).await?,
                     KeyTrust::Trusted,
                 ),
                 Some(compromise) => (
-                    self.open_uncached(version, dek, aad, value).await?,
+                    self.open_uncached(version, dek, aad, body).await?,
                     KeyTrust::Compromised(compromise.clone()),
                 ),
             };
@@ -455,15 +446,10 @@ where
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let deks = edit.record().wrapped_deks();
                     for (key_id, dek) in &deks {
-                        let binding = self.cache.binding(*key_id)?;
-                        let key = self
-                            .provider
-                            .decrypt_data_encryption_key(dek, binding.as_ref())
-                            .await?;
-                        let rewrapped = self
-                            .provider
-                            .encrypt_data_encryption_key(&key, binding.as_ref())
-                            .await?;
+                        // What the KMS unwraps is the serialized Tink key it wrapped, so it is
+                        // wrapped again as it is.
+                        let key = self.provider.decrypt_data_encryption_key(dek).await?;
+                        let rewrapped = self.provider.encrypt_data_encryption_key(&key).await?;
                         edit.replace_dek(*key_id, rewrapped, Timestamp::now())?;
                     }
                     Ok(deks.len())
@@ -478,7 +464,6 @@ where
     async fn start(
         store: S,
         provider: P,
-        backend: AeadBackend,
         options: KeyringOptions,
         stored: Stored<S::Revision>,
     ) -> KeyringResult<Self> {
@@ -490,9 +475,6 @@ where
                 provider: kek.clone(),
             })));
         }
-        if !options.bind_keys {
-            spans::keys_unbound(stored.record.id());
-        }
         let dek_cache = match options.dek_cache {
             Some(dek_cache) => dek_cache,
             None => DekCache::new(DekCacheOptions::new())?,
@@ -501,7 +483,6 @@ where
             store,
             kek.clone(),
             dek_cache,
-            options.bind_keys,
             options.record_ttl,
             options.reload_min_interval,
             stored,
@@ -514,10 +495,10 @@ where
         Ok(Self {
             cache,
             provider,
-            backend,
             compromised_reads: options.compromised_reads,
             cas_retries: options.cas_retries,
             _watch: watch,
+            backend: PhantomData,
         })
     }
 
@@ -607,9 +588,9 @@ where
         }
     }
 
-    fn cipher(&self, version: &KeyVersion) -> KeyringResult<AeadCipher> {
+    fn cipher(&self, version: &KeyVersion) -> KeyringResult<AeadCipher<B>> {
         match version.algorithm() {
-            KeyAlgorithm::Randomized(algorithm) => Ok(AeadCipher::new(self.backend, algorithm)?),
+            KeyAlgorithm::Randomized(algorithm) => Ok(AeadCipher::new(algorithm)?),
             KeyAlgorithm::Deterministic(_) => Err(KeyringError::record_invalid(
                 self.id(),
                 RecordInvalidReason::PurposeMismatch(version.key_id()),
@@ -617,34 +598,30 @@ where
         }
     }
 
-    /// Opens `value` with `aad` under `version` of `record`, whose wrapped key is `dek`, with
-    /// the key through the [`DekCache`].
-    async fn open_cached<T>(
+    /// Opens `body`, the bytes after a value's prefix, with `aad` under `version` of `record`,
+    /// whose wrapped key is `dek`, with the key through the [`DekCache`].
+    async fn open_cached(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
-        value: &Encrypted<T>,
+        body: &[u8],
     ) -> KeyringResult<SecretValue> {
         let cipher = self.cipher(version)?;
-        let body = CipherText(value.body().to_vec());
+        let body = CipherText(body.to_vec());
         let (opened, outcome) = self
-            .with_cached_key(record, version.key_id(), dek, async |cache, binding| {
-                cache
-                    .with_key(&self.provider, dek, binding, |key| {
-                        cipher.decrypt_value(&aad.bytes, &body, key)
-                    })
-                    .await
+            .with_cached_key(record, version.key_id(), dek, |key| {
+                cipher.decrypt_value(&aad.bytes, &body, key)
             })
             .await?;
         spans::record_dek_cache(outcome);
         Ok(opened?)
     }
 
-    /// Runs `use_cache`, a call of the [`DekCache`] with the key `dek` wraps, with the binding of
-    /// `key_id`, and returns its result and where the key came from, for the caller to record.
-    /// `record` is the record `dek` was read from, as the wrapped key of `key_id`.
+    /// Runs `use_key` with the key `dek` wraps, through the [`DekCache`], and returns its result
+    /// and where the key came from, for the caller to record. `record` is the record `dek` was
+    /// read from, as the wrapped key of `key_id`.
     ///
     /// A refresh evicts the keys it takes out of use once, when it takes the new record. A call
     /// that read `dek` from the record before and unwraps it after that eviction caches it
@@ -655,23 +632,35 @@ where
         record: &KeyringRecord,
         key_id: KeyId,
         dek: &EncryptedDataEncryptionKey,
-        use_cache: impl AsyncFnOnce(
-            &DekCache,
-            Option<&DekBinding>,
-        ) -> KmsAeadResult<(T, DekCacheOutcome)>,
+        use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<(T, DekCacheOutcome)> {
-        let binding = self.cache.binding(key_id)?;
-        let (result, outcome) = use_cache(self.dek_cache(), binding.as_ref()).await?;
+        let (result, outcome) = self
+            .dek_cache()
+            .with_key(&self.provider, dek, use_key)
+            .await?;
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
             if !std::ptr::eq(record, &*current)
                 && withdrawn_deks(record, &current).any(|withdrawn| withdrawn == (key_id, dek))
             {
-                self.dek_cache()
-                    .invalidate(self.provider.kek(), dek, binding.as_ref());
+                self.dek_cache().invalidate(self.provider.kek(), dek);
             }
         }
         Ok((result, outcome))
+    }
+
+    /// Runs `use_key` with the key `dek` wraps, which the provider unwraps for this call only
+    /// and which never enters the [`DekCache`].
+    async fn with_uncached_key<T>(
+        &self,
+        dek: &EncryptedDataEncryptionKey,
+        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+    ) -> KeyringResult<T> {
+        let (result, _) = DekCache::disabled()
+            .with_key(&self.provider, dek, use_key)
+            .await?;
+        spans::record_dek_cache_bypassed();
+        Ok(result)
     }
 
     /// A new version to replace the active version `key_id` that is being flagged compromised,
@@ -686,23 +675,20 @@ where
             .ok()
     }
 
-    /// Opens `value` with a key the provider unwraps for this call only, which never enters the
+    /// Opens `body` with a key the provider unwraps for this call only, which never enters the
     /// [`DekCache`].
-    async fn open_uncached<T>(
+    async fn open_uncached(
         &self,
         version: &KeyVersion,
         dek: &EncryptedDataEncryptionKey,
         aad: &FieldAad,
-        value: &Encrypted<T>,
+        body: &[u8],
     ) -> KeyringResult<SecretValue> {
         let cipher = self.cipher(version)?;
-        let binding = self.cache.binding(version.key_id())?;
-        let key = self
-            .provider
-            .decrypt_data_encryption_key(dek, binding.as_ref())
-            .await?;
-        spans::record_dek_cache_bypassed();
-        Ok(cipher.decrypt_value(&aad.bytes, &CipherText(value.body().to_vec()), &key)?)
+        let body = CipherText(body.to_vec());
+        Ok(self
+            .with_uncached_key(dek, |key| cipher.decrypt_value(&aad.bytes, &body, key))
+            .await??)
     }
 
     async fn rotate_record(
@@ -714,23 +700,14 @@ where
         edit.rotate(new, Timestamp::now())
     }
 
-    /// The next version of `algorithm`'s purpose in `record`, with its key wrapped under the
-    /// binding of its id.
+    /// The next version of `algorithm`'s purpose in `record`, with its key wrapped.
     async fn new_version(
         &self,
         record: &KeyringRecord,
         algorithm: KeyAlgorithm,
     ) -> KeyringResult<NewVersion> {
         let key_id = record.next_key_id(algorithm.purpose())?;
-        let binding = self.cache.binding(key_id)?;
-        NewVersion::generate(
-            key_id,
-            algorithm,
-            &self.provider,
-            self.backend,
-            binding.as_ref(),
-        )
-        .await
+        NewVersion::generate::<P, B>(key_id, algorithm, &self.provider).await
     }
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
@@ -739,19 +716,21 @@ where
     /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. The application
     /// decodes a value it stored as hex before the call.
     ///
-    /// The value's key is unwrapped unbound by this keyring's provider, so it must have been
-    /// wrapped by the keyring's KEK, and through the keyring's [`DekCache`], where a store-less
-    /// envelope's values share one entry. Values written by kms-aead 0.28.1 or earlier need the
-    /// `legacy-formats` feature.
+    /// The value's key is unwrapped by this keyring's provider, so it must have been wrapped by
+    /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
+    /// values share one entry. It reads Tink's KMS envelope, the layout kms-aead 0.30 writes; a
+    /// value in a layout of kms-aead 0.29 or earlier is upgraded first, with kms-aead's
+    /// `KmsAeadEnvelope::upgrade_legacy_value`.
     ///
     /// # Errors
     ///
     /// [`KeyringError::EnvelopeKeyOfKeyVersion`], before any KMS call, when the value carries the
     /// wrapped key of a version of the keyring's record, in any purpose or state;
     /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
-    /// value is not in a layout this build reads, `UNSUPPORTED_ALGORITHM` when the backend does
-    /// not implement `algorithm`, the provider's error when the key does not unwrap, and code
-    /// `DECRYPT` when the value is not authentic under it and `aad`.
+    /// value is not in Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement
+    /// `algorithm`, the provider's error when the key does not unwrap, `INVALID_KEY_FORMAT` when
+    /// what it unwraps is not a serialized Tink key, and code `DECRYPT` when the value is not
+    /// authentic under it and `aad`.
     pub async fn decrypt_envelope_value(
         &self,
         aad: &[u8],
@@ -760,24 +739,21 @@ where
     ) -> KeyringResult<SecretValue> {
         spans::in_span(spans::decrypt_envelope(self.id()), async {
             let (cipher_text, dek) = value.separate()?;
-            // The wrapped bytes alone, since the key version in an envelope header is not
-            // authenticated. Wrapped keys are not secret, so the comparison need not be
-            // constant-time.
             let record = self.cache.current().await;
-            if let Some(version) = record.versions().iter().find(|version| {
-                version
-                    .wrapped_dek()
-                    .is_some_and(|wrapped| wrapped.wrapped() == dek.wrapped())
-            }) {
+            if let Some(version) = record
+                .versions()
+                .iter()
+                .find(|version| version.wrapped_dek() == Some(&dek))
+            {
                 return Err(KeyringError::EnvelopeKeyOfKeyVersion(KeyVersionError {
                     keyring: self.id().clone(),
                     key_id: version.key_id(),
                 }));
             }
-            let cipher = AeadCipher::new(self.backend, algorithm)?;
+            let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
                 .dek_cache()
-                .with_key(&self.provider, &dek, None, |key| {
+                .with_key(&self.provider, &dek, |key| {
                     cipher.decrypt_value(aad, &cipher_text, key)
                 })
                 .await?;
@@ -790,61 +766,38 @@ where
 
 impl NewVersion {
     /// Version `key_id` with a new key for `algorithm`, from the KMS generator when the provider
-    /// uses one and from the CSPRNG otherwise, wrapped by `provider` with `binding`.
-    async fn generate<P>(
+    /// uses one and from the CSPRNG of `B` otherwise, wrapped by `provider`.
+    async fn generate<P, B>(
         key_id: KeyId,
         algorithm: KeyAlgorithm,
         provider: &P,
-        backend: AeadBackend,
-        binding: Option<&DekBinding>,
     ) -> KeyringResult<Self>
     where
         P: KmsAeadEncryptionProvider + Sync,
+        B: AeadBackend,
     {
         let dek = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
-                let (_, dek) = AeadCipher::new(backend, algorithm)?
-                    .generate_wrapped_key(provider, binding)
+                let (_, dek) = AeadCipher::<B>::new(algorithm)?
+                    .generate_wrapped_key(provider)
                     .await?;
                 dek
             }
+            #[cfg(feature = "deterministic")]
             KeyAlgorithm::Deterministic(algorithm) => {
-                Self::wrapped_deterministic_key(algorithm, provider, binding).await?
+                let (_, dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
+                    .generate_wrapped_key(provider)
+                    .await?;
+                dek
             }
+            #[cfg(not(feature = "deterministic"))]
+            KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
         };
         Ok(Self {
             key_id,
             algorithm,
             dek,
         })
-    }
-
-    #[cfg(feature = "deterministic")]
-    async fn wrapped_deterministic_key<P>(
-        algorithm: DeterministicAlgorithm,
-        provider: &P,
-        binding: Option<&DekBinding>,
-    ) -> KeyringResult<EncryptedDataEncryptionKey>
-    where
-        P: KmsAeadEncryptionProvider + Sync,
-    {
-        let (_, dek) = kms_aead::DeterministicCipher::new(algorithm)?
-            .generate_wrapped_key(provider, binding)
-            .await?;
-        Ok(dek)
-    }
-
-    #[cfg(not(feature = "deterministic"))]
-    async fn wrapped_deterministic_key<P>(
-        algorithm: DeterministicAlgorithm,
-        provider: &P,
-        binding: Option<&DekBinding>,
-    ) -> KeyringResult<EncryptedDataEncryptionKey>
-    where
-        P: KmsAeadEncryptionProvider + Sync,
-    {
-        let _ = (algorithm, provider, binding);
-        Err(KeyringError::DeterministicDisabled)
     }
 }
 
@@ -887,17 +840,11 @@ impl Drop for WatchTask {
 
 impl KeyringPolicy {
     /// The record of a new keyring `id` under this policy, with one active version per purpose
-    /// it names an algorithm for, each wrapped by `provider`, with its version's binding when
-    /// `bind_keys` is set.
-    async fn new_record<P>(
-        &self,
-        id: KeyringId,
-        provider: &P,
-        backend: AeadBackend,
-        bind_keys: bool,
-    ) -> KeyringResult<KeyringRecord>
+    /// it names an algorithm for, each wrapped by `provider`.
+    async fn new_record<P, B>(&self, id: KeyringId, provider: &P) -> KeyringResult<KeyringRecord>
     where
         P: KmsAeadEncryptionProvider + Sync,
+        B: AeadBackend,
     {
         let now = Timestamp::now();
         let algorithms = Algorithms::new(self.randomized_algorithm, self.deterministic_algorithm);
@@ -910,12 +857,7 @@ impl KeyringPolicy {
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
             if let Some(algorithm) = algorithms.of(purpose) {
                 let key_id = edit.record().next_key_id(purpose)?;
-                let binding = bind_keys
-                    .then(|| edit.record().id().dek_binding(key_id))
-                    .transpose()?;
-                let new =
-                    NewVersion::generate(key_id, algorithm, provider, backend, binding.as_ref())
-                        .await?;
+                let new = NewVersion::generate::<P, B>(key_id, algorithm, provider).await?;
                 edit.rotate(new, now)?;
             }
         }
@@ -972,15 +914,6 @@ pub struct KeyringOptions {
     /// What `decrypt` does with a value under a compromised version: `Block` by default.
     #[default = "CompromisedReadPolicy::Block"]
     pub compromised_reads: CompromisedReadPolicy,
-    /// Whether every wrapped key is bound at the KMS to `<keyring id>/<key id>`: `true` by
-    /// default. The KMS then refuses a wrapped key copied into another version or keyring, so
-    /// that a writer of the keyring store without the KMS's encrypt right cannot bring a leaked
-    /// key back into use under a new id. `false` is for a KMS that has no associated data at
-    /// wrap, Azure Key Vault in this release: on such a keyring that writer can, and the
-    /// record's integrity rests on the store's access control alone. Fixed for the life of a
-    /// keyring: the keys of a bound keyring do not unwrap unbound, nor the reverse.
-    #[default = "true"]
-    pub bind_keys: bool,
     /// The cache of unwrapped keys, which may be shared with other keyrings and envelopes, or
     /// `None`, the default, for `DekCache::new(DekCacheOptions::new())`: a TTL of 15 minutes
     /// and 1024 keys.

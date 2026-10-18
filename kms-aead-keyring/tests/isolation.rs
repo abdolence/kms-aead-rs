@@ -5,7 +5,7 @@
 #![cfg(any(feature = "ring", feature = "aws-lc", feature = "rustcrypto"))]
 
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadAlgorithm, AeadBackend};
+use kms_aead::{AeadAlgorithm, ValueStruct};
 use kms_aead_keyring::store::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
@@ -13,11 +13,13 @@ use kms_aead_keyring::{
 };
 
 #[cfg(feature = "ring")]
-const BACKEND: AeadBackend = AeadBackend::Ring;
+type Backend = kms_aead::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-const BACKEND: AeadBackend = AeadBackend::AwsLc;
+type Backend = kms_aead::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-const BACKEND: AeadBackend = AeadBackend::RustCrypto;
+type Backend = kms_aead::RustCrypto;
+
+type LocalKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Backend>, Backend>;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -29,14 +31,11 @@ const ALICE: &str = "alice@example.com";
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 /// A keyring under the default policy and options, on a local KEK.
-async fn default_keyring(
-) -> Result<Keyring<MemoryKeyringStore, LocalKmsProvider>, Box<dyn std::error::Error>> {
-    let provider =
-        LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, BACKEND)?;
-    Ok(Keyring::create(
+async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
+    let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+    Ok(LocalKeyring::create(
         MemoryKeyringStore::new(),
         provider,
-        BACKEND,
         KeyringId::from_static("tenant-42"),
         KeyringPolicy::new(),
         KeyringOptions::new().with_watch(false),
@@ -67,15 +66,14 @@ async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
     Ok(())
 }
 
-/// The value type defaults to the randomized mode, and its bytes are Tink's AES-GCM layout.
+/// A randomized value's bytes are Tink's AES-GCM layout.
 #[tokio::test]
 async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
     let keyring = default_keyring().await?;
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let value: Encrypted<String, Randomized> = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(value.as_bytes()[..5], [0x01, 0, 0, 0, 1]);
-    assert_eq!(value.as_bytes().len(), 5 + 12 + ALICE.len() + 16);
-    let value: Encrypted<String> = value;
+    assert_eq!(value.value()[..5], [0x01, 0, 0, 0, 1]);
+    assert_eq!(value.value().len(), 5 + 12 + ALICE.len() + 16);
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
     Ok(())
 }

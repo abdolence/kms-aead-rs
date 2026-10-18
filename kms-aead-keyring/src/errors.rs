@@ -73,9 +73,6 @@ pub enum KeyringError {
     InvalidTransition(InvalidTransitionError),
     /// Bytes that are not a keyring value.
     ValueLayout(ValueLayoutError),
-    /// A decrypted value that does not decode as its plaintext type, or a plaintext that does
-    /// not encode.
-    Plaintext(PlaintextError),
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
     /// A field's [`Interop`] requirement that sealing would break, checked before sealing.
@@ -112,7 +109,6 @@ impl KeyringError {
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::ValueLayout(_) => "VALUE_LAYOUT",
-            KeyringError::Plaintext(_) => "PLAINTEXT",
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
@@ -164,27 +160,6 @@ impl KeyringError {
 
     pub(crate) fn invalid_identifier(identifier: Identifier, rule: IdentifierRule) -> Self {
         KeyringError::InvalidIdentifier(InvalidIdentifierError { identifier, rule })
-    }
-
-    /// A [`Plaintext`](KeyringError::Plaintext) error of the type `T`. `reason` never quotes the
-    /// value.
-    pub(crate) fn plaintext<T>(reason: impl Into<String>) -> Self {
-        KeyringError::Plaintext(PlaintextError {
-            type_name: std::any::type_name::<T>(),
-            reason: reason.into(),
-        })
-    }
-
-    /// A [`Plaintext`](KeyringError::Plaintext) error of the type `T` with serde_json's category
-    /// and position of `error`, never its message, which quotes the input.
-    #[cfg(feature = "serde-json")]
-    pub(crate) fn json<T>(error: &serde_json::Error) -> Self {
-        Self::plaintext::<T>(format!(
-            "{:?} error at line {} column {}",
-            error.classify(),
-            error.line(),
-            error.column()
-        ))
     }
 }
 
@@ -280,11 +255,6 @@ impl Display for KeyringError {
                 error.key_id, error.keyring, error.from, error.transition
             ),
             KeyringError::ValueLayout(error) => write!(f, "Not a keyring value: {error}"),
-            KeyringError::Plaintext(error) => write!(
-                f,
-                "The plaintext does not convert to or from {}: {}",
-                error.type_name, error.reason
-            ),
             KeyringError::DeterministicDisabled => {
                 f.write_str("Creating a deterministic key version needs the deterministic feature")
             }
@@ -457,7 +427,7 @@ pub enum RecordInvalidReason {
     MissingMaterial(KeyId),
     /// A version whose ordinal is not above every earlier version of its purpose.
     OrdinalOrder(KeyId),
-    /// A wrapped key that is not standard base64 of encrypted key layout v1.
+    /// A wrapped key that is not standard base64 of one byte or more.
     MalformedWrappedDek(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
@@ -676,11 +646,8 @@ pub struct InvalidTransitionError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ValueLayoutError {
-    /// The value does not start with `0x01`, the version byte of Tink's TINK prefix.
+    /// The value does not start with Tink's output prefix, `[0x01][key id: u32 BE]`.
     NoTinkPrefix,
-    /// The value is shorter than an empty value of this purpose: 33 bytes for a randomized
-    /// value, 21 for a deterministic one.
-    TooShort(Purpose),
     /// The key id is 0 or 2^31, which name no version.
     ReservedKeyId,
 }
@@ -688,10 +655,7 @@ pub enum ValueLayoutError {
 impl Display for ValueLayoutError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            ValueLayoutError::NoTinkPrefix => f.write_str("it does not start with 0x01"),
-            ValueLayoutError::TooShort(purpose) => {
-                write!(f, "it is shorter than an empty {purpose} value")
-            }
+            ValueLayoutError::NoTinkPrefix => f.write_str("it does not start with Tink's prefix"),
             ValueLayoutError::ReservedKeyId => f.write_str("its key id is 0 or 2147483648"),
         }
     }
@@ -730,16 +694,6 @@ impl Display for InteropRequirement {
             }
         }
     }
-}
-
-/// See [`KeyringError::Plaintext`]. The reason never quotes the value.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct PlaintextError {
-    /// The plaintext type.
-    pub type_name: &'static str,
-    /// Why the bytes do not convert.
-    pub reason: String,
 }
 
 #[cfg(test)]

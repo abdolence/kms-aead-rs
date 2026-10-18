@@ -14,8 +14,10 @@
 //! a new keyring, the bytes are those Tink and BigQuery's `AEAD.DECRYPT_STRING` read. The key id
 //! is not authenticated: a value relabelled with another id opens under no key.
 //!
-//! [`Encrypted<T>`](Encrypted) is a value that decrypts to a `T`, checked when it is read from
-//! stored bytes. [`Plaintext`] fixes how each `T` encodes, so that other readers decode it.
+//! A value is kms-aead's [`Encrypted<T, Randomized>`](Encrypted), re-exported here, a value that
+//! decrypts to a `T` and is checked when it is read from stored bytes. [`Plaintext`] fixes how
+//! each `T` encodes, so that other readers decode it, and an application newtype such as `Email`
+//! implements it to name what a field holds.
 //!
 //! # Associated data
 //!
@@ -60,13 +62,6 @@
 //! job wraps keys and writes the record. A running process takes a record from the store only
 //! if it moves every version forward from the one it holds, and logs an `ERROR` otherwise.
 //!
-//! Each version's DEK is wrapped bound to `<keyring id>/<key id>` through the KMS's associated
-//! data, and every unwrap names the same binding, so the KMS refuses a wrapped DEK copied into
-//! another version or another keyring: a writer of the store without the KMS's encrypt right
-//! cannot bring a leaked DEK back into use under a new id. A KMS without associated data at wrap,
-//! Azure Key Vault in this release, needs [`bind_keys`](KeyringOptions::bind_keys) off, and then
-//! the record's integrity rests on the store's access control alone.
-//!
 //! # Caching
 //!
 //! The record is revalidated with a conditional read once it is older than
@@ -92,7 +87,6 @@
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
 //! | `deterministic` | creating deterministic key versions; the deterministic types are in every build |
-//! | `legacy-formats` | kms-aead's `legacy-formats`: [`Keyring::decrypt_envelope_value`] also reads the values kms-aead 0.28.1 and earlier wrote |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
@@ -112,12 +106,26 @@
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-//! use kms_aead::AeadBackend;
+//! use kms_aead::{KmsAeadResult, Ring};
 //! use kms_aead_keyring::store::MemoryKeyringStore;
 //! use kms_aead_keyring::{
-//!     EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-//!     KeyringPolicy, Purpose,
+//!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
+//!     KeyringPolicy, Plaintext, Purpose, Randomized,
 //! };
+//! use secret_vault_value::SecretValue;
+//!
+//! #[derive(Debug, PartialEq)]
+//! struct Email(String);
+//!
+//! impl Plaintext for Email {
+//!     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+//!         self.0.to_plaintext()
+//!     }
+//!
+//!     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+//!         String::from_plaintext(plaintext).map(Email)
+//!     }
+//! }
 //!
 //! const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 //! const EMAIL: FieldSpec = FieldSpec::new(
@@ -126,11 +134,10 @@
 //! );
 //!
 //! let provider =
-//!     LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?, AeadBackend::Ring)?;
-//! let keyring = Keyring::open_or_create(
+//!     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+//! let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
 //!     MemoryKeyringStore::new(),
 //!     provider,
-//!     AeadBackend::Ring,
 //!     TENANT,
 //!     KeyringPolicy::new(),
 //!     KeyringOptions::new(),
@@ -138,10 +145,11 @@
 //! .await?;
 //!
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
-//! let value = keyring.encrypt(&aad, &"alice@example.com".to_string()).await?;
+//! let alice = Email("alice@example.com".to_string());
+//! let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 //! keyring.rotate(Purpose::Randomized).await?;
 //!
-//! assert_eq!(keyring.decrypt(&aad, &value).await?, "alice@example.com");
+//! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 //! # Ok(())
 //! # }
 //! # #[cfg(not(feature = "ring"))]
@@ -154,9 +162,6 @@
 mod aad;
 pub use aad::*;
 
-mod encrypted;
-pub use encrypted::*;
-
 pub mod errors;
 pub use errors::{KeyringError, KeyringResult};
 
@@ -166,8 +171,10 @@ pub use key_id::*;
 mod keyring;
 pub use keyring::*;
 
-mod plaintext;
-pub use plaintext::*;
+pub use kms_aead::formats::{Deterministic, Randomized};
+#[cfg(feature = "serde-json")]
+pub use kms_aead::Json;
+pub use kms_aead::{Encrypted, Plaintext};
 
 mod record;
 pub use record::*;
