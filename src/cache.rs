@@ -5,9 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use rsb_derive::Builder;
@@ -21,11 +19,6 @@ use crate::{
 };
 
 const DEFAULT_MAX_ENTRIES: NonZeroUsize = NonZeroUsize::new(1024).expect("1024 is not zero");
-
-/// The shortest period of the reaper, for TTLs under 4 ms.
-const MIN_REAPER_PERIOD: Duration = Duration::from_millis(1);
-
-const REAPER_THREAD_NAME: &str = "kms-aead-dek-reaper";
 
 /// The settings of an enabled [`DekCache`].
 #[derive(Debug, Clone, Builder)]
@@ -88,16 +81,17 @@ impl Display for DekCacheOutcome {
 /// # Key lifetime
 ///
 /// A key is dropped, which zeroizes its bytes, when its entry leaves the cache: once the entry
-/// expires, is evicted for capacity, invalidated or cleared. A `with_key` call that already holds
-/// the key keeps it until its closure returns, and a call waiting on an unwrap that started
-/// before an [`invalidate`](Self::invalidate) or a [`clear`](Self::clear) receives that unwrap's
-/// key, which is not cached.
+/// is evicted for capacity, invalidated, cleared or purged after it expired. A `with_key` call
+/// that already holds the key keeps it until its closure returns, and a call waiting on an
+/// unwrap that started before an [`invalidate`](Self::invalidate) or a [`clear`](Self::clear)
+/// receives that unwrap's key, which is not cached.
 ///
-/// Each enabled cache runs a reaper thread, `kms-aead-dek-reaper`, which drops the expired
-/// entries every quarter of the TTL, and at least every millisecond, and exits once the cache is
-/// dropped. It needs no traffic and no async runtime: the bytes of a key are gone `ttl` plus the
-/// reaper period after it was inserted at most, or when the last `with_key` call holding it
-/// returns, if that is later, as fast as the operating system schedules the thread.
+/// A lookup never returns an entry older than the TTL. The cache runs no thread and no task of
+/// its own: the expired entries of both purposes are dropped at the next call on the cache, for
+/// either purpose, at [`purge_expired`](Self::purge_expired), or when the last clone of the cache
+/// is dropped. With no calls, the bytes of an expired key stay in memory, so an application whose
+/// process can sit idle while it holds keys, and that needs the TTL to bound their lifetime in
+/// memory, calls `purge_expired` on a timer of its own.
 ///
 /// A KMS key that is disabled, or an IAM grant that is revoked, reaches the keys this cache
 /// holds only when their entries expire, or at [`invalidate`](Self::invalidate) or
@@ -117,48 +111,6 @@ struct EnabledCache {
     randomized: KeyMap<DataEncryptionKey>,
     #[cfg(feature = "deterministic")]
     deterministic: KeyMap<DeterministicDataEncryptionKey>,
-    /// Never sends. Dropping it with the cache disconnects the reaper's receiver, which stops
-    /// the reaper at once rather than at its next period.
-    _reaper_stop: Sender<()>,
-}
-
-impl EnabledCache {
-    /// A cache with `options`, and its reaper thread, which exits once the cache is dropped.
-    fn start(options: DekCacheOptions) -> KmsAeadResult<(Arc<Self>, JoinHandle<()>)> {
-        let (reaper_stop, reaper_stopped) = mpsc::channel();
-        let period = (options.ttl / 4).max(MIN_REAPER_PERIOD);
-        let cache = Arc::new(Self {
-            options,
-            randomized: KeyMap::new(),
-            #[cfg(feature = "deterministic")]
-            deterministic: KeyMap::new(),
-            _reaper_stop: reaper_stop,
-        });
-        let reaped = Arc::downgrade(&cache);
-        let reaper = thread::Builder::new()
-            .name(REAPER_THREAD_NAME.to_string())
-            .spawn(move || Self::reap(&reaped, &reaper_stopped, period))
-            .map_err(|error| {
-                KmsAeadSystemError::create(
-                    "DEK_CACHE_REAPER",
-                    &format!("Unable to start the DEK cache reaper thread: {error}"),
-                )
-            })?;
-        Ok((cache, reaper))
-    }
-
-    /// Drops the expired entries of `cache` every `period`, until the cache is dropped and
-    /// `stopped` disconnects with it.
-    fn reap(cache: &Weak<Self>, stopped: &Receiver<()>, period: Duration) {
-        while let Err(RecvTimeoutError::Timeout) = stopped.recv_timeout(period) {
-            let Some(cache) = cache.upgrade() else {
-                return;
-            };
-            cache.randomized.purge(cache.options.ttl);
-            #[cfg(feature = "deterministic")]
-            cache.deterministic.purge(cache.options.ttl);
-        }
-    }
 }
 
 /// The key of an entry. Wrapped keys are not secret, so they hash and compare in variable time.
@@ -188,13 +140,19 @@ struct MapState<K> {
     insertion_order: VecDeque<CacheKey>,
     /// The unwraps under way, which concurrent misses for the same key wait on. An unwrap
     /// whose callers were all cancelled leaves a dangling entry, which the next miss of its key
-    /// replaces and the reaper removes.
+    /// replaces and the next purge removes.
     unwraps: HashMap<CacheKey, Weak<SharedUnwrap<K>>>,
 }
 
 struct CachedDek<K> {
     dek: Arc<K>,
     inserted_at: Instant,
+}
+
+impl<K> CachedDek<K> {
+    fn is_expired(&self, ttl: Duration, now: Instant) -> bool {
+        now.saturating_duration_since(self.inserted_at) >= ttl
+    }
 }
 
 /// The result of one provider call, shared by every caller that missed the same key while it
@@ -230,8 +188,11 @@ impl<K> KeyMap<K> {
     {
         let shared = {
             let mut state = self.lock();
-            state.drop_expired(options.ttl, Instant::now());
-            if let Some(cached) = state.entries.get(&cache_key) {
+            let live = state
+                .entries
+                .get(&cache_key)
+                .filter(|cached| !cached.is_expired(options.ttl, Instant::now()));
+            if let Some(cached) = live {
                 return Ok((Arc::clone(&cached.dek), DekCacheOutcome::Hit));
             }
             state.shared_unwrap(&cache_key)
@@ -257,7 +218,8 @@ impl<K> KeyMap<K> {
         result.map(|dek| (dek, DekCacheOutcome::Miss))
     }
 
-    /// Drops the expired entries, and forgets the unwraps whose callers were all cancelled.
+    /// Drops the expired entries, and forgets the unwraps whose callers were all cancelled. An
+    /// unwrap with a caller still waiting on it stays registered.
     fn purge(&self, ttl: Duration) {
         let mut state = self.lock();
         state.drop_expired(ttl, Instant::now());
@@ -271,7 +233,7 @@ impl<K> MapState<K> {
             let expired = self
                 .entries
                 .get(oldest)
-                .is_none_or(|cached| now.saturating_duration_since(cached.inserted_at) >= ttl);
+                .is_none_or(|cached| cached.is_expired(ttl, now));
             if !expired {
                 return;
             }
@@ -339,13 +301,11 @@ impl<K> MapState<K> {
 }
 
 impl DekCache {
-    /// A cache with `options`, and its reaper thread, which exits once the last clone of the
-    /// cache is dropped.
+    /// A cache with `options`.
     ///
     /// # Errors
     ///
-    /// `INVALID_DEK_CACHE_TTL` when the TTL is zero, and `DEK_CACHE_REAPER` when the operating
-    /// system refuses to start the reaper thread.
+    /// `INVALID_DEK_CACHE_TTL` when the TTL is zero.
     pub fn new(options: DekCacheOptions) -> KmsAeadResult<Self> {
         if options.ttl.is_zero() {
             return Err(KmsAeadSystemError::create(
@@ -353,12 +313,17 @@ impl DekCache {
                 "A DEK cache TTL of zero caches nothing: use DekCache::disabled",
             ));
         }
-        let (cache, _detached_reaper) = EnabledCache::start(options)?;
-        Ok(Self(Some(cache)))
+        Ok(Self(Some(Arc::new(EnabledCache {
+            options,
+            randomized: KeyMap::new(),
+            #[cfg(feature = "deterministic")]
+            deterministic: KeyMap::new(),
+        }))))
     }
 
-    /// A cache that holds nothing and runs no thread: every [`with_key`](Self::with_key) calls
-    /// the provider, and [`invalidate`](Self::invalidate) and [`clear`](Self::clear) do nothing.
+    /// A cache that holds nothing: every [`with_key`](Self::with_key) calls the provider, and
+    /// [`invalidate`](Self::invalidate), [`clear`](Self::clear) and
+    /// [`purge_expired`](Self::purge_expired) do nothing.
     pub fn disabled() -> Self {
         Self(None)
     }
@@ -389,6 +354,7 @@ impl DekCache {
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
         let unwrap_key = || provider.decrypt_data_encryption_key(encrypted);
+        self.purge_expired();
         match &self.0 {
             Some(cache) => {
                 let cache_key = CacheKey::new(provider.kek(), encrypted);
@@ -429,6 +395,7 @@ impl DekCache {
             let key = provider.decrypt_data_encryption_key(encrypted).await?;
             checked_deterministic_key(key, algorithm)
         };
+        self.purge_expired();
         match &self.0 {
             Some(cache) => {
                 let cache_key = CacheKey::new(provider.kek(), encrypted);
@@ -449,11 +416,25 @@ impl DekCache {
     /// [`with_key`](Self::with_key) of the key calls the provider, and an unwrap of it under way
     /// returns its key to its callers without caching it.
     pub fn invalidate(&self, kek: &KekRef, encrypted: &EncryptedDataEncryptionKey) {
+        self.purge_expired();
         if let Some(cache) = &self.0 {
             let cache_key = CacheKey::new(kek.clone(), encrypted);
             cache.randomized.lock().remove(&cache_key);
             #[cfg(feature = "deterministic")]
             cache.deterministic.lock().remove(&cache_key);
+        }
+    }
+
+    /// Drops the expired entries of both purposes, which zeroizes their keys once no
+    /// [`with_key`](Self::with_key) call holds them. Every call on the cache does this first. An
+    /// application whose process can sit idle while the cache holds keys calls it from a timer of
+    /// its own, on whatever runtime it uses, to drop them at the TTL; see "Key lifetime" on
+    /// [`DekCache`].
+    pub fn purge_expired(&self) {
+        if let Some(cache) = &self.0 {
+            cache.randomized.purge(cache.options.ttl);
+            #[cfg(feature = "deterministic")]
+            cache.deterministic.purge(cache.options.ttl);
         }
     }
 
@@ -488,6 +469,7 @@ impl InsertDek for DekCache {
         encrypted: &EncryptedDataEncryptionKey,
         key: DataEncryptionKey,
     ) {
+        self.purge_expired();
         if let Some(cache) = &self.0 {
             cache.randomized.lock().insert(
                 CacheKey::new(kek, encrypted),
@@ -551,13 +533,14 @@ impl DekCache {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
 
     use futures::executor::block_on;
 
     use super::*;
     use crate::errors::KmsAeadError;
     use crate::test_provider::{
-        let_spawned_tasks_wait, wait_until, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
+        let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
     };
 
     const ORDERS_KEK: &str = "orders";
@@ -867,7 +850,7 @@ mod tests {
     }
 
     #[test]
-    fn an_expired_key_is_zeroized_without_traffic_or_runtime() -> KmsAeadResult<()> {
+    fn purge_expired_zeroizes_an_expired_key_without_a_runtime() -> KmsAeadResult<()> {
         let encrypted = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
         let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
@@ -875,20 +858,38 @@ mod tests {
         assert!(tokio::runtime::Handle::try_current().is_err());
         block_on(cache.with_key(&provider, &encrypted, |_| ()))?;
         let cached = cache.cached_dek(&provider.kek(), &encrypted).unwrap();
-        wait_until(|| cached.strong_count() == 0);
+        thread::sleep(SHORT_TTL);
+        let held_until_purged = cached.strong_count();
+        cache.purge_expired();
 
-        assert_eq!(cached.strong_count(), 0);
+        assert_eq!([held_until_purged, cached.strong_count()], [1, 0]);
         Ok(())
     }
 
-    #[test]
-    fn a_dropped_cache_stops_its_reaper() -> KmsAeadResult<()> {
-        let (cache, reaper) = EnabledCache::start(DekCacheOptions::new())?;
+    #[cfg(feature = "deterministic")]
+    #[tokio::test]
+    async fn a_randomized_lookup_drops_an_expired_deterministic_key() -> KmsAeadResult<()> {
+        let orders = EncryptedDataEncryptionKey::new(ORDERS_DEK.to_vec(), None);
+        let billing = EncryptedDataEncryptionKey::new(BILLING_DEK.to_vec(), None);
+        let cache = DekCache::new(DekCacheOptions::new().with_ttl(SHORT_TTL))?;
+        let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);
 
-        drop(cache);
-        wait_until(|| reaper.is_finished());
+        cache
+            .with_deterministic_key(
+                &provider,
+                DeterministicAlgorithm::Aes256Siv,
+                &orders,
+                |_| (),
+            )
+            .await?;
+        let deterministic = cache
+            .cached_deterministic_dek(&provider.kek(), &orders)
+            .unwrap();
+        tokio::time::sleep(SHORT_TTL).await;
+        let held_until_lookup = deterministic.strong_count();
+        cache.with_key(&provider, &billing, |_| ()).await?;
 
-        assert!(reaper.is_finished());
+        assert_eq!([held_until_lookup, deterministic.strong_count()], [1, 0]);
         Ok(())
     }
 

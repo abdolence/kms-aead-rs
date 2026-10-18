@@ -69,10 +69,12 @@ pub struct KmsAeadEnvelopeOptions {
 /// each value carries its wrapped DEK.
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
-/// which zeroizes it at most its TTL plus its reaper period after it was cached, whatever
-/// `max_age`, and the first encryption after that unwraps it again with one KMS call. The values
-/// sealed while the cache holds the DEK are readable by whoever reads the process's memory in
-/// that window.
+/// which serves it for the cache's TTL, whatever `max_age`, and the first encryption after that
+/// unwraps it again with one KMS call. The cache zeroizes the expired DEK at its next call or at
+/// [`DekCache::purge_expired`], so a writer that falls quiet leaves the DEK in memory until
+/// then: a process that can sit idle calls `purge_expired` on a timer to drop it at the TTL. The
+/// values sealed while the cache holds the DEK are readable by whoever reads the process's
+/// memory in that window.
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct DekReusePolicy {
@@ -438,7 +440,7 @@ mod tests {
     #[cfg(not(feature = "legacy-formats"))]
     use crate::errors::KmsAeadLegacyFormat;
     use crate::test_provider::{
-        let_spawned_tasks_wait, wait_until, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
+        let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider, CONCURRENT_CALLS,
         TEST_BACKEND,
     };
 
@@ -952,7 +954,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_quiet_writer_key_is_zeroized_at_the_cache_ttl() -> KmsAeadResult<()> {
+    async fn a_quiet_writer_key_is_zeroized_by_purge_expired() -> KmsAeadResult<()> {
         let ttl = Duration::from_millis(200);
         let envelope = CountingEnvelope::with_options(
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
@@ -970,12 +972,14 @@ mod tests {
         let cached = envelope
             .dek_cache()
             .cached_dek(&envelope.provider.kek(), &writer_dek);
-        wait_until(|| cached.as_ref().is_some_and(|dek| dek.strong_count() == 0));
+        tokio::time::sleep(ttl).await;
+        envelope.dek_cache().purge_expired();
+        let zeroized = cached.is_some_and(|dek| dek.strong_count() == 0);
         let after_ttl = envelope
             .encrypt_value(&AAD, &SecretValue::from(PLAIN_TEXT))
             .await?;
 
-        assert!(cached.is_some_and(|dek| dek.strong_count() == 0));
+        assert!(zeroized);
         assert_eq!(after_ttl.separate()?.1, writer_dek);
         assert_eq!(envelope.provider.wraps(), 1);
         assert_eq!(envelope.provider.unwraps(), 1);

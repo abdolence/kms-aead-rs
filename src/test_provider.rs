@@ -2,7 +2,6 @@
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
@@ -25,9 +24,6 @@ pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 /// How many calls the concurrency tests start at once.
 pub(crate) const CONCURRENT_CALLS: usize = 16;
-
-/// How long a test waits for another thread, far past any period that thread waits on.
-const WAIT_DEADLINE: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {
@@ -163,14 +159,6 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
 pub(crate) async fn let_spawned_tasks_wait() {
     for _ in 0..CONCURRENT_CALLS * 4 {
         tokio::task::yield_now().await;
-    }
-}
-
-/// Waits until `done` holds, which another thread brings about, or for 5 seconds at most.
-pub(crate) fn wait_until(done: impl Fn() -> bool) {
-    let deadline = Instant::now() + WAIT_DEADLINE;
-    while !done() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
     }
 }
 
