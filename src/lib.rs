@@ -78,6 +78,11 @@
 //! [`Format`](formats::Format). The `serde` feature reads and writes it, and the `postgres` and
 //! `sqlx` features store it in a PostgreSQL `BYTEA` column.
 //!
+//! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
+//! the column: a truncated HMAC-SHA256 of the value under a beacon key, which
+//! [`KmsAeadEnvelope::beacon`] computes with the key unwrapped through the envelope's cache, and
+//! [`BeaconMac`] with a key the caller holds. It is stored as `Encrypted` is.
+//!
 //! # Other features
 //!
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`];
@@ -241,6 +246,9 @@ pub use backend::{generate_random_bytes, AeadBackend};
 
 mod aead_cipher;
 pub use aead_cipher::*;
+
+mod beacon;
+pub use beacon::{Beacon, BeaconAlgorithm, BeaconBits, BeaconMac};
 
 pub mod cache;
 
