@@ -65,6 +65,8 @@ impl PartialEq for DataEncryptionKey {
     }
 }
 
+impl Eq for DataEncryptionKey {}
+
 /// A data encryption key encrypted by a KMS: the bytes the provider returned, which are also the
 /// bytes to store and the bytes the provider decrypts. They are the KMS ciphertext of the key as
 /// Tink serialises it, or of the raw key for Azure, and they name the KMS key version that
