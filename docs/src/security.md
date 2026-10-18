@@ -98,8 +98,9 @@ splits two principals:
   `decrypt` and `beacon` make no KMS encryption call, so it needs nothing more;
 - **Administrative principal**: KMS encrypt and decrypt on the KEK, and the only principal with
   write access to the keyring store. `create`, `rotate`, `promote`, `change_algorithm`,
-  `mark_compromised`, `retire`, `reinstate`, `destroy`, `reencrypt_deks` and
-  `export_bigquery_keyset` run under it, in a job, never in a request handler.
+  `mark_compromised`, `retire`, `reinstate`, `destroy`, `dangerously_destroy_all_versions`,
+  `reencrypt_deks`, `export_bigquery_keyset` and `export_tink_keyset` run under it, in a job,
+  never in a request handler.
 
 | KMS | Serving | Administration |
 |---|---|---|

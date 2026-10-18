@@ -105,7 +105,7 @@
 //! | Feature | Enables |
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
-//! | `deterministic` | creating deterministic key versions; the deterministic types are in every build |
+//! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`; the deterministic types are in every build |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |

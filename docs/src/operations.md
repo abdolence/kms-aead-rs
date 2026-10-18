@@ -315,7 +315,7 @@ KEK, follow the IAM over-grant steps. If the attacker may also write the keyring
 This case starts from the `ERROR` event of a refused record that moves backwards, whose `rule`
 names the version, or from a version in the record that the administrative job's log does not
 show. Either means that something other than the job wrote the record: a restore, which
-[the previous case](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the
+[the next case](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the
 store.
 
 1. If the version is active, `mark_compromised` it, so that nothing new is sealed under it from

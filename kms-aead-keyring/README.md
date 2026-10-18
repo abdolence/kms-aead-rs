@@ -11,7 +11,8 @@ The library provides:
 
 - values in Tink's wire format, with a 4-byte key id instead of an encrypted DEK, which Tink and
   BigQuery read too;
-- no KMS call on write, and one decryption per key version per cache TTL on read;
+- no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on
+  write and read;
 - staged rotation, retirement, destruction and a compromised flag every process sees;
 - keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory for tests;
 - `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support

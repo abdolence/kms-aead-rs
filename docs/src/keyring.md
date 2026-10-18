@@ -6,7 +6,8 @@ data encryption key (DEK) encrypted by a KEK in the KMS, with a lifecycle state.
 
 Compared to an envelope, a keyring value carries a 4-byte key id instead of its encrypted DEK:
 
-- no KMS call on write, and on read only one decryption per key version per DEK cache TTL;
+- no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on write
+  and read;
 - 33 bytes of overhead per value, 21 for deterministic values, see
   [Formats of `Encrypted`](./formats.md#formats-of-encrypted);
 - central staged rotation, retirement, destruction and a compromised flag, for every process
@@ -35,8 +36,10 @@ The crate has no default features, and the backend features are those of kms-aea
 - `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto`: the crypto backends, see
   [Crypto backends](./crypto-backends.md). A keyring names its backend as a type parameter, such
   as `kms_aead::backends::Ring`;
-- `deterministic`: creating deterministic key versions, see
-  [Deterministic fields](./keyring/deterministic.md);
+- `deterministic`: deterministic key versions and every call on them, `encrypt_deterministic`,
+  `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`, see
+  [Deterministic fields](./keyring/deterministic.md). The deterministic types exist in every
+  build, so a process without the feature keeps a record's deterministic versions intact;
 - `serde`: `Serialize` and `Deserialize` for `Encrypted`;
 - `serde-json`: `serde`, and `Json<T>`, a plaintext stored as its JSON;
 - `firestore`, `postgres`, `gcs`, `s3`: the keyring stores, see
@@ -133,10 +136,11 @@ The keyring calls split in two groups:
 - serving calls: `encrypt`, `decrypt`, `beacon` and their variants, which read the record and
   decrypt DEKs. They need the KMS's decrypt right and read access to the store;
 - administrative calls: `create`, `rotate`, `promote`, `change_algorithm`, `mark_compromised`,
-  `retire`, `reinstate`, `destroy` and `reencrypt_deks`, which write the record, and
-  `export_bigquery_keyset`. `create`, `rotate`, `change_algorithm`, `mark_compromised`,
-  `reencrypt_deks` and the export encrypt, so they need the KMS's encrypt right, and all but the
-  export need write access to the store.
+  `retire`, `reinstate`, `destroy`, `dangerously_destroy_all_versions` and `reencrypt_deks`,
+  which write the record, and the exports `export_bigquery_keyset` and `export_tink_keyset`.
+  `create`, `rotate`, `change_algorithm`, `mark_compromised`, `reencrypt_deks` and the exports
+  encrypt, so they need the KMS's encrypt right, and all but the exports need write access to the
+  store.
 
 Run the administrative calls in a job under its own principal, never in a request handler. The
 deployment rule and the IAM roles per KMS are in

@@ -66,7 +66,8 @@ ring = ["kms-aead/ring"]
 aws-lc = ["kms-aead/aws-lc"]
 aws-lc-fips = ["kms-aead/aws-lc-fips"]
 rustcrypto = ["kms-aead/rustcrypto"]
-# Creates deterministic key versions. The deterministic types exist in every build.
+# Deterministic key versions and every call on them. The deterministic types exist in every
+# build.
 deterministic = ["kms-aead/deterministic"]
 # `Serialize` and `Deserialize` for `Encrypted`.
 serde = ["kms-aead/serde"]

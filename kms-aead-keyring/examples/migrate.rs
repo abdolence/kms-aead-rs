@@ -201,13 +201,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_rows(&keyring, &table).await?;
 
     // The sweep over `seal.format = 'envelope'`.
-    let candidates = table
+    let candidates: Vec<String> = table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
         .filter(|(_, row)| row.seal.format == SealFormat::Envelope)
         .map(|(user, _)| user.clone())
-        .collect::<Vec<_>>();
+        .collect();
     let report = sweep::run(
         &TENANT,
         stream::iter(candidates),
