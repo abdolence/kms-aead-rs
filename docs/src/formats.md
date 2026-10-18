@@ -67,8 +67,7 @@ kms-aead-keyring value handed to the encrypted key reader by mistake also starts
 With the feature, both read as they did in 0.29, and the first read of each legacy layout in a
 process logs one `WARN` event that names the upgrade function to use.
 
-To find the rows that need the feature before an upgrade, look for `KMS AEAD decrypt` spans with
-`format=envelope_legacy`. In a build without `legacy-formats` they come with
+In a build without `legacy-formats`, the `KMS AEAD decrypt` spans of such rows record
 `error_code=LEGACY_FORMAT`, see [Observability](./observability.md).
 
 ## Upgrading stored values
@@ -83,7 +82,7 @@ With `legacy-formats`, two functions rewrite a stored value in the current layou
 
 Both are local re-framing: the wrapped DEK and the AEAD bytes stay as they are, and no KMS is
 called. The upgraded value records no key version, and the GCP and AWS providers, the only ones
-before 0.29, unwrap without one. Each call opens a `KMS AEAD upgrade` span.
+before 0.29, unwrap without one.
 
 A sweep over stored rows:
 

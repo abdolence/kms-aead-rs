@@ -11,7 +11,6 @@ use tracing::Span;
 
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
-use crate::types::EnvelopeLayout;
 use crate::{
     spans, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, CipherTextWithEncryptedKey,
     DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult,
@@ -363,10 +362,7 @@ where
         aad: &[u8],
         cipher_text: &CipherTextWithEncryptedKey,
     ) -> KmsAeadResult<SecretValue> {
-        let format = EnvelopeLayout::try_from(cipher_text)
-            .ok()
-            .map(EnvelopeLayout::name);
-        spans::in_span(self.decrypt_span(self.mode(), format), async {
+        spans::in_span(self.decrypt_span(self.mode()), async {
             let (cipher_text, encrypted_dek) = cipher_text.separate()?;
             self.with_dek(&encrypted_dek, |key| {
                 self.cipher.decrypt_value(aad, &cipher_text, key)
@@ -423,7 +419,7 @@ where
         cipher_text: &CipherText,
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
-        spans::in_scope(self.decrypt_span("caller_dek", None), || {
+        spans::in_scope(self.decrypt_span("caller_dek"), || {
             self.cipher.decrypt_value(aad, cipher_text, dek)
         })
     }
@@ -439,7 +435,7 @@ where
         cipher_text: &CipherText,
         dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<SecretValue> {
-        spans::in_span(self.decrypt_span("caller_dek", None), async {
+        spans::in_span(self.decrypt_span("caller_dek"), async {
             self.with_dek(dek, |key| self.cipher.decrypt_value(aad, cipher_text, key))
                 .await
         })
@@ -495,14 +491,8 @@ where
         spans::aead_encrypt(mode, self.cipher.algorithm(), B::NAME, &self.dek_cache)
     }
 
-    fn decrypt_span(&self, mode: &str, format: Option<&str>) -> Span {
-        spans::aead_decrypt(
-            mode,
-            self.cipher.algorithm(),
-            B::NAME,
-            &self.dek_cache,
-            format,
-        )
+    fn decrypt_span(&self, mode: &str) -> Span {
+        spans::aead_decrypt(mode, self.cipher.algorithm(), B::NAME, &self.dek_cache)
     }
 }
 

@@ -1,6 +1,4 @@
 use crate::errors::*;
-#[cfg(feature = "legacy-formats")]
-use crate::spans;
 use crate::KmsAeadResult;
 use rvstruct::*;
 use secret_vault_value::SecretValue;
@@ -179,17 +177,6 @@ enum EncryptedKeyLayout {
     Bare,
 }
 
-#[cfg(feature = "legacy-formats")]
-impl EncryptedKeyLayout {
-    /// The value of the `from_format` and `to_format` span fields.
-    fn name(self) -> &'static str {
-        match self {
-            EncryptedKeyLayout::V1 => "encrypted_key_v1",
-            EncryptedKeyLayout::Bare => "encrypted_key_bare",
-        }
-    }
-}
-
 impl EncryptedDataEncryptionKey {
     const LAYOUT_MAGIC: u8 = 0xFF;
     const LAYOUT_V1: u8 = 0x01;
@@ -264,8 +251,6 @@ impl EncryptedDataEncryptionKey {
     /// version. It takes the stored bytes because a parsed key does not record the layout it
     /// was read from; a caller that stores hex decodes before and encodes after.
     ///
-    /// Opens a `KMS AEAD upgrade` span.
-    ///
     /// # Errors
     ///
     /// The errors of `TryFrom<&[u8]>`.
@@ -275,15 +260,11 @@ impl EncryptedDataEncryptionKey {
         note = "reading the layouts written up to 0.28.1 will be removed in a later breaking release"
     )]
     pub fn upgrade_legacy_layout(stored: &[u8]) -> KmsAeadResult<Option<Vec<u8>>> {
-        let layout = Self::layout(stored);
-        let from_format = layout.as_ref().ok().copied().map(EncryptedKeyLayout::name);
-        spans::upgrade(from_format, EncryptedKeyLayout::V1.name(), || {
-            let encrypted_dek = Self::try_from(stored)?;
-            match layout? {
-                EncryptedKeyLayout::V1 => Ok(None),
-                EncryptedKeyLayout::Bare => encrypted_dek.to_bytes().map(Some),
-            }
-        })
+        let encrypted_dek = Self::try_from(stored)?;
+        match Self::layout(stored)? {
+            EncryptedKeyLayout::V1 => Ok(None),
+            EncryptedKeyLayout::Bare => encrypted_dek.to_bytes().map(Some),
+        }
     }
 
     fn layout(bytes: &[u8]) -> KmsAeadResult<EncryptedKeyLayout> {
@@ -411,19 +392,9 @@ pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 /// The layout of a stored [`CipherTextWithEncryptedKey`].
 #[derive(Clone, Copy)]
-pub(crate) enum EnvelopeLayout {
+enum EnvelopeLayout {
     V1,
     LengthPrefixed,
-}
-
-impl EnvelopeLayout {
-    /// The value of the `format`, `from_format` and `to_format` span fields.
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            EnvelopeLayout::V1 => "envelope_v1",
-            EnvelopeLayout::LengthPrefixed => "envelope_legacy",
-        }
-    }
 }
 
 /// The layout the first byte names, whether or not this build reads it.
@@ -540,8 +511,6 @@ impl CipherTextWithEncryptedKey {
     /// bytes stay as they are, and no KMS is called: the GCP and AWS providers unwrap without a
     /// key version.
     ///
-    /// Opens a `KMS AEAD upgrade` span.
-    ///
     /// # Errors
     ///
     /// The errors of [`separate`](Self::separate).
@@ -551,17 +520,11 @@ impl CipherTextWithEncryptedKey {
         note = "reading the layouts written up to 0.28.1 will be removed in a later breaking release"
     )]
     pub fn upgrade_legacy_layout(&self) -> KmsAeadResult<Option<Self>> {
-        let layout = EnvelopeLayout::try_from(self);
-        let from_format = layout.as_ref().ok().copied().map(EnvelopeLayout::name);
-        spans::upgrade(from_format, EnvelopeLayout::V1.name(), || {
-            let (cipher_text, encrypted_dek) = self.separate()?;
-            match layout? {
-                EnvelopeLayout::V1 => Ok(None),
-                EnvelopeLayout::LengthPrefixed => {
-                    Self::join(&cipher_text, &encrypted_dek).map(Some)
-                }
-            }
-        })
+        let (cipher_text, encrypted_dek) = self.separate()?;
+        match EnvelopeLayout::try_from(self)? {
+            EnvelopeLayout::V1 => Ok(None),
+            EnvelopeLayout::LengthPrefixed => Self::join(&cipher_text, &encrypted_dek).map(Some),
+        }
     }
 
     fn split_v1(value: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {

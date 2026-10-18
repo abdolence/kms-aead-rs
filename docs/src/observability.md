@@ -13,7 +13,6 @@ The spans are:
   `decrypt_value_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_new_dek` and `generate_new_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
-- `KMS AEAD upgrade`: both `upgrade_legacy_layout` functions, with `legacy-formats`;
 - `KMS wrap`: each provider's wrap of a DEK;
 - `KMS unwrap`: each provider's unwrap of a DEK;
 - `KMS random`: a call to the GCP or AWS KMS generator, when the provider uses it.
@@ -55,8 +54,8 @@ let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
 The decrypt prints, without timestamps:
 
 ```text
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled /kms_aead/format="envelope_v1"}:KMS unwrap{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled /kms_aead/format="envelope_v1"}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS unwrap{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=chacha20-poly1305 /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 ```
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/tracing.rs),
@@ -102,13 +101,7 @@ left unrecorded, never recorded as `0` or an empty string.
 | `algorithm` | `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm` or `aes-256-gcm-siv` |
 | `backend` | `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` for a call that unwraps through an enabled cache, a failed unwrap recording `miss`; unrecorded for a call that looks nothing up |
-| `format` | decrypt only: the layout read, `envelope_v1` or `envelope_legacy`; unrecorded for the calls that take a `CipherText` |
 | `error_code` | the code of the error the call returned |
-
-`format` is recorded whether or not the build reads the layout, so in a build without
-`legacy-formats` a length-prefixed value shows `format=envelope_legacy` with
-`error_code=LEGACY_FORMAT`. Query for that pair to find the values that need the feature before
-an upgrade.
 
 ### KMS AEAD generate DEK and KMS AEAD decrypt DEK
 
@@ -118,14 +111,6 @@ an upgrade.
 | `algorithm` | the algorithm of the key, `aes-256-siv` for deterministic keys |
 | `backend` | generate DEK only: the envelope's backend, `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
-| `error_code` | the code of the error the call returned |
-
-### KMS AEAD upgrade
-
-| Field | Value |
-|---|---|
-| `from_format` | the layout of the stored value: `envelope_legacy`, `envelope_v1`, `encrypted_key_bare` or `encrypted_key_v1` |
-| `to_format` | the layout written, `envelope_v1` or `encrypted_key_v1`; unrecorded when the value already was current |
 | `error_code` | the code of the error the call returned |
 
 ### KMS wrap, KMS unwrap and KMS random
