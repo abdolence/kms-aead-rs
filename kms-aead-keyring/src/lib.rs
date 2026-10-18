@@ -46,7 +46,7 @@
 //!
 //! With the `deterministic` feature, `Keyring::encrypt_deterministic` seals a value under the
 //! active AES-SIV version, so that equal plaintexts give equal [`Encrypted<T,
-//! Deterministic>`](formats::Deterministic) values, and `Keyring::equality_probes` seals a plaintext
+//! Deterministic>`](formats::Deterministic) values, and `Keyring::deterministic_probes` seals a plaintext
 //! under every version that still decrypts, for the `IN` list of an equality query across a
 //! rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id,
 //! so a value opens in any row of its kind and field, and a deterministic field never decides
@@ -74,7 +74,7 @@
 //! [`Keyring::mark_compromised`] flags a version for good, and replaces an active one with a
 //! version that is active at once. Under the default [`CompromisedReadPolicy::Block`] values
 //! under a compromised version stop decrypting through [`Keyring::decrypt`];
-//! [`Keyring::decrypt_with_status`] still opens them and reports them as untrusted.
+//! [`Keyring::decrypt_with_trust`] still opens them and reports them as untrusted.
 //!
 //! The record's integrity rests on the store's access control. The processes that serve
 //! requests need the KMS's decrypt right and read access to the store; only an administrative
@@ -224,7 +224,6 @@ mod spans;
 pub mod store;
 
 pub mod sweep;
-pub use sweep::{SealFormat, SealMarker};
 
 pub mod testing;
 

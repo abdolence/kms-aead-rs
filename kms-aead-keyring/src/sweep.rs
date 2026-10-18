@@ -15,10 +15,11 @@
 //! `failed == 0` and that query returns nothing, the old version can be
 //! [`retire`](crate::Keyring::retire)d.
 //!
-//! The re-seal reads every field with [`decrypt_with_status`](crate::Keyring::decrypt_with_status),
-//! and builds its [`Resealed`] from the [`KeyTrust`] of each. A value read under a compromised
-//! version is untrusted data, since whoever holds the leaked key can have forged it, and
-//! re-sealing makes it read as trusted everywhere. The application decides per record before it
+//! The re-seal reads every field with [`decrypt_with_trust`](crate::Keyring::decrypt_with_trust),
+//! and reports in [`ResealOutcome::Resealed`] whether the [`KeyTrust`](crate::KeyTrust) of any
+//! of them is compromised. A value read under a compromised version is untrusted data, since
+//! whoever holds the leaked key can have forged it, and re-sealing makes it read as trusted
+//! everywhere. The application decides per record before it
 //! re-seals, with a quarantine field beside the marker, a comparison against a backup taken
 //! before the compromise, or acceptance; [`SweepReport::resealed_from_compromised`] counts the
 //! records that went through that decision.
@@ -54,7 +55,7 @@ use tracing::Instrument;
 
 use crate::errors::KeyringResult;
 use crate::purpose::{optional_key_id, unreserved};
-use crate::{spans, KeyId, KeyTrust, KeyringId, Purpose};
+use crate::{spans, KeyId, KeyringId, Purpose};
 
 /// Which layout a record's encrypted fields are in, and the oldest key version of each purpose
 /// among them, stored beside those fields as plain fields an index covers: in Firestore the
@@ -135,30 +136,17 @@ impl Default for SealMarker {
 }
 
 /// What the re-seal of one candidate did.
-#[derive(Debug)]
-pub enum Outcome {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResealOutcome {
     /// The record's fields were sealed again under the active versions.
-    Resealed(Resealed),
+    Resealed {
+        /// Whether any field the re-seal read came from a compromised version, with
+        /// [`KeyTrust::Compromised`](crate::KeyTrust::Compromised): `false` for a record of
+        /// envelope values, which name no key version.
+        from_compromised: bool,
+    },
     /// The record needed no re-seal by the time it was read, or a concurrent write won.
     Skipped,
-}
-
-/// A re-sealed record, built from the [`KeyTrust`] of every field the re-seal read, so that a
-/// record with any field from a compromised version counts as one. A record of envelope values,
-/// which name no key version, is built from no trust.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Resealed {
-    from_compromised: bool,
-}
-
-impl<'a> FromIterator<&'a KeyTrust> for Resealed {
-    fn from_iter<I: IntoIterator<Item = &'a KeyTrust>>(trusts: I) -> Self {
-        Self {
-            from_compromised: trusts
-                .into_iter()
-                .any(|trust| matches!(trust, KeyTrust::Compromised(_))),
-        }
-    }
 }
 
 /// The counts of a sweep. Every candidate is counted once in `scanned` and once in `resealed`,
@@ -195,7 +183,7 @@ where
     T: Display,
     C: Stream<Item = T>,
     F: FnMut(T) -> Fut,
-    Fut: Future<Output = KeyringResult<Outcome>>,
+    Fut: Future<Output = KeyringResult<ResealOutcome>>,
 {
     let span = spans::sweep(keyring_id);
     let report = async {
@@ -211,13 +199,13 @@ where
         while let Some((candidate, outcome)) = outcomes.next().await {
             report.scanned += 1;
             match outcome {
-                Ok(Outcome::Resealed(resealed)) => {
+                Ok(ResealOutcome::Resealed { from_compromised }) => {
                     report.resealed += 1;
-                    if resealed.from_compromised {
+                    if from_compromised {
                         report.resealed_from_compromised += 1;
                     }
                 }
-                Ok(Outcome::Skipped) => report.skipped += 1,
+                Ok(ResealOutcome::Skipped) => report.skipped += 1,
                 Err(error) => {
                     report.failed += 1;
                     spans::sweep_failed(keyring_id, &candidate, &error);
@@ -235,12 +223,11 @@ where
 #[cfg(test)]
 mod tests {
     use futures_util::stream;
-    use jiff::Timestamp;
     use serde_json::json;
 
     use super::*;
     use crate::test_support::{TestResult, TENANT};
-    use crate::{Compromise, KeyringError};
+    use crate::{KeyTrust, KeyringError};
 
     const DETERMINISTIC: u32 = 1 << 31;
     const BEACON: u32 = 1 << 30;
@@ -324,11 +311,14 @@ mod tests {
             NonZeroUsize::MIN.saturating_add(1),
             |candidate| async move {
                 match candidate {
-                    "3" => Ok(Outcome::Skipped),
+                    "3" => Ok(ResealOutcome::Skipped),
                     "4" | "5" => Err(KeyringError::RecordMissing(TENANT)),
-                    _ => Ok(Outcome::Resealed(
-                        [&KeyTrust::Trusted].into_iter().collect(),
-                    )),
+                    "6" => Ok(ResealOutcome::Resealed {
+                        from_compromised: true,
+                    }),
+                    _ => Ok(ResealOutcome::Resealed {
+                        from_compromised: false,
+                    }),
                 }
             },
         )
@@ -339,41 +329,9 @@ mod tests {
             SweepReport {
                 scanned: 6,
                 resealed: 3,
-                resealed_from_compromised: 0,
+                resealed_from_compromised: 1,
                 skipped: 1,
                 failed: 2,
-            }
-        );
-    }
-
-    #[tokio::test]
-    async fn resealed_from_compromised_is_counted() {
-        let report = run(
-            &TENANT,
-            stream::iter(["trusted", "one-compromised", "all-compromised", "skipped"]),
-            NonZeroUsize::MIN,
-            |candidate| async move {
-                let compromised =
-                    KeyTrust::Compromised(Compromise::new(Timestamp::UNIX_EPOCH, None));
-                let trusts = match candidate {
-                    "trusted" => vec![KeyTrust::Trusted, KeyTrust::Trusted],
-                    "one-compromised" => vec![KeyTrust::Trusted, compromised],
-                    "all-compromised" => vec![compromised],
-                    _ => return Ok(Outcome::Skipped),
-                };
-                Ok(Outcome::Resealed(trusts.iter().collect()))
-            },
-        )
-        .await;
-
-        assert_eq!(
-            report,
-            SweepReport {
-                scanned: 4,
-                resealed: 3,
-                resealed_from_compromised: 2,
-                skipped: 1,
-                failed: 0,
             }
         );
     }
@@ -426,13 +384,17 @@ mod tests {
                 stream::iter(["42"]),
                 NonZeroUsize::MIN,
                 |_| async {
-                    let email = keyring.decrypt_with_status(&email_aad, &email).await?;
-                    let phone = keyring.decrypt_with_status(&phone_aad, &phone).await?;
+                    let email = keyring.decrypt_with_trust(&email_aad, &email).await?;
+                    let phone = keyring.decrypt_with_trust(&phone_aad, &phone).await?;
                     let trusts = [email.trust, phone.trust];
                     seen.lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .extend(trusts.iter().cloned());
-                    Ok(Outcome::Resealed(trusts.iter().collect()))
+                    Ok(ResealOutcome::Resealed {
+                        from_compromised: trusts
+                            .iter()
+                            .any(|trust| matches!(trust, KeyTrust::Compromised(_))),
+                    })
                 },
             )
             .await;

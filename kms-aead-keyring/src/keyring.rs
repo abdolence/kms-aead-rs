@@ -182,7 +182,7 @@ where
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has none, which follows a
     /// `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`] when
-    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::Kms`] with
+    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::KmsAead`] with
     /// code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error when
     /// the version's key is not in the [`DekCache`] and cannot be decrypted.
     pub async fn encrypt<T: Plaintext>(
@@ -221,11 +221,11 @@ where
     /// - [`KeyringError::KeyVersionRetired`] and [`KeyringError::KeyVersionDestroyed`];
     /// - [`KeyringError::KeyVersionCompromised`] under [`CompromisedReadPolicy::Block`], before
     ///   any decryption;
-    /// - [`KeyringError::Kms`] with code `DECRYPT` when the value is not authentic under the
+    /// - [`KeyringError::KmsAead`] with code `DECRYPT` when the value is not authentic under the
     ///   version's key and `aad`, and the provider's error when the key cannot be decrypted;
     /// - [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`], before any
     ///   store or KMS call, when the value's key id is reserved or deterministic;
-    /// - [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
+    /// - [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
     pub async fn decrypt<T: Plaintext>(
         &self,
         aad: &FieldAad,
@@ -254,7 +254,7 @@ where
     /// # Errors
     ///
     /// As [`decrypt`](Self::decrypt), without `KeyVersionCompromised`.
-    pub async fn decrypt_with_status<T: Plaintext>(
+    pub async fn decrypt_with_trust<T: Plaintext>(
         &self,
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
@@ -771,8 +771,8 @@ where
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
     /// store-less, with the `aad` the application gave it and the `algorithm` of the envelope
-    /// that wrote it: the read of a record whose [`SealMarker`](crate::SealMarker) says
-    /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. A value stored as hex
+    /// that wrote it: the read of a record whose [`SealMarker`](crate::sweep::SealMarker) says
+    /// [`Envelope`](crate::sweep::SealFormat::Envelope), until a sweep re-seals it. A value stored as hex
     /// is read with `Encrypted::try_from_hex_string`.
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
@@ -783,7 +783,7 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Kms`] with the errors of `Encrypted::separate` when the value is not in
+    /// [`KeyringError::KmsAead`] with the errors of `Encrypted::separate` when the value is not in
     /// Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`, the
     /// provider's error when the key does not decrypt, `INVALID_KEY_FORMAT` when what it decrypts
     /// is not a serialised Tink key, code `DECRYPT` when the value is not authentic under it and

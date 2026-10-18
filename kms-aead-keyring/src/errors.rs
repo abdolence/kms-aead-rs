@@ -28,7 +28,7 @@ pub enum KeyringError {
     /// An operation of kms-aead failed: a decryption, an encryption, a value that is not authentic
     /// under its key and AAD (code `DECRYPT`), or a plaintext that does not encode or decode as its
     /// type (code `INVALID_PLAINTEXT`).
-    Kms(KmsAeadError),
+    KmsAead(KmsAeadError),
     /// The keyring store failed.
     Store(KeyringStoreError),
     /// A keyring id, key id or AAD part that breaks the rule of its type.
@@ -87,11 +87,11 @@ pub enum KeyringError {
 
 impl KeyringError {
     /// The code to match on and the `error_code` span field: kms-aead's own code for
-    /// [`Kms`](KeyringError::Kms), such as `DECRYPT` or a KMS's code, and the variant's name in
+    /// [`KmsAead`](KeyringError::KmsAead), such as `DECRYPT` or a KMS's code, and the variant's name in
     /// upper snake case otherwise, such as `KEY_VERSION_COMPROMISED`.
     pub fn code(&self) -> &str {
         match self {
-            KeyringError::Kms(error) => error.code(),
+            KeyringError::KmsAead(error) => error.code(),
             KeyringError::Store(_) => "STORE",
             KeyringError::InvalidIdentifier(_) => "INVALID_IDENTIFIER",
             KeyringError::RecordMissing(_) => "RECORD_MISSING",
@@ -208,14 +208,14 @@ impl KeyringError {
 
 impl From<KmsAeadError> for KeyringError {
     fn from(error: KmsAeadError) -> Self {
-        KeyringError::Kms(error)
+        KeyringError::KmsAead(error)
     }
 }
 
 impl Display for KeyringError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            KeyringError::Kms(error) => error.fmt(f),
+            KeyringError::KmsAead(error) => error.fmt(f),
             KeyringError::Store(error) => write!(
                 f,
                 "The {} keyring store failed to {}: {}",
@@ -322,7 +322,7 @@ impl Display for KeyringError {
 impl Error for KeyringError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            KeyringError::Kms(error) => Some(error),
+            KeyringError::KmsAead(error) => Some(error),
             KeyringError::Store(error) => error
                 .root_cause
                 .as_ref()

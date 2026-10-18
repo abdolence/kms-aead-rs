@@ -163,7 +163,7 @@ async fn a_value_opens_only_with_its_aad() -> TestResult {
     ] {
         assert!(matches!(
             keyring.decrypt(&aad, &value).await,
-            Err(KeyringError::Kms(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
+            Err(KeyringError::KmsAead(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
         ));
     }
     let same_bytes = FieldAad::custom(b"user/42/email");
@@ -188,11 +188,11 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
 
     assert!(matches!(
         keyring.decrypt(&aad, &relabelled(&first, 2)?).await,
-        Err(KeyringError::Kms(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
+        Err(KeyringError::KmsAead(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
     ));
     assert!(matches!(
         keyring.decrypt(&aad, &relabelled(&second, 1)?).await,
-        Err(KeyringError::Kms(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
+        Err(KeyringError::KmsAead(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
     ));
     assert_eq!(keyring.decrypt(&aad, &first).await?, ALICE);
     Ok(())
@@ -579,7 +579,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
         fixture.keyring.decrypt(&aad, &forged).await,
         Err(KeyringError::KeyVersionCompromised(_))
     ));
-    let status = fixture.keyring.decrypt_with_status(&aad, &forged).await?;
+    let status = fixture.keyring.decrypt_with_trust(&aad, &forged).await?;
     assert_eq!(status.value, "mallory@example.com");
     assert_eq!(status.key_id, KeyId::new(1));
     assert!(matches!(
@@ -590,7 +590,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
 }
 
 #[tokio::test]
-async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> TestResult {
+async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> TestResult {
     let fixture = Fixture::new(
         KeyringOptions::new()
             .with_watch(false)
@@ -606,7 +606,7 @@ async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> 
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     for read in 1..=2 {
-        let status = fixture.keyring.decrypt_with_status(&aad, &value).await?;
+        let status = fixture.keyring.decrypt_with_trust(&aad, &value).await?;
         assert!(matches!(status.trust, KeyTrust::Compromised(_)));
         assert_eq!(
             fixture.provider.calls.decryptions.load(Ordering::SeqCst),
@@ -621,7 +621,7 @@ async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> 
     );
 
     let trusted = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    let status = fixture.keyring.decrypt_with_status(&aad, &trusted).await?;
+    let status = fixture.keyring.decrypt_with_trust(&aad, &trusted).await?;
     assert_eq!(
         (status.key_id, status.trust),
         (KeyId::new(2), KeyTrust::Trusted)
@@ -661,7 +661,7 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
     ));
     assert!(matches!(
         fixture.keyring.rotate(Purpose::Randomized).await,
-        Err(KeyringError::Kms(_))
+        Err(KeyringError::KmsAead(_))
     ));
 
     fixture
@@ -699,7 +699,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
         Err(KeyringError::KeyVersionRetired(_))
     ));
     assert!(matches!(
-        keyring.decrypt_with_status(&aad, &old).await,
+        keyring.decrypt_with_trust(&aad, &old).await,
         Err(KeyringError::KeyVersionRetired(_))
     ));
     keyring.reinstate(KeyId::new(1)).await?;
@@ -843,7 +843,7 @@ async fn an_algorithm_the_backend_lacks_is_refused_before_any_write() -> TestRes
             .keyring
             .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::Aes256GcmSiv))
             .await,
-        Err(KeyringError::Kms(KmsAeadError::UnsupportedAlgorithm(_)))
+        Err(KeyringError::KmsAead(KmsAeadError::UnsupportedAlgorithm(_)))
     ));
     assert_eq!(fixture.other_process().await?.record().to_json()?, before);
     Ok(())

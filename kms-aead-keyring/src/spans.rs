@@ -45,7 +45,7 @@ const FIELD_RECORD: &str = "/kms_aead_keyring/record";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the keyring has a
 /// cache: `reencrypt_deks`, a keyset export, and a compromised version read by
-/// `decrypt_with_status`.
+/// `decrypt_with_trust`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// `Keyring encrypt`, with the name of the keyring's AEAD backend for a randomised call. A

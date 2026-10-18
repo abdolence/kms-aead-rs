@@ -32,7 +32,7 @@ where
     /// # Errors
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has no active beacon version;
-    /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode; and
+    /// [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the value does not encode; and
     /// the provider's error when the version's key is not in the
     /// [`DekCache`](kms_aead::cache::DekCache) and cannot be decrypted.
     pub async fn beacon<T: Plaintext>(
@@ -67,7 +67,7 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode, and
+    /// [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the value does not encode, and
     /// the provider's error when a version's key cannot be decrypted.
     pub async fn beacon_probes<T: Plaintext>(
         &self,

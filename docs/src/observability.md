@@ -161,8 +161,8 @@ in the filter beside `kms_aead=debug`.
 
 | Span | Opened by | Fields |
 |---|---|---|
-| `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `equality_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
-| `Keyring decrypt` | `decrypt`, `decrypt_with_status`, their deterministic pair, `decrypt_envelope` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
+| `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `deterministic_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
+| `Keyring decrypt` | `decrypt`, `decrypt_with_trust`, their deterministic pair, `decrypt_envelope` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
 | `Keyring load` | every store read: `open`, a revalidation, a reload, the read before an administrative write | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
 | `Keyring beacon` | `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
 | `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `to_key_id`, `cas_retries`, `error_code` |
@@ -177,12 +177,12 @@ in the filter beside `kms_aead=debug`.
 |---|---|
 | `keyring` | the keyring id, which can name a tenant |
 | `purpose` | `randomized`, `deterministic` or `beacon` |
-| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version, and for `equality_probes` and `beacon_probes`, which run under several |
-| `algorithm` | the version's algorithm, such as `aes-256-gcm` or `hmac-sha256`; unrecorded for `equality_probes` and `beacon_probes` |
+| `key_id` | the decimal key id; unrecorded for an envelope value, which names no version, and for `deterministic_probes` and `beacon_probes`, which run under several |
+| `algorithm` | the version's algorithm, such as `aes-256-gcm` or `hmac-sha256`; unrecorded for `deterministic_probes` and `beacon_probes` |
 | `backend` | `ring`, `aws-lc` or `rustcrypto`; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring's backend |
 | `key_state` | `pending`, `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
-| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `reencrypt_deks`, the export, and a compromised version read past the cache; unrecorded for `equality_probes` and `beacon_probes` |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `reencrypt_deks`, the export, and a compromised version read past the cache; unrecorded for `deterministic_probes` and `beacon_probes` |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, `s3`, or an application store's name |
 | `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |

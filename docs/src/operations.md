@@ -89,13 +89,12 @@ use futures_util::stream;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
-use kms_aead_keyring::sweep::{self, Outcome, SweepReport};
 use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring,
+    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
     KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Purpose, Rotation,
-    SealMarker,
 };
 use secret_vault_value::SecretValue;
 
@@ -132,20 +131,21 @@ async fn reseal(
     keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>,
     table: &Table,
     user: &str,
-) -> KeyringResult<Outcome> {
+) -> KeyringResult<ResealOutcome> {
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
-        return Ok(Outcome::Skipped);
+        return Ok(ResealOutcome::Skipped);
     };
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let decrypted: Decrypted<Email> = keyring.decrypt_with_status(&aad, &row.email).await?;
+    let decrypted: Decrypted<Email> = keyring.decrypt_with_trust(&aad, &row.email).await?;
     let email: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &decrypted.value).await?;
     let seal = SealMarker::keyring([email.key_id()])?;
     table
         .lock()
         .unwrap()
         .insert(user.to_string(), UserRow { email, seal });
-    // A record with any field from a compromised version counts as one
-    Ok(Outcome::Resealed([decrypted.trust].iter().collect()))
+    Ok(ResealOutcome::Resealed {
+        from_compromised: matches!(decrypted.trust, KeyTrust::Compromised(_)),
+    })
 }
 
 # #[tokio::main]
@@ -222,8 +222,8 @@ turned up after all, while a destroyed one is gone.
 
 ### The trust of re-sealed values
 
-A sweep reads every field with `decrypt_with_status`, and builds its `Outcome::Resealed` from the
-`KeyTrust` of each. A value read under a compromised version is untrusted data: whoever holds the
+A sweep reads every field with `decrypt_with_trust`, and reports in `ResealOutcome::Resealed`
+whether the `KeyTrust` of any of them is compromised. A value read under a compromised version is untrusted data: whoever holds the
 leaked DEK can have forged it. Re-sealing it under a new version makes it read as trusted
 everywhere afterwards.
 
@@ -285,7 +285,7 @@ Or is suspected to have.
    the DEK cache. With the default `Block` policy values under the version stop decrypting
    through `decrypt`. Set `Allow` for the time of the sweep if availability matters more, and be
    aware the leaked DEK can forge values under its id meanwhile;
-3. sweep with `decrypt_with_status`, and decide per record on the values read through the
+3. sweep with `decrypt_with_trust`, and decide per record on the values read through the
    compromised version, see [The trust of re-sealed values](#the-trust-of-re-sealed-values);
 4. export the BigQuery keysets again: a `Readable` keyset leaves the compromised version out.
    Delete the `Single` keyset of the compromised version once the sweep is done;

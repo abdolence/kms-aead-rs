@@ -196,7 +196,7 @@ impl Display for KeyAlgorithm {
 ///
 /// # Errors
 ///
-/// [`KeyringError::Kms`] with code `UNKNOWN_ALGORITHM` for any other name.
+/// [`KeyringError::KmsAead`] with code `UNKNOWN_ALGORITHM` for any other name.
 impl FromStr for KeyAlgorithm {
     type Err = KeyringError;
 

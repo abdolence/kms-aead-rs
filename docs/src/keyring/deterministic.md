@@ -93,7 +93,7 @@ the bytes. AES-SIV runs on the RustCrypto `aes-siv` crate whatever the
 keyring's AEAD backend.
 
 `decrypt_deterministic` applies the [compromised read policy](./lifecycle.md#reading-a-compromised-version),
-and `decrypt_deterministic_with_status` reports the version's trust, as their randomised
+and `decrypt_deterministic_with_trust` reports the version's trust, as their randomised
 counterparts do.
 
 ## AAD
@@ -111,7 +111,7 @@ to be queried, and the query rebuilds its AAD.
 
 A value sealed under one deterministic version and the same plaintext under the next one differ.
 So an equality query matches against every version that still decrypts, with
-`equality_probes`:
+`deterministic_probes`:
 
 ```rust
 # use kms_aead::backends::Ring;
@@ -153,14 +153,14 @@ let staged: KeyId = keyring.rotate(Purpose::Deterministic).await?;
 keyring.promote(staged).await?;
 
 // One probe per version that still decrypts, newest first
-let probes: Vec<Encrypted<Email, Deterministic>> = keyring.equality_probes(&aad, &alice).await?;
+let probes: Vec<Encrypted<Email, Deterministic>> = keyring.deterministic_probes(&aad, &alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&before));
 # Ok(())
 # }
 ```
 
-`equality_probes` returns one probe per pending, active or decrypt-only deterministic version,
+`deterministic_probes` returns one probe per pending, active or decrypt-only deterministic version,
 compromised ones included, so a query finds the rows sealed under any of them, and a sweep the rows
 sealed under a compromised one. A staged version is probed before its promotion, so a process that
 has not seen the promotion yet finds the values of the processes that have. Retired and destroyed

@@ -502,7 +502,7 @@ mod tests {
                 .await;
             assert!(matches!(
                 opened,
-                Err(KeyringError::Kms(error)) if error.code() == "INVALID_KEY_FORMAT"
+                Err(KeyringError::KmsAead(error)) if error.code() == "INVALID_KEY_FORMAT"
             ));
         }
 

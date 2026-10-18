@@ -179,7 +179,7 @@ the AAD of one row. `from_static` checks a kind or field name at compile time wh
 initialises a constant.
 
 So a value opens only in its own row and field. A value copied into another row fails with
-`KeyringError::Kms` with code `DECRYPT`. And since the AAD names the logical place, not the
+`KeyringError::KmsAead` with code `DECRYPT`. And since the AAD names the logical place, not the
 physical one, a value moves between tables and data stores without being encrypted again.
 
 An `EntityId` can be personal data, so no span, event or error of the crate carries it.

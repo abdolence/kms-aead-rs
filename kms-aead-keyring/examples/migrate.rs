@@ -19,11 +19,11 @@ use kms_aead::{
     KmsAeadResult,
 };
 use kms_aead_keyring::formats::{Envelope, Randomized};
-use kms_aead_keyring::sweep::{self, Outcome};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealFormat, SealMarker};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, KeyringResult, Plaintext, SealFormat, SealMarker,
+    KeyringPolicy, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -126,14 +126,14 @@ async fn print_rows(
 }
 
 /// Re-seals the row of `user` as a keyring value, unless a writer did since the sweep's query.
-async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<Outcome> {
+async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
     let row = table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .get(user)
         .cloned();
     let Some(row) = row.filter(|row| row.seal.format == SealFormat::Envelope) else {
-        return Ok(Outcome::Skipped);
+        return Ok(ResealOutcome::Skipped);
     };
     let email: Email = keyring
         .decrypt_envelope(
@@ -153,7 +153,9 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
         .unwrap_or_else(PoisonError::into_inner)
         .insert(user.to_string(), row);
     // Envelope values name no key version, so the record carries no trust to decide on.
-    Ok(Outcome::Resealed([].iter().collect()))
+    Ok(ResealOutcome::Resealed {
+        from_compromised: false,
+    })
 }
 
 #[tokio::main]

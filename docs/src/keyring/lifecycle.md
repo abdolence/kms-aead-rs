@@ -184,7 +184,7 @@ version:
   of a sweep when availability matters more, and be aware the leaked DEK can forge values under
   that id meanwhile.
 
-`decrypt_with_status` opens the value whatever the policy, and returns a `Decrypted` with the
+`decrypt_with_trust` opens the value whatever the policy, and returns a `Decrypted` with the
 value, the key id of the version that opened it and its `KeyTrust`, `Trusted` or
 `Compromised`. It is the call for a [sweep](../operations.md#sweeps). A compromised version's DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.

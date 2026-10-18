@@ -44,7 +44,7 @@ where
     /// [`KeyringError::NoActiveVersion`] when the keyring has no deterministic version, or lost
     /// it to a `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`]
     /// when sealing breaks the [`Interop`](crate::Interop) requirement `aad` carries;
-    /// [`KeyringError::Kms`] with code `INVALID_PLAINTEXT` when the value does not encode; and
+    /// [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the value does not encode; and
     /// the provider's error when the version's key is not in the
     /// [`DekCache`](kms_aead::cache::DekCache) and cannot be decrypted.
     pub async fn encrypt_deterministic<T: Plaintext>(
@@ -105,7 +105,7 @@ where
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
     /// compromised, without applying the read policy, as
-    /// [`decrypt_with_status`](Self::decrypt_with_status) does for randomised values. A
+    /// [`decrypt_with_trust`](Self::decrypt_with_trust) does for randomised values. A
     /// compromised version's key is decrypted through the provider, never through the
     /// [`DekCache`](kms_aead::cache::DekCache).
     ///
@@ -113,7 +113,7 @@ where
     ///
     /// As [`decrypt_deterministic`](Self::decrypt_deterministic), without
     /// `KeyVersionCompromised`.
-    pub async fn decrypt_deterministic_with_status<T: Plaintext>(
+    pub async fn decrypt_deterministic_with_trust<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
@@ -162,10 +162,10 @@ where
     /// # Errors
     ///
     /// [`KeyringError::Interop`], before any decryption, when sealing under any of the versions
-    /// breaks the [`Interop`](crate::Interop) requirement `aad` carries; [`KeyringError::Kms`]
+    /// breaks the [`Interop`](crate::Interop) requirement `aad` carries; [`KeyringError::KmsAead`]
     /// with code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error
     /// when a version's key cannot be decrypted.
-    pub async fn equality_probes<T: Plaintext>(
+    pub async fn deterministic_probes<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
         value: &T,
@@ -320,7 +320,9 @@ mod tests {
             .await?;
         let pending = keyring.rotate(Purpose::Deterministic).await?;
 
-        let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
+        let probes = keyring
+            .deterministic_probes(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(
             probes
                 .iter()
@@ -345,7 +347,7 @@ mod tests {
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         let probes = keyring
-            .equality_probes(
+            .deterministic_probes(
                 &EMAIL.with_interop(Interop::BigQuery).deterministic_aad(),
                 &ALICE.to_string(),
             )
@@ -361,7 +363,7 @@ mod tests {
             decryptions
         );
         keyring
-            .equality_probes(&EMAIL.deterministic_aad(), &ALICE.to_string())
+            .deterministic_probes(&EMAIL.deterministic_aad(), &ALICE.to_string())
             .await?;
         Ok(())
     }
@@ -377,7 +379,9 @@ mod tests {
         let current = [KeyId::new(0x8000_0002)];
 
         keyring.retire(first).await?;
-        let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
+        let probes = keyring
+            .deterministic_probes(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(
             probes
                 .iter()
@@ -387,7 +391,9 @@ mod tests {
         );
 
         keyring.destroy(first).await?;
-        let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
+        let probes = keyring
+            .deterministic_probes(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(
             probes
                 .iter()
@@ -408,7 +414,9 @@ mod tests {
             .await?;
         keyring.mark_compromised(first.key_id(), None).await?;
 
-        let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
+        let probes = keyring
+            .deterministic_probes(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(
             probes
                 .iter()
@@ -419,7 +427,9 @@ mod tests {
         assert_eq!(probes[1], first);
 
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
-        keyring.equality_probes(&aad, &ALICE.to_string()).await?;
+        keyring
+            .deterministic_probes(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(
             provider.calls.decryptions.load(Ordering::SeqCst),
             decryptions + 1,
@@ -444,7 +454,7 @@ mod tests {
             Err(KeyringError::KeyVersionCompromised(error)) if error.key_id == key_id
         ));
         let decrypted = keyring
-            .decrypt_deterministic_with_status(&aad, &value)
+            .decrypt_deterministic_with_trust(&aad, &value)
             .await?;
         assert_eq!(decrypted.value, ALICE);
         assert_eq!(decrypted.key_id, key_id);
@@ -472,7 +482,7 @@ mod tests {
         );
         assert!(matches!(
             keyring.decrypt(&email_of("7")?, &randomized).await,
-            Err(KeyringError::Kms(error)) if error.code() == "DECRYPT"
+            Err(KeyringError::KmsAead(error)) if error.code() == "DECRYPT"
         ));
         Ok(())
     }
