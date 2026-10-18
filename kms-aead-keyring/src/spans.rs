@@ -105,12 +105,26 @@ pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
     )
 }
 
-/// `Keyring rotate`, for `rotate` and `change_algorithm`.
+/// `Keyring rotate`, for `rotate` and `change_algorithm`, which record the staged version as
+/// `to_key_id`.
 pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
     debug_span!(
         "Keyring rotate",
         { KEYRING } = keyring.as_str(),
         { PURPOSE } = %purpose,
+        { FROM_KEY_ID } = field::Empty,
+        { TO_KEY_ID } = field::Empty,
+        { CAS_RETRIES } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring promote`, for the pending version `key_id`.
+pub(crate) fn promote(keyring: &KeyringId, key_id: KeyId) -> Span {
+    debug_span!(
+        "Keyring promote",
+        { KEYRING } = keyring.as_str(),
+        { KEY_ID } = %key_id,
         { FROM_KEY_ID } = field::Empty,
         { TO_KEY_ID } = field::Empty,
         { CAS_RETRIES } = field::Empty,

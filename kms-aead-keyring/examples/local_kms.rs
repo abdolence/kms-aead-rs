@@ -1,5 +1,5 @@
-//! A keyring on the memory store with a local KEK: encrypts a field, rotates, and reads the
-//! value written before the rotation. Needs no cloud credentials.
+//! A keyring on the memory store with a local KEK: encrypts a field, stages and promotes a new
+//! key version, and reads the value written before the rotation. Needs no cloud credentials.
 //!
 //! ```sh
 //! cargo run -p kms-aead-keyring --example local_kms --features ring
@@ -51,15 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alice = Email("alice@example.com".to_string());
 
     let before = keyring.encrypt(&aad, &alice).await?;
-    let rotation = keyring.rotate(Purpose::Randomized).await?;
+    let staged = keyring.rotate(Purpose::Randomized).await?;
+    println!("staged key version {staged}");
+    let rotation = keyring.promote(staged).await?;
     let after = keyring.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
-        Some(previous) => println!(
-            "rotated from key version {previous} to {}",
-            rotation.current
-        ),
-        None => println!("created key version {}", rotation.current),
+        Some(previous) => println!("promoted key version {} over {previous}", rotation.current),
+        None => println!("promoted key version {}", rotation.current),
     }
     for value in [before, after] {
         let Email(email) = keyring.decrypt(&aad, &value).await?;

@@ -58,6 +58,9 @@ pub enum KeyringError {
     KeyVersionRetired(KeyVersionError),
     /// The value's key version is destroyed: its key is gone.
     KeyVersionDestroyed(KeyVersionError),
+    /// A pending version selected as the primary of a keyset export: a pending version never
+    /// encrypts.
+    KeyVersionPending(KeyVersionError),
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
@@ -98,6 +101,7 @@ impl KeyringError {
             KeyringError::KeyVersionUnknown(_) => "KEY_VERSION_UNKNOWN",
             KeyringError::KeyVersionRetired(_) => "KEY_VERSION_RETIRED",
             KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
+            KeyringError::KeyVersionPending(_) => "KEY_VERSION_PENDING",
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
@@ -223,6 +227,11 @@ impl Display for KeyringError {
             KeyringError::KeyVersionDestroyed(error) => write!(
                 f,
                 "The key version {} of the keyring {} is destroyed",
+                error.key_id, error.keyring
+            ),
+            KeyringError::KeyVersionPending(error) => write!(
+                f,
+                "The key version {} of the keyring {} is pending",
                 error.key_id, error.keyring
             ),
             KeyringError::KeyVersionCompromised(error) => write!(
@@ -407,8 +416,12 @@ pub enum RecordInvalidReason {
     PurposeMismatch(KeyId),
     /// Two active versions of one purpose.
     TwoActiveVersions(Purpose),
+    /// Two pending versions of one purpose.
+    TwoPendingVersions(Purpose),
     /// An active version flagged compromised.
     CompromisedActive(KeyId),
+    /// A pending version flagged compromised.
+    CompromisedPending(KeyId),
     /// A destroyed version that still holds a wrapped key.
     DestroyedWithMaterial(KeyId),
     /// A version that is not destroyed and holds no wrapped key.
@@ -459,8 +472,14 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::TwoActiveVersions(purpose) => {
                 write!(f, "two active {purpose} versions")
             }
+            RecordInvalidReason::TwoPendingVersions(purpose) => {
+                write!(f, "two pending {purpose} versions")
+            }
             RecordInvalidReason::CompromisedActive(key_id) => {
                 write!(f, "the active key version {key_id} is compromised")
+            }
+            RecordInvalidReason::CompromisedPending(key_id) => {
+                write!(f, "the pending key version {key_id} is compromised")
             }
             RecordInvalidReason::DestroyedWithMaterial(key_id) => {
                 write!(f, "the destroyed key version {key_id} holds a wrapped key")
@@ -583,7 +602,7 @@ pub struct PurposeError {
 }
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
-/// [`KeyringError::KeyVersionDestroyed`] and
+/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`] and
 /// [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

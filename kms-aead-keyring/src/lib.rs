@@ -146,7 +146,8 @@
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
 //! let alice = Email("alice@example.com".to_string());
 //! let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
-//! keyring.rotate(Purpose::Randomized).await?;
+//! let staged = keyring.rotate(Purpose::Randomized).await?;
+//! keyring.promote(staged).await?;
 //!
 //! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 //! # Ok(())

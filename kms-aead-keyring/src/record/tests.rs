@@ -111,6 +111,33 @@ fn two_active_versions_of_one_purpose_are_rejected() -> KeyringResult<()> {
 }
 
 #[test]
+fn two_pending_versions_of_one_purpose_are_rejected() -> KeyringResult<()> {
+    let document = document(vec![
+        version(1, "active", false)?,
+        version(2, "pending", false)?,
+        version(3, "pending", false)?,
+    ]);
+    assert_eq!(
+        refusal(&document),
+        Some(RecordInvalidReason::TwoPendingVersions(Purpose::Randomized))
+    );
+    Ok(())
+}
+
+#[test]
+fn a_pending_compromised_version_is_rejected() -> KeyringResult<()> {
+    let document = document(vec![
+        version(1, "active", false)?,
+        version(2, "pending", true)?,
+    ]);
+    assert_eq!(
+        refusal(&document),
+        Some(RecordInvalidReason::CompromisedPending(KeyId::try_from(2)?))
+    );
+    Ok(())
+}
+
+#[test]
 fn an_active_compromised_version_is_rejected() -> KeyringResult<()> {
     let document = document(vec![version(1, "active", true)?]);
     assert_eq!(
@@ -303,14 +330,16 @@ enum Operation {
     Retire,
     Reinstate,
     Destroy,
+    Promote,
 }
 
 impl Operation {
-    const ALL: [Operation; 4] = [
+    const ALL: [Operation; 5] = [
         Operation::MarkCompromised,
         Operation::Retire,
         Operation::Reinstate,
         Operation::Destroy,
+        Operation::Promote,
     ];
 
     fn apply(self, edit: &mut RecordEdit, key_id: KeyId) -> KeyringResult<()> {
@@ -322,6 +351,7 @@ impl Operation {
             Operation::Retire => edit.retire(key_id, now),
             Operation::Reinstate => edit.reinstate(key_id, now),
             Operation::Destroy => edit.destroy(key_id, now),
+            Operation::Promote => edit.promote(key_id, now).map(|_| ()),
         }
     }
 
@@ -331,22 +361,34 @@ impl Operation {
             Operation::Retire => Transition::Retire,
             Operation::Reinstate => Transition::Reinstate,
             Operation::Destroy => Transition::Destroy,
+            Operation::Promote => Transition::Promote,
         }
     }
 }
 
 /// The state and compromised flag each operation of `Operation::ALL` leaves a version in, or
 /// `None` where the lifecycle has no such transition.
-type Outcomes = [Option<(KeyVersionState, bool)>; 4];
+type Outcomes = [Option<(KeyVersionState, bool)>; 5];
 
 /// Every state a version can be in, compromised or not, with its outcomes.
-fn lifecycle() -> [(&'static str, bool, Outcomes); 7] {
+fn lifecycle() -> [(&'static str, bool, Outcomes); 8] {
     use KeyVersionState::*;
     [
         (
+            "pending",
+            false,
+            [
+                None,
+                None,
+                None,
+                Some((Destroyed, false)),
+                Some((Active, false)),
+            ],
+        ),
+        (
             "active",
             false,
-            [Some((DecryptOnly, true)), None, None, None],
+            [Some((DecryptOnly, true)), None, None, None, None],
         ),
         (
             "decrypt_only",
@@ -356,12 +398,13 @@ fn lifecycle() -> [(&'static str, bool, Outcomes); 7] {
                 Some((Retired, false)),
                 None,
                 None,
+                None,
             ],
         ),
         (
             "decrypt_only",
             true,
-            [None, Some((Retired, true)), None, None],
+            [None, Some((Retired, true)), None, None, None],
         ),
         (
             "retired",
@@ -371,6 +414,7 @@ fn lifecycle() -> [(&'static str, bool, Outcomes); 7] {
                 None,
                 Some((DecryptOnly, false)),
                 Some((Destroyed, false)),
+                None,
             ],
         ),
         (
@@ -381,10 +425,11 @@ fn lifecycle() -> [(&'static str, bool, Outcomes); 7] {
                 None,
                 Some((DecryptOnly, true)),
                 Some((Destroyed, true)),
+                None,
             ],
         ),
-        ("destroyed", false, [None, None, None, None]),
-        ("destroyed", true, [None, None, None, None]),
+        ("destroyed", false, [None, None, None, None, None]),
+        ("destroyed", true, [None, None, None, None, None]),
     ]
 }
 
@@ -472,16 +517,46 @@ fn new_version(record: &KeyringRecord, algorithm: KeyAlgorithm) -> KeyringResult
 }
 
 #[test]
-fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
+fn a_rotation_stages_the_next_key_id_of_its_purpose() -> TestResult {
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
     let now = Timestamp::now();
-    let rotation = edit.rotate(
-        new_version(
-            edit.record(),
-            KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
-        )?,
-        now,
-    )?;
+    let randomized = KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm);
+    let staged = edit.stage(new_version(edit.record(), randomized)?, now)?;
+    let deterministic = KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv);
+    let staged_deterministic = edit.stage(new_version(edit.record(), deterministic)?, now)?;
+
+    assert_eq!(
+        (staged, staged_deterministic),
+        (KeyId::try_from(3)?, KeyId::try_from(0x8000_0002)?)
+    );
+    assert!(matches!(
+        edit.stage(new_version(edit.record(), randomized)?, now),
+        Err(KeyringError::InvalidTransition(error))
+            if error.key_id == staged
+                && error.from == KeyVersionState::Pending
+                && error.transition == Transition::Rotate
+    ));
+    let record = edit.finish()?;
+    let version = record.version(staged).ok_or("the staged version is gone")?;
+    assert_eq!(version.state(), KeyVersionState::Pending);
+    assert_eq!(version.staged_at(), Some(now));
+    assert_eq!(
+        record.active(Purpose::Randomized).map(KeyVersion::key_id),
+        Some(KeyId::try_from(2)?)
+    );
+    assert_eq!(record.updated_at(), now);
+    Ok(())
+}
+
+#[test]
+fn a_promotion_moves_the_active_version_to_decrypt_only() -> TestResult {
+    let now = Timestamp::now();
+    let mut edit = RecordEdit::from(parse(&document(vec![
+        version(1, "decrypt_only", false)?,
+        version(2, "active", false)?,
+        version(3, "pending", false)?,
+    ]))?);
+    let rotation = edit.promote(KeyId::try_from(3)?, now)?;
     assert_eq!(
         rotation,
         Rotation {
@@ -490,33 +565,23 @@ fn rotation_takes_the_next_key_id_of_its_purpose() -> KeyringResult<()> {
             current: KeyId::try_from(3)?,
         }
     );
-    let rotation = edit.rotate(
-        new_version(
-            edit.record(),
-            KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv),
-        )?,
-        now,
-    )?;
-    assert_eq!(rotation.current, KeyId::try_from(0x8000_0002)?);
     let record = edit.finish()?;
     assert_eq!(
         record.version(KeyId::try_from(2)?).map(KeyVersion::state),
         Some(KeyVersionState::DecryptOnly)
     );
-    assert_eq!(record.updated_at(), now);
-    Ok(())
-}
+    assert_eq!(
+        record
+            .version(KeyId::try_from(3)?)
+            .map(KeyVersion::staged_at),
+        Some(None)
+    );
 
-#[test]
-fn rotation_without_an_active_version_creates_one() -> KeyringResult<()> {
-    let mut edit = RecordEdit::from(parse(&document(vec![version(1, "decrypt_only", true)?]))?);
-    let rotation = edit.rotate(
-        new_version(
-            edit.record(),
-            KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
-        )?,
-        Timestamp::now(),
-    )?;
+    let mut without_active = RecordEdit::from(parse(&document(vec![
+        version(1, "decrypt_only", true)?,
+        version(2, "pending", false)?,
+    ]))?);
+    let rotation = without_active.promote(KeyId::try_from(2)?, now)?;
     assert_eq!(
         (rotation.previous, rotation.current),
         (None, KeyId::try_from(2)?)
@@ -557,21 +622,55 @@ fn compromising_the_active_version_rotates_in_the_same_change() -> KeyringResult
     Ok(())
 }
 
+#[test]
+fn a_compromise_replacement_is_active_beside_a_pending_version() -> KeyringResult<()> {
+    let now = Timestamp::now();
+    let mut edit = RecordEdit::from(parse(&document(vec![
+        version(1, "active", false)?,
+        version(2, "pending", false)?,
+    ]))?);
+    let replacement = new_version(
+        edit.record(),
+        KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
+    )?;
+    let rotation = edit.mark_compromised(
+        KeyId::try_from(1)?,
+        Compromise::new(now, None),
+        Some(replacement),
+        now,
+    )?;
+    assert_eq!(
+        rotation.map(|rotation| rotation.current),
+        Some(KeyId::try_from(3)?)
+    );
+    let record = edit.finish()?;
+    assert_eq!(
+        record.active(Purpose::Randomized).map(KeyVersion::key_id),
+        Some(KeyId::try_from(3)?)
+    );
+    assert_eq!(
+        record.version(KeyId::try_from(2)?).map(KeyVersion::state),
+        Some(KeyVersionState::Pending)
+    );
+    Ok(())
+}
+
 /// The held record of the regression cases: randomized 1 compromised and decrypt-only, 2
-/// active, 3 retired, 4 destroyed.
+/// active, 3 retired, 4 destroyed, 5 pending.
 fn held() -> KeyringResult<Value> {
     Ok(document(vec![
         version(1, "decrypt_only", true)?,
         version(2, "active", false)?,
         version(3, "retired", false)?,
         version(4, "destroyed", false)?,
+        version(5, "pending", false)?,
     ]))
 }
 
 #[test]
 fn a_regressed_record_is_refused() -> TestResult {
     type Change = fn(&mut Value);
-    let cases: [(Change, RegressionRule); 6] = [
+    let cases: [(Change, RegressionRule); 8] = [
         (
             |next| {
                 if let Some(versions) = next["versions"].as_array_mut() {
@@ -607,6 +706,21 @@ fn a_regressed_record_is_refused() -> TestResult {
             },
             RegressionRule::StateReverted(KeyId::try_from(4)?),
         ),
+        (
+            |next| {
+                next["versions"][1]["state"] = json!("pending");
+                next["versions"][4]["state"] = json!("active");
+            },
+            RegressionRule::StateReverted(KeyId::try_from(2)?),
+        ),
+        (
+            |next| {
+                next["versions"][1]["state"] = json!("decrypt_only");
+                next["versions"][4]["state"] = json!("active");
+                next["versions"][2]["state"] = json!("pending");
+            },
+            RegressionRule::StateReverted(KeyId::try_from(3)?),
+        ),
     ];
     let held_record = parse(&held()?)?;
     for (change, rule) in cases {
@@ -627,11 +741,21 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     next["versions"][1]["state"] = json!("retired");
     next["versions"][2]["state"] = json!("decrypt_only");
     next["versions"][2]["compromised"] = json!({ "at": COMPROMISED, "note": null });
+    next["versions"][4]["state"] = json!("active");
     if let Some(versions) = next["versions"].as_array_mut() {
-        versions.push(version(5, "active", false)?);
+        versions.push(version(6, "pending", false)?);
     }
     assert_eq!(check_successor(&held_record, &parse(&next)?), Ok(()));
     assert_eq!(check_successor(&held_record, &held_record), Ok(()));
+
+    let mut destroyed = held()?;
+    destroyed["versions"][4]["state"] = json!("destroyed");
+    destroyed["versions"][4]["wrapped_dek"] = Value::Null;
+    assert_eq!(check_successor(&held_record, &parse(&destroyed)?), Ok(()));
+    let mut retired = held()?;
+    retired["versions"][1]["state"] = json!("decrypt_only");
+    retired["versions"][4]["state"] = json!("retired");
+    assert_eq!(check_successor(&held_record, &parse(&retired)?), Ok(()));
     Ok(())
 }
 
@@ -645,11 +769,13 @@ fn versions_taken_out_of_use_are_withdrawn() -> TestResult {
     next["versions"][1]["state"] = json!("decrypt_only");
     next["versions"][1]["compromised"] = json!({ "at": COMPROMISED, "note": null });
     next["versions"][2]["state"] = json!("retired");
+    next["versions"][4]["state"] = json!("destroyed");
+    next["versions"][4]["wrapped_dek"] = Value::Null;
     if let Some(versions) = next["versions"].as_array_mut() {
-        versions.push(version(5, "active", false)?);
+        versions.push(version(6, "active", false)?);
     }
     let next = parse(&next)?;
-    assert_eq!(withdrawn_deks(&held_record, &next).count(), 2);
+    assert_eq!(withdrawn_deks(&held_record, &next).count(), 3);
     assert_eq!(withdrawn_deks(&held_record, &held_record).count(), 0);
     Ok(())
 }
@@ -712,6 +838,7 @@ fn keyring_ids_are_ascii_and_at_most_128_bytes() -> KeyringResult<()> {
 #[test]
 fn state_and_algorithm_names_parse_back() -> TestResult {
     for state in [
+        KeyVersionState::Pending,
         KeyVersionState::Active,
         KeyVersionState::DecryptOnly,
         KeyVersionState::Retired,

@@ -110,7 +110,9 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let deterministic_aad = field.deterministic_aad();
 
     let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    keyring.rotate(Purpose::Randomized).await?;
+    keyring
+        .promote(keyring.rotate(Purpose::Randomized).await?)
+        .await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let mut relabelled = first.value().clone();
     relabelled[1..5].copy_from_slice(&ABSENT_KEY_ID.to_be_bytes());

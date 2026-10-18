@@ -316,14 +316,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn probes_cover_every_decrypting_version_newest_first() -> TestResult {
+    async fn probes_cover_every_decrypting_version_newest_first_with_the_pending_one() -> TestResult
+    {
         let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
         let aad = EMAIL.deterministic_aad();
         let first = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
-        keyring.rotate(Purpose::Deterministic).await?;
-        keyring.rotate(Purpose::Deterministic).await?;
+        keyring
+            .promote(keyring.rotate(Purpose::Deterministic).await?)
+            .await?;
+        let pending = keyring.rotate(Purpose::Deterministic).await?;
 
         let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
         assert_eq!(
@@ -332,13 +335,13 @@ mod tests {
                 .map(KeyId::try_from)
                 .collect::<KeyringResult<Vec<_>>>()?,
             [
-                KeyId::try_from(0x8000_0003)?,
+                pending,
                 KeyId::try_from(0x8000_0002)?,
                 KeyId::try_from(0x8000_0001)?,
             ]
         );
         assert_eq!(
-            probes[0],
+            probes[1],
             keyring
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?
@@ -376,7 +379,9 @@ mod tests {
     async fn retired_versions_give_no_probe() -> TestResult {
         let keyring = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
         let aad = EMAIL.deterministic_aad();
-        keyring.rotate(Purpose::Deterministic).await?;
+        keyring
+            .promote(keyring.rotate(Purpose::Deterministic).await?)
+            .await?;
         let first = KeyId::try_from(0x8000_0001)?;
         let current = [KeyId::try_from(0x8000_0002)?];
 

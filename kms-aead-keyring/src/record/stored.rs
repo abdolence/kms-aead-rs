@@ -175,7 +175,7 @@ impl KeyringRecord {
     }
 
     /// The rules across versions: unique key ids, increasing within a purpose in creation
-    /// order, and at most one active version per purpose.
+    /// order, and at most one active and one pending version per purpose.
     fn check_versions(&self) -> Result<(), RecordInvalidReason> {
         let mut seen = HashSet::new();
         let mut last_randomized = None;
@@ -198,11 +198,19 @@ impl KeyringRecord {
             *last = Some(key_id);
         }
         for purpose in [Purpose::Randomized, Purpose::Deterministic] {
-            let active = self.versions.iter().filter(|version| {
-                version.key_id.purpose() == purpose && version.state() == KeyVersionState::Active
-            });
-            if active.count() > 1 {
+            let in_state = |state| {
+                self.versions
+                    .iter()
+                    .filter(|version| {
+                        version.key_id.purpose() == purpose && version.state() == state
+                    })
+                    .count()
+            };
+            if in_state(KeyVersionState::Active) > 1 {
                 return Err(RecordInvalidReason::TwoActiveVersions(purpose));
+            }
+            if in_state(KeyVersionState::Pending) > 1 {
+                return Err(RecordInvalidReason::TwoPendingVersions(purpose));
             }
         }
         Ok(())
@@ -248,6 +256,10 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 return Err(RecordInvalidReason::CompromisedActive(key_id))
             }
             (KeyVersionState::Active, Some(dek)) => VersionState::Active(dek),
+            (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
+                return Err(RecordInvalidReason::CompromisedPending(key_id))
+            }
+            (KeyVersionState::Pending, Some(dek)) => VersionState::Pending(dek),
             (KeyVersionState::DecryptOnly, Some(dek)) => {
                 VersionState::DecryptOnly(RetainedDek { dek, compromised })
             }

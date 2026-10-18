@@ -199,7 +199,9 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    keyring.rotate(Purpose::Randomized).await?;
+    keyring
+        .promote(keyring.rotate(Purpose::Randomized).await?)
+        .await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(
         (KeyId::try_from(&first)?, KeyId::try_from(&second)?),
@@ -240,7 +242,9 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
         )
         .await?,
     );
-    admin.rotate(Purpose::Randomized).await?;
+    admin
+        .promote(admin.rotate(Purpose::Randomized).await?)
+        .await?;
     let aad = Arc::new(email_of("42")?);
     let value = admin.encrypt(&aad, &ALICE.to_string()).await?;
 
@@ -279,10 +283,9 @@ async fn reload_is_rate_limited() -> TestResult {
 async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    fixture
-        .other_process()
-        .await?
-        .rotate(Purpose::Randomized)
+    let admin = fixture.other_process().await?;
+    admin
+        .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
 
     let cached = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
@@ -395,13 +398,13 @@ async fn open_with_the_wrong_kek_fails() -> TestResult {
 async fn cas_conflicts_are_retried_then_refused() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false).with_cas_retries(2)).await?;
     fixture.store.calls.conflicts.store(2, Ordering::SeqCst);
-    let rotation = fixture.keyring.rotate(Purpose::Randomized).await?;
-    assert_eq!(rotation.current, KeyId::try_from(2)?);
+    let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
+    assert_eq!(staged, KeyId::try_from(2)?);
     assert_eq!(fixture.store.calls.loads.load(Ordering::SeqCst), 3);
 
     fixture.store.calls.conflicts.store(3, Ordering::SeqCst);
     assert!(matches!(
-        fixture.keyring.rotate(Purpose::Randomized).await,
+        fixture.keyring.promote(staged).await,
         Err(KeyringError::RecordConflict(RecordConflictError {
             attempts: 3,
             ..
@@ -409,8 +412,8 @@ async fn cas_conflicts_are_retried_then_refused() -> TestResult {
     ));
     let stored = fixture.other_process().await?.record();
     assert_eq!(
-        stored.active(Purpose::Randomized).map(KeyVersion::key_id),
-        Some(KeyId::try_from(2)?)
+        stored.version(staged).map(KeyVersion::state),
+        Some(KeyVersionState::Pending)
     );
     Ok(())
 }
@@ -627,7 +630,12 @@ async fn mark_compromised_writes_the_flag_when_the_wrap_fails() -> TestResult {
         .calls
         .fail_wraps
         .store(false, Ordering::SeqCst);
-    let rotation = fixture.keyring.rotate(Purpose::Randomized).await?;
+    let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
+    assert!(matches!(
+        fixture.keyring.encrypt(&aad, &ALICE.to_string()).await,
+        Err(KeyringError::NoActiveVersion(_))
+    ));
+    let rotation = fixture.keyring.promote(staged).await?;
     assert_eq!(
         (rotation.previous, rotation.current),
         (None, KeyId::try_from(2)?)
@@ -645,7 +653,9 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    keyring.rotate(Purpose::Randomized).await?;
+    keyring
+        .promote(keyring.rotate(Purpose::Randomized).await?)
+        .await?;
 
     keyring.retire(KeyId::try_from(1)?).await?;
     assert!(matches!(
@@ -768,18 +778,20 @@ async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
     let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
 
-    let rotation = keyring.change_algorithm(chacha).await?;
+    let staged = keyring.change_algorithm(chacha).await?;
     let record = keyring.record();
     assert_eq!(
         record.algorithms().randomized(),
         AeadAlgorithm::ChaCha20Poly1305
     );
+    let version = record.version(staged).ok_or("the staged version is gone")?;
     assert_eq!(
-        record.version(rotation.current).map(KeyVersion::algorithm),
-        Some(chacha)
+        (version.algorithm(), version.state()),
+        (chacha, KeyVersionState::Pending)
     );
+    keyring.promote(staged).await?;
     let new = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyId::try_from(&new)?, rotation.current);
+    assert_eq!(KeyId::try_from(&new)?, staged);
     assert_eq!(keyring.decrypt(&aad, &new).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     Ok(())
@@ -823,7 +835,7 @@ async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
         Some(KeyId::try_from(0x8000_0001)?)
     );
     assert_eq!(
-        keyring.rotate(Purpose::Deterministic).await?.current,
+        keyring.rotate(Purpose::Deterministic).await?,
         KeyId::try_from(0x8000_0002)?
     );
     Ok(())
@@ -925,10 +937,9 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
     let late = MemoryKeyringStore::new();
     let opened = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
     late.compare_and_swap(&opened.record, None).await?;
-    fixture
-        .other_process()
-        .await?
-        .rotate(Purpose::Randomized)
+    let admin = fixture.other_process().await?;
+    admin
+        .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
     let rotated = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
     let store = TestStore::new(&late, Duration::ZERO);
@@ -964,8 +975,11 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
     admin.rotate(Purpose::Randomized).await?;
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
+    admin.promote(KeyId::try_from(2)?).await?;
     for _ in 0..4 {
-        admin.rotate(Purpose::Randomized).await?;
+        admin
+            .promote(admin.rotate(Purpose::Randomized).await?)
+            .await?;
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
@@ -982,6 +996,111 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
     );
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let keyring = &fixture.keyring;
+    let aad = email_of("42")?;
+    let first = KeyId::try_from(1)?;
+
+    let staged = keyring.rotate(Purpose::Randomized).await?;
+    let record = keyring.record();
+    let version = record.version(staged).ok_or("the staged version is gone")?;
+    assert_eq!(version.state(), KeyVersionState::Pending);
+    assert_eq!(version.staged_at(), Some(version.created_at()));
+    let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    assert_eq!(KeyId::try_from(&value)?, first);
+
+    let rotation = keyring.promote(staged).await?;
+    assert_eq!((rotation.previous, rotation.current), (Some(first), staged));
+    let promoted = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    assert_eq!(KeyId::try_from(&promoted)?, staged);
+    assert_eq!(keyring.decrypt(&aad, &promoted).await?, ALICE);
+    assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
+    Ok(())
+}
+
+/// An instance that refreshed while a version was pending opens the values written under it
+/// once it is promoted, before the instance sees the promotion and without a reload.
+#[tokio::test(start_paused = true)]
+async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let admin = fixture.other_process().await?;
+    let aad = email_of("42")?;
+
+    let staged = admin.rotate(Purpose::Randomized).await?;
+    tokio::time::advance(KeyringOptions::DEFAULT_RECORD_TTL).await;
+    let sealed_before = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    assert_eq!(KeyId::try_from(&sealed_before)?, KeyId::try_from(1)?);
+    assert_eq!(
+        fixture
+            .keyring
+            .record()
+            .version(staged)
+            .map(KeyVersion::state),
+        Some(KeyVersionState::Pending)
+    );
+    let store_calls = (
+        fixture.store.calls.loads.load(Ordering::SeqCst),
+        fixture.store.calls.revalidations.load(Ordering::SeqCst),
+    );
+
+    admin.promote(staged).await?;
+    let promoted = admin.encrypt(&aad, &ALICE.to_string()).await?;
+    assert_eq!(KeyId::try_from(&promoted)?, staged);
+
+    assert_eq!(fixture.keyring.decrypt(&aad, &promoted).await?, ALICE);
+    assert_eq!(
+        (
+            fixture.store.calls.loads.load(Ordering::SeqCst),
+            fixture.store.calls.revalidations.load(Ordering::SeqCst),
+        ),
+        store_calls
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_pending_version_is_destroyed_or_promoted_and_blocks_another_rotation() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let keyring = &fixture.keyring;
+    let staged = keyring.rotate(Purpose::Randomized).await?;
+
+    let refused = [
+        (
+            keyring.rotate(Purpose::Randomized).await.map(|_| ()),
+            Transition::Rotate,
+        ),
+        (keyring.retire(staged).await, Transition::Retire),
+        (
+            keyring.mark_compromised(staged, None).await.map(|_| ()),
+            Transition::MarkCompromised,
+        ),
+    ];
+    for (result, transition) in refused {
+        assert!(
+            matches!(
+                &result,
+                Err(KeyringError::InvalidTransition(error))
+                    if error.key_id == staged
+                        && error.from == KeyVersionState::Pending
+                        && error.transition == transition
+            ),
+            "{transition}: {result:?}"
+        );
+    }
+
+    keyring.destroy(staged).await?;
+    assert!(matches!(
+        keyring.promote(staged).await,
+        Err(KeyringError::InvalidTransition(error))
+            if error.from == KeyVersionState::Destroyed && error.transition == Transition::Promote
+    ));
+    let restaged = keyring.rotate(Purpose::Randomized).await?;
+    assert_eq!(restaged, KeyId::try_from(3)?);
     Ok(())
 }
 
@@ -1038,7 +1157,9 @@ async fn interop_bigquery_seals_under_its_algorithms_and_a_cloud_kms_kek() -> Te
 async fn interop_bigquery_refuses_a_non_gcm_version() -> TestResult {
     let keyring = bigquery_keyring(cloud_kms_provider()?).await?;
     let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
-    keyring.change_algorithm(chacha).await?;
+    keyring
+        .promote(keyring.change_algorithm(chacha).await?)
+        .await?;
 
     assert!(matches!(
         keyring

@@ -49,10 +49,10 @@ pub use export::{KeysetSelection, WrappedKeyset};
 /// while it holds keys, and needs the cache's TTL to bound their time in memory, calls
 /// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
-/// The administrative calls, `create`, `rotate`, `mark_compromised`, `retire`, `reinstate`,
-/// `destroy`, `rewrap` and `change_algorithm`, write the record, and `create`, `rotate`,
-/// `mark_compromised`, `rewrap` and `change_algorithm` also wrap keys, so they need the KMS's
-/// encrypt right. They run under an administrative principal, in a job, while the serving
+/// The administrative calls, `create`, `rotate`, `promote`, `mark_compromised`, `retire`,
+/// `reinstate`, `destroy`, `rewrap` and `change_algorithm`, write the record, and `create`,
+/// `rotate`, `mark_compromised`, `rewrap` and `change_algorithm` also wrap keys, so they need
+/// the KMS's encrypt right. They run under an administrative principal, in a job, while the serving
 /// processes only decrypt keys and read the store.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the record's change
@@ -283,19 +283,26 @@ where
         .await
     }
 
-    /// Creates a new active version of `purpose` with the record's algorithm for it; the
-    /// version it replaces decrypts only. Processes on the old record keep sealing under the
-    /// previous version until their record refreshes, and those values decrypt.
+    /// Stages a new version of `purpose`, with the record's algorithm for it, and returns its
+    /// key id. The version is [`Pending`](KeyVersionState::Pending): every process decrypts under
+    /// it once its record refreshes, and none encrypts under it until
+    /// [`promote`](Self::promote) makes it active.
+    ///
+    /// Promote it only after the longest time any process may run without a successful refresh
+    /// of its record, from [`staged_at`](KeyVersion::staged_at): a process that has not seen the
+    /// pending version reads a value under it as an unknown key id, and reloads its record first.
     ///
     /// # Errors
     ///
     /// The provider's and the store's errors, [`KeyringError::NoAlgorithm`] for a purpose the
-    /// record names no algorithm for, [`KeyringError::RecordRegressed`] when the stored record
-    /// moves backwards from the cached one, and [`KeyringError::RecordConflict`] after
+    /// record names no algorithm for, [`KeyringError::InvalidTransition`] with
+    /// [`Transition::Rotate`](crate::Transition::Rotate) naming the pending version when the
+    /// purpose has one already, [`KeyringError::RecordRegressed`] when the stored record moves
+    /// backwards from the cached one, and [`KeyringError::RecordConflict`] after
     /// [`cas_retries`](KeyringOptions::cas_retries) conflicts.
-    pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<Rotation> {
+    pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), purpose), async {
-            let rotation = self
+            let staged = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let algorithm = edit
@@ -303,7 +310,30 @@ where
                         .algorithms()
                         .of(purpose)
                         .ok_or_else(|| KeyringError::no_algorithm(self.id(), purpose))?;
-                    self.rotate_record(edit, algorithm).await
+                    self.stage(edit, algorithm).await
+                })
+                .await?;
+            spans::record_rotation(None, staged);
+            Ok(staged)
+        })
+        .await
+    }
+
+    /// Makes the pending version `key_id` the active version of its purpose; the version it
+    /// replaces decrypts only. Processes on the old record keep sealing under the previous
+    /// version until their record refreshes, and those values decrypt.
+    ///
+    /// # Errors
+    ///
+    /// The store's errors, [`KeyringError::KeyVersionUnknown`],
+    /// [`KeyringError::InvalidTransition`] for a version that is not pending, and the errors of
+    /// a write as for [`rotate`](Self::rotate).
+    pub async fn promote(&self, key_id: KeyId) -> KeyringResult<Rotation> {
+        spans::in_span(spans::promote(self.id(), key_id), async {
+            let rotation = self
+                .cache
+                .write(self.cas_retries, async |edit: &mut RecordEdit| {
+                    edit.promote(key_id, Timestamp::now())
                 })
                 .await?;
             spans::record_rotation(rotation.previous, rotation.current);
@@ -312,23 +342,24 @@ where
         .await
     }
 
-    /// Makes `algorithm` the one new versions of its purpose use, and rotates that purpose.
+    /// Makes `algorithm` the one new versions of its purpose use, and stages a version of it as
+    /// [`rotate`](Self::rotate) does, returning its key id.
     ///
     /// # Errors
     ///
     /// As [`rotate`](Self::rotate), and `UNSUPPORTED_ALGORITHM` from kms-aead when the backend
     /// does not implement `algorithm`.
-    pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<Rotation> {
+    pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
-            let rotation = self
+            let staged = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     edit.set_algorithm(algorithm, Timestamp::now());
-                    self.rotate_record(edit, algorithm).await
+                    self.stage(edit, algorithm).await
                 })
                 .await?;
-            spans::record_rotation(rotation.previous, rotation.current);
-            Ok(rotation)
+            spans::record_rotation(None, staged);
+            Ok(staged)
         })
         .await
     }
@@ -336,17 +367,22 @@ where
     /// Flags the version `key_id` compromised, for good, and drops its key from this process's
     /// [`DekCache`] before returning; other processes drop it when their record refreshes.
     ///
-    /// For the active version, it also rotates in the same write and returns the rotation. When
-    /// the KMS cannot wrap the new key, during an outage or without the encrypt right, it writes
-    /// the flag alone, logs a `WARN` naming the error and returns `Ok(None)`: the purpose then
-    /// has no active version, and `encrypt` fails with `NoActiveVersion` until
-    /// [`rotate`](Self::rotate) succeeds. For any other version it returns `Ok(None)`.
+    /// For the active version, it also adds a new version in the same write, active at once
+    /// rather than pending, and returns the rotation: every encrypt under the compromised key
+    /// stops as soon as each process refreshes, and the processes that have not seen the new
+    /// version yet reload their record when they read a value under it. A pending version of the
+    /// purpose stays pending. When the KMS cannot wrap the new key, during an outage or without
+    /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
+    /// `Ok(None)`: the purpose then has no active version, and `encrypt` fails with
+    /// `NoActiveVersion` until a version is promoted. For any other version it returns
+    /// `Ok(None)`.
     ///
     /// # Errors
     ///
     /// The store's errors, [`KeyringError::KeyVersionUnknown`],
-    /// [`KeyringError::InvalidTransition`] for a destroyed or already compromised version, and
-    /// the errors of a write as for [`rotate`](Self::rotate).
+    /// [`KeyringError::InvalidTransition`] for a pending, destroyed or already compromised
+    /// version, and the errors of a write as for [`rotate`](Self::rotate). A pending version
+    /// never sealed a value: [`destroy`](Self::destroy) it instead.
     pub async fn mark_compromised(
         &self,
         key_id: KeyId,
@@ -414,12 +450,13 @@ where
         .await
     }
 
-    /// Removes a retired version's wrapped key from the record: the values under it can never
-    /// be read again, from this record. The version stays, so that its id is never reused.
+    /// Removes a retired or pending version's wrapped key from the record: the values under it
+    /// can never be read again, from this record. The version stays, so that its id is never
+    /// reused.
     ///
     /// # Errors
     ///
-    /// As [`retire`](Self::retire), for any version that is not retired.
+    /// As [`retire`](Self::retire), for any version that is neither retired nor pending.
     pub async fn destroy(&self, key_id: KeyId) -> KeyringResult<()> {
         spans::in_span(spans::destroy(self.id(), key_id), async {
             self.cache
@@ -691,13 +728,10 @@ where
             .await??)
     }
 
-    async fn rotate_record(
-        &self,
-        edit: &mut RecordEdit,
-        algorithm: KeyAlgorithm,
-    ) -> KeyringResult<Rotation> {
+    /// Stages a new version of `algorithm` in `edit`.
+    async fn stage(&self, edit: &mut RecordEdit, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         let new = self.new_version(edit.record(), algorithm).await?;
-        edit.rotate(new, Timestamp::now())
+        edit.stage(new, Timestamp::now())
     }
 
     /// The next version of `algorithm`'s purpose in `record`, with its key wrapped.
@@ -845,14 +879,15 @@ impl KeyringPolicy {
             if let Some(algorithm) = algorithms.of(purpose) {
                 let key_id = edit.record().next_key_id(purpose)?;
                 let new = NewVersion::generate::<P, B>(key_id, algorithm, provider).await?;
-                edit.rotate(new, now)?;
+                edit.stage(new, now)?;
+                edit.promote(key_id, now)?;
             }
         }
         edit.finish()
     }
 }
 
-/// What a rotation did.
+/// What a promotion, or the replacement of a compromised active version, did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rotation {
     /// The purpose rotated.

@@ -82,9 +82,10 @@ async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
 #[tokio::test]
 async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
     let keyring = default_keyring().await?;
-    keyring
+    let staged = keyring
         .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
         .await?;
+    keyring.promote(staged).await?;
     for aad in [
         EMAIL.aad(&EntityId::try_from("42")?),
         FieldAad::custom(vec![0xFF; 3]),

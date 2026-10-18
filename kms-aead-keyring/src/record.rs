@@ -195,16 +195,22 @@ impl FromStr for KeyAlgorithm {
 /// The lifecycle state of a key version.
 ///
 /// ```text
-///                      rotate                 retire               destroy
-///   (new) ──create──▶ Active ──────▶ DecryptOnly ──────▶ Retired ──────▶ Destroyed
-///                       │                 ▲    │            ▲
-///                       │ mark_compromised│    └─reinstate──┘
-///                       └─────────────────┘
+/// rotate ─▶ Pending ──promote──▶ Active ───▶ DecryptOnly ──retire──▶ Retired ──destroy──▶ Destroyed
+///              │                   ▲                ▲                   │                    ▲
+///              │       create ─────┘                └─────reinstate─────┘                    │
+///              └─────────────────────────────────destroy─────────────────────────────────────┘
 /// ```
 ///
-/// Every state right of `Active` may also be compromised.
+/// A rotation stages a version as `Pending`, which decrypts and never encrypts, and `promote`
+/// makes it `Active` once every process has had time to refresh its record. The active version
+/// moves to `DecryptOnly` when the next one is promoted or when it is flagged compromised.
+/// `create`, and the replacement `mark_compromised` makes for an active version, are `Active` at
+/// once. Every state right of `Active` may also be compromised; `Pending` and `Active` never are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum KeyVersionState {
+    /// Staged by a rotation: decrypts, and never encrypts until it is promoted. At most one per
+    /// purpose.
+    Pending,
     /// Encrypts new values and decrypts. At most one per purpose.
     Active,
     /// Decrypts only: every version a rotation replaced.
@@ -219,9 +225,12 @@ impl KeyVersionState {
     /// Whether a version in this state can later be in `next`, along the lifecycle.
     fn reaches(self, next: KeyVersionState) -> bool {
         match (self, next) {
-            (KeyVersionState::Active, _) => true,
+            (current, next) if current == next => true,
+            (_, KeyVersionState::Pending) => false,
+            (KeyVersionState::Pending, _) => true,
             (_, KeyVersionState::Active) => false,
-            (KeyVersionState::Destroyed, next) => next == KeyVersionState::Destroyed,
+            (KeyVersionState::Active, _) => true,
+            (KeyVersionState::Destroyed, _) => false,
             (KeyVersionState::DecryptOnly | KeyVersionState::Retired, _) => true,
         }
     }
@@ -232,6 +241,7 @@ impl KeyVersionState {
 impl Display for KeyVersionState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
+            KeyVersionState::Pending => "pending",
             KeyVersionState::Active => "active",
             KeyVersionState::DecryptOnly => "decrypt_only",
             KeyVersionState::Retired => "retired",
@@ -250,6 +260,7 @@ impl FromStr for KeyVersionState {
 
     fn from_str(name: &str) -> KeyringResult<Self> {
         match name {
+            "pending" => Ok(KeyVersionState::Pending),
             "active" => Ok(KeyVersionState::Active),
             "decrypt_only" => Ok(KeyVersionState::DecryptOnly),
             "retired" => Ok(KeyVersionState::Retired),
@@ -263,15 +274,17 @@ impl FromStr for KeyVersionState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Transition {
-    /// The active version gives way to a new one, and decrypts only.
+    /// A new version of the purpose is staged as pending.
     Rotate,
+    /// A pending version becomes the active one.
+    Promote,
     /// The version is flagged compromised.
     MarkCompromised,
     /// A decrypt-only version is refused on read.
     Retire,
     /// A retired version decrypts again.
     Reinstate,
-    /// A retired version's wrapped key is removed.
+    /// A retired or pending version's wrapped key is removed.
     Destroy,
 }
 
@@ -280,6 +293,7 @@ impl Display for Transition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Transition::Rotate => "rotate",
+            Transition::Promote => "promote",
             Transition::MarkCompromised => "mark_compromised",
             Transition::Retire => "retire",
             Transition::Reinstate => "reinstate",
@@ -353,6 +367,12 @@ impl KeyVersion {
         self.state_changed_at
     }
 
+    /// When the version was staged, while it is pending: the time from which a promotion waits
+    /// out the longest any process may run without a successful refresh of its record.
+    pub fn staged_at(&self) -> Option<Timestamp> {
+        matches!(self.state, VersionState::Pending(_)).then_some(self.state_changed_at)
+    }
+
     pub(crate) fn wrapped_dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         self.state.dek()
     }
@@ -363,7 +383,7 @@ impl KeyVersion {
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
         match &self.state {
-            VersionState::Active(dek) => Some((dek, None)),
+            VersionState::Pending(dek) | VersionState::Active(dek) => Some((dek, None)),
             VersionState::DecryptOnly(kept) => Some((&kept.dek, kept.compromised.as_ref())),
             VersionState::Retired(_) | VersionState::Destroyed(_) => None,
         }
@@ -383,10 +403,11 @@ impl Debug for KeyVersion {
     }
 }
 
-/// A state with what it holds, so that a destroyed version without its key and an active one
-/// without a compromised flag are the only shapes there are.
+/// A state with what it holds, so that a destroyed version without its key, and a pending or
+/// active one without a compromised flag, are the only shapes there are.
 #[derive(Clone)]
 enum VersionState {
+    Pending(EncryptedDataEncryptionKey),
     Active(EncryptedDataEncryptionKey),
     DecryptOnly(RetainedDek),
     Retired(RetainedDek),
@@ -396,6 +417,7 @@ enum VersionState {
 impl VersionState {
     fn kind(&self) -> KeyVersionState {
         match self {
+            VersionState::Pending(_) => KeyVersionState::Pending,
             VersionState::Active(_) => KeyVersionState::Active,
             VersionState::DecryptOnly(_) => KeyVersionState::DecryptOnly,
             VersionState::Retired(_) => KeyVersionState::Retired,
@@ -405,7 +427,7 @@ impl VersionState {
 
     fn compromised(&self) -> Option<&Compromise> {
         match self {
-            VersionState::Active(_) => None,
+            VersionState::Pending(_) | VersionState::Active(_) => None,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
                 kept.compromised.as_ref()
             }
@@ -415,7 +437,7 @@ impl VersionState {
 
     fn dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         match self {
-            VersionState::Active(dek) => Some(dek),
+            VersionState::Pending(dek) | VersionState::Active(dek) => Some(dek),
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => Some(&kept.dek),
             VersionState::Destroyed(_) => None,
         }
@@ -452,8 +474,8 @@ pub(crate) struct NewVersion {
 /// versions, and every version ever created, in creation order. It is stored as one JSON
 /// document, the same in every store; see [`to_json`](Self::to_json).
 ///
-/// Every record that exists holds its invariants: at most one active version per purpose, an
-/// active version never compromised, a wrapped key on every version but the destroyed ones,
+/// Every record that exists holds its invariants: at most one active and one pending version
+/// per purpose, neither of them compromised, a wrapped key on every version but the destroyed ones,
 /// unique key ids of the purpose of their algorithm, increasing within a purpose in creation
 /// order, and at most 1 MiB of JSON: at about 400 bytes per version with its wrapped key, about
 /// 2,600 versions.
@@ -515,6 +537,13 @@ impl KeyringRecord {
     /// The version of `purpose` that encrypts new values.
     pub fn active(&self, purpose: Purpose) -> Option<&KeyVersion> {
         self.active_dek(purpose).map(|(version, _)| version)
+    }
+
+    /// The version of `purpose` a rotation staged, which decrypts and waits for its promotion.
+    pub fn pending(&self, purpose: Purpose) -> Option<&KeyVersion> {
+        self.versions.iter().find(|version| {
+            version.key_id.purpose() == purpose && matches!(version.state, VersionState::Pending(_))
+        })
     }
 
     /// The active version of `purpose` and its wrapped key.
@@ -597,13 +626,37 @@ impl RecordEdit {
         KeyringRecord::from_json(&self.0.id, &self.0.to_json()?)
     }
 
-    /// Adds `new` as the active version of its purpose; the active version it replaces decrypts
-    /// only.
-    pub(crate) fn rotate(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<Rotation> {
-        let purpose = new.algorithm.purpose();
+    /// Adds `new` as the pending version of its purpose.
+    ///
+    /// # Errors
+    ///
+    /// `InvalidTransition` with [`Transition::Rotate`], naming the pending version, when the
+    /// purpose has one already.
+    pub(crate) fn stage(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
+        if let Some(pending) = self.0.pending(new.algorithm.purpose()) {
+            return Err(KeyringError::InvalidTransition(InvalidTransitionError {
+                keyring: self.0.id.clone(),
+                key_id: pending.key_id,
+                from: KeyVersionState::Pending,
+                transition: Transition::Rotate,
+            }));
+        }
+        let key_id = new.key_id;
+        self.push(new, VersionState::Pending, now);
+        Ok(key_id)
+    }
+
+    /// Makes the pending version `key_id` the active version of its purpose; the active version
+    /// it replaces decrypts only.
+    pub(crate) fn promote(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<Rotation> {
+        let purpose = key_id.purpose();
         let previous = self.0.active(purpose).map(KeyVersion::key_id);
+        self.change_state(key_id, Transition::Promote, now, |state| match state {
+            VersionState::Pending(dek) => Some(VersionState::Active(dek.clone())),
+            _ => None,
+        })?;
         if let Some(previous) = previous {
-            self.change_state(previous, Transition::Rotate, now, |state| match state {
+            self.change_state(previous, Transition::Promote, now, |state| match state {
                 VersionState::Active(dek) => Some(VersionState::DecryptOnly(RetainedDek {
                     dek: dek.clone(),
                     compromised: None,
@@ -611,11 +664,10 @@ impl RecordEdit {
                 _ => None,
             })?;
         }
-        let current = self.push_active(new, now);
         Ok(Rotation {
             purpose,
             previous,
-            current,
+            current: key_id,
         })
     }
 
@@ -638,6 +690,7 @@ impl RecordEdit {
             Transition::MarkCompromised,
             now,
             |state| match state {
+                VersionState::Pending(_) => None,
                 VersionState::Active(dek) => Some(VersionState::DecryptOnly(RetainedDek {
                     dek: dek.clone(),
                     compromised: Some(compromise.clone()),
@@ -652,7 +705,8 @@ impl RecordEdit {
         match replacement {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
-                let current = self.push_active(new, now);
+                let current = new.key_id;
+                self.push(new, VersionState::Active, now);
                 Ok(Some(Rotation {
                     purpose,
                     previous: Some(key_id),
@@ -679,6 +733,7 @@ impl RecordEdit {
 
     pub(crate) fn destroy(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<()> {
         self.change_state(key_id, Transition::Destroy, now, |state| match state {
+            VersionState::Pending(_) => Some(VersionState::Destroyed(None)),
             VersionState::Retired(kept) => Some(VersionState::Destroyed(kept.compromised.clone())),
             _ => None,
         })
@@ -693,7 +748,7 @@ impl RecordEdit {
         now: Timestamp,
     ) -> KeyringResult<()> {
         match &mut self.version_mut(key_id)?.state {
-            VersionState::Active(held) => *held = dek,
+            VersionState::Pending(held) | VersionState::Active(held) => *held = dek,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => kept.dek = dek,
             VersionState::Destroyed(_) => {
                 return Err(KeyringError::record_invalid(
@@ -715,20 +770,24 @@ impl RecordEdit {
         self.0.updated_at = now;
     }
 
-    /// Appends `new` as an active version. A key id that does not follow the record's, such as
-    /// one computed on an older record, fails the record's checks in [`finish`](Self::finish).
-    fn push_active(&mut self, new: NewVersion, now: Timestamp) -> KeyId {
+    /// Appends `new` in the state `state` makes of its wrapped key. A key id that does not
+    /// follow the record's, such as one computed on an older record, fails the record's checks in
+    /// [`finish`](Self::finish).
+    fn push(
+        &mut self,
+        new: NewVersion,
+        state: fn(EncryptedDataEncryptionKey) -> VersionState,
+        now: Timestamp,
+    ) {
         let record = &mut self.0;
-        let key_id = new.key_id;
         record.versions.push(KeyVersion {
-            key_id,
+            key_id: new.key_id,
             algorithm: new.algorithm,
             created_at: now,
             state_changed_at: now,
-            state: VersionState::Active(new.dek),
+            state: state(new.dek),
         });
         record.updated_at = now;
-        key_id
     }
 
     /// Moves `key_id` to the state `next` returns for its current one, or fails with

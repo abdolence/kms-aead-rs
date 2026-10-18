@@ -14,18 +14,19 @@ use kms_aead::{
 use crate::errors::{KeyVersionError, KeyringError, KeyringResult};
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{KeyAlgorithm, KeyId, KeyVersion, Keyring, KeyringRecord, Purpose};
+use crate::{KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, Keyring, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeysetSelection {
-    /// Every version of the purpose that decrypts and is not compromised, with the active version
-    /// as the primary: the keyset of a query that reads a column. BigQuery opens a value under the
-    /// key its prefix names, so one keyset reads the values of every version it holds.
+    /// Every version of the purpose that decrypts and is not compromised, the pending one
+    /// included, with the active version as the primary: the keyset of a query that reads a
+    /// column. BigQuery opens a value under the key its prefix names, so one keyset reads the
+    /// values of every version it holds.
     Readable(Purpose),
-    /// The one version, as the primary, also when it is compromised: the keyset of
-    /// `DETERMINISTIC_ENCRYPT` for the probe of one version, since BigQuery encrypts under the
-    /// primary, and of a read through a compromised version.
+    /// The one version, as the primary, also when it is compromised, and never a pending one:
+    /// the keyset of `DETERMINISTIC_ENCRYPT` for the probe of one version, since BigQuery
+    /// encrypts under the primary, and of a read through a compromised version.
     Single(KeyId),
 }
 
@@ -117,7 +118,8 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     ///   and [`KeyringError::RecordRegressed`], from the read of the record;
     /// - [`KeyringError::NoActiveVersion`] for `Readable` of a purpose with no active version;
     /// - [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`] and
-    ///   [`KeyringError::KeyVersionDestroyed`] for `Single` of a version that does not decrypt;
+    ///   [`KeyringError::KeyVersionDestroyed`] for `Single` of a version that does not decrypt,
+    ///   and [`KeyringError::KeyVersionPending`] for `Single` of a pending version;
     /// - [`KeyringError::ExportAlgorithmUnsupported`], before any KMS call, for a selected
     ///   version whose algorithm is not AES-256-GCM or AES-SIV;
     /// - the provider's errors, among them Cloud KMS's limit of 64 KiB of plaintext, which a
@@ -202,6 +204,12 @@ where
                 let version = record
                     .version(key_id)
                     .ok_or_else(|| KeyringError::key_version_unknown(self.id(), key_id))?;
+                if version.state() == KeyVersionState::Pending {
+                    return Err(KeyringError::KeyVersionPending(KeyVersionError {
+                        keyring: self.id().clone(),
+                        key_id,
+                    }));
+                }
                 let (dek, _) = version
                     .readable_dek()
                     .ok_or_else(|| self.unreadable(version))?;
@@ -414,8 +422,11 @@ mod tests {
     #[tokio::test]
     async fn readable_omits_compromised_versions() -> TestResult {
         let (keyring, provider) = keyring(KeyringPolicy::new()).await?;
-        keyring.rotate(Purpose::Randomized).await?;
-        keyring.rotate(Purpose::Randomized).await?;
+        for _ in 0..2 {
+            keyring
+                .promote(keyring.rotate(Purpose::Randomized).await?)
+                .await?;
+        }
         keyring.mark_compromised(KeyId::try_from(2)?, None).await?;
 
         let wrapped = keyring
@@ -535,10 +546,37 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pending_version_is_readable_and_never_the_primary() -> TestResult {
+        let (keyring, provider) = keyring(KeyringPolicy::new()).await?;
+        let staged = keyring.rotate(Purpose::Randomized).await?;
+
+        let wrapped = keyring
+            .export_keyset(KeysetSelection::Readable(Purpose::Randomized))
+            .await?;
+        let keyset = provider
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                wrapped.as_bytes().to_vec(),
+            ))
+            .await?;
+        assert_eq!(wrapped.key_ids(), [KeyId::try_from(1)?, staged]);
+        assert_eq!(
+            *keyset.value(),
+            keyset_of(&keyring, &provider, 1, &[1, staged.as_u32()]).await?
+        );
+        assert!(matches!(
+            keyring.export_keyset(KeysetSelection::Single(staged)).await,
+            Err(KeyringError::KeyVersionPending(KeyVersionError { key_id, .. })) if key_id == staged
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
         let (keyring, _) = keyring(KeyringPolicy::new()).await?;
         let first = KeyId::try_from(1)?;
-        keyring.rotate(Purpose::Randomized).await?;
+        keyring
+            .promote(keyring.rotate(Purpose::Randomized).await?)
+            .await?;
         keyring.retire(first).await?;
         keyring.destroy(first).await?;
 
