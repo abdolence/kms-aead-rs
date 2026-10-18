@@ -67,7 +67,7 @@ impl Emulator {
         let parameters = CreateKeyParameters {
             kty: Some(KeyType::Rsa),
             key_size: Some(2048),
-            // Lowkey Vault checks the encrypt and decrypt operations on wrap and unwrap.
+            // Lowkey Vault checks the encrypt and decrypt operations on wrapKey and unwrapKey.
             key_ops: Some(vec![
                 KeyOperation::WrapKey,
                 KeyOperation::UnwrapKey,
@@ -88,7 +88,7 @@ impl Emulator {
         Ok(KmsKeyVersion::try_from(version)?)
     }
 
-    /// Lowkey Vault wraps only with an explicit key version.
+    /// Lowkey Vault encrypts only with an explicit key version.
     async fn encryption(
         &self,
         key_name: &str,
@@ -117,7 +117,7 @@ fn unique_name(prefix: &str) -> TestResult<String> {
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
 async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<()> {
     let emulator = Emulator::connect()?;
-    let key_name = unique_name("dek-wrapping-key")?;
+    let key_name = unique_name("dek-encrypting-key")?;
     let first_version = emulator.create_rsa_key_version(&key_name).await?;
     let aad = b"test-aad";
 
@@ -148,7 +148,7 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
 async fn value_encrypted_with_another_key_fails_to_decrypt() -> TestResult<()> {
     let emulator = Emulator::connect()?;
-    let key_name = unique_name("dek-wrapping-key")?;
+    let key_name = unique_name("dek-encrypting-key")?;
     let other_key_name = unique_name("other-key")?;
     let key_version = emulator.create_rsa_key_version(&key_name).await?;
     let other_key_version = emulator.create_rsa_key_version(&other_key_name).await?;
@@ -171,14 +171,14 @@ async fn value_encrypted_with_another_key_fails_to_decrypt() -> TestResult<()> {
 
 #[tokio::test]
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
-async fn key_vault_wraps_the_raw_dek_and_the_value_round_trips() -> TestResult<()> {
+async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResult<()> {
     let emulator = Emulator::connect()?;
-    let key_name = unique_name("dek-wrapping-key")?;
+    let key_name = unique_name("dek-encrypting-key")?;
     let key_version = emulator.create_rsa_key_version(&key_name).await?;
     let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
     let aad = b"test-aad";
 
-    let (dek, encrypted_dek) = encryption.generate_new_dek().await?;
+    let (dek, encrypted_dek) = encryption.generate_dek().await?;
     let cipher_text =
         encryption.encrypt_value_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
     let decrypted = encryption
@@ -187,7 +187,7 @@ async fn key_vault_wraps_the_raw_dek_and_the_value_round_trips() -> TestResult<(
             &CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?,
         )
         .await?;
-    // The provider's bytes are `[0x01][k: u8][key version: k][Key Vault wrapped key]`.
+    // The provider's bytes are `[0x01][k: u8][key version: k][Key Vault encrypted DEK]`.
     let wrapped = &encrypted_dek.value()[2 + key_version.as_str().len()..];
     let parameters = KeyOperationParameters {
         algorithm: Some(EncryptionAlgorithm::RsaOaep256),

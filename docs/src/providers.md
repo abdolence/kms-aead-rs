@@ -1,6 +1,6 @@
 # KMS providers
 
-A provider wraps and unwraps data encryption keys with one key encryption key (KEK). Each one is
+A provider encrypts and decrypts data encryption keys with one key encryption key (KEK). Each one is
 a type in `kms_aead::providers`, enabled by its feature:
 
 | KMS | Type | Feature |
@@ -31,10 +31,10 @@ let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 # }
 ```
 
-Each provider names its configured KEK on every unwrap, so a DEK wrapped under another KEK fails
-at the KMS and never opens a value. `provider.kek()` returns that KEK as a `KekRef`: the KMS
+Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
+fails at the KMS and never opens a value. `provider.kek()` returns that KEK as a `KekRef`: the KMS
 and the key name. It is also the `provider` and `key` field of the [KMS spans](./observability.md)
-and the key of the [DEK cache](./dek-caching.md). Nothing else is checked: a wrapped DEK carries
+and the key of the [DEK cache](./dek-caching.md). Nothing else is checked: an encrypted DEK carries
 no context that the KMS authenticates, see [Security considerations](./security.md#threat-model).
 
 ## KMS random generators
@@ -56,8 +56,8 @@ around another provider. The implementation:
 
 - returns from `kek()` a `KekRef` with `KekProvider::Other` and a key name that identifies the
   key across every KMS instance it may address. A wrapper returns the inner provider's `kek()`;
-- names that KEK to the KMS on every unwrap;
-- keeps key material, plaintext or wrapped, out of its errors' `Display` and `Debug`.
+- names that KEK to the KMS on every decryption;
+- keeps key material, plaintext or encrypted, out of its errors' `Display` and `Debug`.
 
 `generate_key_material` has a default implementation that returns `Ok(None)`, so the backend
 generates the key.

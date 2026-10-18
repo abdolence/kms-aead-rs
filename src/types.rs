@@ -9,7 +9,7 @@ use crate::errors::*;
 use crate::KmsAeadResult;
 
 /// A value sealed by an [`AeadAlgorithm`](crate::AeadAlgorithm): `[nonce][ciphertext][tag]`.
-/// It holds no key, so it is not a storage form for envelope encryption without the wrapped key
+/// It holds no key, so it is not a storage form for envelope encryption without the encrypted DEK
 /// that opens it.
 #[derive(Clone, ValueStruct)]
 pub struct CipherText(pub Vec<u8>);
@@ -41,8 +41,8 @@ impl PartialEq for CipherText {
 ///
 /// The ciphers take the key's own bytes. A provider's
 /// [`encrypt_data_encryption_key`](crate::KmsAeadEncryptionProvider::encrypt_data_encryption_key)
-/// receives the key as Tink serialises it, which is what the KMS wraps, and the Azure provider the
-/// raw key.
+/// receives the key as Tink serialises it, which is what the KMS encrypts, and the Azure provider
+/// the raw key.
 #[derive(Debug, Clone)]
 pub struct DataEncryptionKey(SecretValue);
 
@@ -94,10 +94,11 @@ impl PartialEq for DataEncryptionKey {
     }
 }
 
-/// A data encryption key wrapped by a KMS: the bytes the provider returned, which are also the
-/// bytes to store and the bytes the provider unwraps. They are the KMS ciphertext of the key as
-/// Tink serialises it, or of the raw key for Azure, and they name the KMS key version that wrapped it where the KMS needs one
-/// to unwrap; the formats chapter of the book lists each provider's bytes.
+/// A data encryption key encrypted by a KMS: the bytes the provider returned, which are also the
+/// bytes to store and the bytes the provider decrypts. They are the KMS ciphertext of the key as
+/// Tink serialises it, or of the raw key for Azure, and they name the KMS key version that
+/// encrypted it where the KMS needs one to decrypt; the formats chapter of the book lists each
+/// provider's bytes.
 ///
 /// Equality compares in constant time. `Debug` shows the length only.
 #[derive(Clone, ValueStruct)]
@@ -148,7 +149,7 @@ impl PartialEq for EncryptedDataEncryptionKey {
 
 impl Eq for EncryptedDataEncryptionKey {}
 
-/// Hashes the bytes, in variable time: a wrapped key opens nothing without the KMS.
+/// Hashes the bytes, in variable time: an encrypted DEK opens nothing without the KMS.
 impl Hash for EncryptedDataEncryptionKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.0.hash(state);
@@ -160,16 +161,16 @@ mod tests {
     use super::*;
     use crate::test_provider::renderings;
 
-    const WRAPPED_KEY: &[u8] = b"zq-key-marker-zq";
+    const ENCRYPTED_DEK: &[u8] = b"zq-key-marker-zq";
     const CIPHER_TEXT: &[u8] = b"zq-cipher-marker-zq";
 
     #[test]
     fn an_encrypted_key_reads_back_from_hex() -> KmsAeadResult<()> {
-        let encrypted_dek = EncryptedDataEncryptionKey::new(WRAPPED_KEY.to_vec());
+        let encrypted_dek = EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec());
 
         let hex_string = encrypted_dek.to_hex_string();
 
-        assert_eq!(hex_string, hex::encode(WRAPPED_KEY));
+        assert_eq!(hex_string, hex::encode(ENCRYPTED_DEK));
         assert_eq!(
             EncryptedDataEncryptionKey::try_from_hex_string(&hex_string.to_uppercase())?,
             encrypted_dek
@@ -189,14 +190,14 @@ mod tests {
     }
 
     #[test]
-    fn debug_shows_no_wrapped_key_or_cipher_text_bytes() {
+    fn debug_shows_no_encrypted_dek_or_cipher_text_bytes() {
         let debug = format!(
             "{:?} {:?}",
-            EncryptedDataEncryptionKey::new(WRAPPED_KEY.to_vec()),
+            EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
             CipherText(CIPHER_TEXT.to_vec())
         );
 
-        for stored in [WRAPPED_KEY, CIPHER_TEXT] {
+        for stored in [ENCRYPTED_DEK, CIPHER_TEXT] {
             for rendering in renderings(stored) {
                 assert!(!debug.contains(&rendering), "{debug}");
             }

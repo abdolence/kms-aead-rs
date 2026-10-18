@@ -2,9 +2,9 @@
 
 Feature `gcp-kms-encryption`, or `gcp-kms-encryption-webpki` for the bundled WebPKI roots.
 
-`GcpKmsKeyRef` names a CryptoKey by its project, location, key ring and key. The provider wraps
-under the primary version of the key, and each wrapped DEK records the version that wrapped it,
-so DEKs wrapped before a rotation still unwrap afterwards.
+`GcpKmsKeyRef` names a CryptoKey by its project, location, key ring and key. The provider encrypts
+under the primary version of the key, and each encrypted DEK records the version that encrypted it,
+so DEKs encrypted before a rotation still decrypt afterwards.
 
 ```rust,no_run
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};

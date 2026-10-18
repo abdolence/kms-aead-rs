@@ -26,7 +26,7 @@ pub enum KmsAeadError {
     /// A KMS that could not be reached or did not answer in time, a server error or a rate limit
     /// from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS.
     NetworkError(KmsAeadNetworkError),
-    /// Encrypting, decrypting, wrapping or unwrapping failed, or a stored value could not be
+    /// Encrypting or decrypting a value or a DEK failed, or a stored value could not be
     /// read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault refused.
     EncryptionError(KmsAeadEncryptionError),
     /// The backend does not implement the algorithm. Returned by constructors only.
@@ -67,7 +67,7 @@ impl KmsAeadError {
 
     /// A service error keeps the code the service returned, such as `IncorrectKeyException`, and
     /// the modelled service error as the root cause. No variant keeps the raw response: the body
-    /// of a response that failed to parse can be a successful unwrap, which holds the data
+    /// of a response that failed to parse can be a successful decryption, which holds the data
     /// encryption key.
     #[cfg(feature = "aws-kms-encryption")]
     pub(crate) fn from_aws_sdk_error<E, R>(e: aws_sdk_kms::error::SdkError<E, R>) -> Self
@@ -115,7 +115,7 @@ impl KmsAeadError {
     /// A 5xx or 429 response is a retryable network error; any other HTTP error keeps Key
     /// Vault's error code and the message of its error envelope. Nothing else from a response
     /// body is kept: for a body that is not an Azure error envelope the SDK copies the whole
-    /// body into the error, and an unwrap response body holds the data encryption key. A
+    /// body into the error, and a decryption response body holds the data encryption key. A
     /// response parse error keeps no message or root cause for the same reason.
     #[cfg(feature = "azure-kms-encryption-base")]
     pub(crate) fn from_azure_error(e: azure_core::Error) -> Self {
@@ -412,8 +412,8 @@ impl KmsAeadLegacyFormatError {
                 "The encrypted key is in the encrypted key layout of kms-aead 0.29, which only the \
                  deprecated legacy-formats feature reads"
             }
-            KmsAeadLegacyFormat::RawWrappedKey => {
-                "The wrapped key holds the raw key, as kms-aead 0.29 and earlier wrapped every \
+            KmsAeadLegacyFormat::RawEncryptedDek => {
+                "The encrypted DEK holds the raw key, as kms-aead 0.29 and earlier encrypted every \
                  key, not a serialised Tink key. Only the deprecated legacy-formats feature reads \
                  it"
             }
@@ -451,10 +451,10 @@ pub enum KmsAeadLegacyFormat {
     /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted key layout of 0.29, starting
     /// with `0xFF 0x01`.
     EncryptedKeyV1,
-    /// A wrapped key that unwraps to the raw key, as 0.29 and earlier wrapped every key, rather
-    /// than to a serialised Tink key. The values of 32-bit targets before 0.24.0, whose framing
-    /// is Tink's, fail with it too.
-    RawWrappedKey,
+    /// An encrypted DEK that decrypts to the raw key, as 0.29 and earlier encrypted every key,
+    /// rather than to a serialised Tink key. The values of 32-bit targets before 0.24.0, whose
+    /// framing is Tink's, fail with it too.
+    RawEncryptedDek,
 }
 
 #[cfg(test)]
@@ -468,7 +468,7 @@ mod tests {
             KmsAeadError::EncryptionError(
                 KmsAeadEncryptionError::new(
                     KmsAeadErrorPublicGenericDetails::new("ENCRYPT".to_string()),
-                    "Unable to wrap".to_string(),
+                    "Unable to encrypt".to_string(),
                 )
                 .with_root_cause(root_cause()),
             ),

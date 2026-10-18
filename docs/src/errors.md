@@ -6,7 +6,7 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
   client that cannot be built;
 - `NetworkError`: a KMS that could not be reached or did not answer in time, a server error or a
   rate limit from Azure Key Vault or Vault, and every gRPC status from Google Cloud KMS;
-- `EncryptionError`: encrypting, decrypting, wrapping or unwrapping failed, or a stored value
+- `EncryptionError`: encrypting or decrypting a value or a DEK failed, or a stored value
   could not be read. Includes every AWS KMS error, and the requests Azure Key Vault and Vault
   refused;
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
@@ -56,9 +56,9 @@ The library's codes:
 | `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, a length past its end, or a typed field without Tink's output prefix |
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted field that is not an encoding of its type, or a `Json` value that does not serialise |
-| `INVALID_KEY_FORMAT` | encryption | an unwrapped DEK that is not a serialised Tink key, such as a wrapped keyset |
+| `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
 | `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted key layout of 0.29 that cannot be read, with `legacy-formats` |
-| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure wrapped DEK or a layout of 0.29 |
+| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
 | `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, and the envelope layouts of 0.29 and earlier in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
@@ -83,7 +83,7 @@ change on a retry.
 
 ## What errors never carry
 
-No error carries plaintext, key material in any form, plaintext or wrapped, AAD content or cipher
+No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in `Display` or in `Debug`. An application can log errors with `{}` and `{:?}`.
 
 `message` is meant for a person reading logs. `public` holds the code, the part safe to return to

@@ -23,7 +23,7 @@ In short:
   ChaCha20-Poly1305. A value does not record its algorithm, so values sealed under the default of
   0.29 open only with `KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305)`,
   and fail with `DECRYPT` without it;
-- the AWS provider names the configured key on every unwrap;
+- the AWS provider names the configured key on every decryption;
 - `EncryptedDataEncryptionKey` is the provider's bytes: store `value()` or `to_hex_string()`, and
   read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`;
 - to move stored values to the new format, upgrade every reader to 0.30 with `legacy-formats`,

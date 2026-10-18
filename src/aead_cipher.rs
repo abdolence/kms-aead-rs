@@ -58,24 +58,24 @@ impl<B: AeadBackend> AeadCipher<B> {
         generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
-    /// A new key and the same key wrapped by `provider`, to store. The key comes from the KMS
+    /// A new key and the same key encrypted by `provider`, to store. The key comes from the KMS
     /// generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is wrapped as Tink wraps a data encryption key, serialised as the Tink key
-    /// of the algorithm, or raw under an Azure KEK, so it can go into a
+    /// otherwise. It is encrypted as Tink encrypts a data encryption key, serialised as the Tink
+    /// key of the algorithm, or raw under an Azure KEK, so it can go into a
     /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey).
     ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
     /// of another length, and `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub async fn generate_wrapped_key<P>(
+    pub async fn generate_dek<P>(
         &self,
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        crate::formats::generate_wrapped_key::<B, P>(
+        crate::formats::generate_dek::<B, P>(
             self.algorithm.into(),
             self.algorithm.key_len(),
             provider,

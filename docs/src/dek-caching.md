@@ -1,17 +1,17 @@
 # DEK caching and reuse
 
-Without a cache, every read of a value unwraps its DEK with one KMS call, and every
-`encrypt_value` wraps a new DEK with another. The library has two ways to make fewer KMS calls:
+Without a cache, every read of a value decrypts its DEK with one KMS call, and every
+`encrypt_value` encrypts a new DEK with another. The library has two ways to make fewer KMS calls:
 
-- `DekCache`, a cache of unwrapped DEKs, which serves repeated reads of values under the same
+- `DekCache`, a cache of decrypted DEKs, which serves repeated reads of values under the same
   DEK without the KMS;
 - store-less DEK reuse, with a `DekReusePolicy`, where one DEK seals many values, so a write
   calls the KMS only when the DEK is renewed.
 
 ## DEK cache
 
-`kms_aead::cache::DekCache` holds plaintext DEKs a provider unwrapped, keyed by the provider's
-KEK and the wrapped DEK's bytes. A per-call envelope has no cache unless the options give it one:
+`kms_aead::cache::DekCache` holds plaintext DEKs a provider decrypted, keyed by the provider's
+KEK and the encrypted DEK's bytes. A per-call envelope has no cache unless the options give it one:
 
 ```rust
 use kms_aead::cache::{DekCache, DekCacheOptions};
@@ -37,9 +37,9 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 # }
 ```
 
-`decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` unwrap through
+`decrypt_value`, the `*_with_encrypted_dek` calls and a store-less `encrypt_value` decrypt through
 the envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
-several KEKs: an entry serves only a lookup that names the same KEK, and a key unwrapped under
+several KEKs: an entry serves only a lookup that names the same KEK, and a key decrypted under
 one KEK never reaches a caller with the provider of another.
 
 The cache:
@@ -49,7 +49,7 @@ The cache:
 - holds at most `max_entries` entries, 1024 by default, and evicts the oldest entry past it;
 - makes one provider call for concurrent misses of the same key, and every caller receives its
   result, the key or the error;
-- keeps no entry for a failed unwrap, so during a KMS outage every call fails as fast as the KMS
+- keeps no entry for a failed decryption, so during a KMS outage every call fails as fast as the KMS
   does;
 - zeroises a key when its entry leaves the cache: once it is evicted, invalidated, cleared, or
   purged after it expired.
@@ -83,9 +83,9 @@ use kms_aead::KmsAeadEncryptionProvider;
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
-let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
+let (_dek, encrypted_dek) = envelope.generate_dek().await?;
 
-// One wrapped DEK
+// One encrypted DEK
 envelope
     .dek_cache()
     .invalidate(envelope.provider().kek(), &encrypted_dek);
@@ -132,7 +132,7 @@ key: a copy taken out of it outlives the cache's control of its lifetime.
 
 A `KmsAeadEnvelope` with a `DekReusePolicy` encrypts many values under one DEK and renews it at
 the first encryption past `max_age` or past `max_uses`, whichever comes first. A renewal makes one
-KMS wrap call. Each value still carries its wrapped DEK in Tink's KMS envelope, so nothing is
+KMS encrypt call. Each value still carries its encrypted DEK in Tink's KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
@@ -154,7 +154,7 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     ),
 )?;
 
-// One KMS wrap for both values
+// One KMS encryption for both values
 let first = envelope.encrypt_value(b"events/1", &SecretValue::from("first")).await?;
 let second = envelope.encrypt_value(b"events/2", &SecretValue::from("second")).await?;
 
@@ -174,7 +174,7 @@ envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
 
 ### The DEK lives in the cache
 
-The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's `DekCache`, which a
+The envelope keeps only the encrypted DEK. Its plaintext lives in the envelope's `DekCache`, which a
 store-less envelope always has: `DekCache::new(DekCacheOptions::new())` unless the options give it
 another, and `INVALID_DEK_REUSE_POLICY` beside `DekCache::disabled()`.
 

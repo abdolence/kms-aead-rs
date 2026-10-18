@@ -24,7 +24,7 @@ mod private {
 /// The layout check of a [`Format`].
 pub(crate) trait FormatLayout {
     /// The key id the framing of a value names, which the value keeps: [`KeyId`] for the
-    /// TINK-prefixed formats, and none for an envelope, which carries its wrapped DEK instead.
+    /// TINK-prefixed formats, and none for an envelope, which carries its encrypted DEK instead.
     type FramedKeyId: Copy;
 
     /// Checks that `value` is framed as a value of the format, and returns the key id the framing
@@ -37,7 +37,7 @@ pub(crate) trait FormatLayout {
 /// [`CipherTextWithEncryptedKey`](crate::CipherTextWithEncryptedKey):
 ///
 /// ```text
-/// [w: u32 BE][wrapped DEK: w][nonce: 12][ciphertext][tag: 16]
+/// [w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]
 /// ```
 ///
 /// [`KmsAeadEnvelope::encrypt_field`](crate::KmsAeadEnvelope::encrypt_field) writes it. The
@@ -77,7 +77,7 @@ impl FormatLayout for Envelope {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 &format!(
-                    "The cipher text of {} bytes after the wrapped key is too short to hold a \
+                    "The cipher text of {} bytes after the encrypted DEK is too short to hold a \
                      nonce and a tag",
                     cipher_text.len()
                 ),

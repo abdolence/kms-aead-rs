@@ -27,8 +27,8 @@ example. A KMS whose variables are not set is skipped. Cloud KMS uses the applic
 credentials, AWS KMS the credentials boto3 finds.
 
 Each line is one value: {"kms": "gcp" or "aws", "algorithm": the kms-aead name, "aad",
-"plain_text" and "value" in hex}, and for a keyset "key_uri", "keyset" and "wrapped_key", the key
-wrapped by the KMS key, which kms-aead opens Tink's value with. Tink for Python has no
+"plain_text" and "value" in hex}, and for a keyset "key_uri", "keyset" and "encrypted_dek", the key
+encrypted by the KMS key, which kms-aead opens Tink's value with. Tink for Python has no
 ChaCha20Poly1305Key, so `decrypt` and `read-keysets` skip the chacha20-poly1305 values that
 kms-aead writes.
 """
@@ -139,7 +139,7 @@ def read_keysets():
     print(json.dumps({
         'kms': case['kms'],
         'algorithm': case['algorithm'],
-        'wrapped_key': case['wrapped_key'],
+        'encrypted_dek': case['encrypted_dek'],
         'aad': case['aad'],
         'plain_text': plain_text.hex(),
         'value': primitive.encrypt(plain_text, aad).hex(),

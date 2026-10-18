@@ -3,10 +3,10 @@ use std::fmt::{Display, Formatter};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::KmsAeadResult;
 
-/// The version of the KMS key that wrapped a data encryption key: 1 to 255 ASCII alphanumeric
+/// The version of the KMS key that encrypted a data encryption key: 1 to 255 ASCII alphanumeric
 /// characters, such as the version of an Azure Key Vault key.
 ///
-/// The same rule validates every key version read back from the Azure provider's wrapped keys
+/// The same rule validates every key version read back from the Azure provider's encrypted DEKs
 /// and from the layouts of 0.29, so it may only ever loosen: a stricter rule makes stored data
 /// unreadable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

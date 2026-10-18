@@ -1,15 +1,15 @@
 //! Envelope encryption with a key encryption key (KEK) held by a KMS, and AEAD without one.
 //!
 //! A value is sealed under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
-//! wrapped by the KEK. [`KmsAeadEnvelope`] does both and stores the wrapped DEK with the cipher
+//! encrypted by the KEK. [`KmsAeadEnvelope`] does both and stores the encrypted DEK with the cipher
 //! text, in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads the
 //! values with the same KMS key and algorithm. [`AeadCipher`] seals with a DEK the caller holds,
 //! without a KMS. [`formats`] has every byte layout.
 //!
 //! # Providers
 //!
-//! A provider wraps and unwraps DEKs with one KEK. Each one is a type in [`providers`], enabled by
-//! its feature where the table names one, and implements [`KmsAeadEncryptionProvider`], which an
+//! A provider encrypts and decrypts DEKs with one KEK. Each one is a type in [`providers`], enabled
+//! by its feature where the table names one, and implements [`KmsAeadEncryptionProvider`], which an
 //! application can also implement for a KMS of its own.
 //!
 //! | KMS | Type | Feature |
@@ -24,11 +24,11 @@
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
 //!
-//! The threat model, a copied or relabelled wrapped DEK among it, is in the book's
+//! The threat model, a copied or relabelled encrypted DEK among it, is in the book's
 //! [Security considerations](https://kms-aead-rust.abdolence.dev/security.html#threat-model).
 //!
-//! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
-//! wrapped under an alias that later moves to another key fails to unwrap with
+//! An AWS KMS decryption names the configured key. Configure the key ARN rather than an alias: a
+//! key encrypted under an alias that later moves to another key fails to decrypt with
 //! `IncorrectKeyException`. Outside the `aws` partition, such as in GovCloud or China, give the
 //! full ARN, since a key id or an alias name becomes an `arn:aws:` ARN.
 //!
@@ -52,7 +52,7 @@
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
 //! A build without a backend feature compiles, and
-//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or wraps
+//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or encrypts
 //! can be constructed: no type implements [`AeadBackend`].
 //!
 //! # Store-less mode and the DEK cache
@@ -84,7 +84,7 @@
 //!
 //! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
 //! the column: a truncated HMAC-SHA256 of the value under a beacon key, which
-//! [`KmsAeadEnvelope::beacon`] computes with the key unwrapped through the envelope's cache, and
+//! [`KmsAeadEnvelope::beacon`] computes with the key decrypted through the envelope's cache, and
 //! [`BeaconMac`] with a key the caller holds. It is stored as `Encrypted` is.
 //!
 //! # Other features

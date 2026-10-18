@@ -71,7 +71,7 @@ See [Typed fields](./envelope-encryption.md#typed-fields).
 The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is the backend that adds
 no second crypto library to a provider build. `ring` and `rustcrypto` work with every provider
 too, and a build may enable several backends at once. Each feature adds a type, `Ring`, `AwsLc` or
-`RustCrypto`, and every type that seals or wraps takes one as its backend type parameter:
+`RustCrypto`, and every type that seals or encrypts takes one as its backend type parameter:
 
 ```rust
 # fn example() -> kms_aead::KmsAeadResult<()> {
@@ -103,7 +103,7 @@ The `aws-lc-rs` feature that `aws-lc` and `aws-lc-fips` enable is not a backend 
 alone, the aws-lc-rs build fails. Use `aws-lc` or `aws-lc-fips`.
 
 A build without any backend feature compiles, and `LocalKmsProvider` is in it, but nothing that
-seals or wraps can be constructed, since no type implements `AeadBackend`.
+seals or encrypts can be constructed, since no type implements `AeadBackend`.
 
 ## First example
 

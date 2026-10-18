@@ -20,7 +20,8 @@ with the deprecated `legacy-formats` feature, which also rewrites them in the ne
 
 ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
-no second crypto library to a cloud provider build, see [Choosing a backend](./getting-started.md#choosing-a-backend).
+no second crypto library to a cloud provider build, see [Choosing a
+backend](./getting-started.md#choosing-a-backend).
 
 The crate declares `rust-version = "1.99"`.
 
@@ -43,7 +44,7 @@ The crate declares `rust-version = "1.99"`.
 | `RingAeadEncryption::generate_data_encryption_key()` | `AeadCipher::generate_key()` |
 | `kms_aead::kms_envelope_encryption::…` | the same names at the crate root |
 | `CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek)` | `CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?`, in Tink's KMS envelope format |
-| `EncryptedDataEncryptionKey::new(wrapped, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one |
+| `EncryptedDataEncryptionKey::new(encrypted, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one |
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | removed; the `key_version` field of the KMS spans |
@@ -72,13 +73,13 @@ generic `&Aad`, and the calls that make no KMS call are not `async`:
 | `use kms_aead::KmsAeadEnvelopeEncryption;` `envelope.encrypt_value(&aad, &value).await?` | `envelope.encrypt_value(aad.as_bytes(), &value).await?` |
 | `envelope.encrypt_value_with_dek(&aad, &value, &dek).await?` | `envelope.encrypt_value_with_dek(aad, &value, &dek)?` |
 | `envelope.decrypt_value_with_dek(&aad, &cipher_text, &dek).await?` | `envelope.decrypt_value_with_dek(aad, &cipher_text, &dek)?` |
-| `KmsAeadEnvelopeEncryption::<Aad>::generate_new_dek(&envelope)` | `envelope.generate_new_dek()` |
+| `KmsAeadEnvelopeEncryption::<Aad>::generate_new_dek(&envelope)` | `envelope.generate_dek()` |
 | `use kms_aead::AeadEncryption;` `cipher.encrypt_value(&aad, &value, &key).await?` | `cipher.encrypt_value(aad, &value, &key)?` |
 
 `value()` and `into_value()` of `CipherText`, `CipherTextWithEncryptedKey`,
-`EncryptedDataEncryptionKey` and `DeterministicCipherText` come from `ValueStruct`, which the crate re-exports: `use
-kms_aead::ValueStruct`. `DataEncryptionKey` no longer implements `ValueStruct`, and has its own
-`value()`.
+`EncryptedDataEncryptionKey` and `DeterministicCipherText` come from `ValueStruct`, which the crate
+re-exports: `use kms_aead::ValueStruct`. `DataEncryptionKey` no longer implements `ValueStruct`, and
+has its own `value()`.
 
 ## Your own provider
 
@@ -90,10 +91,10 @@ An application's own implementation of the provider trait:
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator;
-- returns `EncryptedDataEncryptionKey::new(bytes)`. A KMS that needs the key version to unwrap
+- returns `EncryptedDataEncryptionKey::new(bytes)`. A KMS that needs the key version to decrypt
   gets it from those bytes, as the Azure provider's do.
 
-The plaintext the provider wraps is the DEK serialised as a Tink key, see
+The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 [Formats](./formats.md#serialised-deks). The library never inspects the provider's own bytes.
 
 ## Errors
@@ -115,21 +116,22 @@ Error codes that changed:
 |---|---|---|
 | `INVALID_CIPHERTEXT` | `INVALID_CIPHER_TEXT_FORMAT` | `AeadCipher::decrypt_value` on a value too short for its nonce and tag |
 | `ENCRYPTION` | `RANDOM_GENERATOR` | a CSPRNG failure, for a nonce or a key |
-| `DECRYPT_KEY` | `ENCRYPT_KEY` | the GCP wrap, when its request cannot be built |
+| `DECRYPT_KEY` | `ENCRYPT_KEY` | the GCP encryption, when its request cannot be built |
 | `DECRYPT_KEY` | `RANDOM_GENERATOR` | the GCP KMS generator, when its request cannot be built |
 | `SYSTEM_TIME_ERROR` | removed | |
-| `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | removed | stored wrapped DEKs are the provider's bytes |
-| `AZURE_KEY_VERSION_MISSING` | `AZURE_WRAPPED_KEY_FORMAT` | the Azure unwrap of bytes outside its layout; the old code stays for a 0.29 value without a key version, with `legacy-formats` |
+| `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | removed | stored encrypted DEKs are the provider's bytes |
+| `AZURE_KEY_VERSION_MISSING` | `AZURE_ENCRYPTED_DEK_FORMAT` | the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with `legacy-formats` |
 
 The other 0.29 codes keep their spelling. The new codes are listed in
 [Error handling](./errors.md#codes).
 
-## AWS KMS unwraps name the key
+## AWS KMS decryption names the key
 
-The AWS provider sends the configured key as `KeyId` on every unwrap. In 0.29 an unwrap left it
-out, so AWS KMS unwrapped under whichever key the wrapped DEK named, for any key the principal may
-decrypt with. A 0.30 process refuses a DEK wrapped under another key with `IncorrectKeyException`.
-A deployment that relied on unwrapping under a second key configures a provider per key.
+The AWS provider sends the configured key as `KeyId` on every decryption. In 0.29 a decryption left
+it out, so AWS KMS decrypted under whichever key the encrypted DEK named, for any key the principal
+may decrypt with. A 0.30 process refuses a DEK encrypted under another key with
+`IncorrectKeyException`. A deployment that relied on decrypting under a second key configures a
+provider per key.
 
 An alias name such as `alias/orders` becomes an alias ARN, where 0.29 built a key ARN of it.
 Configure the key ARN rather than an alias, see [AWS KMS](./providers/aws.md#key-arn-and-aliases).
@@ -164,10 +166,11 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 
 ## Old values
 
-0.30 writes Tink's KMS envelope, and wraps every DEK but Azure's as a serialised Tink key. 0.29 wrote envelope
-layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a length-prefixed
-envelope, all with the raw DEK wrapped. 0.30 reads them only with the deprecated `legacy-formats`
-feature, and fails with `LEGACY_FORMAT` without it, see [Formats](./formats.md#values-written-by-029-and-earlier).
+0.30 writes Tink's KMS envelope, and encrypts every DEK but Azure's as a serialised Tink key. 0.29
+wrote envelope layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a
+length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
+`legacy-formats` feature, and fails with `LEGACY_FORMAT` without it, see
+[Formats](./formats.md#values-written-by-029-and-earlier).
 
 The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
 [Default algorithm](#default-algorithm).

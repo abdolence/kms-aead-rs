@@ -1,4 +1,4 @@
-//! A provider for unit tests that need no KMS, whose "wrapped" key is the plaintext it is given,
+//! A provider for unit tests that need no KMS, whose "encrypted" key is the plaintext it is given,
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -37,13 +37,13 @@ static TEST_KEK: LazyLock<KekRef> =
 pub(crate) enum TestKmsProvider {
     Working,
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-    FailingToWrap,
-    FailingToUnwrap,
+    FailingToEncrypt,
+    FailingToDecrypt,
     /// Returns its key material from `generate_key_material`, as a KMS generator would.
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     Generating(SecretValue),
-    /// Unwraps a key into its wrapped bytes followed by the nanoseconds from the instant it
-    /// holds to the unwrap, as a little-endian `u64`, so that a caller can tell how old the key
+    /// Decrypts a key into its encrypted bytes followed by the nanoseconds from the instant it
+    /// holds to the decryption, as a little-endian `u64`, so that a caller can tell how old the key
     /// it is given is.
     Stamping(Instant),
 }
@@ -60,9 +60,9 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
             #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-            TestKmsProvider::FailingToWrap => Err(KmsAeadEncryptionError::create(
-                "TEST_WRAP",
-                "The test provider fails to wrap",
+            TestKmsProvider::FailingToEncrypt => Err(KmsAeadEncryptionError::create(
+                "TEST_ENCRYPT",
+                "The test provider fails to encrypt",
             )),
             _ => Ok(EncryptedDataEncryptionKey::new(
                 encryption_key.value().ref_sensitive_value().clone(),
@@ -75,9 +75,9 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         match self {
-            TestKmsProvider::FailingToUnwrap => Err(KmsAeadEncryptionError::create(
-                "TEST_UNWRAP",
-                "The test provider fails to unwrap",
+            TestKmsProvider::FailingToDecrypt => Err(KmsAeadEncryptionError::create(
+                "TEST_DECRYPT",
+                "The test provider fails to decrypt",
             )),
             TestKmsProvider::Stamping(since) => {
                 let nanos = u64::try_from(since.elapsed().as_nanos())
@@ -101,13 +101,13 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     }
 }
 
-/// A [`TestKmsProvider`] under a KEK of its own, which counts its wraps and unwraps and can hold
-/// them, once counted, until the test opens its gate.
+/// A [`TestKmsProvider`] under a KEK of its own, which counts its encryptions and decryptions and
+/// can hold them, once counted, until the test opens its gate.
 pub(crate) struct CountingKmsProvider {
     inner: TestKmsProvider,
     kek: KekRef,
-    wraps: AtomicUsize,
-    unwraps: AtomicUsize,
+    encryptions: AtomicUsize,
+    decryptions: AtomicUsize,
     gate: watch::Sender<bool>,
 }
 
@@ -126,8 +126,8 @@ impl CountingKmsProvider {
         Self {
             inner,
             kek,
-            wraps: AtomicUsize::new(0),
-            unwraps: AtomicUsize::new(0),
+            encryptions: AtomicUsize::new(0),
+            decryptions: AtomicUsize::new(0),
             gate: watch::Sender::new(true),
         }
     }
@@ -144,12 +144,12 @@ impl CountingKmsProvider {
     }
 
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-    pub(crate) fn wraps(&self) -> usize {
-        self.wraps.load(Ordering::SeqCst)
+    pub(crate) fn encryptions(&self) -> usize {
+        self.encryptions.load(Ordering::SeqCst)
     }
 
-    pub(crate) fn unwraps(&self) -> usize {
-        self.unwraps.load(Ordering::SeqCst)
+    pub(crate) fn decryptions(&self) -> usize {
+        self.decryptions.load(Ordering::SeqCst)
     }
 
     async fn pass_gate(&self) {
@@ -167,7 +167,7 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
         &self,
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        self.wraps.fetch_add(1, Ordering::SeqCst);
+        self.encryptions.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
         self.inner.encrypt_data_encryption_key(encryption_key).await
     }
@@ -176,15 +176,15 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        self.unwraps.fetch_add(1, Ordering::SeqCst);
+        self.decryptions.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
         self.inner.decrypt_data_encryption_key(encrypted_key).await
     }
 }
 
-/// What [`TestKmsProvider`] returns when kms-aead wraps `key` as a key of `key_type`: the key as
+/// What [`TestKmsProvider`] returns when kms-aead encrypts `key` as a key of `key_type`: the key as
 /// Tink serialises it.
-pub(crate) fn wrapped_by_test_provider(
+pub(crate) fn encrypted_by_test_provider(
     key_type: impl Into<TinkKeyType>,
     key: &[u8],
 ) -> EncryptedDataEncryptionKey {
