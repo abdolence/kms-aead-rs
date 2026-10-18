@@ -1,16 +1,17 @@
-//! kms-aead against Tink's `KmsEnvelopeAead` on a Cloud KMS key and an AWS KMS key. `encrypt`
-//! writes one value per KMS and algorithm for `python -I tests/tink_interop.py decrypt`, and
-//! `decrypt` reads what `python -I tests/tink_interop.py encrypt` writes. The script lists the
-//! commands and the variables that name the keys.
+//! kms-aead's typed fields against Tink's `KmsEnvelopeAead` on a Cloud KMS key and an AWS KMS
+//! key. `encrypt` writes one `Encrypted<String, Envelope>` per KMS and algorithm for
+//! `python -I tests/tink_interop.py decrypt`, and `decrypt` reads what
+//! `python -I tests/tink_interop.py encrypt` writes. The script lists the commands and the
+//! variables that name the keys; a KMS whose variables are not set is skipped.
 
 use std::io::BufRead;
 
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AwsLc, CipherTextWithEncryptedKey, KmsAeadEncryptionProvider, KmsAeadEnvelope,
+    AeadAlgorithm, AwsLc, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope,
     KmsAeadEnvelopeOptions, KmsAeadResult, ValueStruct,
 };
-use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
 const ALGORITHMS: [AeadAlgorithm; 4] = [
@@ -22,20 +23,28 @@ const ALGORITHMS: [AeadAlgorithm; 4] = [
 
 #[tokio::main]
 async fn main() -> KmsAeadResult<()> {
-    let variable = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set"));
-    let gcp_key = GcpKmsKeyRef::new(
-        variable("PROJECT_ID"),
-        variable("PROJECT_LOCATION"),
-        variable("KMS_KEY_RING"),
-        variable("KMS_KEY"),
-    );
-    let aws_key = AwsKmsKeyRef::new(variable("ACCOUNT_ID"), variable("KMS_KEY_ID"));
+    let variable = |name: &str| std::env::var(name).ok();
+    let required = |name: &str| variable(name).unwrap_or_else(|| panic!("{name} is not set"));
+    let gcp_key = variable("PROJECT_ID").map(|project_id| {
+        GcpKmsKeyRef::new(
+            project_id,
+            required("PROJECT_LOCATION"),
+            required("KMS_KEY_RING"),
+            required("KMS_KEY"),
+        )
+    });
+    let aws_key =
+        variable("KMS_KEY_ID").map(|key_id| AwsKmsKeyRef::new(required("ACCOUNT_ID"), key_id));
 
     match std::env::args().nth(1).as_deref() {
         Some("encrypt") => {
             for algorithm in ALGORITHMS {
-                encrypt("gcp", GcpKmsProvider::new(&gcp_key).await?, algorithm).await?;
-                encrypt("aws", AwsKmsProvider::new(&aws_key).await?, algorithm).await?;
+                if let Some(gcp_key) = &gcp_key {
+                    encrypt("gcp", GcpKmsProvider::new(gcp_key).await?, algorithm).await?;
+                }
+                if let Some(aws_key) = &aws_key {
+                    encrypt("aws", AwsKmsProvider::new(aws_key).await?, algorithm).await?;
+                }
             }
         }
         Some("decrypt") => {
@@ -46,31 +55,25 @@ async fn main() -> KmsAeadResult<()> {
                 let field = |name: &str| case[name].as_str().expect("the field is a string");
                 let algorithm: AeadAlgorithm = field("algorithm").parse()?;
                 let aad = hex::decode(field("aad")).expect("aad is hex");
-                let value = CipherTextWithEncryptedKey::from(
+                let value = Encrypted::<String, Envelope>::try_from(
                     hex::decode(field("value")).expect("value is hex"),
-                );
-                let decrypted = match field("kms") {
-                    "gcp" => {
-                        decrypt(
-                            GcpKmsProvider::new(&gcp_key).await?,
-                            algorithm,
-                            &aad,
-                            &value,
-                        )
-                        .await?
+                )?;
+                let decrypted = match (field("kms"), &gcp_key, &aws_key) {
+                    ("gcp", Some(gcp_key), _) => {
+                        let provider = GcpKmsProvider::new(gcp_key).await?;
+                        decrypt(provider, algorithm, &aad, &value).await?
                     }
-                    _ => {
-                        decrypt(
-                            AwsKmsProvider::new(&aws_key).await?,
-                            algorithm,
-                            &aad,
-                            &value,
-                        )
-                        .await?
+                    ("aws", _, Some(aws_key)) => {
+                        let provider = AwsKmsProvider::new(aws_key).await?;
+                        decrypt(provider, algorithm, &aad, &value).await?
+                    }
+                    (kms, _, _) => {
+                        println!("{kms} {algorithm}: skipped, its key is not configured");
+                        continue;
                     }
                 };
                 let expected = hex::decode(field("plain_text")).expect("plain_text is hex");
-                if *decrypted.ref_sensitive_value() == expected {
+                if decrypted.as_bytes() == expected {
                     println!("{} {algorithm}: ok", field("kms"));
                 } else {
                     println!("{} {algorithm}: another plain text", field("kms"));
@@ -94,9 +97,8 @@ where
     )?;
     let aad = format!("orders/{kms}/{algorithm}");
     let plain_text = format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION"));
-    let value = envelope
-        .encrypt_value(aad.as_bytes(), &SecretValue::from(plain_text.as_str()))
-        .await?;
+    let value: Encrypted<String, Envelope> =
+        envelope.encrypt_field(aad.as_bytes(), &plain_text).await?;
     println!(
         "{}",
         json!({
@@ -114,8 +116,8 @@ async fn decrypt<P>(
     provider: P,
     algorithm: AeadAlgorithm,
     aad: &[u8],
-    value: &CipherTextWithEncryptedKey,
-) -> KmsAeadResult<SecretValue>
+    value: &Encrypted<String, Envelope>,
+) -> KmsAeadResult<String>
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
@@ -123,6 +125,6 @@ where
         provider,
         KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
     )?
-    .decrypt_value(aad, value)
+    .decrypt_field(aad, value)
     .await
 }

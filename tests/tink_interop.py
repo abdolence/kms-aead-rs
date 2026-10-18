@@ -10,8 +10,9 @@ Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`
     python -I tests/tink_interop.py decrypt < kms-aead.jsonl
 
 The keys come from the variables of the live tests: PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING
-and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS. Cloud KMS uses the
-application default credentials, AWS KMS the credentials boto3 finds.
+and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS, with ACCOUNT_ID for the
+example. A KMS whose variables are not set is skipped. Cloud KMS uses the application default
+credentials, AWS KMS the credentials boto3 finds.
 
 Each line is one value: {"kms": "gcp" or "aws", "algorithm": the kms-aead name, "aad",
 "plain_text" and "value" in hex}. Tink for Python has no ChaCha20Poly1305Key, so `decrypt` skips
@@ -35,17 +36,19 @@ TEMPLATES = {
 
 
 def remote_aeads():
-  gcp_key = 'gcp-kms://projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}'.format(
-      os.environ['PROJECT_ID'],
-      os.environ['PROJECT_LOCATION'],
-      os.environ['KMS_KEY_RING'],
-      os.environ['KMS_KEY'],
-  )
-  aws_key = 'aws-kms://' + os.environ['KMS_KEY_ID']
-  return {
-      'gcp': gcpkms.GcpKmsClient(gcp_key).get_aead(gcp_key),
-      'aws': awskms.AwsKmsClient(aws_key, None).get_aead(aws_key),
-  }
+  remotes = {}
+  if 'PROJECT_ID' in os.environ:
+    gcp_key = 'gcp-kms://projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}'.format(
+        os.environ['PROJECT_ID'],
+        os.environ['PROJECT_LOCATION'],
+        os.environ['KMS_KEY_RING'],
+        os.environ['KMS_KEY'],
+    )
+    remotes['gcp'] = gcpkms.GcpKmsClient(gcp_key).get_aead(gcp_key)
+  if 'KMS_KEY_ID' in os.environ:
+    aws_key = 'aws-kms://' + os.environ['KMS_KEY_ID']
+    remotes['aws'] = awskms.AwsKmsClient(aws_key, None).get_aead(aws_key)
+  return remotes
 
 
 def encrypt():
@@ -72,6 +75,9 @@ def decrypt():
     template = TEMPLATES.get(case['algorithm'])
     if template is None:
       print(f'{name}: skipped, Tink for Python has no such key type')
+      continue
+    if case['kms'] not in remotes:
+      print(f'{name}: skipped, its key is not configured')
       continue
     envelope = aead.KmsEnvelopeAead(template, remotes[case['kms']])
     plain_text = envelope.decrypt(
