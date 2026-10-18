@@ -1,13 +1,12 @@
-use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
-use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, KeyringStoreError};
+use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
 use crate::{KeyringId, KeyringRecord};
 
@@ -154,14 +153,16 @@ impl S3KeyringStore {
             {
                 return Ok(Revalidation::Unchanged)
             }
-            Err(error) => return Err(store_error(operation, error)),
+            Err(error) => {
+                return Err(KeyringError::store_caused_by(
+                    StoreKind::S3,
+                    operation,
+                    Arc::new(error),
+                ))
+            }
         };
         let revision = S3ETag(response.e_tag.ok_or_else(|| {
-            KeyringError::Store(KeyringStoreError::new(
-                StoreKind::S3,
-                operation,
-                "The read returned no ETag".to_string(),
-            ))
+            KeyringError::store(StoreKind::S3, operation, "The read returned no ETag")
         })?);
         // Reads until past the record cap, so that an object over the cap still reads as over
         // it, and a read never buffers more than the cap and one chunk.
@@ -171,7 +172,13 @@ impl S3KeyringStore {
             match body.try_next().await {
                 Ok(Some(chunk)) => document.extend_from_slice(&chunk),
                 Ok(None) => break,
-                Err(error) => return Err(store_error(operation, error)),
+                Err(error) => {
+                    return Err(KeyringError::store_caused_by(
+                        StoreKind::S3,
+                        operation,
+                        Arc::new(error),
+                    ))
+                }
             }
         }
         Ok(Revalidation::Changed(Stored {
@@ -190,11 +197,11 @@ impl KeyringStore for S3KeyringStore {
         match self.read(id, None, StoreOperation::Load).await? {
             Revalidation::Changed(stored) => Ok(Some(stored)),
             Revalidation::Missing => Ok(None),
-            Revalidation::Unchanged => Err(KeyringError::Store(KeyringStoreError::new(
+            Revalidation::Unchanged => Err(KeyringError::store(
                 StoreKind::S3,
                 StoreOperation::Load,
-                "A read without a precondition was not modified".to_string(),
-            ))),
+                "A read without a precondition was not modified",
+            )),
         }
     }
 
@@ -235,35 +242,25 @@ impl KeyringStore for S3KeyringStore {
             {
                 return Ok(Swap::Conflict)
             }
-            Err(error) => return Err(store_error(StoreOperation::CompareAndSwap, error)),
+            Err(error) => {
+                return Err(KeyringError::store_caused_by(
+                    StoreKind::S3,
+                    StoreOperation::CompareAndSwap,
+                    Arc::new(error),
+                ))
+            }
         };
         match response.e_tag {
             Some(etag) => Ok(Swap::Written(S3ETag(etag))),
-            None => Err(KeyringError::Store(KeyringStoreError::new(
+            None => Err(KeyringError::store(
                 StoreKind::S3,
                 StoreOperation::CompareAndSwap,
-                "The write returned no ETag".to_string(),
-            ))),
+                "The write returned no ETag",
+            )),
         }
     }
 
     async fn watch(&self, _id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
         Ok(None)
     }
-}
-
-/// The client's `error` as a store error. The message is the service's, which names the object
-/// at most, never its content.
-fn store_error(
-    operation: StoreOperation,
-    error: impl Error + Send + Sync + 'static,
-) -> KeyringError {
-    KeyringError::Store(
-        KeyringStoreError::new(
-            StoreKind::S3,
-            operation,
-            DisplayErrorContext(&error).to_string(),
-        )
-        .with_root_cause(Arc::new(error)),
-    )
 }

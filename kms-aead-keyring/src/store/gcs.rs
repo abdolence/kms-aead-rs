@@ -11,7 +11,7 @@ use gcloud_sdk::tonic::{self, Code};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
-use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, KeyringStoreError};
+use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
 use crate::{KeyringId, KeyringRecord};
 
@@ -170,7 +170,11 @@ impl GcsKeyringStore {
         let refused = |status: tonic::Status| match status.code() {
             Code::NotFound => Ok(Revalidation::Missing),
             Code::FailedPrecondition => Ok(Revalidation::Unchanged),
-            _ => Err(store_error(operation, status)),
+            _ => Err(KeyringError::store_caused_by(
+                StoreKind::Gcs,
+                operation,
+                Arc::new(status),
+            )),
         };
         let mut stream = match self.client.get().read_object(request).await {
             Ok(response) => response.into_inner(),
@@ -193,11 +197,11 @@ impl GcsKeyringStore {
             }
         }
         let revision = generation.ok_or_else(|| {
-            KeyringError::Store(KeyringStoreError::new(
+            KeyringError::store(
                 StoreKind::Gcs,
                 operation,
-                "The read returned no object metadata".to_string(),
-            ))
+                "The read returned no object metadata",
+            )
         })?;
         Ok(Revalidation::Changed(Stored {
             record: KeyringRecord::from_json(id, &document)?,
@@ -215,11 +219,11 @@ impl KeyringStore for GcsKeyringStore {
         match self.read(id, None, StoreOperation::Load).await? {
             Revalidation::Changed(stored) => Ok(Some(stored)),
             Revalidation::Missing => Ok(None),
-            Revalidation::Unchanged => Err(KeyringError::Store(KeyringStoreError::new(
+            Revalidation::Unchanged => Err(KeyringError::store(
                 StoreKind::Gcs,
                 StoreOperation::Load,
-                "A read without a precondition failed a precondition".to_string(),
-            ))),
+                "A read without a precondition failed a precondition",
+            )),
         }
     }
 
@@ -265,30 +269,27 @@ impl KeyringStore for GcsKeyringStore {
         let response = match self.client.get().write_object(request).await {
             Ok(response) => response,
             Err(status) if status.code() == Code::FailedPrecondition => return Ok(Swap::Conflict),
-            Err(status) => return Err(store_error(StoreOperation::CompareAndSwap, status)),
+            Err(status) => {
+                return Err(KeyringError::store_caused_by(
+                    StoreKind::Gcs,
+                    StoreOperation::CompareAndSwap,
+                    Arc::new(status),
+                ))
+            }
         };
         match response.into_inner().write_status {
             Some(write_object_response::WriteStatus::Resource(object)) => {
                 Ok(Swap::Written(GcsGeneration(object.generation)))
             }
-            _ => Err(KeyringError::Store(KeyringStoreError::new(
+            _ => Err(KeyringError::store(
                 StoreKind::Gcs,
                 StoreOperation::CompareAndSwap,
-                "The write returned no finalised object".to_string(),
-            ))),
+                "The write returned no finalised object",
+            )),
         }
     }
 
     async fn watch(&self, _id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
         Ok(None)
     }
-}
-
-/// The client's `status` as a store error. The message is the service's, which names the
-/// object at most, never its content.
-fn store_error(operation: StoreOperation, status: tonic::Status) -> KeyringError {
-    KeyringError::Store(
-        KeyringStoreError::new(StoreKind::Gcs, operation, status.message().to_string())
-            .with_root_cause(Arc::new(status)),
-    )
 }

@@ -15,7 +15,7 @@ use tokio::sync::{mpsc, watch};
 use super::{
     KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
 };
-use crate::errors::{KeyringError, KeyringResult, KeyringStoreError};
+use crate::errors::{KeyringError, KeyringResult};
 use crate::{KeyringId, KeyringRecord};
 
 /// The one target of a watch's listener, which listens to nothing else.
@@ -84,7 +84,13 @@ impl FirestoreKeyringStore {
             .by_id_in(&self.collection)
             .one(id.as_str())
             .await
-            .map_err(|error| store_error(operation, error))
+            .map_err(|error| {
+                KeyringError::store_caused_by(
+                    FirestoreKeyringStore::KIND,
+                    operation,
+                    Arc::new(error),
+                )
+            })
     }
 }
 
@@ -168,7 +174,13 @@ impl KeyringStore for FirestoreKeyringStore {
     /// [`KeyringError::Store`] also when Firestore sends no state of the document within 10
     /// seconds.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
-        let failed = |error| store_error(StoreOperation::Watch, error);
+        let failed = |error: FirestoreError| {
+            KeyringError::store_caused_by(
+                FirestoreKeyringStore::KIND,
+                StoreOperation::Watch,
+                Arc::new(error),
+            )
+        };
         let mut listener = self
             .db
             .create_listener(FirestoreMemListenStateStorage::new())
@@ -238,11 +250,11 @@ impl KeyringStore for FirestoreKeyringStore {
                 .is_ok_and(|current| current.is_ok());
         if !started {
             let _ = listener.shutdown().await;
-            return Err(KeyringError::Store(KeyringStoreError::new(
+            return Err(KeyringError::store(
                 Self::KIND,
                 StoreOperation::Watch,
-                "Firestore sent no state of the document".to_string(),
-            )));
+                "Firestore sent no state of the document",
+            ));
         }
         tokio::spawn(async move {
             sender.closed().await;
@@ -271,13 +283,15 @@ fn update_time(
     operation: StoreOperation,
 ) -> KeyringResult<FirestoreTimestamp> {
     let update_time = document.update_time.ok_or_else(|| {
-        KeyringError::Store(KeyringStoreError::new(
+        KeyringError::store(
             FirestoreKeyringStore::KIND,
             operation,
-            "Firestore returned a document without an update time".to_string(),
-        ))
+            "Firestore returned a document without an update time",
+        )
     })?;
-    FirestoreTimestamp::try_from(update_time).map_err(|error| store_error(operation, error))
+    FirestoreTimestamp::try_from(update_time).map_err(|error| {
+        KeyringError::store_caused_by(FirestoreKeyringStore::KIND, operation, Arc::new(error))
+    })
 }
 
 /// The outcome of a write Firestore refused: [`Swap::Conflict`] when the document exists on a
@@ -290,15 +304,12 @@ fn refused(error: FirestoreError) -> KeyringResult<Swap<FirestoreTimestamp>> {
         FirestoreError::DatabaseError(failed) if failed.public.code == "FailedPrecondition" => {
             Ok(Swap::Conflict)
         }
-        _ => Err(store_error(StoreOperation::CompareAndSwap, error)),
+        _ => Err(KeyringError::store_caused_by(
+            FirestoreKeyringStore::KIND,
+            StoreOperation::CompareAndSwap,
+            Arc::new(error),
+        )),
     }
-}
-
-fn store_error(operation: StoreOperation, error: FirestoreError) -> KeyringError {
-    KeyringError::Store(
-        KeyringStoreError::new(FirestoreKeyringStore::KIND, operation, error.to_string())
-            .with_root_cause(Arc::new(error)),
-    )
 }
 
 #[cfg(test)]

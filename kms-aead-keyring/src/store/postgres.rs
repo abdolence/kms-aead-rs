@@ -14,7 +14,7 @@ use tokio_postgres::{AsyncMessage, Client, Config, Connection, Socket};
 use super::{
     KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap, WatchEvent,
 };
-use crate::errors::{Identifier, IdentifierRule, KeyringResult, KeyringStoreError};
+use crate::errors::{Identifier, IdentifierRule, KeyringResult};
 use crate::{KeyringError, KeyringId, KeyringRecord};
 
 /// The delay before the second attempt to replace a lost listener connection. The first attempt
@@ -425,16 +425,9 @@ fn store_error(
             database.message(),
             database.code().code()
         );
-        return KeyringError::Store(KeyringStoreError::new(
-            StoreKind::Postgres,
-            operation,
-            message,
-        ));
+        return KeyringError::store(StoreKind::Postgres, operation, &message);
     }
-    KeyringError::Store(
-        KeyringStoreError::new(StoreKind::Postgres, operation, error.to_string())
-            .with_root_cause(error),
-    )
+    KeyringError::store_caused_by(StoreKind::Postgres, operation, error)
 }
 
 fn stored(

@@ -171,6 +171,36 @@ impl KeyringError {
         )
     }
 
+    /// A failure of the store `store` that no client error caused, such as a response without
+    /// the metadata the store needs.
+    pub(crate) fn store(store: StoreKind, operation: StoreOperation, message: &str) -> Self {
+        KeyringError::Store(KeyringStoreError::new(
+            store,
+            operation,
+            message.to_string(),
+        ))
+    }
+
+    /// A failure of the store `store` that the client error `root_cause` caused. The message is
+    /// the error followed by each of its sources, since some clients name only the kind of
+    /// failure in their own `Display`.
+    pub(crate) fn store_caused_by(
+        store: StoreKind,
+        operation: StoreOperation,
+        root_cause: Arc<dyn Error + Send + Sync>,
+    ) -> Self {
+        let mut message = root_cause.to_string();
+        let mut source = root_cause.source();
+        while let Some(cause) = source {
+            message.push_str(": ");
+            message.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        KeyringError::Store(
+            KeyringStoreError::new(store, operation, message).with_root_cause(root_cause),
+        )
+    }
+
     pub(crate) fn invalid_identifier(identifier: Identifier, rule: IdentifierRule) -> Self {
         KeyringError::InvalidIdentifier(InvalidIdentifierError { identifier, rule })
     }
