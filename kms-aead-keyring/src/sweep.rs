@@ -221,11 +221,20 @@ pub struct SweepReport {
 /// flight, and counts what they did. A candidate is whatever the application identifies a record
 /// by, such as its id or its key columns.
 ///
+/// A re-seal returns the application's own error type `E`, so that an error of its table is
+/// returned as it is. The keyring's calls inside it, such as
+/// [`Keyring::reseal`](crate::Keyring::reseal), return a
+/// [`KeyringError`](crate::KeyringError), which `?` converts into `E` through a `From` impl the
+/// application gives its error; `E` is `KeyringError` itself for a re-seal that has no other
+/// errors.
+///
 /// A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at `WARN`
-/// with the candidate's `Display` and the error's code, never a value, so a candidate's
-/// `Display` names the record and nothing else. The sweep opens a `Keyring sweep` span for
+/// with the candidate's `Display` and the error's `Display`. The report keeps counts only; an
+/// application that wants the errors themselves records them inside `reseal`. Both texts are the
+/// application's own and go to the log as they are, so they name the record and the failure and
+/// carry no value, secret or personal data. The sweep opens a `Keyring sweep` span for
 /// `keyring_id`, which carries the counts once it ends.
-pub async fn run<T, C, F, Fut>(
+pub async fn run<T, C, F, Fut, E>(
     keyring_id: &KeyringId,
     candidates: C,
     concurrency: NonZeroUsize,
@@ -235,7 +244,8 @@ where
     T: Display,
     C: Stream<Item = T>,
     F: FnMut(T) -> Fut,
-    Fut: Future<Output = KeyringResult<ResealOutcome>>,
+    Fut: Future<Output = Result<ResealOutcome, E>>,
+    E: Display,
 {
     let span = spans::sweep(keyring_id);
     let report = async {
@@ -274,6 +284,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use futures_util::stream;
     use serde_json::json;
 
@@ -404,7 +416,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_counts_scanned_resealed_skipped_failed() {
+    async fn run_counts_scanned_resealed_skipped_failed_with_the_applications_errors() {
         let report = run(
             &TENANT,
             stream::iter(["1", "2", "3", "4", "5", "6"]),
@@ -412,7 +424,8 @@ mod tests {
             |candidate| async move {
                 match candidate {
                     "3" => Ok(ResealOutcome::Skipped),
-                    "4" | "5" => Err(KeyringError::RecordMissing(TENANT)),
+                    "4" => Err(io::Error::other("the users table is unavailable")),
+                    "5" => Err(io::Error::other(KeyringError::RecordMissing(TENANT))),
                     "6" => Ok(ResealOutcome::Resealed {
                         from_compromised: true,
                     }),
@@ -499,7 +512,7 @@ mod tests {
                     seen.lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .extend(trusts.iter().cloned());
-                    Ok(ResealOutcome::Resealed {
+                    Ok::<ResealOutcome, KeyringError>(ResealOutcome::Resealed {
                         from_compromised: trusts
                             .iter()
                             .any(|trust| matches!(trust, KeyTrust::Compromised(_))),

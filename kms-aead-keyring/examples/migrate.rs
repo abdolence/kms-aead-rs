@@ -9,11 +9,13 @@
 //! ```
 
 use std::collections::BTreeMap;
+use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::{Mutex, PoisonError};
 
 use futures_util::stream;
 use kms_aead::backends::Ring;
+use kms_aead::errors::KmsAeadError;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
@@ -26,8 +28,7 @@ use kms_aead_keyring::sweep::{
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringAlgorithms,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Purpose,
-    Resealed,
+    KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose, Resealed,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -129,9 +130,46 @@ async fn print_rows(
     Ok(())
 }
 
+/// Why the re-seal of a row failed.
+enum MigrateError {
+    Keyring(KeyringError),
+    /// A stored value that does not parse as the layout its marker names.
+    Value(KmsAeadError),
+    /// A row in a layout this application does not write, which stays behind for a person to
+    /// look at.
+    UnknownLayout(SealFormat),
+}
+
+impl From<KeyringError> for MigrateError {
+    fn from(error: KeyringError) -> Self {
+        MigrateError::Keyring(error)
+    }
+}
+
+impl From<KmsAeadError> for MigrateError {
+    fn from(error: KmsAeadError) -> Self {
+        MigrateError::Value(error)
+    }
+}
+
+/// The text the sweep logs, which names the failure and no value of the row.
+impl Display for MigrateError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            MigrateError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
+            MigrateError::Value(error) => write!(f, "a stored value failed with {}", error.code()),
+            MigrateError::UnknownLayout(format) => write!(f, "an unknown seal format {format:?}"),
+        }
+    }
+}
+
 /// Re-seals the row of `user` under the active version, from an envelope value or a keyring value
 /// under an older version, unless a writer did since the sweep's query.
-async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
+async fn reseal(
+    keyring: &UsersKeyring,
+    table: &Table,
+    user: &str,
+) -> Result<ResealOutcome, MigrateError> {
     let row = table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -163,8 +201,7 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
             (resealed.value, from_compromised)
         }
-        // A layout this application does not write.
-        _ => return Ok(ResealOutcome::Skipped),
+        other => return Err(MigrateError::UnknownLayout(other)),
     };
     let row = UserRow {
         seal: SealMarker::keyring([email.key_id()])?,

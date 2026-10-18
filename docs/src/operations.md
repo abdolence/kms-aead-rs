@@ -254,13 +254,18 @@ if report.failed == 0 && !behind {
 
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
 `failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
-`WARN` with the candidate's `Display` and the error's code, never a value. A candidate is the
-application's own type, such as a record id, a struct of key columns or the record itself, and its
-`Display` names the record and nothing else. A record id is often an entity id, so read the
-sweep's log as an administrative log.
+`WARN` with the candidate's `Display` and the error's `Display`. A candidate is the application's
+own type, such as a record id, a struct of key columns or the record itself, and its `Display`
+names the record and nothing else. A record id is often an entity id, so read the sweep's log as
+an administrative log.
 
-The re-seal returns a `KeyringResult`, so an error of the application's own data store becomes a
-`KeyringError::Store` with `StoreKind::Other`, as the examples below do.
+The re-seal returns `Result<ResealOutcome, E>` with the application's own error type, any type
+that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`
+impl on the application's error lets `?` convert it, as the examples below do with an error of
+their data store; a re-seal with no errors of its own returns `KeyringResult<ResealOutcome>`, as
+above. The error's `Display` is the application's text and goes to the log as it is, so it carries
+no value, secret or personal data. The report counts failures and keeps no error: an application
+that wants the errors themselves records them inside its re-seal.
 
 Once a sweep reports `failed == 0` and the query returns nothing, `retire` the old version. Keep it
 retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
@@ -294,7 +299,6 @@ read it:
 ```rust,no_run
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 use firestore::errors::FirestoreError;
 use firestore::{
@@ -304,13 +308,12 @@ use futures_util::StreamExt;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadResult;
-use kms_aead_keyring::errors::KeyringStoreError;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::store::{FirestoreKeyringStore, StoreKind, StoreOperation};
+use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Resealed,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -360,26 +363,47 @@ impl Display for Candidate {
     }
 }
 
-/// An error of the users collection, as the sweep counts it.
-fn users_error(operation: StoreOperation, error: FirestoreError) -> KeyringError {
-    KeyringError::Store(
-        KeyringStoreError::new(
-            StoreKind::Other(USERS),
-            operation,
-            "the users collection failed".to_string(),
-        )
-        .with_root_cause(Arc::new(error)),
-    )
+/// Why the re-seal of a document failed: an error of the keyring or of the users collection.
+enum SweepError {
+    Keyring(KeyringError),
+    Users(FirestoreError),
+}
+
+impl From<KeyringError> for SweepError {
+    fn from(error: KeyringError) -> Self {
+        SweepError::Keyring(error)
+    }
+}
+
+impl From<FirestoreError> for SweepError {
+    fn from(error: FirestoreError) -> Self {
+        SweepError::Users(error)
+    }
+}
+
+/// The text the sweep logs: codes, never Firestore's messages, since a deserialisation error can
+/// quote the field it could not read.
+impl Display for SweepError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SweepError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
+            SweepError::Users(FirestoreError::DatabaseError(error)) => {
+                write!(f, "the users collection failed with {}", error.public.code)
+            }
+            SweepError::Users(FirestoreError::DeserializeError(_)) => {
+                f.write_str("a document of users did not deserialise")
+            }
+            SweepError::Users(_) => f.write_str("the users collection failed"),
+        }
+    }
 }
 
 async fn reseal(
     keyring: &UsersKeyring,
     db: &FirestoreDb,
     candidate: Candidate,
-) -> KeyringResult<ResealOutcome> {
-    let doc = candidate
-        .0
-        .map_err(|error| users_error(StoreOperation::Load, error))?;
+) -> Result<ResealOutcome, SweepError> {
+    let doc = candidate.0?;
     let aad = EMAIL.aad(&EntityId::try_from(doc.id.as_str())?);
     let Some(resealed): Option<Resealed<Email, Randomized>> =
         keyring.reseal(&aad, &doc.email).await?
@@ -408,7 +432,7 @@ async fn reseal(
         Err(FirestoreError::DatabaseError(error)) if error.public.code == "FailedPrecondition" => {
             Ok(ResealOutcome::Skipped)
         }
-        Err(error) => Err(users_error(StoreOperation::CompareAndSwap, error)),
+        Err(error) => Err(SweepError::Users(error)),
     }
 }
 
@@ -476,19 +500,17 @@ detect its write:
 ```rust,no_run
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 use futures_util::{stream, Stream, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadResult;
-use kms_aead_keyring::errors::KeyringStoreError;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::store::{PostgresKeyringStore, StoreKind, StoreOperation};
+use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealThresholds, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Resealed,
 };
 use secret_vault_value::SecretValue;
 use tokio_postgres::{Client, Config, NoTls, Row};
@@ -542,16 +564,36 @@ impl TryFrom<Row> for Candidate {
     }
 }
 
-/// An error of the users table, as the sweep counts it.
-fn users_error(operation: StoreOperation, error: tokio_postgres::Error) -> KeyringError {
-    KeyringError::Store(
-        KeyringStoreError::new(
-            StoreKind::Other("users"),
-            operation,
-            "the users table failed".to_string(),
-        )
-        .with_root_cause(Arc::new(error)),
-    )
+/// Why the re-seal of a row failed: an error of the keyring or of the users table.
+enum SweepError {
+    Keyring(KeyringError),
+    Users(tokio_postgres::Error),
+}
+
+impl From<KeyringError> for SweepError {
+    fn from(error: KeyringError) -> Self {
+        SweepError::Keyring(error)
+    }
+}
+
+impl From<tokio_postgres::Error> for SweepError {
+    fn from(error: tokio_postgres::Error) -> Self {
+        SweepError::Users(error)
+    }
+}
+
+/// The text the sweep logs: codes, never the server's message, whose detail can quote a row's
+/// values.
+impl Display for SweepError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            SweepError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
+            SweepError::Users(error) => match error.code() {
+                Some(state) => write!(f, "the users table failed with SQLSTATE {}", state.code()),
+                None => f.write_str("the users table failed"),
+            },
+        }
+    }
 }
 
 /// The rows whose `seal_randomized` is below `active`, a page at a time in the order of `id`.
@@ -589,10 +631,10 @@ async fn reseal(
     keyring: &UsersKeyring,
     client: &Client,
     candidate: Candidate,
-) -> KeyringResult<ResealOutcome> {
+) -> Result<ResealOutcome, SweepError> {
     let (id, email) = match candidate {
         Candidate::Row { id, email } => (id, email),
-        Candidate::Unread(error) => return Err(users_error(StoreOperation::Load, error)),
+        Candidate::Unread(error) => return Err(SweepError::Users(error)),
     };
     let aad = EMAIL.aad(&EntityId::try_from(id.to_string())?);
     let Some(resealed): Option<Resealed<Email, Randomized>> =
@@ -608,8 +650,7 @@ async fn reseal(
              WHERE id = $1 AND email = $4",
             &[&id, &resealed.value, &seal_randomized, &email],
         )
-        .await
-        .map_err(|error| users_error(StoreOperation::CompareAndSwap, error))?;
+        .await?;
     Ok(match updated {
         // A write since the query: the writer re-sealed the row itself
         0 => ResealOutcome::Skipped,
@@ -748,8 +789,8 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
-    KeyringResult, Plaintext, Resealed,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringError,
+    Plaintext, Resealed,
 };
 use secret_vault_value::SecretValue;
 
@@ -801,8 +842,10 @@ struct PhoneUpdate {
 }
 
 /// Re-seals the `pages` of the query, and writes each through `merge`, which runs the `MERGE`
-/// and returns its number of affected rows.
-async fn sweep_phones<Pages, Merge, Merged>(
+/// and returns its number of affected rows. `ClientError` is the error of the application's
+/// BigQuery client, which a `KeyringError` converts into, and its `Display` is the text the
+/// sweep logs for a failed page.
+async fn sweep_phones<Pages, Merge, Merged, ClientError>(
     keyring: &UsersKeyring,
     pages: Pages,
     merge: Merge,
@@ -810,7 +853,8 @@ async fn sweep_phones<Pages, Merge, Merged>(
 where
     Pages: Stream<Item = UsersPage>,
     Merge: Fn(Vec<PhoneUpdate>) -> Merged,
-    Merged: Future<Output = KeyringResult<u64>>,
+    Merged: Future<Output = Result<u64, ClientError>>,
+    ClientError: From<KeyringError> + Display,
 {
     sweep::run(keyring.id(), pages, CONCURRENCY, |page| {
         let merge = &merge;
@@ -835,7 +879,7 @@ where
             if updates.is_empty() {
                 return Ok(ResealOutcome::Skipped);
             }
-            Ok(match merge(updates).await? {
+            Ok::<ResealOutcome, ClientError>(match merge(updates).await? {
                 0 => ResealOutcome::Skipped,
                 _ => ResealOutcome::Resealed { from_compromised },
             })

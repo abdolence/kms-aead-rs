@@ -5,7 +5,8 @@
 //! known, and leaves a value nobody reported unrecorded. kms-aead's spans nest inside them: a
 //! `KMS decrypt DEK` under a `Keyring decrypt` on a DEK cache miss, a `KMS encrypt DEK` under a
 //! `Keyring rotate`. No field carries plaintext, key material in any form, AAD content, cipher
-//! text bytes, or the length of a value or of its AAD.
+//! text bytes, or the length of a value or of its AAD. The `record` and `error` fields of a
+//! failed sweep re-seal are the application's own text, which it keeps free of them.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -42,6 +43,7 @@ const FIELD_RESEALED_FROM_COMPROMISED: &str = "/kms_aead_keyring/resealed_from_c
 const FIELD_SKIPPED: &str = "/kms_aead_keyring/skipped";
 const FIELD_FAILED: &str = "/kms_aead_keyring/failed";
 const FIELD_RECORD: &str = "/kms_aead_keyring/record";
+const FIELD_ERROR: &str = "/kms_aead_keyring/error";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the keyring has a
 /// cache: `reencrypt_deks`, a keyset export, and a compromised version read by
@@ -498,12 +500,12 @@ pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
 }
 
 /// A record the sweep could not re-seal, by the application's candidate for it, which is often
-/// an entity id: the sweep's log is read as an administrative log.
-pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &KeyringError) {
+/// an entity id, and the application's error: the sweep's log is read as an administrative log.
+pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &impl Display) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_RECORD } = %candidate,
-        { FIELD_ERROR_CODE } = error.code(),
+        { FIELD_ERROR } = %error,
         "The sweep could not re-seal a record"
     );
 }

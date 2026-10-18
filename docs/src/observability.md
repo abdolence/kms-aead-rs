@@ -208,8 +208,10 @@ in the filter beside `kms_aead=debug`.
 - `INFO`: the active version of a purpose changed, with the old and new key ids;
 - `WARN`: the store's listener disconnected, reconnected, or did not start, and a keyring
   opened with no tokio runtime to follow the store's signals;
-- `WARN`: a record a sweep could not re-seal, with the application's record id and the error
-  code. A record id is often an entity id, so the sweep's log is an administrative log;
+- `WARN`: a record a sweep could not re-seal, with the `Display` of the application's candidate
+  in `record` and of its error in `error`. Both are the application's own text, so it keeps
+  values, secrets and personal data out of them. A record id is often an entity id, so the
+  sweep's log is an administrative log;
 - `DEBUG`: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
   retried.
 
