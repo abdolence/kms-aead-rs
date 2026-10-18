@@ -3,7 +3,6 @@ use std::fmt::{Debug, Formatter};
 use prost::encoding::{self, WireType};
 use prost::Message;
 use secret_vault_value::SecretValue;
-use zeroize::Zeroize;
 
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, KmsAeadResult};
@@ -300,7 +299,8 @@ impl Debug for KeyData {
 
 impl Drop for KeyData {
     fn drop(&mut self) {
-        self.value.zeroize();
+        // Dropping the bytes inside a SecretValue zeroizes them.
+        drop(SecretValue::new(std::mem::take(&mut self.value)));
     }
 }
 

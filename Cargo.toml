@@ -66,8 +66,6 @@ aws-sdk-kms = { version = "1", optional = true, default-features = false, featur
 subtle = "2.6.1"
 # Tink's key and keyset messages. The version gcloud-sdk depends on, so that one copy is in the tree.
 prost = "0.14"
-# Zeroizes the serialized keys inside Tink's keyset messages.
-zeroize = "1"
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
 tokio = { version = "1", default-features = false, features = ["sync"] }
