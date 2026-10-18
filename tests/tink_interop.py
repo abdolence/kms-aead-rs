@@ -1,4 +1,4 @@
-"""Tink's KmsEnvelopeAead on a Cloud KMS key and an AWS KMS key, for checking kms-aead against it.
+"""Tink on a Cloud KMS key and an AWS KMS key, for checking kms-aead against it.
 
 Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`):
 
@@ -8,6 +8,16 @@ Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`
     cargo run --example tink_interop --features gcp-kms-encryption,aws-kms-encryption,aws-lc \\
         -- encrypt > kms-aead.jsonl
     python -I tests/tink_interop.py decrypt < kms-aead.jsonl
+    cargo run --example tink_interop --features gcp-kms-encryption,aws-kms-encryption,aws-lc \\
+        -- export > kms-aead-keysets.jsonl
+    python -I tests/tink_interop.py read-keysets < kms-aead-keysets.jsonl > tink-keysets.jsonl
+    cargo run --example tink_interop --features gcp-kms-encryption,aws-kms-encryption,aws-lc \\
+        -- decrypt < tink-keysets.jsonl
+
+`encrypt` and `decrypt` use Tink's KmsEnvelopeAead. `read-keysets` reads each keyset kms-aead
+exported with KeysetHandle.read and the KMS client of the key URI kms-aead gave, opens the value
+kms-aead sealed with it, and writes a value of its own sealed with the keyset; it reports on
+stderr.
 
 The keys come from the variables of the live tests: PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING
 and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS, with ACCOUNT_ID for the
@@ -15,8 +25,10 @@ example. A KMS whose variables are not set is skipped. Cloud KMS uses the applic
 credentials, AWS KMS the credentials boto3 finds.
 
 Each line is one value: {"kms": "gcp" or "aws", "algorithm": the kms-aead name, "aad",
-"plain_text" and "value" in hex}. Tink for Python has no ChaCha20Poly1305Key, so `decrypt` skips
-the chacha20-poly1305 values that kms-aead writes.
+"plain_text" and "value" in hex}, and for a keyset "key_uri", "keyset" and "wrapped_key", the key
+wrapped by the KMS key, which kms-aead opens Tink's value with. Tink for Python has no
+ChaCha20Poly1305Key, so `decrypt` and `read-keysets` skip the chacha20-poly1305 values that
+kms-aead writes.
 """
 
 from importlib import metadata
@@ -24,6 +36,7 @@ import json
 import os
 import sys
 
+import tink
 from tink import aead
 from tink.integration import awskms
 from tink.integration import gcpkms
@@ -35,19 +48,25 @@ TEMPLATES = {
 }
 
 
+def remote_aead(key_uri):
+  if key_uri.startswith('gcp-kms://'):
+    return gcpkms.GcpKmsClient(key_uri).get_aead(key_uri)
+  return awskms.AwsKmsClient(key_uri, None).get_aead(key_uri)
+
+
 def remote_aeads():
   remotes = {}
   if 'PROJECT_ID' in os.environ:
-    gcp_key = 'gcp-kms://projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}'.format(
-        os.environ['PROJECT_ID'],
-        os.environ['PROJECT_LOCATION'],
-        os.environ['KMS_KEY_RING'],
-        os.environ['KMS_KEY'],
+    remotes['gcp'] = remote_aead(
+        'gcp-kms://projects/{}/locations/{}/keyRings/{}/cryptoKeys/{}'.format(
+            os.environ['PROJECT_ID'],
+            os.environ['PROJECT_LOCATION'],
+            os.environ['KMS_KEY_RING'],
+            os.environ['KMS_KEY'],
+        )
     )
-    remotes['gcp'] = gcpkms.GcpKmsClient(gcp_key).get_aead(gcp_key)
   if 'KMS_KEY_ID' in os.environ:
-    aws_key = 'aws-kms://' + os.environ['KMS_KEY_ID']
-    remotes['aws'] = awskms.AwsKmsClient(aws_key, None).get_aead(aws_key)
+    remotes['aws'] = remote_aead('aws-kms://' + os.environ['KMS_KEY_ID'])
   return remotes
 
 
@@ -91,6 +110,41 @@ def decrypt():
   sys.exit(1 if failures else 0)
 
 
+def read_keysets():
+  failures = 0
+  for line in sys.stdin:
+    case = json.loads(line)
+    name = f"{case['kms']} {case['algorithm']} keyset"
+    if case['algorithm'] not in TEMPLATES:
+      print(f'{name}: skipped, Tink for Python has no such key type', file=sys.stderr)
+      continue
+    keyset = tink.read_keyset_handle(
+        tink.BinaryKeysetReader(bytes.fromhex(case['keyset'])),
+        remote_aead(case['key_uri']),
+    )
+    primitive = keyset.primitive(aead.Aead)
+    aad = bytes.fromhex(case['aad'])
+    if primitive.decrypt(bytes.fromhex(case['value']), aad) == bytes.fromhex(
+        case['plain_text']
+    ):
+      print(f'{name}: ok', file=sys.stderr)
+    else:
+      print(f'{name}: another plain text', file=sys.stderr)
+      failures += 1
+    plain_text = f"sealed by Tink {metadata.version('tink')}".encode()
+    print(json.dumps({
+        'kms': case['kms'],
+        'algorithm': case['algorithm'],
+        'wrapped_key': case['wrapped_key'],
+        'aad': case['aad'],
+        'plain_text': plain_text.hex(),
+        'value': primitive.encrypt(plain_text, aad).hex(),
+    }))
+  sys.exit(1 if failures else 0)
+
+
 if __name__ == '__main__':
   aead.register()
-  {'encrypt': encrypt, 'decrypt': decrypt}[sys.argv[1]]()
+  {'encrypt': encrypt, 'decrypt': decrypt, 'read-keysets': read_keysets}[
+      sys.argv[1]
+  ]()
