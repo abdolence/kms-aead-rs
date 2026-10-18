@@ -54,7 +54,7 @@ aws-config = { version = "1", default-features = false, features = ["behavior-ve
 # tokio-postgres-rustls builds only on tokio-postgres's `runtime`, which a build without the
 # `postgres` feature does not turn on.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
-tokio-postgres-rustls = "0.13"
+tokio-postgres-rustls = "0.14"
 # No crypto provider of its own: a second one beside the aws-lc-rs of gcloud-sdk or aws-sdk-s3
 # leaves rustls without a process default, and their clients panic.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
