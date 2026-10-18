@@ -628,6 +628,7 @@ fn trusted_roots(
 mod tests {
     use super::*;
     use crate::test_http::answer_with;
+    use crate::test_provider::TEST_BACKEND;
     use tokio::net::TcpListener;
 
     const TOKEN: &str = "hvs.token-marker-value";
@@ -912,7 +913,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::new(provider.clone(), crate::test_provider::TEST_BACKEND)
+        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND)
             .await
             .unwrap();
         let aad = "orders-aad".to_string();
