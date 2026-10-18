@@ -84,7 +84,7 @@ impl Display for EntityKind {
 
 /// The id of one entity, such as a user id: the middle part of a default AAD, which binds a
 /// value to its row. An id that holds `/` is encoded by the application first, with
-/// percent-encoding for example, or the field uses [`FieldAad::custom`].
+/// percent-encoding for example, or the field uses [`FieldSpec::custom_aad`].
 ///
 /// 1 to 255 bytes of UTF-8 without `/`, NUL or another ASCII control character. It can be
 /// personal data, so no span, event or error of the crate carries it.
@@ -178,7 +178,8 @@ pub enum Interop {
     /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
     /// and AES-SIV only and decrypts with Cloud KMS only: sealing needs an AES-256-GCM version
     /// for a randomised value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
-    /// The AAD is the default one, which SQL rebuilds.
+    /// The AAD is the default one, which SQL rebuilds, so the field takes no
+    /// [`custom_aad`](FieldSpec::custom_aad).
     BigQuery,
     /// Tink decrypts the field with the keyset of
     /// [`Keyring::export_tink_keyset`](crate::Keyring::export_tink_keyset): sealing needs an
@@ -284,6 +285,24 @@ impl FieldSpec {
         }
     }
 
+    /// The AAD of the field's value as `bytes` of the application's own choosing, with no
+    /// structure, in place of the default one. It binds a value to neither its field nor its row
+    /// unless `bytes` do. Sealing with it checks the field's [`Interop`] as with the default AAD.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::CustomAadUnsupported`] on a field that [`Interop::BigQuery`] reads: SQL
+    /// rebuilds the default AAD and cannot rebuild other bytes.
+    pub fn custom_aad(&self, bytes: &(impl AsRef<[u8]> + ?Sized)) -> KeyringResult<FieldAad> {
+        match self.interop {
+            Some(interop @ Interop::BigQuery) => Err(KeyringError::CustomAadUnsupported(interop)),
+            Some(Interop::Tink) | None => Ok(FieldAad {
+                bytes: bytes.as_ref().to_vec(),
+                interop: self.interop,
+            }),
+        }
+    }
+
     /// The AAD of the field's deterministic values: `<kind>/<field>`, for example `user/email`.
     /// It holds no entity id, so that equal plaintexts in different rows give equal values.
     pub fn deterministic_aad(&self) -> DeterministicAad {
@@ -294,8 +313,9 @@ impl FieldSpec {
     }
 }
 
-/// The associated data of one randomised value. A value opens only with the AAD it was
-/// sealed with.
+/// The associated data of one randomised value, built by [`FieldSpec::aad`] or
+/// [`FieldSpec::custom_aad`] so that it carries the field's [`Interop`]. A value opens only with
+/// the AAD it was sealed with.
 ///
 /// `Debug` shows nothing of the bytes, not even their length: the default AAD holds an entity
 /// id.
@@ -305,15 +325,6 @@ pub struct FieldAad {
 }
 
 impl FieldAad {
-    /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadCipher`. SQL cannot
-    /// rebuild it, so it carries no [`Interop`] and a field BigQuery reads cannot use it.
-    pub fn custom(bytes: &(impl AsRef<[u8]> + ?Sized)) -> Self {
-        Self {
-            bytes: bytes.as_ref().to_vec(),
-            interop: None,
-        }
-    }
-
     /// Appends `/` and `context`, any bytes; a value sealed with a context opens only with the
     /// same context. `context` may itself hold `/`, so two contexts can produce the same AAD
     /// from different splits: the caller owns both sides of its AAD and keeps them apart.
@@ -429,6 +440,16 @@ mod tests {
                         && error.rule == IdentifierRule::Length
             ));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn a_bigquery_field_refuses_a_custom_aad() -> KeyringResult<()> {
+        let spec = email()?.with_interop(Interop::BigQuery);
+        assert!(matches!(
+            spec.custom_aad(b"tenant-7/42"),
+            Err(KeyringError::CustomAadUnsupported(Interop::BigQuery))
+        ));
         Ok(())
     }
 

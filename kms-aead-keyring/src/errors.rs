@@ -78,6 +78,10 @@ pub enum KeyringError {
     /// An [`Interop`] requirement that sealing a field or exporting a keyset would break,
     /// checked before sealing and before any KMS call of an export.
     Interop(InteropError),
+    /// [`FieldSpec::custom_aad`](crate::FieldSpec::custom_aad) on a field whose reader rebuilds
+    /// the AAD itself, which bytes of the application's own choosing would not match: a field
+    /// that [`Interop::BigQuery`] decrypts in SQL.
+    CustomAadUnsupported(Interop),
     /// A version selected for a keyset export whose algorithm the keyset's reader does not
     /// read: for BigQuery neither AES-256-GCM nor AES-SIV, for Tink ChaCha20-Poly1305 or a
     /// beacon's.
@@ -113,6 +117,7 @@ impl KeyringError {
             KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
+            KeyringError::CustomAadUnsupported(_) => "CUSTOM_AAD_UNSUPPORTED",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
             KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
         }
@@ -330,6 +335,10 @@ impl Display for KeyringError {
                 f,
                 "{} does not read the keyring {}: {}",
                 error.interop, error.keyring, error.requirement
+            ),
+            KeyringError::CustomAadUnsupported(interop) => write!(
+                f,
+                "{interop} rebuilds the AAD of the field itself and cannot rebuild a custom one"
             ),
             KeyringError::ExportAlgorithmUnsupported(error) => write!(
                 f,

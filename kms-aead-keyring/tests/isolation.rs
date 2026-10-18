@@ -9,9 +9,8 @@ use kms_aead::AeadAlgorithm;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
-    KeyVersion, Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
-    Purpose,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyAlgorithm, KeyId, KeyVersion,
+    Keyring, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Purpose,
 };
 
 #[cfg(feature = "ring")]
@@ -90,7 +89,7 @@ async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
     keyring.promote(staged).await?;
     for aad in [
         EMAIL.aad(&EntityId::try_from("42")?),
-        FieldAad::custom(&[0xFF; 3]),
+        EMAIL.custom_aad(&[0xFF; 3])?,
     ] {
         let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
         assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);

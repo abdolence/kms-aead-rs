@@ -30,7 +30,7 @@
 //! The default associated data of a value is its place in the application's model,
 //! `<kind>/<id>/<field>` such as `user/42/email`, built by [`FieldSpec::aad`]: a value opens only
 //! in its own row and field, and moves between data stores without being encrypted again.
-//! [`FieldAad::custom`] takes any bytes instead.
+//! [`FieldSpec::custom_aad`] takes any bytes instead, on a field that BigQuery does not read.
 //!
 //! A field that BigQuery also decrypts is declared with
 //! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal

@@ -15,7 +15,8 @@ use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::KeyringStore;
 use crate::test_support::{
-    email_of, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult, TestStore, TENANT,
+    email_of, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult, TestStore, EMAIL,
+    TENANT,
 };
 use crate::testing::MemoryKeyringStore;
 use crate::{EntityId, EntityKind, FieldName, FieldSpec, KeyringRegistryOptions, Transition};
@@ -158,14 +159,14 @@ async fn a_value_opens_only_with_its_aad() -> TestResult {
     for aad in [
         email_of("43")?,
         email_of("42")?.with_context(b"eu"),
-        FieldAad::custom(b"user/42/email/"),
+        EMAIL.custom_aad(b"user/42/email/")?,
     ] {
         assert!(matches!(
             keyring.decrypt(&aad, &value).await,
             Err(KeyringError::KmsAead(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
         ));
     }
-    let same_bytes = FieldAad::custom(b"user/42/email");
+    let same_bytes = EMAIL.custom_aad(b"user/42/email")?;
     assert_eq!(keyring.decrypt(&same_bytes, &value).await?, ALICE);
     Ok(())
 }
@@ -1263,6 +1264,25 @@ async fn interop_tink_seals_under_the_algorithms_and_keks_every_tink_reads() -> 
         .await?;
     assert!(matches!(
         cloud_kms.encrypt(&aad, &ALICE.to_string()).await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Algorithm(chacha)
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn interop_tink_checks_a_custom_aad_too() -> TestResult {
+    let aad = BIGQUERY_EMAIL
+        .with_interop(Interop::Tink)
+        .custom_aad(b"tenant-7/42")?;
+    let keyring = bigquery_keyring(TestProvider::cloud_kms()?).await?;
+    let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
+    keyring
+        .promote(keyring.change_algorithm(chacha).await?)
+        .await?;
+
+    assert!(matches!(
+        keyring.encrypt(&aad, &ALICE.to_string()).await,
         Err(KeyringError::Interop(error))
             if error.requirement == InteropRequirement::Algorithm(chacha)
     ));

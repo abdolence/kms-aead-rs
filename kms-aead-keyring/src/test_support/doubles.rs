@@ -35,7 +35,8 @@ pub(crate) type TestKeyring<S> = Keyring<S, TestProvider, TestBackend>;
 /// A registry on the store `S` and the backend of the build.
 pub(crate) type TestRegistry<S> = KeyringRegistry<S, TestBackend>;
 
-const EMAIL: FieldSpec = FieldSpec::new(
+/// The field `user/email`, read by no other reader.
+pub(crate) const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
