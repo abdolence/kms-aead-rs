@@ -612,7 +612,7 @@ mod postgres {
         use std::time::{Duration, Instant};
 
         use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-        use kms_aead::AeadBackend;
+        use kms_aead::Ring;
         use kms_aead_keyring::store::{
             KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresRevision, Revalidation,
             StoreKind, Stored, Swap,
@@ -680,13 +680,9 @@ mod postgres {
             };
             let interval = Duration::from_millis(500);
             let id = unique_keyring_id()?;
-            let keyring = Keyring::open_or_create(
+            let keyring = Keyring::<CountingStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
                 store,
-                LocalKmsProvider::ephemeral(
-                    LocalKekId::try_from("postgres-kek".to_string())?,
-                    AeadBackend::Ring,
-                )?,
-                AeadBackend::Ring,
+                LocalKmsProvider::ephemeral(LocalKekId::try_from("postgres-kek".to_string())?)?,
                 id.clone(),
                 KeyringPolicy::new(),
                 KeyringOptions::new().with_reload_min_interval(interval),
