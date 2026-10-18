@@ -8,6 +8,11 @@ use tokio::sync::mpsc;
 use crate::errors::KeyringResult;
 use crate::{KeyringId, KeyringRecord};
 
+#[cfg(feature = "gcs")]
+mod gcs;
+#[cfg(feature = "gcs")]
+pub use gcs::*;
+
 mod memory;
 pub use memory::*;
 
@@ -153,15 +158,20 @@ pub enum WatchEvent {
 pub enum StoreKind {
     /// [`MemoryKeyringStore`].
     Memory,
+    /// [`GcsKeyringStore`].
+    #[cfg(feature = "gcs")]
+    Gcs,
     /// An application's own store, by the name it gives.
     Other(&'static str),
 }
 
-/// `memory`, or the application's name: the value of the `store` span field.
+/// `memory`, `gcs`, or the application's name: the value of the `store` span field.
 impl Display for StoreKind {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             StoreKind::Memory => "memory",
+            #[cfg(feature = "gcs")]
+            StoreKind::Gcs => "gcs",
             StoreKind::Other(name) => name,
         })
     }

@@ -318,6 +318,8 @@ pub enum Identifier {
     EntityId,
     /// [`FieldName`](crate::FieldName).
     FieldName,
+    /// The bucket name of the GCS store.
+    GcsBucketName,
 }
 
 impl Display for Identifier {
@@ -328,6 +330,7 @@ impl Display for Identifier {
             Identifier::EntityKind => "entity kind",
             Identifier::EntityId => "entity id",
             Identifier::FieldName => "field name",
+            Identifier::GcsBucketName => "GCS bucket name",
         })
     }
 }

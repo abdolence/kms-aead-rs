@@ -52,6 +52,7 @@
 //! | Store | Type | Feature |
 //! |---|---|---|
 //! | Memory, for tests and single processes | [`MemoryKeyringStore`](store::MemoryKeyringStore) | none |
+//! | Cloud Storage | `GcsKeyringStore` | `gcs` |
 //!
 //! # Features
 //!
@@ -62,6 +63,8 @@
 //! | `legacy-formats` | kms-aead's `legacy-formats` |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
 //! | `serde-json` | `serde`, and [`Json`], a plaintext stored as its JSON |
+//! | `gcs` | `GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
+//! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //!
 //! # Example
 //!

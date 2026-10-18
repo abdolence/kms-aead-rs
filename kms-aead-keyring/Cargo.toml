@@ -29,6 +29,10 @@ subtle = { workspace = true }
 # `rt` runs the task that follows a store's change signals and `time` spaces its revalidations.
 tokio = { workspace = true, features = ["sync", "rt", "time"] }
 tracing = { workspace = true }
+# The version kms-aead's GCP provider depends on, so that one copy is in the tree.
+gcloud-sdk = { version = "0.33", optional = true, default-features = false }
+# The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
+tokio-stream = { version = "0.1", optional = true, default-features = false }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -52,6 +56,11 @@ legacy-formats = ["kms-aead/legacy-formats"]
 serde = ["kms-aead/serde"]
 # `Json<T>`, a plaintext stored as its JSON.
 serde-json = ["serde"]
+# `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
+# feature from the application, or one of the two below, to build.
+gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
+gcs-tls-roots = ["gcs", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
+gcs-tls-webpki = ["gcs", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 
 [lints.clippy]
 mod_module_files = "deny"

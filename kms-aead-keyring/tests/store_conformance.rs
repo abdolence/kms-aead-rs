@@ -16,11 +16,26 @@ fn unique_keyring_id() -> KeyringResult<KeyringId> {
     KeyringId::try_from(format!("conformance-{}", uuid::Uuid::now_v7()))
 }
 
+/// `[0xFF][0x01][0x00]` starts encrypted key layout v1 with no key version; `wrapped` follows.
+const WRAPPED_DEK: &str = "/wEAd3JhcHBlZA==";
+
+/// As [`WRAPPED_DEK`], with `record-bytes-marker` after the layout bytes: a wrapped key whose
+/// bytes a test looks for in the store's errors.
+#[cfg(feature = "gcs")]
+const MARKED_WRAPPED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
+
 /// The record of `id` after `rotations` rotations: randomized versions 1 to `rotations`
 /// decrypt only, and the next one is active.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
-    // `[0xFF][0x01][0x00]` starts encrypted key layout v1 with no key version.
-    let wrapped_dek = "/wEAd3JhcHBlZA==";
+    record_wrapping(id, rotations, WRAPPED_DEK)
+}
+
+/// As [`record`], with every version's wrapped key `wrapped_dek`, in standard base64.
+fn record_wrapping(
+    id: &KeyringId,
+    rotations: u32,
+    wrapped_dek: &str,
+) -> KeyringResult<KeyringRecord> {
     let versions: Vec<_> = (1..=rotations + 1)
         .map(|key_id| {
             json!({
@@ -218,6 +233,40 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
     Ok(())
 }
 
+/// A store error carries none of the record it failed to write: the wrapped key appears neither
+/// as text nor as bytes in the error's `Display`, its `Debug`, or its root cause's. `failing` is
+/// a store whose writes fail.
+#[cfg(feature = "gcs")]
+async fn a_store_error_carries_no_record_bytes(failing: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let marked = record_wrapping(&id, 0, MARKED_WRAPPED_DEK)?;
+    let error = match failing.compare_and_swap(&marked, None).await {
+        Err(error) => error,
+        Ok(swap) => return Err(format!("the write did not fail: {swap:?}").into()),
+    };
+    assert!(matches!(error, kms_aead_keyring::KeyringError::Store(_)));
+    let mut rendered = format!("{error}\n{error:?}");
+    let mut source = std::error::Error::source(&error);
+    while let Some(cause) = source {
+        rendered.push_str(&format!("\n{cause}\n{cause:?}"));
+        source = cause.source();
+    }
+    let marker = b"record-bytes-marker";
+    let as_bytes = |bytes: &[u8]| {
+        let listed = format!("{bytes:?}");
+        listed[1..listed.len() - 1].to_string()
+    };
+    for leaked in [
+        "record-bytes-marker".to_string(),
+        MARKED_WRAPPED_DEK.to_string(),
+        as_bytes(marker),
+        as_bytes(MARKED_WRAPPED_DEK.as_bytes()),
+    ] {
+        assert!(!rendered.contains(&leaked), "the error carries {leaked}");
+    }
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
 async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
@@ -236,4 +285,49 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
 #[tokio::test]
 async fn the_memory_store_conforms() -> TestResult {
     conformance(MemoryKeyringStore::new).await
+}
+
+/// The GCS store against the bucket `KEYRING_GCS_BUCKET` names, with the application default
+/// credentials. Each run writes under a prefix of its own, `kms-keyrings-conformance/<uuid>/`,
+/// and leaves its objects for the bucket's lifecycle rule.
+#[cfg(feature = "gcs")]
+mod gcs {
+    use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
+    use gcloud_sdk::GoogleApi;
+    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore};
+
+    use super::{conformance, unique_keyring_id, TestResult};
+
+    async fn store() -> Result<GcsKeyringStore, Box<dyn std::error::Error>> {
+        let bucket = GcsBucketName::try_from(std::env::var("KEYRING_GCS_BUCKET")?)?;
+        let client =
+            GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
+                .await?;
+        Ok(GcsKeyringStore::new(client, bucket)?.with_prefix(format!(
+            "kms-keyrings-conformance/{}/",
+            uuid::Uuid::now_v7()
+        )))
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn the_gcs_store_conforms() -> TestResult {
+        let store = store().await?;
+        conformance(|| store.clone()).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn watch_returns_none() -> TestResult {
+        assert!(store().await?.watch(&unique_keyring_id()?).await?.is_none());
+        Ok(())
+    }
+
+    /// An object name past the service's 1,024-byte limit makes every write fail.
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn a_store_error_carries_no_record_bytes() -> TestResult {
+        let failing = store().await?.with_prefix("x".repeat(1100));
+        super::a_store_error_carries_no_record_bytes(failing).await
+    }
 }
