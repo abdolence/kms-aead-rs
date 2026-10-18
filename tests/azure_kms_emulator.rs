@@ -6,6 +6,8 @@
 //!   cargo test --features azure-kms-encryption --test azure_kms_emulator -- --ignored
 //! ```
 
+#![cfg(test)]
+
 use azure_core::http::{ClientOptions, RequestContent, Transport};
 use azure_security_keyvault_keys::models::{CreateKeyParameters, KeyOperation, KeyType};
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
@@ -110,7 +112,7 @@ impl Emulator {
             Arc::new(FixedTokenCredential),
         )
         .unwrap();
-        KmsAeadEnvelope::new(provider, BACKEND).await.unwrap()
+        KmsAeadEnvelope::new(provider, BACKEND).unwrap()
     }
 }
 
@@ -129,12 +131,12 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() {
     let emulator = Emulator::connect();
     let key_name = unique_name("dek-wrapping-key");
     let first_version = emulator.create_rsa_key_version(&key_name).await;
-    let aad = "test-aad".to_string();
+    let aad = b"test-aad";
 
     let cipher_text = emulator
         .encryption(&key_name, first_version.clone())
         .await
-        .encrypt_value(&aad, &SecretValue::from("test-secret"))
+        .encrypt_value(aad, &SecretValue::from("test-secret"))
         .await
         .unwrap();
     let (_, encrypted_key) = cipher_text.separate().unwrap();
@@ -144,7 +146,7 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() {
     let decrypted = emulator
         .encryption(&key_name, rotated_version)
         .await
-        .decrypt_value(&aad, &cipher_text)
+        .decrypt_value(aad, &cipher_text)
         .await
         .unwrap();
 
@@ -159,18 +161,18 @@ async fn value_encrypted_with_another_key_fails_to_decrypt() {
     let other_key_name = unique_name("other-key");
     let key_version = emulator.create_rsa_key_version(&key_name).await;
     let other_key_version = emulator.create_rsa_key_version(&other_key_name).await;
-    let aad = "test-aad".to_string();
+    let aad = b"test-aad";
 
     let cipher_text = emulator
         .encryption(&other_key_name, other_key_version)
         .await
-        .encrypt_value(&aad, &SecretValue::from("test-secret"))
+        .encrypt_value(aad, &SecretValue::from("test-secret"))
         .await
         .unwrap();
     let result = emulator
         .encryption(&key_name, key_version)
         .await
-        .decrypt_value(&aad, &cipher_text)
+        .decrypt_value(aad, &cipher_text)
         .await;
 
     assert!(matches!(result, Err(KmsAeadError::EncryptionError(_))));

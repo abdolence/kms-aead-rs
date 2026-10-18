@@ -9,24 +9,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::subscriber::set_global_default(subscriber)?;
 
     let encryption = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)?;
-    let key = encryption.generate_data_encryption_key()?;
+    let key = encryption.generate_key()?;
 
     let secret_value = SecretValue::from("test-secret");
-    let test_aad = "test-aad".to_string();
+    let test_aad = b"test-aad";
 
-    let cipher_text = encryption
-        .encrypt_value(&test_aad, &secret_value, &key)
-        .await?;
+    let cipher_text = encryption.encrypt_value(test_aad, &secret_value, &key)?;
 
     println!("Encrypted to {:?}", cipher_text.to_hex_string());
 
-    let secret_value = encryption
-        .decrypt_value(&test_aad, &cipher_text, &key)
-        .await?;
+    let secret_value = encryption.decrypt_value(test_aad, &cipher_text, &key)?;
 
     println!(
         "We have our secret back: {}",
-        secret_value.sensitive_value_to_str().unwrap() == "test-secret"
+        secret_value == SecretValue::from("test-secret")
     );
 
     Ok(())

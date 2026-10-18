@@ -12,7 +12,7 @@ use secret_vault_value::SecretValue;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::spans::{self, kms};
 use crate::{
-    AeadAlgorithm, AeadBackend, AeadCipher, Cipher, CipherText, DataEncryptionKey,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, DekBinding,
     EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
     KmsKeyVersion,
 };
@@ -51,25 +51,6 @@ impl TryFrom<String> for LocalKekId {
                 ),
             ))
         }
-    }
-}
-
-impl LocalKekId {
-    /// `[0x01][i][KEK id][KEK version]`: the start of a wrapped key and its associated data.
-    fn wrapped_key_header(&self, version: LocalKekVersion) -> KmsAeadResult<Vec<u8>> {
-        let id = self.0.as_bytes();
-        let id_len = u8::try_from(id.len()).map_err(|_| {
-            KmsAeadSystemError::create(
-                "INVALID_LOCAL_KEK_ID",
-                "A local KEK id is longer than 255 bytes",
-            )
-        })?;
-        let mut header = Vec::with_capacity(2 + id.len() + 4);
-        header.push(WRAPPED_KEY_LAYOUT);
-        header.push(id_len);
-        header.extend_from_slice(id);
-        header.extend_from_slice(&version.0.get().to_be_bytes());
-        Ok(header)
     }
 }
 
@@ -281,7 +262,7 @@ impl std::fmt::Debug for LocalKek {
 /// not hold its version, and `DECRYPT` when it is not authentic under that version.
 #[derive(Debug)]
 pub struct LocalKmsProvider {
-    id: LocalKekId,
+    /// Its key is the KEK id, which every wrapped key records.
     kek: KekRef,
     keks: BTreeMap<LocalKekVersion, DataEncryptionKey>,
     cipher: AeadCipher,
@@ -327,7 +308,6 @@ impl LocalKmsProvider {
 
         Ok(Self {
             kek: KekRef::new(KekProvider::Local, id.to_string()),
-            id,
             keks: by_version,
             cipher,
         })
@@ -342,7 +322,7 @@ impl LocalKmsProvider {
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn ephemeral(id: LocalKekId, backend: AeadBackend) -> KmsAeadResult<Self> {
         let material = AeadCipher::new(backend, AeadAlgorithm::Aes256Gcm)?
-            .generate_data_encryption_key()?
+            .generate_key()?
             .into_value();
         let kek = LocalKek {
             version: LocalKekVersion(NonZeroU32::MIN),
@@ -350,6 +330,23 @@ impl LocalKmsProvider {
             source: "ephemeral",
         };
         Self::new(id, vec![kek], backend)
+    }
+
+    /// `[0x01][i][KEK id][KEK version]`: the start of a wrapped key and its associated data.
+    fn wrapped_key_header(&self, version: LocalKekVersion) -> KmsAeadResult<Vec<u8>> {
+        let id = self.kek.key().as_bytes();
+        let id_len = u8::try_from(id.len()).map_err(|_| {
+            KmsAeadSystemError::create(
+                "INVALID_LOCAL_KEK_ID",
+                "A local KEK id is longer than 255 bytes",
+            )
+        })?;
+        let mut header = Vec::with_capacity(2 + id.len() + 4);
+        header.push(WRAPPED_KEY_LAYOUT);
+        header.push(id_len);
+        header.extend_from_slice(id);
+        header.extend_from_slice(&version.0.get().to_be_bytes());
+        Ok(header)
     }
 
     /// Splits `[0x01][i][KEK id][KEK version]` off a wrapped key and checks the id, before
@@ -371,12 +368,12 @@ impl LocalKmsProvider {
         let (id, rest) = rest
             .split_at_checked(usize::from(*id_len))
             .ok_or_else(malformed)?;
-        if id != self.id.0.as_bytes() {
+        if id != self.kek.key().as_bytes() {
             return Err(KmsAeadEncryptionError::create(
                 "LOCAL_KEK_ID_MISMATCH",
                 &format!(
                     "The key was wrapped under another local KEK than {}",
-                    self.id
+                    self.kek.key()
                 ),
             ));
         }
@@ -390,25 +387,34 @@ impl LocalKmsProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for LocalKmsProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         spans::in_span(kms::wrap_span(&self.kek), async {
             let (&version, kek) = self.keks.last_key_value().ok_or_else(|| {
                 KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
-                    &format!("The local KEK {} has no version", self.id),
+                    &format!("The local KEK {} has no version", self.kek.key()),
                 )
             })?;
-            let mut wrapped = self.id.wrapped_key_header(version)?;
-            let sealed =
-                kms::timed(async { self.cipher.seal(&wrapped, encryption_key.value(), kek) })
-                    .await?;
+            let mut wrapped = self.wrapped_key_header(version)?;
+            let sealed = kms::timed(async {
+                self.cipher
+                    .encrypt_value(&wrapped, encryption_key.value(), kek)
+            })
+            .await?;
             wrapped.extend_from_slice(sealed.value());
             let key_version = KmsKeyVersion::try_from(version.to_string())?;
             let encrypted_key = EncryptedDataEncryptionKey::new(wrapped, Some(key_version));
@@ -421,32 +427,38 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let (header, version, sealed) = self.read_header(encrypted_key.wrapped())?;
             let kek = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",
-                    &format!("The local KEK {} has no version {version}", self.id),
+                    &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
             let sealed = CipherText::from(sealed.to_vec());
-            let key = kms::timed(async { self.cipher.open(header, &sealed, kek) }).await?;
+            let key = kms::timed(async { self.cipher.decrypt_value(header, &sealed, kek) }).await?;
             Ok(DataEncryptionKey::from(key))
         })
         .await
     }
 }
 
-#[cfg(all(
-    test,
-    any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")
-))]
+#[cfg(test)]
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 mod tests {
     use super::*;
     use crate::test_provider::{renderings, TEST_BACKEND};
 
+    const ORDERS: &str = "orders";
     const KEK_MATERIAL: [u8; 32] = [0x42; 32];
     const DEK_MATERIAL: [u8; 32] = [0x11; 32];
 
@@ -454,95 +466,111 @@ mod tests {
     /// version 7 and nonce `[0x24; 12]`, from [`DEK_MATERIAL`].
     const GOLDEN_WRAPPED_KEY: &str = "0106676f6c64656e000000072424242424242424242424240480d550f8d7d72f37f933bbac2382b77dea2261a7ba417ca1b5dd4b47d4f602e5d1e6bd40e6d7891cd8fbc8d68e3a18";
 
-    fn kek_id(id: &str) -> LocalKekId {
-        LocalKekId::try_from(id.to_string()).unwrap()
-    }
-
-    fn version(version: u32) -> LocalKekVersion {
-        LocalKekVersion::from(NonZeroU32::new(version).unwrap())
-    }
-
-    fn kek(kek_version: u32, material: [u8; 32]) -> LocalKek {
-        LocalKek::from_secret(version(kek_version), SecretValue::new(material.to_vec())).unwrap()
-    }
-
-    fn dek() -> DataEncryptionKey {
-        DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()))
-    }
-
-    fn error_code<T: std::fmt::Debug>(result: KmsAeadResult<T>) -> String {
-        result.unwrap_err().code().to_string()
-    }
-
     #[tokio::test]
-    async fn a_wrapped_key_unwraps_to_the_same_key() {
-        let provider =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-
-        let wrapped = provider.encrypt_data_encryption_key(&dek()).await.unwrap();
-
-        assert_eq!(wrapped.key_version().unwrap().as_str(), "1");
-        assert_eq!(
-            provider
-                .decrypt_data_encryption_key(&wrapped)
-                .await
-                .unwrap(),
-            dek()
-        );
-        assert_eq!(provider.kek(), KekRef::new(KekProvider::Local, "orders"));
-    }
-
-    #[tokio::test]
-    async fn the_highest_version_wraps_and_every_version_unwraps() {
-        let old = LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-            .unwrap();
-        let wrapped_by_old = old.encrypt_data_encryption_key(&dek()).await.unwrap();
-        let rotated = LocalKmsProvider::new(
-            kek_id("orders"),
-            vec![kek(3, [0x43; 32]), kek(1, KEK_MATERIAL), kek(2, [0x44; 32])],
+    async fn a_wrapped_key_unwraps_to_the_same_key() -> KmsAeadResult<()> {
+        let provider = LocalKmsProvider::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
             TEST_BACKEND,
-        )
-        .unwrap();
+        )?;
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let wrapped_by_new = rotated.encrypt_data_encryption_key(&dek()).await.unwrap();
+        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
 
-        assert_eq!(wrapped_by_new.key_version().unwrap().as_str(), "3");
+        assert_eq!(wrapped.key_version().map(KmsKeyVersion::as_str), Some("1"));
+        assert_eq!(
+            provider.decrypt_data_encryption_key(&wrapped, None).await?,
+            dek
+        );
+        assert_eq!(*provider.kek(), KekRef::new(KekProvider::Local, ORDERS));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_highest_version_wraps_and_every_version_unwraps() -> KmsAeadResult<()> {
+        let [v1, v2, v3] = [1, 2, 3].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let old = LocalKmsProvider::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(
+                v1,
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
+            TEST_BACKEND,
+        )?;
+        let wrapped_by_old = old.encrypt_data_encryption_key(&dek, None).await?;
+        let rotated = LocalKmsProvider::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![
+                LocalKek::from_secret(v3, SecretValue::new(vec![0x43; 32]))?,
+                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
+                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+            ],
+            TEST_BACKEND,
+        )?;
+
+        let wrapped_by_new = rotated.encrypt_data_encryption_key(&dek, None).await?;
+
+        assert_eq!(
+            wrapped_by_new.key_version().map(KmsKeyVersion::as_str),
+            Some("3")
+        );
         for wrapped in [wrapped_by_old, wrapped_by_new] {
             assert_eq!(
-                rotated.decrypt_data_encryption_key(&wrapped).await.unwrap(),
-                dek()
+                rotated.decrypt_data_encryption_key(&wrapped, None).await?,
+                dek
             );
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn the_golden_wrapped_key_unwraps() {
-        let provider =
-            LocalKmsProvider::new(kek_id("golden"), vec![kek(7, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-        let golden =
-            EncryptedDataEncryptionKey::new(hex::decode(GOLDEN_WRAPPED_KEY).unwrap(), None);
+    async fn the_golden_wrapped_key_unwraps() -> KmsAeadResult<()> {
+        let provider = LocalKmsProvider::new(
+            LocalKekId::try_from("golden".to_string())?,
+            vec![LocalKek::from_secret(
+                LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
+            TEST_BACKEND,
+        )?;
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
         assert_eq!(
-            provider.decrypt_data_encryption_key(&golden).await.unwrap(),
-            dek()
+            provider
+                .decrypt_data_encryption_key(
+                    &EncryptedDataEncryptionKey::new(golden.clone(), None),
+                    None
+                )
+                .await?,
+            dek
         );
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek()).await.unwrap();
-        let header = &hex::decode(GOLDEN_WRAPPED_KEY).unwrap()[..12];
-        assert_eq!(&wrapped.wrapped()[..12], header);
+        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
+        assert_eq!(&wrapped.wrapped()[..12], &golden[..12]);
         assert_eq!(wrapped.wrapped().len(), 12 + 12 + 32 + 16);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_flipped_header_byte_fails_to_unwrap() {
+    async fn a_flipped_header_byte_fails_to_unwrap() -> KmsAeadResult<()> {
         let provider = LocalKmsProvider::new(
-            kek_id("golden"),
-            vec![kek(7, KEK_MATERIAL), kek(6, KEK_MATERIAL)],
+            LocalKekId::try_from("golden".to_string())?,
+            [7, 6]
+                .map(|version| {
+                    LocalKek::from_secret(
+                        LocalKekVersion::from(NonZeroU32::new(version).unwrap()),
+                        SecretValue::new(KEK_MATERIAL.to_vec()),
+                    )
+                })
+                .into_iter()
+                .collect::<KmsAeadResult<_>>()?,
             TEST_BACKEND,
-        )
-        .unwrap();
+        )?;
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
         for index in 0..12 {
@@ -552,109 +580,144 @@ mod tests {
                 let wrapped = EncryptedDataEncryptionKey::new(wrapped, None);
                 assert!(
                     provider
-                        .decrypt_data_encryption_key(&wrapped)
+                        .decrypt_data_encryption_key(&wrapped, None)
                         .await
                         .is_err(),
                     "byte {index} flipped by {flip:#04x}"
                 );
             }
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_key_wrapped_under_another_kek_id_is_refused() {
-        let orders =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-        let invoices =
-            LocalKmsProvider::new(kek_id("invoices"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-        let wrapped = orders.encrypt_data_encryption_key(&dek()).await.unwrap();
+    async fn a_key_wrapped_under_another_kek_id_is_refused() -> KmsAeadResult<()> {
+        let [orders, invoices] = [ORDERS, "invoices"].map(|id| {
+            LocalKmsProvider::new(
+                LocalKekId::try_from(id.to_string())?,
+                vec![LocalKek::from_secret(
+                    LocalKekVersion::from(NonZeroU32::MIN),
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                )?],
+                TEST_BACKEND,
+            )
+        });
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let wrapped = orders?.encrypt_data_encryption_key(&dek, None).await?;
 
-        assert_eq!(
-            error_code(invoices.decrypt_data_encryption_key(&wrapped).await),
-            "LOCAL_KEK_ID_MISMATCH"
+        let result = invoices?.decrypt_data_encryption_key(&wrapped, None).await;
+
+        assert!(
+            matches!(&result, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
+            "{result:?}"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn an_edek_wrapped_under_another_key_fails_to_unwrap() {
-        let original =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-        let impostor =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(1, [0x43; 32])], TEST_BACKEND)
-                .unwrap();
-        let wrapped = impostor.encrypt_data_encryption_key(&dek()).await.unwrap();
+    async fn an_edek_wrapped_under_another_key_fails_to_unwrap() -> KmsAeadResult<()> {
+        let [original, impostor] = [KEK_MATERIAL, [0x43; 32]].map(|material| {
+            LocalKmsProvider::new(
+                LocalKekId::try_from(ORDERS.to_string())?,
+                vec![LocalKek::from_secret(
+                    LocalKekVersion::from(NonZeroU32::MIN),
+                    SecretValue::new(material.to_vec()),
+                )?],
+                TEST_BACKEND,
+            )
+        });
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let wrapped = impostor?.encrypt_data_encryption_key(&dek, None).await?;
 
-        assert_eq!(
-            error_code(original.decrypt_data_encryption_key(&wrapped).await),
-            "DECRYPT"
+        let result = original?.decrypt_data_encryption_key(&wrapped, None).await;
+
+        assert!(
+            matches!(&result, Err(e) if e.code() == "DECRYPT"),
+            "{result:?}"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_version_the_provider_does_not_hold_is_refused() {
-        let rotated =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(2, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
-        let old = LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-            .unwrap();
-        let wrapped = rotated.encrypt_data_encryption_key(&dek()).await.unwrap();
+    async fn a_version_the_provider_does_not_hold_is_refused() -> KmsAeadResult<()> {
+        let [rotated, old] = [2, 1].map(|version| {
+            LocalKmsProvider::new(
+                LocalKekId::try_from(ORDERS.to_string())?,
+                vec![LocalKek::from_secret(
+                    LocalKekVersion::from(NonZeroU32::new(version).unwrap()),
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                )?],
+                TEST_BACKEND,
+            )
+        });
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let wrapped = rotated?.encrypt_data_encryption_key(&dek, None).await?;
 
-        assert_eq!(
-            error_code(old.decrypt_data_encryption_key(&wrapped).await),
-            "LOCAL_KEK_UNKNOWN_VERSION"
+        let result = old?.decrypt_data_encryption_key(&wrapped, None).await;
+
+        assert!(
+            matches!(&result, Err(e) if e.code() == "LOCAL_KEK_UNKNOWN_VERSION"),
+            "{result:?}"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn a_truncated_wrapped_key_is_refused() {
-        let provider =
-            LocalKmsProvider::new(kek_id("golden"), vec![kek(7, KEK_MATERIAL)], TEST_BACKEND)
-                .unwrap();
+    async fn a_truncated_wrapped_key_is_refused() -> KmsAeadResult<()> {
+        let provider = LocalKmsProvider::new(
+            LocalKekId::try_from("golden".to_string())?,
+            vec![LocalKek::from_secret(
+                LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
+                SecretValue::new(KEK_MATERIAL.to_vec()),
+            )?],
+            TEST_BACKEND,
+        )?;
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
         for len in [0, 1, 2, 8, 11] {
             let wrapped = EncryptedDataEncryptionKey::new(golden[..len].to_vec(), None);
-            assert_eq!(
-                error_code(provider.decrypt_data_encryption_key(&wrapped).await),
-                "LOCAL_WRAPPED_KEY_FORMAT",
-                "{len} bytes"
+            let result = provider.decrypt_data_encryption_key(&wrapped, None).await;
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_WRAPPED_KEY_FORMAT"),
+                "{len} bytes: {result:?}"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn invalid_keks_fail_with_their_codes() {
-        let short = SecretValue::new(vec![0x42; 16]);
-        assert_eq!(
-            error_code(LocalKek::from_secret(version(1), short)),
-            "LOCAL_KEK_LENGTH"
+    fn invalid_keks_fail_with_their_codes() -> KmsAeadResult<()> {
+        let v1 = LocalKekVersion::from(NonZeroU32::MIN);
+        let orders = LocalKekId::try_from(ORDERS.to_string())?;
+
+        let short = LocalKek::from_secret(v1, SecretValue::new(vec![0x42; 16]));
+        assert!(
+            matches!(&short, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
+            "{short:?}"
         );
-        assert_eq!(
-            error_code(LocalKek::from_env(
-                version(1),
-                "KMS_AEAD_LOCAL_KEK_TEST_UNSET_VARIABLE"
-            )),
-            "LOCAL_KEK_SOURCE"
+        let unset = LocalKek::from_env(v1, "KMS_AEAD_LOCAL_KEK_TEST_UNSET_VARIABLE");
+        assert!(
+            matches!(&unset, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
+            "{unset:?}"
         );
-        assert_eq!(
-            error_code(LocalKmsProvider::new(
-                kek_id("orders"),
-                Vec::new(),
-                TEST_BACKEND
-            )),
-            "LOCAL_KEK_VERSIONS"
+        let no_version = LocalKmsProvider::new(orders.clone(), Vec::new(), TEST_BACKEND);
+        assert!(
+            matches!(&no_version, Err(e) if e.code() == "LOCAL_KEK_VERSIONS"),
+            "{no_version:?}"
         );
-        assert_eq!(
-            error_code(LocalKmsProvider::new(
-                kek_id("orders"),
-                vec![kek(1, KEK_MATERIAL), kek(1, [0x43; 32])],
-                TEST_BACKEND,
-            )),
-            "LOCAL_KEK_VERSIONS"
+        let twice = LocalKmsProvider::new(
+            orders,
+            vec![
+                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
+                LocalKek::from_secret(v1, SecretValue::new(vec![0x43; 32]))?,
+            ],
+            TEST_BACKEND,
         );
+        assert!(
+            matches!(&twice, Err(e) if e.code() == "LOCAL_KEK_VERSIONS"),
+            "{twice:?}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -668,39 +731,45 @@ mod tests {
             "a b".into(),
             "é".into(),
         ] {
-            assert_eq!(
-                error_code(LocalKekId::try_from(invalid.clone())),
-                "INVALID_LOCAL_KEK_ID",
-                "{invalid:?}"
+            let result = LocalKekId::try_from(invalid.clone());
+            assert!(
+                matches!(&result, Err(e) if e.code() == "INVALID_LOCAL_KEK_ID"),
+                "{invalid:?}: {result:?}"
             );
         }
     }
 
     #[tokio::test]
-    async fn an_ephemeral_provider_round_trips() {
-        let provider = LocalKmsProvider::ephemeral(kek_id("tests"), TEST_BACKEND).unwrap();
+    async fn an_ephemeral_provider_round_trips() -> KmsAeadResult<()> {
+        let provider =
+            LocalKmsProvider::ephemeral(LocalKekId::try_from("tests".to_string())?, TEST_BACKEND)?;
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek()).await.unwrap();
+        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
 
         assert_eq!(
-            provider
-                .decrypt_data_encryption_key(&wrapped)
-                .await
-                .unwrap(),
-            dek()
+            provider.decrypt_data_encryption_key(&wrapped, None).await?,
+            dek
         );
+        Ok(())
     }
 
     #[test]
-    fn debug_prints_no_key_material() {
-        let provider =
-            LocalKmsProvider::new(kek_id("orders"), vec![kek(1, [0x5A; 32])], TEST_BACKEND)
-                .unwrap();
-        let printed = format!("{provider:?} {:?}", kek(2, [0x5A; 32]));
+    fn debug_prints_no_key_material() -> KmsAeadResult<()> {
+        let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let provider = LocalKmsProvider::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x5A; 32]))?],
+            TEST_BACKEND,
+        )?;
+        let kek = LocalKek::from_secret(v2, SecretValue::new(vec![0x5A; 32]))?;
+
+        let printed = format!("{provider:?} {kek:?}");
 
         for rendering in renderings(&[0x5A; 32]) {
             assert!(!printed.contains(&rendering), "{printed}");
         }
+        Ok(())
     }
 
     mod files {
@@ -736,28 +805,34 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_kek_file_wraps_and_unwraps() {
+        async fn a_kek_file_wraps_and_unwraps() -> KmsAeadResult<()> {
             let dir = TestDir::new("round-trip");
             let path = dir.file("kek", KEK_BASE64);
+            let v1 = LocalKekVersion::from(NonZeroU32::MIN);
             let from_file = LocalKmsProvider::new(
-                kek_id("orders"),
-                vec![LocalKek::from_file(version(1), &path).unwrap()],
+                LocalKekId::try_from(ORDERS.to_string())?,
+                vec![LocalKek::from_file(v1, &path)?],
                 TEST_BACKEND,
-            )
-            .unwrap();
-            let from_secret =
-                LocalKmsProvider::new(kek_id("orders"), vec![kek(1, KEK_MATERIAL)], TEST_BACKEND)
-                    .unwrap();
+            )?;
+            let from_secret = LocalKmsProvider::new(
+                LocalKekId::try_from(ORDERS.to_string())?,
+                vec![LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                )?],
+                TEST_BACKEND,
+            )?;
+            let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-            let wrapped = from_file.encrypt_data_encryption_key(&dek()).await.unwrap();
+            let wrapped = from_file.encrypt_data_encryption_key(&dek, None).await?;
 
             assert_eq!(
                 from_secret
-                    .decrypt_data_encryption_key(&wrapped)
-                    .await
-                    .unwrap(),
-                dek()
+                    .decrypt_data_encryption_key(&wrapped, None)
+                    .await?,
+                dek
             );
+            Ok(())
         }
 
         #[test]
@@ -765,7 +840,7 @@ mod tests {
             let dir = TestDir::new("newline");
             let path = dir.file("kek", &format!("{KEK_BASE64}\n"));
 
-            assert!(LocalKek::from_file(version(1), &path).is_ok());
+            assert!(LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path).is_ok());
         }
 
         #[test]
@@ -773,9 +848,11 @@ mod tests {
             let dir = TestDir::new("base64");
             let path = dir.file("kek", "not base64!");
 
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &path)),
-                "LOCAL_KEK_SOURCE"
+            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
+                "{result:?}"
             );
         }
 
@@ -784,41 +861,53 @@ mod tests {
             let dir = TestDir::new("length");
             let path = dir.file("kek", "QkJCQg==");
 
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &path)),
-                "LOCAL_KEK_LENGTH"
+            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
+                "{result:?}"
             );
         }
 
         #[test]
         fn a_directory_is_refused() {
             let dir = TestDir::new("directory");
+            let path = dir.0.clone();
 
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &dir.0)),
-                "LOCAL_KEK_SOURCE"
+            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
+                "{result:?}"
             );
         }
 
         #[test]
         fn a_missing_file_is_refused() {
             let dir = TestDir::new("missing");
+            let path = dir.0.join("kek");
 
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &dir.0.join("kek"))),
-                "LOCAL_KEK_SOURCE"
+            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
+                "{result:?}"
             );
         }
 
         #[test]
         fn a_file_larger_than_the_cap_is_refused() {
             let dir = TestDir::new("large");
-            let padded = format!("{KEK_BASE64}{}", " ".repeat(LocalKek::MAX_FILE_LEN));
-            let path = dir.file("kek", &padded);
+            let path = dir.file(
+                "kek",
+                &format!("{KEK_BASE64}{}", " ".repeat(LocalKek::MAX_FILE_LEN)),
+            );
 
-            assert_eq!(
-                error_code(LocalKek::from_file(version(1), &path)),
-                "LOCAL_KEK_LENGTH"
+            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
+                "{result:?}"
             );
         }
     }

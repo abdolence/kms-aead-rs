@@ -10,10 +10,7 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadError;
-use crate::{
-    AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption, Cipher, CipherText, DataEncryptionKey,
-    KmsAeadResult,
-};
+use crate::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, KmsAeadResult};
 
 const BACKENDS: &[AeadBackend] = &[
     #[cfg(feature = "ring")]
@@ -73,18 +70,18 @@ fn every_supported_algorithm_round_trips() -> KmsAeadResult<()> {
             .into_iter()
             .filter_map(move |algorithm| AeadCipher::new(backend, algorithm).ok())
     }) {
-        let key = cipher.generate_data_encryption_key()?;
+        let key = cipher.generate_key()?;
         TestRunner::default()
             .run(&inputs, |(plain_text, aad)| {
                 let plain_text = SecretValue::new(plain_text);
-                let cipher_text = cipher.seal(&aad, &plain_text, &key)?;
+                let cipher_text = cipher.encrypt_value(&aad, &plain_text, &key)?;
                 prop_assert_eq!(
                     cipher_text.value().len(),
                     AeadAlgorithm::NONCE_LEN
                         + plain_text.ref_sensitive_value().len()
                         + AeadAlgorithm::TAG_LEN
                 );
-                prop_assert_eq!(cipher.open(&aad, &cipher_text, &key)?, plain_text);
+                prop_assert_eq!(cipher.decrypt_value(&aad, &cipher_text, &key)?, plain_text);
                 Ok(())
             })
             .unwrap_or_else(|failure| panic!("{cipher:?}: {failure}"));
@@ -94,8 +91,8 @@ fn every_supported_algorithm_round_trips() -> KmsAeadResult<()> {
 
 /// Every backend writes the same layout, so a value sealed by one opens with every other that
 /// implements its algorithm.
-#[tokio::test]
-async fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
+#[test]
+fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
     let plain_text = SecretValue::from(PLAIN_TEXT);
     for algorithm in ALGORITHMS {
         let ciphers: Vec<AeadCipher> = BACKENDS
@@ -103,11 +100,11 @@ async fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult
             .filter_map(|&backend| AeadCipher::new(backend, algorithm).ok())
             .collect();
         for sealer in &ciphers {
-            let key = sealer.generate_data_encryption_key()?;
-            let cipher_text = sealer.encrypt_value(&AAD, &plain_text, &key).await?;
+            let key = sealer.generate_key()?;
+            let cipher_text = sealer.encrypt_value(AAD, &plain_text, &key)?;
             for opener in &ciphers {
                 assert_eq!(
-                    opener.decrypt_value(&AAD, &cipher_text, &key).await?,
+                    opener.decrypt_value(AAD, &cipher_text, &key)?,
                     plain_text,
                     "{algorithm} sealed by {} and opened by {}",
                     sealer.backend(),
@@ -119,8 +116,8 @@ async fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult
     Ok(())
 }
 
-#[tokio::test]
-async fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()> {
+#[test]
+fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()> {
     let deterministic_sized_key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
     let plain_text = SecretValue::from(PLAIN_TEXT);
     for cipher in BACKENDS.iter().flat_map(|&backend| {
@@ -128,20 +125,16 @@ async fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()>
             .into_iter()
             .filter_map(move |algorithm| AeadCipher::new(backend, algorithm).ok())
     }) {
-        let sealed = cipher
-            .encrypt_value(&AAD, &plain_text, &deterministic_sized_key)
-            .await;
+        let sealed = cipher.encrypt_value(AAD, &plain_text, &deterministic_sized_key);
         assert!(
             matches!(&sealed, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "INVALID_KEY_LENGTH"),
             "{cipher:?} seals: {sealed:?}"
         );
 
-        let key = cipher.generate_data_encryption_key()?;
-        let cipher_text = cipher.encrypt_value(&AAD, &plain_text, &key).await?;
-        let opened = cipher
-            .decrypt_value(&AAD, &cipher_text, &deterministic_sized_key)
-            .await;
+        let key = cipher.generate_key()?;
+        let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
+        let opened = cipher.decrypt_value(AAD, &cipher_text, &deterministic_sized_key);
         assert!(
             matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "INVALID_KEY_LENGTH"),
@@ -151,17 +144,17 @@ async fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()>
     Ok(())
 }
 
-#[tokio::test]
-async fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
+#[test]
+fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
     let plain_text = SecretValue::from(PLAIN_TEXT);
     for cipher in BACKENDS.iter().flat_map(|&backend| {
         ALGORITHMS
             .into_iter()
             .filter_map(move |algorithm| AeadCipher::new(backend, algorithm).ok())
     }) {
-        let key = cipher.generate_data_encryption_key()?;
-        let other_key = cipher.generate_data_encryption_key()?;
-        let cipher_text = cipher.encrypt_value(&AAD, &plain_text, &key).await?;
+        let key = cipher.generate_key()?;
+        let other_key = cipher.generate_key()?;
+        let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
         let last = cipher_text.value().len() - 1;
         let flipped = |index: usize| {
             let mut bytes = cipher_text.value().clone();
@@ -186,7 +179,7 @@ async fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
             ("a flipped tag bit", AAD, flipped(last), &key),
         ];
         for (case, aad, value, key) in cases {
-            let opened = cipher.decrypt_value(&aad, &value, key).await;
+            let opened = cipher.decrypt_value(aad, &value, key);
             assert!(
                 matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "DECRYPT"),
@@ -197,21 +190,21 @@ async fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
+#[test]
+fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
     for cipher in BACKENDS.iter().flat_map(|&backend| {
         ALGORITHMS
             .into_iter()
             .filter_map(move |algorithm| AeadCipher::new(backend, algorithm).ok())
     }) {
-        let key = cipher.generate_data_encryption_key()?;
+        let key = cipher.generate_key()?;
         for len in [
             0,
             AeadAlgorithm::NONCE_LEN - 1,
             AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN - 1,
         ] {
             let short = CipherText(vec![0xAA; len]);
-            let opened = cipher.decrypt_value(&AAD, &short, &key).await;
+            let opened = cipher.decrypt_value(AAD, &short, &key);
             assert!(
                 matches!(&opened, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
@@ -222,18 +215,18 @@ async fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
     Ok(())
 }
 
-#[tokio::test]
-async fn sealing_twice_gives_different_values() -> KmsAeadResult<()> {
+#[test]
+fn sealing_twice_gives_different_values() -> KmsAeadResult<()> {
     let plain_text = SecretValue::from(PLAIN_TEXT);
     for cipher in BACKENDS.iter().flat_map(|&backend| {
         ALGORITHMS
             .into_iter()
             .filter_map(move |algorithm| AeadCipher::new(backend, algorithm).ok())
     }) {
-        let key = cipher.generate_data_encryption_key()?;
+        let key = cipher.generate_key()?;
         let mut nonces = HashSet::new();
         for _ in 0..100 {
-            let cipher_text = cipher.encrypt_value(&AAD, &plain_text, &key).await?;
+            let cipher_text = cipher.encrypt_value(AAD, &plain_text, &key)?;
             nonces.insert(cipher_text.value()[..AeadAlgorithm::NONCE_LEN].to_vec());
         }
         assert_eq!(nonces.len(), 100, "{cipher:?}");
@@ -250,7 +243,7 @@ fn generated_keys_have_the_algorithm_length_and_differ() -> KmsAeadResult<()> {
     }) {
         let mut keys = HashSet::new();
         for _ in 0..100 {
-            let key = cipher.generate_data_encryption_key()?;
+            let key = cipher.generate_key()?;
             keys.insert(key.value().ref_sensitive_value().clone());
         }
         assert_eq!(keys.len(), 100, "{cipher:?}");
@@ -264,8 +257,8 @@ fn generated_keys_have_the_algorithm_length_and_differ() -> KmsAeadResult<()> {
 }
 
 /// The AEAD layer of every envelope layout: kms-aead 0.28.1 output with the default algorithm.
-#[tokio::test]
-async fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
+#[test]
+fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
     let key = DataEncryptionKey::from(SecretValue::new(
         hex::decode("ee1b4efa8e3b1f550edfe8fe963d575b8cbf4e1f686e8c512ac7e4b3b1b7dd0a").unwrap(),
     ));
@@ -278,9 +271,7 @@ async fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
     for &backend in BACKENDS {
         let cipher = AeadCipher::new(backend, AeadAlgorithm::ChaCha20Poly1305)?;
 
-        let opened = cipher
-            .decrypt_value(&"fixture-aad", &cipher_text, &key)
-            .await?;
+        let opened = cipher.decrypt_value(b"fixture-aad", &cipher_text, &key)?;
 
         assert_eq!(opened, SecretValue::from("fixture-secret"), "{backend}");
     }

@@ -118,14 +118,21 @@ impl AwsKmsProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for AwsKmsProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         spans::in_span(kms::wrap_span(&self.kek), async {
             let request = self
                 .client
@@ -158,7 +165,14 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
@@ -306,7 +320,7 @@ mod tests {
             request.get_ciphertext_blob().as_ref().map(Blob::as_ref),
             Some(b"wrapped".as_slice())
         );
-        assert_eq!(provider.kek(), KekRef::new(KekProvider::Aws, KEY_ARN));
+        assert_eq!(*provider.kek(), KekRef::new(KekProvider::Aws, KEY_ARN));
     }
 
     #[test]
@@ -343,7 +357,10 @@ mod tests {
         .await;
 
         let error = provider
-            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])))
+            .encrypt_data_encryption_key(
+                &DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])),
+                None,
+            )
             .await
             .unwrap_err();
 
@@ -477,7 +494,7 @@ mod tests {
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         );
         let encryption =
-            KmsAeadEnvelope::new(AwsKmsProvider::new(&key_ref).await?, AeadBackend::Ring).await?;
+            KmsAeadEnvelope::new(AwsKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
         let envelopes = [
             #[cfg(feature = "legacy-formats")]
             ENVELOPE_FROM_0_28_1,
@@ -485,7 +502,7 @@ mod tests {
         ];
         for envelope in envelopes {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
-            let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
+            let secret = encryption.decrypt_value(b"test-aad", &envelope).await?;
             assert_eq!(secret, SecretValue::from("test-secret"));
         }
         Ok(())
@@ -509,12 +526,12 @@ mod tests {
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
         let wrapped_under_other = AwsKmsProvider::new(&other)
             .await?
-            .encrypt_data_encryption_key(&dek)
+            .encrypt_data_encryption_key(&dek, None)
             .await?;
 
         let result = AwsKmsProvider::new(&configured)
             .await?
-            .decrypt_data_encryption_key(&wrapped_under_other)
+            .decrypt_data_encryption_key(&wrapped_under_other, None)
             .await;
 
         assert!(

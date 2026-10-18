@@ -248,6 +248,18 @@ pub(crate) fn upgrade<T>(
     result
 }
 
+/// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.
+pub(crate) fn in_scope<T>(
+    span: Span,
+    operation: impl FnOnce() -> KmsAeadResult<T>,
+) -> KmsAeadResult<T> {
+    let result = span.in_scope(operation);
+    if let Err(error) = &result {
+        span.record(ERROR_CODE, error.code());
+    }
+    result
+}
+
 /// Runs `operation` inside `span`, without holding the span entered across an `.await`, and
 /// records the code of the error it returns.
 pub(crate) async fn in_span<T>(

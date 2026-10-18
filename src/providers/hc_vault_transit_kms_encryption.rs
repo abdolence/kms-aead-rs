@@ -352,14 +352,21 @@ impl HcVaultTransitProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         spans::in_span(kms::wrap_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroized.
@@ -385,7 +392,14 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
@@ -677,10 +691,10 @@ mod tests {
         );
 
         provider
-            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(b"vault:v1:wrapped".into(), None),
                 None,
-            ))
+            )
             .await
             .unwrap();
 
@@ -703,6 +717,7 @@ mod tests {
         HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(TEST_KEY.into()), options)
             .unwrap()
             .kek()
+            .clone()
     }
 
     #[test]
@@ -750,7 +765,10 @@ mod tests {
         )
         .unwrap();
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a refused connection is not an encrypted key");
         };
 
@@ -767,7 +785,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             TEST_GUARD,
-            provider.encrypt_data_encryption_key(&data_key()),
+            provider.encrypt_data_encryption_key(&data_key(), None),
         )
         .await
         .expect("the request must end before the test guard");
@@ -791,7 +809,10 @@ mod tests {
             format!("denied {TOKEN} {DATA_KEY} {}", data_key_base64.as_str()),
         );
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a 403 is not an encrypted key");
         };
 
@@ -824,10 +845,10 @@ mod tests {
         answer_with(listener, 200, format!(r#"{{"data":"{DATA_KEY}"}}"#));
 
         let Err(error) = provider
-            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(b"vault:v1:wrapped".into(), None),
                 None,
-            ))
+            )
             .await
         else {
             panic!("a string is not a Transit decrypt response");
@@ -847,7 +868,10 @@ mod tests {
         let body = serde_json::json!({ "errors": [echoed, DATA_KEY] }).to_string();
         answer_with(listener, 400, body);
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a 400 is not an encrypted key");
         };
 
@@ -913,9 +937,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND)
-            .await
-            .unwrap();
+        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND).unwrap();
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
@@ -924,15 +946,24 @@ mod tests {
             encrypted_dek.key_version().map(KmsKeyVersion::to_string)
         };
 
-        let before_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let before_rotation = encryption
+            .encrypt_value(aad.as_bytes(), &secret)
+            .await
+            .unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
-        let after_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let after_rotation = encryption
+            .encrypt_value(aad.as_bytes(), &secret)
+            .await
+            .unwrap();
 
         assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
         assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
-                encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
+                encryption
+                    .decrypt_value(aad.as_bytes(), &cipher_text)
+                    .await
+                    .unwrap(),
                 secret
             );
         }
@@ -950,7 +981,10 @@ mod tests {
             HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(key_name), options)
                 .unwrap();
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("an invalid token must not encrypt");
         };
 

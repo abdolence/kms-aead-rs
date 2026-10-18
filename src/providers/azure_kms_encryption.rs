@@ -166,14 +166,21 @@ fn is_key_vault_name(name: &str) -> bool {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for AzureKmsProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         spans::in_span(kms::wrap_span(&self.kek), async {
             let parameters =
                 self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
@@ -227,7 +234,14 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let key_version = encrypted_key.key_version().ok_or_else(|| {

@@ -36,11 +36,6 @@ impl AeadAlgorithm {
             | AeadAlgorithm::Aes256GcmSiv => 32,
         }
     }
-
-    /// The length of the nonce at the start of every value, in bytes.
-    pub fn nonce_len(self) -> usize {
-        Self::NONCE_LEN
-    }
 }
 
 /// `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm`, `aes-256-gcm-siv`: the values of the

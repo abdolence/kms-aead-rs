@@ -153,6 +153,52 @@ impl Display for KmsKeyVersion {
     }
 }
 
+/// Non-secret text a wrapped data encryption key is bound to. The KMS authenticates it at wrap
+/// and refuses an unwrap that names another binding, or none. 1 to 1024 bytes of UTF-8 without
+/// control characters, so that it fits every KMS and reads in a log line; `INVALID_DEK_BINDING`
+/// otherwise.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DekBinding(String);
+
+impl DekBinding {
+    /// The longest binding, in bytes, which every KMS accepts as associated data.
+    const MAX_LEN: usize = 1024;
+
+    /// The binding as the providers send it to the KMS.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for DekBinding {
+    type Error = KmsAeadError;
+
+    /// # Errors
+    ///
+    /// `INVALID_DEK_BINDING` when `value` is empty, longer than 1024 bytes, or holds a control
+    /// character.
+    fn try_from(value: String) -> KmsAeadResult<Self> {
+        if (1..=Self::MAX_LEN).contains(&value.len()) && !value.chars().any(char::is_control) {
+            Ok(Self(value))
+        } else {
+            Err(KmsAeadSystemError::create(
+                "INVALID_DEK_BINDING",
+                &format!(
+                    "A DEK binding of {} bytes is not 1 to {} bytes without control characters",
+                    value.len(),
+                    Self::MAX_LEN
+                ),
+            ))
+        }
+    }
+}
+
+impl Display for DekBinding {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// A data encryption key wrapped by a KMS, with the version of the KMS key that wrapped it when
 /// the provider records one.
 ///
@@ -394,7 +440,7 @@ impl PartialEq for EncryptedDataEncryptionKey {
 
 /// A cipher text with the wrapped data encryption key that decrypts it, as stored.
 ///
-/// [`new`](Self::new) writes layout v1:
+/// [`join`](Self::join) writes layout v1:
 ///
 /// ```text
 /// [0x01][k: u8][key version: k bytes][w: u16 BE][wrapped key: w bytes][cipher text to the end]
@@ -411,19 +457,19 @@ impl PartialEq for EncryptedDataEncryptionKey {
 /// The header is not authenticated, so a header field is only ever an address or an audit
 /// value. A field that selects an algorithm, a mode or a transform needs a new layout tag with
 /// an authenticated header.
-#[derive(Clone)]
+#[derive(Clone, ValueStruct)]
 pub struct CipherTextWithEncryptedKey(pub Vec<u8>);
 
 /// The layout of a stored [`CipherTextWithEncryptedKey`].
 #[derive(Clone, Copy)]
-enum EnvelopeLayout {
+pub(crate) enum EnvelopeLayout {
     V1,
     LengthPrefixed,
 }
 
 impl EnvelopeLayout {
     /// The value of the `format`, `from_format` and `to_format` span fields.
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             EnvelopeLayout::V1 => "envelope_v1",
             EnvelopeLayout::LengthPrefixed => "envelope_legacy",
@@ -431,15 +477,39 @@ impl EnvelopeLayout {
     }
 }
 
+/// The layout the first byte names, whether or not this build reads it.
+/// [`CipherTextWithEncryptedKey::separate`] reads and checks the rest.
+impl TryFrom<&CipherTextWithEncryptedKey> for EnvelopeLayout {
+    type Error = KmsAeadError;
+
+    fn try_from(value: &CipherTextWithEncryptedKey) -> KmsAeadResult<Self> {
+        match value.0.first() {
+            Some(&CipherTextWithEncryptedKey::LAYOUT_V1) => Ok(EnvelopeLayout::V1),
+            // The length-prefixed layout starts with the top byte of its length, zero for any
+            // wrapped key a KMS returns.
+            Some(0x00) => Ok(EnvelopeLayout::LengthPrefixed),
+            Some(_) => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "Unknown cipher text layout tag",
+            )),
+            None => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_CIPHER_TEXT_LAYOUT",
+                "Empty cipher text has no layout tag",
+            )),
+        }
+    }
+}
+
 impl CipherTextWithEncryptedKey {
     const LAYOUT_V1: u8 = 0x01;
 
-    /// Writes layout v1 of `cipher_text` and the wrapped key that opens it.
+    /// Writes layout v1 of `cipher_text` and the wrapped key that opens it, which
+    /// [`separate`](Self::separate) reads back.
     ///
     /// # Errors
     ///
     /// `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is longer than 65,535 bytes.
-    pub fn new(
+    pub fn join(
         cipher_text: &CipherText,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Self> {
@@ -454,7 +524,11 @@ impl CipherTextWithEncryptedKey {
             )
         })?;
 
-        let mut value = Vec::with_capacity(4 + wrapped.len() + cipher_text.value().len());
+        let key_version_len = encrypted_dek
+            .key_version()
+            .map_or(0, |key_version| key_version.as_str().len());
+        let mut value =
+            Vec::with_capacity(4 + key_version_len + wrapped.len() + cipher_text.value().len());
         value.push(Self::LAYOUT_V1);
         KmsKeyVersion::write_field(encrypted_dek.key_version(), &mut value)?;
         value.extend_from_slice(&wrapped_len.to_be_bytes());
@@ -475,7 +549,7 @@ impl CipherTextWithEncryptedKey {
     /// - without `legacy-formats`, [`KmsAeadError::LegacyFormat`] with
     ///   [`KmsAeadLegacyFormat::LengthPrefixedEnvelope`] on a value starting with `0x00`.
     pub fn separate(&self) -> KmsAeadResult<(CipherText, EncryptedDataEncryptionKey)> {
-        let fields = match self.layout()? {
+        let fields = match EnvelopeLayout::try_from(self)? {
             EnvelopeLayout::V1 => Self::split_v1(self.value()),
             #[cfg(feature = "legacy-formats")]
             EnvelopeLayout::LengthPrefixed => {
@@ -528,38 +602,17 @@ impl CipherTextWithEncryptedKey {
         note = "reading the layouts written up to 0.28.1 will be removed in a later breaking release"
     )]
     pub fn upgrade_legacy_layout(&self) -> KmsAeadResult<Option<Self>> {
-        let layout = self.layout();
+        let layout = EnvelopeLayout::try_from(self);
         let from_format = layout.as_ref().ok().copied().map(EnvelopeLayout::name);
         spans::upgrade(from_format, EnvelopeLayout::V1.name(), || {
             let (cipher_text, encrypted_dek) = self.separate()?;
             match layout? {
                 EnvelopeLayout::V1 => Ok(None),
-                EnvelopeLayout::LengthPrefixed => Self::new(&cipher_text, &encrypted_dek).map(Some),
+                EnvelopeLayout::LengthPrefixed => {
+                    Self::join(&cipher_text, &encrypted_dek).map(Some)
+                }
             }
         })
-    }
-
-    /// The layout the first byte names, as the `format` span field records it, whether or not
-    /// this build reads it. [`separate`](Self::separate) reads and checks the rest.
-    pub(crate) fn layout_name(&self) -> Option<&'static str> {
-        self.layout().ok().map(EnvelopeLayout::name)
-    }
-
-    fn layout(&self) -> KmsAeadResult<EnvelopeLayout> {
-        match self.value().first() {
-            Some(&Self::LAYOUT_V1) => Ok(EnvelopeLayout::V1),
-            // The length-prefixed layout starts with the top byte of its length, zero for any
-            // wrapped key a KMS returns.
-            Some(0x00) => Ok(EnvelopeLayout::LengthPrefixed),
-            Some(_) => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                "Unknown cipher text layout tag",
-            )),
-            None => Err(KmsAeadEncryptionError::create(
-                "UNKNOWN_CIPHER_TEXT_LAYOUT",
-                "Empty cipher text has no layout tag",
-            )),
-        }
     }
 
     fn split_v1(value: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
@@ -590,18 +643,6 @@ impl CipherTextWithEncryptedKey {
     /// The lowercase hex of the value.
     pub fn to_hex_string(&self) -> String {
         hex::encode(self.value())
-    }
-
-    /// The stored bytes.
-    #[inline]
-    pub fn value(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl From<Vec<u8>> for CipherTextWithEncryptedKey {
-    fn from(value: Vec<u8>) -> Self {
-        Self(value)
     }
 }
 
@@ -648,6 +689,25 @@ mod tests {
     }
 
     #[test]
+    fn a_dek_binding_is_1_to_1024_bytes_without_control_characters() {
+        for valid in ["tenant-42/3".to_string(), "é".repeat(512), "b".repeat(1024)] {
+            assert!(DekBinding::try_from(valid.clone()).is_ok(), "{valid:?}");
+        }
+        for invalid in [
+            String::new(),
+            "b".repeat(1025),
+            "tenant-42\n3".to_string(),
+            "tenant-42\u{7f}".to_string(),
+        ] {
+            let result = DekBinding::try_from(invalid.clone());
+            assert!(
+                matches!(&result, Err(e) if e.code() == "INVALID_DEK_BINDING"),
+                "{invalid:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
     fn layout_v1_with_key_version_is_pinned() {
         let cipher_text = CipherText(GOLDEN_CIPHER_TEXT.to_vec());
         let encrypted_dek = EncryptedDataEncryptionKey::new(
@@ -655,7 +715,7 @@ mod tests {
             Some(KmsKeyVersion::try_from("18".to_string()).unwrap()),
         );
 
-        let envelope = CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek).unwrap();
+        let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).unwrap();
 
         assert_eq!(
             envelope.to_hex_string(),
@@ -669,7 +729,7 @@ mod tests {
         let cipher_text = CipherText(GOLDEN_CIPHER_TEXT.to_vec());
         let encrypted_dek = EncryptedDataEncryptionKey::new(GOLDEN_WRAPPED_KEY.to_vec(), None);
 
-        let envelope = CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek).unwrap();
+        let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).unwrap();
 
         assert_eq!(
             envelope.to_hex_string(),
@@ -689,7 +749,7 @@ mod tests {
             let key_version = key_version.map(|version| KmsKeyVersion::try_from(version).unwrap());
             let encrypted_dek = EncryptedDataEncryptionKey::new(wrapped, key_version);
 
-            let envelope = CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek).unwrap();
+            let envelope = CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek).unwrap();
 
             prop_assert_eq!(envelope.separate().unwrap(), (cipher_text, encrypted_dek));
         }
@@ -701,9 +761,9 @@ mod tests {
         let largest = EncryptedDataEncryptionKey::new(vec![0xAA; 65_535], None);
         let too_large = EncryptedDataEncryptionKey::new(vec![0xAA; 65_536], None);
 
-        assert!(CipherTextWithEncryptedKey::new(&cipher_text, &largest).is_ok());
+        assert!(CipherTextWithEncryptedKey::join(&cipher_text, &largest).is_ok());
         assert_eq!(
-            error_code(CipherTextWithEncryptedKey::new(&cipher_text, &too_large)),
+            error_code(CipherTextWithEncryptedKey::join(&cipher_text, &too_large)),
             "INVALID_CIPHER_TEXT_FORMAT"
         );
     }
@@ -940,7 +1000,7 @@ mod tests {
 
     #[test]
     fn envelope_debug_shows_no_wrapped_key_bytes() {
-        let envelope = CipherTextWithEncryptedKey::new(
+        let envelope = CipherTextWithEncryptedKey::join(
             &CipherText(GOLDEN_CIPHER_TEXT.to_vec()),
             &EncryptedDataEncryptionKey::new(GOLDEN_WRAPPED_KEY.to_vec(), None),
         )
@@ -964,49 +1024,6 @@ mod tests {
         for rendering in renderings(CIPHER_TEXT_MARKER) {
             assert!(!debug.contains(&rendering), "{debug}");
         }
-    }
-
-    #[test]
-    fn encrypted_keys_are_equal_with_equal_wrapped_keys_and_key_versions() {
-        let version = KmsKeyVersion::try_from("1".to_string()).unwrap();
-        let dek1 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], Some(version.clone()));
-        let dek2 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], Some(version.clone()));
-        let dek3 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 6], Some(version));
-        let dek4 = EncryptedDataEncryptionKey::new(vec![1, 2, 3, 4, 5], None);
-
-        assert_eq!(dek1, dek2);
-        assert_ne!(dek1, dek3);
-        assert_ne!(dek1, dek4);
-    }
-
-    #[test]
-    fn envelopes_are_equal_with_equal_bytes() {
-        let ct1 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 5]);
-        let ct2 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 5]);
-        let ct3 = CipherTextWithEncryptedKey::from(vec![1, 2, 3, 4, 6]);
-
-        assert_eq!(ct1, ct2);
-        assert_ne!(ct1, ct3);
-    }
-
-    #[test]
-    fn cipher_texts_are_equal_with_equal_bytes() {
-        let cipher1 = CipherText(vec![1, 2, 3, 4, 5]);
-        let cipher2 = CipherText(vec![1, 2, 3, 4, 5]);
-        let cipher3 = CipherText(vec![1, 2, 3, 4, 6]);
-
-        assert_eq!(cipher1, cipher2);
-        assert_ne!(cipher1, cipher3);
-    }
-
-    #[test]
-    fn data_encryption_keys_are_equal_with_equal_bytes() {
-        let dek1 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
-        let dek2 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 5]));
-        let dek3 = DataEncryptionKey::from(SecretValue::new(vec![1, 2, 3, 4, 6]));
-
-        assert_eq!(dek1, dek2);
-        assert_ne!(dek1, dek3);
     }
 
     /// A wrapped key and a cipher text that no message should ever contain.
@@ -1141,7 +1158,7 @@ mod tests {
     #[test]
     fn a_value_in_the_wrong_reader_fails_without_a_panic() -> KmsAeadResult<()> {
         let keyring_value = keyring_value();
-        let envelope_v1 = CipherTextWithEncryptedKey::new(
+        let envelope_v1 = CipherTextWithEncryptedKey::join(
             &CipherText(CIPHER_TEXT_MARKER.to_vec()),
             &EncryptedDataEncryptionKey::new(WRAPPED_KEY_MARKER.to_vec(), None),
         )?;

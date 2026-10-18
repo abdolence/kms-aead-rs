@@ -156,14 +156,21 @@ impl GcpKmsProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for GcpKmsProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         spans::in_span(kms::wrap_span(&self.kek), async {
             let encrypt_request = routed(
                 EncryptRequest {
@@ -198,7 +205,14 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        if binding.is_some() {
+            return Err(KmsAeadEncryptionError::create(
+                "DEK_BINDING_UNSUPPORTED",
+                "This provider does not bind wrapped keys yet",
+            ));
+        }
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
@@ -404,7 +418,7 @@ mod tests {
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         );
         let encryption =
-            KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring).await?;
+            KmsAeadEnvelope::new(GcpKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
         let envelopes = [
             #[cfg(feature = "legacy-formats")]
             ENVELOPE_FROM_0_28_1,
@@ -412,7 +426,7 @@ mod tests {
         ];
         for envelope in envelopes {
             let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
-            let secret = encryption.decrypt_value(&"test-aad", &envelope).await?;
+            let secret = encryption.decrypt_value(b"test-aad", &envelope).await?;
             assert_eq!(secret, SecretValue::from("test-secret"));
         }
         Ok(())
