@@ -39,8 +39,9 @@ With the `serde` feature `Encrypted` serialises as bytes: a Firestore `bytes` va
 serde_json an array of numbers.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
@@ -107,8 +108,8 @@ With the `postgres` feature `Encrypted` binds and decodes in tokio-postgres as a
 slice of values as a `BYTEA[]` for `= ANY($1)`:
 
 ```rust,no_run
+use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
-use kms_aead::Ring;
 use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring};

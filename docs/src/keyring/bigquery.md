@@ -53,8 +53,9 @@ another KMS, fails the next write of the field instead of silently writing value
 cannot read.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::errors::{InteropError, InteropRequirement};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
@@ -139,8 +140,8 @@ message Tink's own keyset readers take, see [Exporting a keyset to
 Tink](#exporting-a-keyset-to-tink):
 
 ```rust,no_run
+use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,
@@ -284,8 +285,8 @@ ARN have no Tink client. The export fails on them with `KeyringError::Interop`, 
 and `InteropRequirement::Kek`, before any store or KMS call.
 
 ```rust,no_run
+use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, EncryptedKeyset,

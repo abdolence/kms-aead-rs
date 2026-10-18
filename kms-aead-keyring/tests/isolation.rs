@@ -14,11 +14,11 @@ use kms_aead_keyring::{
 };
 
 #[cfg(feature = "ring")]
-type Backend = kms_aead::Ring;
+type Backend = kms_aead::backends::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-type Backend = kms_aead::AwsLc;
+type Backend = kms_aead::backends::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-type Backend = kms_aead::RustCrypto;
+type Backend = kms_aead::backends::RustCrypto;
 
 type LocalKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Backend>, Backend>;
 

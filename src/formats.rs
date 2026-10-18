@@ -1,9 +1,10 @@
 //! Every byte layout of kms-aead, Tink's among them. The formats chapter of the book describes
 //! each of them.
 //!
-//! kms-aead writes one envelope format for every provider, Tink's KMS envelope, [`Envelope`]. Every
-//! data encryption key it encrypts, in an envelope or on its own, is the KMS ciphertext of the key as Tink serialises it,
-//! except under an Azure KEK: Azure has no Tink client, so its encrypted DEK is the raw key.
+//! kms-aead writes one envelope format for every provider, Tink's KMS envelope, [`Envelope`].
+//! Every data encryption key it encrypts, in an envelope or on its own, is the KMS ciphertext of
+//! the key as Tink serialises it, except under an Azure KEK: Azure has no Tink client, so its
+//! encrypted DEK is the raw key.
 //!
 //! The encrypted DEKs of two built-in providers are kms-aead's own layouts, crate-private and
 //! described on the provider types, `AzureKmsProvider` and
@@ -16,13 +17,14 @@
 //!
 //! The public items here are the [`Format`] of an [`Encrypted`](crate::Encrypted) value,
 //! [`Envelope`], [`Bare`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the
-//! last two are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery read them
-//! with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
+//! last two are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery
+//! read them with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
 
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
-    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider,
-    KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
+    KmsAeadResult, ValueStruct,
 };
 
 pub(crate) mod envelope;
@@ -44,7 +46,7 @@ pub(crate) mod azure;
 #[cfg(feature = "legacy-formats")]
 pub(crate) mod legacy;
 
-/// The first bytes of the encrypted key layout of 0.29, `[0xFF][0x01][k][key version]` before
+/// The first bytes of the encrypted DEK layout v1 of 0.29, `[0xFF][0x01][k][key version]` before
 /// the encrypted DEK, which no built-in provider's own bytes start with.
 const LEGACY_ENCRYPTED_DEK_V1_PREFIX: [u8; 2] = [0xFF, 0x01];
 
@@ -101,7 +103,7 @@ where
             ));
         }
         Some(material) => DataEncryptionKey::from(material),
-        None => DataEncryptionKey::from(generate_random_bytes::<B>(key_len)?),
+        None => DataEncryptionKey::from(B::generate_random_bytes(key_len)?),
     };
     let encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
     Ok((dek, encrypted_dek))
@@ -109,9 +111,9 @@ where
 
 /// The data encryption key that `encrypted_dek` holds, decrypted by `provider`, and the layout
 /// written by 0.29 or earlier that it was read from, if any. Only `legacy-formats` reads those
-/// layouts: the bytes of 0.29's encrypted key layout given to a built-in provider, and an encrypted
-/// DEK that holds the raw key rather than a serialised Tink key. The bytes of an application's own
-/// provider are never inspected.
+/// layouts: the bytes of 0.29's encrypted DEK layout v1 given to a built-in provider, and an
+/// encrypted DEK that holds the raw key rather than a serialised Tink key. The bytes of an
+/// application's own provider are never inspected.
 ///
 /// # Errors
 ///
@@ -132,13 +134,13 @@ where
             .strip_prefix(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
         {
             let inner_encrypted_dek =
-                legacy::encrypted_key_from_layout_v1(after_header, provider.kek().provider())?;
+                legacy::encrypted_dek_from_layout_v1(after_header, provider.kek().provider())?;
             let decrypted_dek = provider
                 .decrypt_data_encryption_key(&inner_encrypted_dek)
                 .await?;
             let (dek, _) = key_from_decrypted(decrypted_dek, provider.kek().provider())?;
-            legacy::warn_once(KmsAeadLegacyFormat::EncryptedKeyV1);
-            return Ok((dek, Some(KmsAeadLegacyFormat::EncryptedKeyV1)));
+            legacy::warn_once(KmsAeadLegacyFormat::EncryptedDekV1);
+            return Ok((dek, Some(KmsAeadLegacyFormat::EncryptedDekV1)));
         }
         #[cfg(not(feature = "legacy-formats"))]
         if encrypted_dek
@@ -146,7 +148,7 @@ where
             .starts_with(&LEGACY_ENCRYPTED_DEK_V1_PREFIX)
         {
             return Err(crate::errors::KmsAeadLegacyFormatError::create(
-                KmsAeadLegacyFormat::EncryptedKeyV1,
+                KmsAeadLegacyFormat::EncryptedDekV1,
             ));
         }
     }
@@ -205,7 +207,7 @@ mod tests {
     /// A Cloud KMS key, whose provider's own bytes never start with `0xFF 0x01`.
     const CLOUD_KMS_KEY: &str = "projects/p/locations/l/keyRings/r/cryptoKeys/k";
     const AZURE_KEY: &str = "https://orders.vault.azure.net/keys/orders";
-    /// `KEY` in the encrypted key layout of 0.29, with the key version `18`.
+    /// `KEY` in the encrypted DEK layout v1 of 0.29, with the key version `18`.
     const ENCRYPTED_KEY_OF_0_29: &str =
         "ff010231384242424242424242424242424242424242424242424242424242424242424242";
 
@@ -282,7 +284,7 @@ mod tests {
             ),
             (
                 EncryptedDataEncryptionKey::new(hex::decode(ENCRYPTED_KEY_OF_0_29).unwrap()),
-                KmsAeadLegacyFormat::EncryptedKeyV1,
+                KmsAeadLegacyFormat::EncryptedDekV1,
             ),
         ];
         for (encrypted_dek, format) in cases {
@@ -292,7 +294,7 @@ mod tests {
                 "{format:?}: {result:?}"
             );
         }
-        // The encrypted key layout is refused before any KMS call.
+        // The encrypted DEK layout v1 is refused before any KMS call.
         assert_eq!(provider.decryptions(), 1);
     }
 
@@ -310,7 +312,7 @@ mod tests {
             ),
             (
                 EncryptedDataEncryptionKey::new(hex::decode(ENCRYPTED_KEY_OF_0_29).unwrap()),
-                KmsAeadLegacyFormat::EncryptedKeyV1,
+                KmsAeadLegacyFormat::EncryptedDekV1,
             ),
         ];
         for (encrypted_dek, format) in cases {

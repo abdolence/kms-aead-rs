@@ -86,8 +86,9 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use futures_util::stream;
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::sweep::{self, Outcome, SweepReport};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;

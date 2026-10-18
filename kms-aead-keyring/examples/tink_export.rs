@@ -13,8 +13,9 @@
 //! KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, with ACCOUNT_ID for AWS KMS. A KMS whose
 //! variables are not set is skipped.
 
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadAlgorithm, AwsLc, KmsAeadEncryptionProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadEncryptionProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,

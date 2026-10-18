@@ -34,7 +34,7 @@ The crate has no default features, and the backend features are those of kms-aea
 
 - `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto`: the crypto backends, see
   [Crypto backends](./crypto-backends.md). A keyring names its backend as a type parameter, such
-  as `kms_aead::Ring`;
+  as `kms_aead::backends::Ring`;
 - `deterministic`: creating deterministic key versions, see
   [Deterministic fields](./keyring/deterministic.md);
 - `serde`: `Serialize` and `Deserialize` for `Encrypted`;
@@ -55,8 +55,9 @@ A keyring on the memory store with a local KEK, for an application type `Email`.
 cloud credentials:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{

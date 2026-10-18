@@ -421,9 +421,9 @@ impl KmsAeadLegacyFormatError {
                  earlier. It is read as an Encrypted value and decrypted only with the deprecated \
                  legacy-formats feature, and Encrypted::separate never reads it"
             }
-            KmsAeadLegacyFormat::EncryptedKeyV1 => {
-                "The encrypted key is in the encrypted key layout of kms-aead 0.29, which only the \
-                 deprecated legacy-formats feature reads"
+            KmsAeadLegacyFormat::EncryptedDekV1 => {
+                "The encrypted DEK is in the encrypted DEK layout v1 of kms-aead 0.29, which \
+                 only the deprecated legacy-formats feature reads"
             }
             KmsAeadLegacyFormat::RawEncryptedDek => {
                 "The encrypted DEK holds the raw key, as kms-aead 0.29 and earlier encrypted every \
@@ -462,9 +462,9 @@ pub enum KmsAeadLegacyFormat {
     /// An [`Envelope`](crate::formats::Envelope) value with the length prefix written up to
     /// 0.28.1, starting with four zero bytes.
     LengthPrefixedEnvelope,
-    /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted key layout of 0.29, starting
+    /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted DEK layout v1 of 0.29, starting
     /// with `0xFF 0x01`.
-    EncryptedKeyV1,
+    EncryptedDekV1,
     /// An encrypted DEK that decrypts to the raw key, as 0.29 and earlier encrypted every key,
     /// rather than to a serialised Tink key. The values of 32-bit targets before 0.24.0, whose
     /// framing is Tink's, fail with it too.

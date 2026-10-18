@@ -22,11 +22,11 @@ use crate::{
 
 /// The backend of the build: the gate runs each backend feature on its own.
 #[cfg(feature = "ring")]
-pub(crate) type TestBackend = kms_aead::Ring;
+pub(crate) type TestBackend = kms_aead::backends::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc"))]
-pub(crate) type TestBackend = kms_aead::AwsLc;
+pub(crate) type TestBackend = kms_aead::backends::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
-pub(crate) type TestBackend = kms_aead::RustCrypto;
+pub(crate) type TestBackend = kms_aead::backends::RustCrypto;
 
 /// A keyring on the store `S`, the test provider and the backend of the build.
 pub(crate) type TestKeyring<S> = Keyring<S, TestProvider, TestBackend>;

@@ -17,15 +17,15 @@ use crate::{
 };
 
 #[cfg(feature = "ring")]
-pub(crate) type TestBackend = crate::Ring;
+pub(crate) type TestBackend = crate::backends::Ring;
 #[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
-pub(crate) type TestBackend = crate::AwsLc;
+pub(crate) type TestBackend = crate::backends::AwsLc;
 #[cfg(all(
     not(feature = "ring"),
     not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
-pub(crate) type TestBackend = crate::RustCrypto;
+pub(crate) type TestBackend = crate::backends::RustCrypto;
 
 /// How many calls the concurrency tests start at once.
 pub(crate) const CONCURRENT_CALLS: usize = 16;

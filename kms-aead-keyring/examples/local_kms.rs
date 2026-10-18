@@ -5,8 +5,9 @@
 //! cargo run -p kms-aead-keyring --example local_kms --features ring
 //! ```
 
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy,

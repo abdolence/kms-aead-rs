@@ -6,8 +6,9 @@ Feature `aws-kms-encryption`.
 accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias ARN.
 
 ```rust,no_run
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, AwsKmsProviderOptions};
-use kms_aead::{AwsLc, KmsAeadEnvelope};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {

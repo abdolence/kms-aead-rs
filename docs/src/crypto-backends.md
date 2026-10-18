@@ -1,7 +1,7 @@
 # Crypto backends
 
 The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
-a type, and `AeadCipher`, `DeterministicCipher`, `KmsAeadEnvelope` and `LocalKmsProvider` take
+a type to `kms_aead::backends`, and `AeadCipher`, `DeterministicCipher`, `KmsAeadEnvelope` and `LocalKmsProvider` take
 that type as their backend type parameter `B`. A build may enable any number of backends, and
 there is no default one.
 
@@ -17,13 +17,15 @@ for every crate in a build when one crate enables another backend.
 
 ## Code generic over the backend
 
-The backend types implement `AeadBackend`, a sealed trait without methods. Its one item is the
-constant `NAME`, the backend's name in spans and logs: `ring`, `aws-lc` or `rustcrypto`. Code
-that works with any backend bounds its type parameter with `AeadBackend` and nothing else:
+The backend types implement `AeadBackend`, a sealed trait in `kms_aead::backends`. Its items are the
+constant `NAME`, the backend's name in spans and logs: `ring`, `aws-lc` or `rustcrypto`, and
+`generate_random_bytes`. Code that works with any backend bounds its type parameter with
+`AeadBackend` and nothing else:
 
 ```rust
+use kms_aead::backends::{AeadBackend, Ring};
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadResult, Ring};
+use kms_aead::{KmsAeadEnvelope, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 struct Orders<B> {
@@ -53,7 +55,7 @@ assert_eq!(orders.round_trip(&card).await?, card);
 # }
 ```
 
-`generate_random_bytes::<B>(len)` returns `len` bytes from the CSPRNG of the backend `B`, for
+`B::generate_random_bytes(len)` returns `len` bytes from the CSPRNG of the backend `B`, for
 secrets the application generates itself.
 
 ## Algorithms
@@ -70,7 +72,8 @@ CSPRNG. A backend that does not implement the algorithm fails at construction, n
 `KmsAeadError::UnsupportedAlgorithm` and the code `UNSUPPORTED_ALGORITHM`:
 
 ```rust
-use kms_aead::{errors::KmsAeadError, AeadAlgorithm, AeadCipher, Ring};
+use kms_aead::backends::Ring;
+use kms_aead::{errors::KmsAeadError, AeadAlgorithm, AeadCipher};
 
 let result = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256GcmSiv);
 assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
@@ -85,8 +88,9 @@ assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
 AEAD output alone, an `Encrypted<T, Bare>`:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Bare;
-use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
@@ -120,8 +124,9 @@ work together, and moving an application from one backend to another needs no mi
 data:
 
 ```rust
+use kms_aead::backends::{Ring, RustCrypto};
 use kms_aead::formats::Bare;
-use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring, RustCrypto};
+use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {

@@ -610,8 +610,8 @@ mod postgres {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
 
+        use kms_aead::backends::Ring;
         use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-        use kms_aead::Ring;
         use kms_aead_keyring::store::{
             KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresRevision, Revalidation,
             StoreKind, Stored, Swap,

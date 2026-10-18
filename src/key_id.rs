@@ -1,5 +1,5 @@
-/// The id of the key a typed field value or a beacon is sealed under, a `u32` with no reserved
-/// value.
+/// The id of the key a `Randomized` or `Deterministic` value or a beacon is sealed under, a `u32`
+/// with no reserved value.
 ///
 /// [`Encrypted<T, Randomized>`](crate::Encrypted), `Encrypted<T, Deterministic>` and
 /// [`Beacon`](crate::Beacon) bytes start with `[0x01][key id: u32 BE]`, and the four bytes after

@@ -67,7 +67,7 @@ impl<T> Encrypted<T, Envelope> {
         bare: &Encrypted<T, Bare>,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Self> {
-        let mut bytes = encrypted_dek.envelope_header()?;
+        let mut bytes = envelope_header(encrypted_dek)?;
         bytes.extend_from_slice(bare.value());
         Self::try_from(bytes)
     }
@@ -82,42 +82,42 @@ impl<T> Encrypted<T, Envelope> {
     /// `KmsAeadEnvelope::upgrade_legacy_value` rewrites. A value in Tink's format always
     /// separates.
     pub fn separate(&self) -> KmsAeadResult<(Encrypted<T, Bare>, EncryptedDataEncryptionKey)> {
-        let (dek_bytes, bare) = split_envelope(self.value())?;
+        let (encrypted_dek_bytes, bare) = split_envelope(self.value())?;
         Ok((
             Encrypted::try_from(bare.to_vec())?,
-            EncryptedDataEncryptionKey::new(dek_bytes.to_vec()),
+            EncryptedDataEncryptionKey::new(encrypted_dek_bytes.to_vec()),
         ))
     }
 }
 
-impl EncryptedDataEncryptionKey {
-    /// `[w: u32 BE][encrypted DEK: w]`, the start of every value in Tink's KMS envelope format
-    /// sealed under this DEK.
-    ///
-    /// # Errors
-    ///
-    /// `INVALID_CIPHER_TEXT_FORMAT` when the encrypted DEK is empty or longer than 4,096 bytes,
-    /// which Tink does not read.
-    pub(crate) fn envelope_header(&self) -> KmsAeadResult<Vec<u8>> {
-        let dek_bytes = self.value();
-        let encrypted_dek_len = u32::try_from(dek_bytes.len())
-            .ok()
-            .filter(|len| (1..=MAX_ENCRYPTED_DEK_LEN).contains(len))
-            .ok_or_else(|| {
-                KmsAeadEncryptionError::create(
-                    "INVALID_CIPHER_TEXT_FORMAT",
-                    &format!(
-                        "An encrypted DEK of {} bytes is not 1 to {} bytes long, the sizes Tink reads",
-                        dek_bytes.len(),
-                        MAX_ENCRYPTED_DEK_LEN
-                    ),
-                )
-            })?;
-        let mut header = Vec::with_capacity(4 + dek_bytes.len());
-        header.extend_from_slice(&encrypted_dek_len.to_be_bytes());
-        header.extend_from_slice(dek_bytes);
-        Ok(header)
-    }
+/// `[w: u32 BE][encrypted DEK: w]`, the start of every value in Tink's KMS envelope format sealed
+/// under the DEK that `encrypted_dek` holds.
+///
+/// # Errors
+///
+/// `INVALID_CIPHER_TEXT_FORMAT` when the encrypted DEK is empty or longer than 4,096 bytes, which
+/// Tink does not read.
+pub(crate) fn envelope_header(
+    encrypted_dek: &EncryptedDataEncryptionKey,
+) -> KmsAeadResult<Vec<u8>> {
+    let encrypted_dek_bytes = encrypted_dek.value();
+    let encrypted_dek_len = u32::try_from(encrypted_dek_bytes.len())
+        .ok()
+        .filter(|len| (1..=MAX_ENCRYPTED_DEK_LEN).contains(len))
+        .ok_or_else(|| {
+            KmsAeadEncryptionError::create(
+                "INVALID_CIPHER_TEXT_FORMAT",
+                &format!(
+                    "An encrypted DEK of {} bytes is not 1 to {} bytes long, the sizes Tink reads",
+                    encrypted_dek_bytes.len(),
+                    MAX_ENCRYPTED_DEK_LEN
+                ),
+            )
+        })?;
+    let mut header = Vec::with_capacity(4 + encrypted_dek_bytes.len());
+    header.extend_from_slice(&encrypted_dek_len.to_be_bytes());
+    header.extend_from_slice(encrypted_dek_bytes);
+    Ok(header)
 }
 
 /// The encrypted DEK and the bare value of `value` in Tink's KMS envelope format, borrowed from
@@ -212,10 +212,10 @@ mod tests {
         #[test]
         fn join_and_separate_round_trip(
             bare in prop::collection::vec(any::<u8>(), 28..256),
-            dek_bytes in prop::collection::vec(any::<u8>(), 1..=4096),
+            encrypted_dek_bytes in prop::collection::vec(any::<u8>(), 1..=4096),
         ) {
             let bare = Encrypted::<String, Bare>::try_from(bare).unwrap();
-            let encrypted_dek = EncryptedDataEncryptionKey::new(dek_bytes);
+            let encrypted_dek = EncryptedDataEncryptionKey::new(encrypted_dek_bytes);
 
             let envelope = Encrypted::<String, Envelope>::join(&bare, &encrypted_dek).unwrap();
             let (separated_bare, separated_encrypted_dek) = envelope.separate().unwrap();
@@ -292,11 +292,15 @@ mod tests {
     fn separate_refuses_the_layouts_of_0_29_and_earlier() {
         let envelopes = [
             (
-                hex::decode("010231380007777261707065647365616c6564").unwrap(),
+                [
+                    &hex::decode("01023138000777726170706564").unwrap()[..],
+                    &BARE,
+                ]
+                .concat(),
                 KmsAeadLegacyFormat::EnvelopeV1,
             ),
             (
-                [&[0x00; 7][..], &[0x07], ENCRYPTED_DEK, SEALED].concat(),
+                [&[0x00; 7][..], &[0x07], ENCRYPTED_DEK, &BARE].concat(),
                 KmsAeadLegacyFormat::LengthPrefixedEnvelope,
             ),
         ];

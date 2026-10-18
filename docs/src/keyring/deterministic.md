@@ -33,8 +33,9 @@ A keyring with deterministic versions names the algorithm in its policy, AES-SIV
 `DeterministicAlgorithm` has:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+use kms_aead::{DeterministicAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::Deterministic;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
@@ -113,8 +114,9 @@ So an equality query matches against every version that still decrypts, with
 `equality_probes`:
 
 ```rust
+# use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+# use kms_aead::{DeterministicAlgorithm, KmsAeadResult};
 # use kms_aead_keyring::formats::Deterministic;
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{

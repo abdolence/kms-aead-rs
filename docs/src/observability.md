@@ -13,6 +13,7 @@ The spans are:
   `decrypt_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_encrypted_dek` and `generate_encrypted_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
+- `KMS AEAD beacon`: the envelope's `beacon`;
 - `KMS encrypt DEK`: each provider's encryption of a DEK;
 - `KMS decrypt DEK`: each provider's decryption of a DEK;
 - `KMS random`: a call to the GCP or AWS KMS generator, when the provider uses it.
@@ -27,8 +28,10 @@ Any tracing subscriber works. With `tracing-subscriber`, an `EnvFilter` that ena
 the library and span close events, every span is printed with its fields when it ends:
 
 ```rust
+use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -44,7 +47,8 @@ let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
-let encrypted = envelope.encrypt(aad, &SecretValue::from("secret")).await?;
+let encrypted: Encrypted<SecretValue, Envelope> =
+    envelope.encrypt(aad, &SecretValue::from("secret")).await?;
 let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 # assert_eq!(decrypted, SecretValue::from("secret"));
 # Ok(())

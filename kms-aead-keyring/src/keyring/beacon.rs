@@ -2,7 +2,8 @@
 
 use std::cmp::Reverse;
 
-use kms_aead::{AeadBackend, Beacon, BeaconMac, KmsAeadEncryptionProvider, Plaintext};
+use kms_aead::backends::AeadBackend;
+use kms_aead::{Beacon, BeaconMac, KmsAeadEncryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::spans;

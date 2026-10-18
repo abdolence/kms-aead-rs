@@ -7,8 +7,9 @@
 use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClient;
 use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
+use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{DeterministicAlgorithm, Ring};
+use kms_aead::DeterministicAlgorithm;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringId, KeyringOptions,

@@ -7,8 +7,9 @@ under the primary version of the key, and each encrypted DEK records the version
 so DEKs encrypted before a rotation still decrypt afterwards.
 
 ```rust,no_run
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};
-use kms_aead::{AwsLc, KmsAeadEnvelope};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {

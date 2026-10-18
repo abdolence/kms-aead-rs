@@ -4,13 +4,13 @@
 use std::fmt::{Debug, Formatter, Write};
 use std::marker::PhantomData;
 
+use kms_aead::backends::AeadBackend;
 use kms_aead::cache::DekCache;
 use kms_aead::formats::{TinkKeyType, TinkKeyset};
 #[cfg(feature = "bigquery-export")]
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{
-    AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
-    ValueStruct,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, ValueStruct,
 };
 
 use crate::encodings::{BigQuery, Encoding, KeysetEncoding, Tink};

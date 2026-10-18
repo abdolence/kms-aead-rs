@@ -118,8 +118,8 @@ answers, the read succeeds after the reload; when it does not, the read fails wi
 `KeyVersionUnknown`. The wait before `promote` is what keeps that path rare.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     KeyId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,

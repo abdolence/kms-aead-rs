@@ -38,8 +38,9 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 A keyring on the memory store with a local KEK, which needs no cloud credentials:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{KmsAeadResult, Ring};
+use kms_aead::KmsAeadResult;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::{

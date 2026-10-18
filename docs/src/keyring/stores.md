@@ -39,8 +39,8 @@ update carries the update time it read as its precondition.
 
 ```rust,no_run
 use firestore::FirestoreDb;
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::Ring;
 use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::{Keyring, KeyringId, KeyringOptions};
 

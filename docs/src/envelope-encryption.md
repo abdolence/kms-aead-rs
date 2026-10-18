@@ -5,8 +5,9 @@ with, and encrypts the DEKs with the KEK of its provider. A call that makes no K
 `async`, and every call opens one `DEBUG` span, see [Observability](./observability.md).
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -41,9 +42,10 @@ one KMS call, opens the value and returns a `T`. A value with no type of its own
 `SecretValue`:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -84,9 +86,10 @@ a type of its own. The value is encoded by its `Plaintext` implementation, and t
 `Encrypted<T, Envelope>` that names the type:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
 use secret_vault_value::SecretValue;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,12 +188,13 @@ whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an
 and BigQuery read the values with a keyset of the one key under that id:
 
 ```rust,no_run
+use kms_aead::backends::Ring;
 use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, Ring,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -287,11 +291,12 @@ query calculates the beacon of the value it looks for and matches it by equality
 the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
     Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KeyId, KmsAeadEnvelope,
-    KmsAeadResult, Plaintext, Ring,
+    KmsAeadResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -413,9 +418,10 @@ values and store the encrypted DEK apart from them, such as one DEK per tenant o
 values are `Encrypted<T, Bare>`, with no encrypted DEK in them.
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Bare;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -460,8 +466,9 @@ version where the KMS needs one to decrypt after a rotation. Store `value()` or 
 and read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string()`:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, ValueStruct};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {

@@ -16,7 +16,7 @@ algorithm, and a value Tink encrypts opens with `KmsAeadEnvelope::decrypt`.
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink encrypted keyset | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][encrypted keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later, and kms-aead-keyring through it |
 | Envelope layout v1 | `Encrypted<T, Envelope>` with `legacy-formats` | `[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
-| Encrypted key layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead with `legacy-formats` | 0.29 |
+| Encrypted DEK layout v1 | stored `EncryptedDataEncryptionKey` | `[0xFF][0x01][k: u8][key version: k][encrypted DEK]` | kms-aead with `legacy-formats` | 0.29 |
 | Length-prefixed envelope | `Encrypted<T, Envelope>` with `legacy-formats` | `[w: u64 BE][encrypted DEK: w][cipher text]`, and `[w: u32 BE]` from 32-bit targets before 0.24.0 | kms-aead with `legacy-formats` | 0.8.0 to 0.28.1 |
 | Raw encrypted DEK | `EncryptedDataEncryptionKey` | the KMS ciphertext of the DEK's 16 or 32 raw bytes | kms-aead with `legacy-formats` | up to 0.29 |
 
@@ -29,9 +29,10 @@ provider encrypts the raw DEK in every release, see [Encrypted DEKs](#encrypted-
 bare value and an encrypted DEK. `separate` reads it back:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -333,7 +334,7 @@ The first bytes of a stored value:
 | `00 00 00 00` | the length-prefixed envelope of 0.28.1 and earlier |
 | `00`, then a length of 1 to 4,096 | Tink's KMS envelope, or the 4-byte length prefix of 32-bit targets before 0.24.0 |
 | `01` | envelope layout v1 of 0.29, or a TINK-prefixed value |
-| `FF 01` | encrypted key layout v1 of 0.29 |
+| `FF 01` | encrypted DEK layout v1 of 0.29 |
 
 Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
 16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
@@ -358,7 +359,7 @@ The layouts of 0.29 and earlier are read only with the deprecated `legacy-format
 
 - `KmsAeadEnvelope::decrypt` reads the three envelope layouts, which `Encrypted<T, Envelope>`
   holds with the feature;
-- the `*_with_encrypted_dek` calls and the DEK cache read the encrypted key layout of 0.29 and
+- the `*_with_encrypted_dek` calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
   raw encrypted DEKs.
 
 `Encrypted::separate` never reads the older envelope layouts: for Azure, the encrypted DEK they
@@ -369,7 +370,7 @@ Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the c
 
 - `KmsAeadLegacyFormat::EnvelopeV1`;
 - `KmsAeadLegacyFormat::LengthPrefixedEnvelope`;
-- `KmsAeadLegacyFormat::EncryptedKeyV1`;
+- `KmsAeadLegacyFormat::EncryptedDekV1`;
 - `KmsAeadLegacyFormat::RawEncryptedDek`, for an encrypted DEK that decrypts to the raw key. The
   values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink's.
 
@@ -403,10 +404,9 @@ are at hand.
 A sweep over stored rows:
 
 ```rust
+use kms_aead::backends::AeadBackend;
 use kms_aead::formats::Envelope;
-use kms_aead::{
-    AeadBackend, Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult,
-};
+use kms_aead::{Encrypted, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 /// A stored envelope value and the AAD it was sealed under.
@@ -435,8 +435,9 @@ where
     }
     Ok(upgraded)
 }
+# use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, Ring, ValueStruct};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;

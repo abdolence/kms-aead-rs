@@ -5,10 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
+use kms_aead::backends::AeadBackend;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::formats::{Envelope, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, DataEncryptionKey,
+    AeadAlgorithm, AeadCipher, BeaconAlgorithm, BeaconMac, DataEncryptionKey,
     DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
     Plaintext,
 };

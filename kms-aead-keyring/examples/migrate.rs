@@ -12,10 +12,11 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::{Mutex, PoisonError};
 
 use futures_util::stream;
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
-    KmsAeadResult, Ring,
+    KmsAeadResult,
 };
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::sweep::{self, Outcome};

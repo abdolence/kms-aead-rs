@@ -34,9 +34,9 @@
 //!
 //! # Backends
 //!
-//! The AEAD runs on a crypto library that a feature compiles in, named by a type that implements
-//! [`AeadBackend`]: the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`]. A build may
-//! enable any number of them, and there is no default one.
+//! The AEAD runs on a crypto library that a feature compiles in, named by a type in [`backends`]
+//! that implements [`AeadBackend`](backends::AeadBackend): the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`].
+//! A build may enable any number of them, and there is no default one.
 //!
 //! | Feature | Type | Algorithms |
 //! |---|---|---|
@@ -53,7 +53,7 @@
 //!
 //! A build without a backend feature compiles, and
 //! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or encrypts
-//! can be constructed: no type implements [`AeadBackend`].
+//! can be constructed: no type implements [`AeadBackend`](backends::AeadBackend).
 //!
 //! # Store-less mode and the DEK cache
 //!
@@ -110,9 +110,10 @@
 //! ```rust,no_run
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::backends::Ring;
 //! use kms_aead::formats::Envelope;
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::{Encrypted, KmsAeadEnvelope, Ring};
+//! use kms_aead::{Encrypted, KmsAeadEnvelope};
 //! use secret_vault_value::SecretValue;
 //!
 //! let kms_ref = AwsKmsKeyRef::new(
@@ -120,14 +121,14 @@
 //!     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".into(),
 //! );
 //! let provider = AwsKmsProvider::new(&kms_ref).await?;
-//! let encryption = KmsAeadEnvelope::<AwsKmsProvider, Ring>::new(provider)?;
+//! let envelope = KmsAeadEnvelope::<AwsKmsProvider, Ring>::new(provider)?;
 //!
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
 //!
 //! let cipher_text: Encrypted<SecretValue, Envelope> =
-//!     encryption.encrypt(aad, &secret_value).await?;
-//! let decrypted: SecretValue = encryption.decrypt(aad, &cipher_text).await?;
+//!     envelope.encrypt(aad, &secret_value).await?;
+//! let decrypted: SecretValue = envelope.decrypt(aad, &cipher_text).await?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -139,8 +140,9 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::backends::Ring;
 //! use kms_aead::formats::Bare;
-//! use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, Ring};
+//! use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted};
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
@@ -247,14 +249,7 @@ pub use api::*;
 mod algorithm;
 pub use algorithm::*;
 
-mod backend;
-#[cfg(feature = "aws-lc-rs")]
-pub use backend::AwsLc;
-#[cfg(feature = "ring")]
-pub use backend::Ring;
-#[cfg(feature = "rustcrypto")]
-pub use backend::RustCrypto;
-pub use backend::{generate_random_bytes, AeadBackend};
+pub mod backends;
 
 mod aead_cipher;
 pub use aead_cipher::*;

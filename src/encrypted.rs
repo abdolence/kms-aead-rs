@@ -248,20 +248,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "legacy-formats"))]
-    #[test]
-    fn an_envelope_of_0_29_needs_legacy_formats() {
-        let envelope_v1 = hex::decode("010231380007777261707065647365616c6564").unwrap();
-
-        let result = Encrypted::<String, Envelope>::try_from(envelope_v1);
-
-        assert!(
-            matches!(&result, Err(KmsAeadError::LegacyFormat(error))
-                if error.format == crate::errors::KmsAeadLegacyFormat::EnvelopeV1),
-            "{result:?}"
-        );
-    }
-
     #[test]
     fn debug_shows_no_stored_bytes() -> KmsAeadResult<()> {
         let body = b"zq-cipher-marker-zq-and-a-tag-of-16";

@@ -14,8 +14,9 @@ a type in `kms_aead::providers`, enabled by its feature:
 Every provider implements `KmsAeadEncryptionProvider`, and `KmsAeadEnvelope` takes any of them:
 
 ```rust,no_run
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AwsLc, KmsAeadEnvelope};
+use kms_aead::KmsAeadEnvelope;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
 let kms_ref = GcpKmsKeyRef::new(

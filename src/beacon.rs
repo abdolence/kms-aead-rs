@@ -6,12 +6,13 @@ use std::str::FromStr;
 use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
+use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::TinkKeyType;
 use crate::types::checked_key_bytes;
 use crate::{
-    generate_random_bytes, AeadBackend, DataEncryptionKey, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult,
+    Plaintext,
 };
 
 #[cfg(feature = "postgres")]
@@ -233,7 +234,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn generate_dek(&self) -> KmsAeadResult<DataEncryptionKey> {
-        generate_random_bytes::<B>(self.algorithm.key_len()).map(DataEncryptionKey::from)
+        B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
     /// A new beacon key and the same key encrypted by `provider`, to store. The key comes from the

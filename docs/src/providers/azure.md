@@ -10,8 +10,9 @@ decryption uses that version, so DEKs encrypted before a rotation still decrypt 
 The provider takes any Azure credential, for example one from `azure_identity`:
 
 ```rust,no_run
+use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider};
-use kms_aead::{AwsLc, KmsAeadEnvelope};
+use kms_aead::KmsAeadEnvelope;
 use secret_vault_value::SecretValue;
 
 # async fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

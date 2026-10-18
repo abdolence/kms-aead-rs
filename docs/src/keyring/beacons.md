@@ -33,8 +33,9 @@ A keyring with beacon versions names the algorithm in its policy, HMAC-SHA256, t
 `beacon_probes` the beacons of a value under every beacon version a lookup matches:
 
 ```rust
+use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, KmsAeadResult, Ring};
+use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, KmsAeadResult};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{

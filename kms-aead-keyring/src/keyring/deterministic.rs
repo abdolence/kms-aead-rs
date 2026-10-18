@@ -3,11 +3,12 @@
 
 use std::cmp::Reverse;
 
+use kms_aead::backends::AeadBackend;
 use kms_aead::cache::DekCacheOutcome;
 use kms_aead::formats::Deterministic;
 use kms_aead::{
-    AeadBackend, DeterministicCipher, Encrypted, EncryptedDataEncryptionKey,
-    KmsAeadEncryptionProvider, Plaintext,
+    DeterministicCipher, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    Plaintext,
 };
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
