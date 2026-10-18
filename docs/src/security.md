@@ -93,8 +93,8 @@ splits two principals:
   and `decrypt` make no KMS wrap call, so it needs nothing more;
 - **Administrative principal**: KMS encrypt and decrypt on the KEK, and the only principal with
   write access to the keyring store. `create`, `rotate`, `change_algorithm`, `mark_compromised`,
-  `retire`, `reinstate`, `destroy` and `rewrap` run under it, in a job, never in a request
-  handler.
+  `retire`, `reinstate`, `destroy`, `rewrap` and `export_bigquery_keyset` run under it, in a
+  job, never in a request handler.
 
 | KMS | Serving | Administration |
 |---|---|---|
@@ -135,6 +135,9 @@ record that moves a version backwards, with an `ERROR`, see
   [Crypto-shredding](./operations.md#crypto-shredding);
 - **equal keyring ids under one KEK get equal bindings.** A staging keyring `tenant-42` and a
   production one under a shared KEK can exchange wrapped DEKs. Use one KEK per environment;
+- **an exported BigQuery keyset is wrapped unbound**, since BigQuery unwraps it with no
+  associated data. It holds the versions' keys, so treat it as a copy of the record's readable
+  versions, and export again after every rotation and every `mark_compromised`;
 - **envelope values stay unbound.** Store-less and per-call envelope values carry no binding,
   keyring or not;
 - **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are

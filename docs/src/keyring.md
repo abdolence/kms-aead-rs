@@ -38,7 +38,9 @@ The crate has no default features, and the backend features are those of kms-aea
 - `serde`: `Serialize` and `Deserialize` for `Encrypted`;
 - `serde-json`: `serde`, and `Json<T>`, a plaintext stored as its JSON;
 - `firestore`, `postgres`, `gcs`: the keyring stores, see [Keyring stores](./keyring/stores.md).
-  `postgres` and `gcs` have TLS variants listed there.
+  `postgres` and `gcs` have TLS variants listed there;
+- `bigquery-export`: `export_bigquery_keyset`, see
+  [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 
 The KMS providers come from kms-aead and its provider features.
 
@@ -107,9 +109,9 @@ The keyring calls split in two groups:
 - serving calls: `encrypt`, `decrypt` and their variants, which read the record and unwrap DEKs.
   They need the KMS's decrypt right and read access to the store;
 - administrative calls: `create`, `rotate`, `change_algorithm`, `mark_compromised`, `retire`,
-  `reinstate`, `destroy` and `rewrap`, which write the record. All of them but `retire`,
-  `reinstate` and `destroy` also wrap DEKs, so they need the KMS's encrypt right beside write
-  access to the store.
+  `reinstate`, `destroy` and `rewrap`, which write the record, and `export_bigquery_keyset`. All
+  of them but `retire`, `reinstate` and `destroy` wrap, so they need the KMS's encrypt right, and
+  all but the export need write access to the store.
 
 Run the administrative calls in a job under its own principal, never in a request handler. The
 deployment rule and the IAM roles per KMS are in
@@ -124,5 +126,6 @@ deployment rule and the IAM roles per KMS are in
   default AAD;
 - [Deterministic fields](./keyring/deterministic.md): equality queries, and what they leak;
 - [Wrap-time key binding](./keyring/key-binding.md): `bind_keys`, and Azure;
-- [BigQuery and Tink interop](./keyring/bigquery.md): the wire format and the BigQuery checks;
+- [BigQuery and Tink interop](./keyring/bigquery.md): the wire format, the BigQuery checks and
+  the keyset export;
 - [Operations](./operations.md): rotation, sweeps, migration and the emergency runbook.

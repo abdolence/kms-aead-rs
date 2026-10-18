@@ -172,8 +172,8 @@ pub use record::*;
 
 mod record_cache;
 
-// The book's code uses the deterministic fields, serde and every store, so it compiles in the
-// build with the docs.rs feature set only.
+// The book's code uses the deterministic fields, serde, every store and the BigQuery export, so it
+// compiles in the build with the docs.rs feature set only.
 #[cfg(all(
     doctest,
     feature = "ring",
@@ -181,7 +181,8 @@ mod record_cache;
     feature = "serde-json",
     feature = "firestore",
     feature = "postgres",
-    feature = "gcs"
+    feature = "gcs",
+    feature = "bigquery-export"
 ))]
 mod book;
 

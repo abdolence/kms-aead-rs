@@ -130,6 +130,7 @@ probe. The probes go into the query:
 |---|---|
 | PostgreSQL | `WHERE email_det = ANY($1)`, with the probes bound as a `BYTEA[]` |
 | Firestore | an `in` filter on the field, which takes up to 30 values |
+| BigQuery | `IN` over one `DETERMINISTIC_ENCRYPT` per version, each with that version's `Single` keyset, see [Queries](./bigquery.md#queries) |
 
 After a rotation the list has two probes until a sweep re-seals every row and the old version is
 retired. That is why deterministic versions are rotated rarely, and every rotation is followed by

@@ -19,6 +19,9 @@ until their record refreshes, and those values decrypt.
   row, see [Queries across rotations](./keyring/deterministic.md#queries-across-rotations), so
   rotate deterministic versions rarely.
 
+After a rotation, export the BigQuery keysets again, since a keyset is a copy of the record at
+the time of the export.
+
 Rotation does not touch values already written. To stop reading them under the old version, run a
 [sweep](#sweeps), then `retire` the version.
 
@@ -229,7 +232,9 @@ Or is suspected to have.
    aware the leaked DEK can forge values under its id meanwhile;
 3. sweep with `decrypt_with_status`, and decide per record on the values read through the
    compromised version, see [The trust of re-sealed values](#the-trust-of-re-sealed-values);
-4. `retire` the version once the sweep is done.
+4. export the BigQuery keysets again: a `Readable` keyset leaves the compromised version out.
+   Delete the `Single` keyset of the compromised version once the sweep is done;
+5. `retire` the version once the sweep is done.
 
 Rotation protects nothing already copied: backups, point-in-time recovery and data exports still
 hold values the leaked DEK opens. Treat them as exposed and revoke the secrets inside them.

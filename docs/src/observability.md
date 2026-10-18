@@ -181,6 +181,7 @@ filter beside `kms_aead=debug`.
 | `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring retire`, `Keyring reinstate`, `Keyring destroy` | the call of that name | `keyring`, `key_id`, `cas_retries`, `error_code` |
 | `Keyring rewrap` | `rewrap` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
+| `Keyring export` | `export_bigquery_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
 | `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
 
 | Field | Value |
@@ -192,7 +193,7 @@ filter beside `kms_aead=debug`.
 | `backend` | `ring`, `aws-lc` or `rustcrypto`; `rustcrypto` for deterministic calls, since AES-SIV runs there |
 | `key_state` | `active`, `decrypt_only`, `retired`, `destroyed`, `compromised`, or `unknown` for a key id the record does not have |
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
-| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap` and for a compromised version read past the cache |
+| `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `rewrap`, the export, and a compromised version read past the cache |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, or an application store's name |
 | `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
@@ -200,7 +201,7 @@ filter beside `kms_aead=debug`.
 | `response_time` | milliseconds the store call took |
 | `from_key_id`, `to_key_id` | the version a rotation replaced, and the new one |
 | `cas_retries` | the compare-and-swap conflicts before the write landed |
-| `versions` | the versions `rewrap` wrapped again |
+| `versions` | the versions `rewrap` wrapped again, or an export put in the keyset |
 | `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` | the counts of the `SweepReport` |
 | `error_code` | the variant name of the `KeyringError` returned, such as `KeyVersionCompromised` |
 
