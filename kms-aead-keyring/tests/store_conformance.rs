@@ -59,6 +59,7 @@ fn record_holding(
         "id": id.as_str(),
         "kek": { "provider": "local", "key": "conformance" },
         "algorithms": { "randomized": "aes-256-gcm", "deterministic": null },
+        "seal_epoch": rotations + 1,
         "versions": versions,
         "created_at": "2026-01-10T09:00:00Z",
         "updated_at": "2026-01-10T09:00:00Z",

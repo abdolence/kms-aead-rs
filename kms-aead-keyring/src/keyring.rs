@@ -20,7 +20,6 @@ use crate::record::withdrawn_deks;
 use crate::record_cache::RecordCache;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
-use crate::sweep::SealThresholds;
 use crate::{
     Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringId,
     KeyringRecord, Purpose,
@@ -240,20 +239,6 @@ where
             },
         )
         .await
-    }
-
-    /// The active version of each purpose in the cached record, against which a sweep's query
-    /// and [`SealMarker::is_behind`](crate::sweep::SealMarker::is_behind) find the records to
-    /// re-seal. A job that starts right after a promotion in another process
-    /// [`reload`](Self::reload)s first.
-    pub fn seal_thresholds(&self) -> SealThresholds {
-        let record = self.record();
-        let active = |purpose| record.active(purpose).map(KeyVersion::id);
-        SealThresholds {
-            randomized: active(Purpose::Randomized),
-            deterministic: active(Purpose::Deterministic),
-            beacon: active(Purpose::Beacon),
-        }
     }
 
     /// `value` sealed again with `aad` under the active randomised version, with the trust of
@@ -482,9 +467,9 @@ where
     /// store-less, so that a sweep can seal it again as a keyring value with `encrypt`; a keyring
     /// never writes envelope values. The `aad` is the one the application gave it and the
     /// `algorithm` that of the envelope that wrote it: the read of a record whose
-    /// [`SealMarker`](crate::sweep::SealMarker) says
-    /// [`Envelope`](crate::sweep::SealFormat::Envelope), until a sweep re-seals it. A value stored
-    /// as hex is read with `Encrypted::try_from_hex_string`.
+    /// [`SealMarker`](crate::sweep::SealMarker) is
+    /// [`SealMarker::ENVELOPE`](crate::sweep::SealMarker::ENVELOPE), until a sweep re-seals it. A
+    /// value stored as hex is read with `Encrypted::try_from_hex_string`.
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's

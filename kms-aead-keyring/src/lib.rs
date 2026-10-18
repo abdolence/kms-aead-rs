@@ -124,10 +124,11 @@
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
 //! | `admin` | `KeyringAdmin`, and the registry's `create`, `open_or_create` and `admin`: the calls that encrypt DEKs, write the record or export keysets |
 //! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`; the deterministic types are in every build |
-//! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`], as bytes |
+//! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker), as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
-//! | `postgres` | `store::PostgresKeyringStore` on tokio-postgres, with the TLS connector the application passes, and kms-aead's `postgres` |
+//! | `postgres` | `store::PostgresKeyringStore` on tokio-postgres, with the TLS connector the application passes, and `ToSql` and `FromSql` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker) as `BYTEA` |
+//! | `sqlx` | sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker) on PostgreSQL, as `BYTEA` |
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |

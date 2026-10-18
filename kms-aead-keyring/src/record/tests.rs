@@ -50,6 +50,7 @@ pub(super) fn document(versions: Vec<Value>) -> Value {
             "deterministic": "aes-256-siv",
             "beacon": "hmac-sha256",
         },
+        "seal_epoch": 2,
         "versions": versions,
         "created_at": CREATED,
         "updated_at": ROTATED,
@@ -259,6 +260,17 @@ fn names_of_other_schemas_algorithms_and_states_are_rejected() -> KeyringResult<
 }
 
 #[test]
+fn a_seal_epoch_of_zero_is_rejected() -> KeyringResult<()> {
+    let mut envelope_epoch = rotated()?;
+    envelope_epoch["seal_epoch"] = json!(0);
+    assert_eq!(
+        refusal(&envelope_epoch),
+        Some(RecordInvalidReason::SealEpochOutOfRange)
+    );
+    Ok(())
+}
+
+#[test]
 fn a_record_of_another_keyring_is_rejected() -> KeyringResult<()> {
     let mut other = rotated()?;
     other["id"] = json!("tenant-43");
@@ -344,7 +356,7 @@ fn held() -> KeyringResult<Value> {
 #[test]
 fn a_regressed_record_is_refused() -> TestResult {
     type Change = fn(&mut Value);
-    let cases: [(Change, RegressionRule); 8] = [
+    let cases: [(Change, RegressionRule); 9] = [
         (
             |next| {
                 if let Some(versions) = next["versions"].as_array_mut() {
@@ -395,6 +407,10 @@ fn a_regressed_record_is_refused() -> TestResult {
             },
             RegressionRule::StateReverted(KeyId::new(3)),
         ),
+        (
+            |next| next["seal_epoch"] = json!(1),
+            RegressionRule::SealEpochReverted,
+        ),
     ];
     let held_record = parse(&held()?)?;
     for (change, rule) in cases {
@@ -416,6 +432,7 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     next["versions"][2]["state"] = json!("decrypt_only");
     next["versions"][2]["compromised"] = json!({ "at": COMPROMISED, "note": null });
     next["versions"][4]["state"] = json!("active");
+    next["seal_epoch"] = json!(3);
     if let Some(versions) = next["versions"].as_array_mut() {
         versions.push(version(6, "pending", false)?);
     }

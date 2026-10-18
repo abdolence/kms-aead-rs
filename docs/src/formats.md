@@ -253,6 +253,7 @@ staged, with the encrypted DEKs shortened:
     "deterministic": "aes-256-siv",
     "beacon": "hmac-sha256"
   },
+  "seal_epoch": 2,
   "versions": [
     {
       "key_id": 1,
@@ -309,6 +310,8 @@ staged, with the encrypted DEKs shortened:
 - `kek` names the provider and the KEK the keyring was created with;
 - `algorithms` holds the algorithm new versions of each purpose use. `deterministic` and `beacon`
   are `null` for a keyring without versions of that purpose;
+- `seal_epoch` counts the writes that made a version active, from 1 at the creation, see
+  [Seal markers](#seal-markers);
 - `versions` holds every version ever created, in creation order, each under its
   [key id](#keyring-key-ids);
 - `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
@@ -323,7 +326,24 @@ fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
 - an encrypted DEK on every version but the destroyed ones;
-- unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.
+- unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;
+- a `seal_epoch` of 1 or more.
+
+## Seal markers
+
+A seal marker is the seal epoch of a keyring when a record's fields were sealed, which the
+application stores beside them:
+
+```text
+[0x01][seal epoch: u32 BE]
+```
+
+5 bytes in all, so that markers compare as their epochs do, and so do their bytes as Firestore,
+PostgreSQL and BigQuery compare them. `SealMarker::ENVELOPE`, `01 00 00 00 00`, is epoch 0, the
+marker of a record of envelope values. `SealMarker::try_from` fails with `InvalidSealMarker` on
+bytes of any other length or first byte. The `serde` feature stores a marker as bytes, an array of
+numbers in serde_json, and the `postgres` and `sqlx` features as `BYTEA`. See
+[Sweeps](./operations.md#sweeps) for the query it serves.
 
 ## Telling layouts apart
 

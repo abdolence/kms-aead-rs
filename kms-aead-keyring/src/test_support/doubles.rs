@@ -126,7 +126,8 @@ impl KmsAeadEncryptionProvider for TestProvider {
 pub(crate) struct TestStore {
     pub(crate) memory: MemoryKeyringStore,
     pub(crate) calls: Arc<StoreCalls>,
-    /// How long each load and revalidation takes, so that concurrent calls overlap it.
+    /// How long each load, revalidation and compare-and-swap takes, so that concurrent calls
+    /// overlap it.
     delay: Duration,
 }
 
@@ -198,6 +199,7 @@ impl KeyringStore for TestStore {
                 left.checked_sub(1)
             })
             .is_ok();
+        tokio::time::sleep(self.delay).await;
         if conflict {
             Ok(Swap::Conflict)
         } else {

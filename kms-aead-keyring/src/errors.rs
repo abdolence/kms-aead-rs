@@ -86,6 +86,9 @@ pub enum KeyringError {
     ExportAlgorithmUnsupported(KeyVersionError),
     /// A name that is not one a [`KeyVersionState`] displays as.
     UnknownKeyVersionState,
+    /// Stored bytes that are not a [`SealMarker`](crate::sweep::SealMarker): not 5 bytes long,
+    /// or not starting with the marker version `0x01`.
+    InvalidSealMarker,
 }
 
 impl KeyringError {
@@ -118,6 +121,7 @@ impl KeyringError {
             KeyringError::CustomAadUnsupported(_) => "CUSTOM_AAD_UNSUPPORTED",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
             KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
+            KeyringError::InvalidSealMarker => "INVALID_SEAL_MARKER",
         }
     }
 
@@ -340,6 +344,9 @@ impl Display for KeyringError {
                 "Not the name of a key version state: the names are pending, active, \
                  decrypt_only, retired and destroyed",
             ),
+            KeyringError::InvalidSealMarker => f.write_str(
+                "Not a seal marker: a marker is the version byte 1 and a 4-byte seal epoch",
+            ),
         }
     }
 }
@@ -499,6 +506,9 @@ pub enum RecordInvalidReason {
     MalformedEncryptedDek(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
+    /// The seal epoch is 0, the epoch of records sealed before the keyring, or a version would
+    /// become active past the last one, 2^32 - 1.
+    SealEpochOutOfRange,
 }
 
 impl Display for RecordInvalidReason {
@@ -598,6 +608,9 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
                 write!(f, "every {purpose} key id is taken")
             }
+            RecordInvalidReason::SealEpochOutOfRange => {
+                f.write_str("the seal epoch is 0 or cannot count up any more")
+            }
         }
     }
 }
@@ -623,8 +636,8 @@ pub struct RecordRegressedError {
     pub rule: RegressionRule,
 }
 
-/// How a record read from the store moves backwards from the record a process holds. Each
-/// names the version of the held record that it concerns.
+/// How a record read from the store moves backwards from the record a process holds. Each rule
+/// of a version names the version of the held record that it concerns.
 ///
 /// Two more properties hold whenever these do, so they need no rule of their own: a destroyed
 /// version never regains an encrypted DEK, since `Destroyed` moves nowhere and holds none, and the
@@ -643,6 +656,9 @@ pub enum RegressionRule {
     /// The version's state moved against the lifecycle, back to `Active` or out of
     /// `Destroyed`.
     StateReverted(KeyId),
+    /// The record's seal epoch is below the held one, so that records sealed under different
+    /// active versions would carry the same [`SealMarker`](crate::sweep::SealMarker).
+    SealEpochReverted,
 }
 
 impl Display for RegressionRule {
@@ -677,6 +693,7 @@ impl Display for RegressionRule {
                     key_id = key_id.as_u32()
                 )
             }
+            RegressionRule::SealEpochReverted => f.write_str("the seal epoch moved back"),
         }
     }
 }

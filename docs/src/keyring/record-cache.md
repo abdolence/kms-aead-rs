@@ -79,10 +79,11 @@ is `DecryptOnly`.
 - a record that went missing from the store keeps the cached one in use, with a `WARN`. New
   processes fail at `open` with `RecordMissing`;
 - a refreshed record is taken only if it moves every version forward from the cached one: no
-  version missing, no changed algorithm or creation time, no compromised flag cleared, and no state
-  moved back against the lifecycle, such as a version back to `Pending`. Otherwise the process
-  keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a write of a
-  `KeyringAdmin` return `RecordRegressed` in that case.
+  version missing, no changed algorithm or creation time, no compromised flag cleared, no state
+  moved back against the lifecycle, such as a version back to `Pending`, and no seal epoch below
+  the cached one, which would give records sealed under different versions one marker. Otherwise
+  the process keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a
+  write of a `KeyringAdmin` return `RecordRegressed` in that case.
 
 The last rule is the detection of a rewritten or restored record in a running process. A process
 that starts after such a write has no record to compare with and takes it.

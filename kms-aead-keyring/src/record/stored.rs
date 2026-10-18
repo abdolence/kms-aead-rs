@@ -16,6 +16,7 @@ use super::{
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::purpose::is_reserved;
+use crate::sweep::SealMarker;
 use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
@@ -31,6 +32,7 @@ struct StoredRecord {
     id: String,
     kek: StoredKek,
     algorithms: StoredAlgorithms,
+    seal_epoch: u32,
     versions: Vec<StoredVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -106,6 +108,7 @@ impl From<&KeyringRecord> for StoredRecord {
                     .beacon
                     .map(|algorithm| algorithm.to_string()),
             },
+            seal_epoch: record.seal_marker.epoch(),
             versions,
             created_at: record.created_at,
             updated_at: record.updated_at,
@@ -170,6 +173,9 @@ impl KeyringRecord {
             .map(KeyVersion::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid)?;
+        if stored.seal_epoch == 0 {
+            return Err(invalid(RecordInvalidReason::SealEpochOutOfRange));
+        }
         let record = Self {
             id: id.clone(),
             kek: KekRef::new(
@@ -177,6 +183,7 @@ impl KeyringRecord {
                 stored.kek.key,
             ),
             algorithms,
+            seal_marker: SealMarker::of_epoch(stored.seal_epoch),
             versions,
             created_at: stored.created_at,
             updated_at: stored.updated_at,

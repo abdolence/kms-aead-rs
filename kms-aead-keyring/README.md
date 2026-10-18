@@ -17,11 +17,12 @@ The library provides:
 - separate application and administration APIs, so applications run with KMS decrypt and store
   read only, and keyrings are created and rotated from infrastructure;
 - keyring stores on Firestore, PostgreSQL, Cloud Storage and S3, and in memory for tests;
-- `Encrypted<T, Randomized>` fields of application types, with serde and tokio-postgres support
-  (sqlx through kms-aead's `sqlx` feature), and an AAD that binds a value to its row;
+- `Encrypted<T, Randomized>` fields of application types, with serde, tokio-postgres and sqlx
+  support, and an AAD that binds a value to its row;
 - deterministic fields for equality queries, across rotations;
 - beacons, blind indexes for lookups of randomised fields;
-- sweeps that re-seal stored values, and the migration from kms-aead's envelope values.
+- sweeps that re-seal stored values, finding the records to visit with one range query on a
+  5-byte seal marker, and the migration from kms-aead's envelope values.
 
 Documentation: the [keyring chapters](https://kms-aead-rust.abdolence.dev/keyring.html) of the
 book, and the [API docs](https://docs.rs/kms-aead-keyring).

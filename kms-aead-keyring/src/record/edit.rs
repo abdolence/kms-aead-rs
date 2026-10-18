@@ -12,6 +12,7 @@ use crate::errors::{
     InvalidTransitionError, KeyringError, KeyringResult, PurposeError, RecordInvalidReason,
 };
 use crate::purpose::next_key_id;
+use crate::sweep::SealMarker;
 use crate::{
     Compromise, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, Purpose, Rotation, Transition,
@@ -93,12 +94,13 @@ impl KeyringAlgorithms {
 
 impl KeyringRecord {
     /// A record with no version yet, to which the creation of a keyring stages and promotes the
-    /// first version of each purpose.
+    /// first version of each purpose. Its seal epoch is 0 until that write finishes.
     fn new(id: KeyringId, kek: KekRef, algorithms: KeyringAlgorithms, now: Timestamp) -> Self {
         Self {
             id,
             kek,
             algorithms,
+            seal_marker: SealMarker::ENVELOPE,
             versions: Vec::new(),
             created_at: now,
             updated_at: now,
@@ -169,24 +171,44 @@ impl RetainedDek {
 
 /// A record that an administrative write is changing: the lifecycle transitions apply to it,
 /// and [`finish`](Self::finish) checks the result as a reader would, before it is written.
-pub(crate) struct RecordEdit(KeyringRecord);
+pub(crate) struct RecordEdit {
+    record: KeyringRecord,
+    /// Whether a transition made a version active, which moves the seal epoch on once per write
+    /// however many versions it activates.
+    activated: bool,
+}
 
 impl From<KeyringRecord> for RecordEdit {
     fn from(record: KeyringRecord) -> Self {
-        Self(record)
+        Self {
+            record,
+            activated: false,
+        }
     }
 }
 
 impl RecordEdit {
     /// The record as changed so far.
     pub(crate) fn record(&self) -> &KeyringRecord {
-        &self.0
+        &self.record
     }
 
-    /// The changed record as a reader parses it from the store, so that a record that would
-    /// fail its invariants or caps there is never written.
+    /// The changed record as a reader parses it from the store, with the seal epoch moved on
+    /// when a version became active, so that a record that would fail its invariants or caps
+    /// there is never written.
+    ///
+    /// # Errors
+    ///
+    /// `RecordInvalid` with `SealEpochOutOfRange` when the epoch cannot count up any more, and
+    /// the errors of a read.
     pub(crate) fn finish(self) -> KeyringResult<KeyringRecord> {
-        KeyringRecord::from_json(&self.0.id, &self.0.to_json()?)
+        let mut record = self.record;
+        if self.activated {
+            record.seal_marker = record.seal_marker.next().ok_or_else(|| {
+                KeyringError::record_invalid(&record.id, RecordInvalidReason::SealEpochOutOfRange)
+            })?;
+        }
+        KeyringRecord::from_json(&record.id, &record.to_json()?)
     }
 
     /// Adds `new` as the pending version of its purpose, under the purpose's next key id, and
@@ -197,9 +219,9 @@ impl RecordEdit {
     /// `InvalidTransition` with [`Transition::Rotate`], naming the pending version, when the
     /// purpose has one already, and `RecordInvalid` with `KeyIdsExhausted` once its ids run out.
     pub(crate) fn stage(&mut self, new: NewVersion, now: Timestamp) -> KeyringResult<KeyId> {
-        if let Some(pending) = self.0.pending(new.algorithm.purpose()) {
+        if let Some(pending) = self.record.pending(new.algorithm.purpose()) {
             return Err(KeyringError::InvalidTransition(InvalidTransitionError {
-                keyring: self.0.id.clone(),
+                keyring: self.record.id.clone(),
                 key_id: pending.key_id,
                 from: KeyVersionState::Pending,
                 transition: Transition::Rotate,
@@ -212,7 +234,7 @@ impl RecordEdit {
     /// it replaces decrypts only.
     pub(crate) fn promote(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<Rotation> {
         let purpose = self.version_mut(key_id)?.algorithm.purpose();
-        let previous = self.0.active(purpose).map(KeyVersion::id);
+        let previous = self.record.active(purpose).map(KeyVersion::id);
         self.change_state(key_id, Transition::Promote, now, |state| match state {
             VersionState::Pending(encrypted_dek) => {
                 Some(VersionState::Active(encrypted_dek.clone()))
@@ -230,6 +252,7 @@ impl RecordEdit {
                 _ => None,
             })?;
         }
+        self.activated = true;
         Ok(Rotation {
             purpose,
             previous,
@@ -248,7 +271,7 @@ impl RecordEdit {
         now: Timestamp,
     ) -> KeyringResult<Option<Rotation>> {
         let was_active = self
-            .0
+            .record
             .version(key_id)
             .is_some_and(|version| version.state() == KeyVersionState::Active);
         self.change_state(
@@ -274,6 +297,7 @@ impl RecordEdit {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
                 let current = self.push(new, VersionState::Active, now)?;
+                self.activated = true;
                 Ok(Some(Rotation {
                     purpose,
                     previous: Some(key_id),
@@ -308,7 +332,7 @@ impl RecordEdit {
 
     /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag.
     pub(crate) fn destroy_all(&mut self, now: Timestamp) {
-        let record = &mut self.0;
+        let record = &mut self.record;
         for version in &mut record.versions {
             if !matches!(version.state, VersionState::Destroyed(_)) {
                 version.state = VersionState::Destroyed(version.state.compromised().cloned());
@@ -334,23 +358,23 @@ impl RecordEdit {
             }
             VersionState::Destroyed(_) => {
                 return Err(KeyringError::record_invalid(
-                    &self.0.id,
+                    &self.record.id,
                     RecordInvalidReason::MissingMaterial(key_id),
                 ))
             }
         }
-        self.0.updated_at = now;
+        self.record.updated_at = now;
         Ok(())
     }
 
     pub(crate) fn set_algorithm(&mut self, algorithm: KeyAlgorithm, now: Timestamp) {
-        let algorithms = &mut self.0.algorithms;
+        let algorithms = &mut self.record.algorithms;
         match algorithm {
             KeyAlgorithm::Randomized(algorithm) => algorithms.randomized = algorithm,
             KeyAlgorithm::Deterministic(algorithm) => algorithms.deterministic = Some(algorithm),
             KeyAlgorithm::Beacon(algorithm) => algorithms.beacon = Some(algorithm),
         }
-        self.0.updated_at = now;
+        self.record.updated_at = now;
     }
 
     /// Appends `new`, under the next key id of its purpose, in the state `state` makes of its
@@ -361,8 +385,8 @@ impl RecordEdit {
         state: fn(EncryptedDataEncryptionKey) -> VersionState,
         now: Timestamp,
     ) -> KeyringResult<KeyId> {
-        let key_id = self.0.next_key_id(new.algorithm.purpose())?;
-        let record = &mut self.0;
+        let key_id = self.record.next_key_id(new.algorithm.purpose())?;
+        let record = &mut self.record;
         record.versions.push(KeyVersion {
             key_id,
             algorithm: new.algorithm,
@@ -387,7 +411,7 @@ impl RecordEdit {
         let Some(state) = next(&version.state) else {
             let from = version.state.kind();
             return Err(KeyringError::InvalidTransition(InvalidTransitionError {
-                keyring: self.0.id.clone(),
+                keyring: self.record.id.clone(),
                 key_id,
                 from,
                 transition,
@@ -395,13 +419,13 @@ impl RecordEdit {
         };
         version.state = state;
         version.state_changed_at = now;
-        self.0.updated_at = now;
+        self.record.updated_at = now;
         Ok(())
     }
 
     /// The version `key_id`, or `KeyVersionUnknown`.
     fn version_mut(&mut self, key_id: KeyId) -> KeyringResult<&mut KeyVersion> {
-        let KeyringRecord { id, versions, .. } = &mut self.0;
+        let KeyringRecord { id, versions, .. } = &mut self.record;
         versions
             .iter_mut()
             .find(|version| version.key_id == key_id)

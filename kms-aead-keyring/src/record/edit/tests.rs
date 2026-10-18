@@ -1,6 +1,8 @@
 use kms_aead::{AeadAlgorithm, DeterministicAlgorithm};
+use serde_json::json;
 
 use super::*;
+use crate::errors::RecordInvalidError;
 use crate::record::tests::{document, parse, rotated, version, COMPROMISED, ENCRYPTED_DEK};
 use crate::test_support::TestResult;
 
@@ -261,6 +263,27 @@ fn a_promotion_moves_the_active_version_to_decrypt_only() -> TestResult {
     ]))?);
     let rotation = without_active.promote(KeyId::new(2), now)?;
     assert_eq!((rotation.previous, rotation.current), (None, KeyId::new(2)));
+    Ok(())
+}
+
+#[test]
+fn an_activation_past_the_last_seal_epoch_is_refused() -> TestResult {
+    let mut last_epoch = document(vec![
+        version(1, "active", false)?,
+        version(2, "pending", false)?,
+    ]);
+    last_epoch["seal_epoch"] = json!(u32::MAX);
+    let mut edit = RecordEdit::from(parse(&last_epoch)?);
+
+    edit.promote(KeyId::new(2), Timestamp::now())?;
+
+    assert!(matches!(
+        edit.finish(),
+        Err(KeyringError::RecordInvalid(RecordInvalidError {
+            reason: RecordInvalidReason::SealEpochOutOfRange,
+            ..
+        }))
+    ));
     Ok(())
 }
 

@@ -97,11 +97,12 @@ The crate has no default features, and the backend features are those of kms-aea
   `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`, see
   [Deterministic fields](./keyring/deterministic.md). The deterministic types exist in every
   build, so a process without the feature keeps a record's deterministic versions intact;
-- `serde`: `Serialize` and `Deserialize` for `Encrypted`;
+- `serde`: `Serialize` and `Deserialize` for `Encrypted` and `SealMarker`, as bytes;
 - `serde-json`: `serde`, and `Json<T>`, a plaintext stored as its JSON;
 - `firestore`, `postgres`, `gcs`, `s3`: the keyring stores, see
   [Keyring stores](./keyring/stores.md). `gcs` has TLS variants listed there, and `postgres`
-  also binds `Encrypted` in tokio-postgres;
+  also binds `Encrypted` and `SealMarker` in tokio-postgres, as `BYTEA`;
+- `sqlx`: `Encrypted` and `SealMarker` in sqlx on PostgreSQL, as `BYTEA`;
 - `bigquery-export`: `admin`, and `export_bigquery_keyset`, see
   [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery).
 

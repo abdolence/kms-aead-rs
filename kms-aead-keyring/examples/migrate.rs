@@ -23,9 +23,7 @@ use kms_aead::{
     KmsAeadResult,
 };
 use kms_aead_keyring::formats::{Envelope, Randomized};
-use kms_aead_keyring::sweep::{
-    self, ResealOutcome, SealFormat, SealMarker, SealThresholds, SweepReport,
-};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
@@ -87,26 +85,23 @@ fn provider(material: &SecretValue) -> Result<LocalKmsProvider<Ring>, Box<dyn st
     )?)
 }
 
-/// The email of `user`, read through the row's seal marker.
+/// The email of `user`, read through the row's seal marker: `SealMarker::ENVELOPE` for an
+/// envelope value, any other marker for a keyring value.
 async fn read_email(
     keyring: &UsersKeyring,
     user: &str,
     row: UserRow,
 ) -> Result<Email, Box<dyn std::error::Error>> {
-    match row.seal.format {
-        SealFormat::Envelope => {
-            let value = Encrypted::<Email, Envelope>::try_from(row.email)?;
-            Ok(keyring
-                .decrypt_envelope_for_migration(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
-                .await?)
-        }
-        SealFormat::Keyring => {
-            let value = Encrypted::<Email, Randomized>::try_from(row.email)?;
-            Ok(keyring
-                .decrypt(&EMAIL.aad(&EntityId::try_from(user)?), &value)
-                .await?)
-        }
-        other => Err(format!("unknown seal format {other:?}").into()),
+    if row.seal == SealMarker::ENVELOPE {
+        let value = Encrypted::<Email, Envelope>::try_from(row.email)?;
+        Ok(keyring
+            .decrypt_envelope_for_migration(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
+            .await?)
+    } else {
+        let value = Encrypted::<Email, Randomized>::try_from(row.email)?;
+        Ok(keyring
+            .decrypt(&EMAIL.aad(&EntityId::try_from(user)?), &value)
+            .await?)
     }
 }
 
@@ -117,16 +112,12 @@ async fn print_rows(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rows = table.lock().unwrap_or_else(PoisonError::into_inner).clone();
     for (user, row) in rows {
-        let marker = row.seal;
+        let seal = row.seal;
         let Email(email) = read_email(keyring, &user, row).await?;
-        match marker.randomized {
-            Some(key_id) => {
-                println!(
-                    "  user {user}: {email}, a keyring value under key id {}",
-                    key_id.as_u32()
-                )
-            }
-            None => println!("  user {user}: {email}, an envelope value"),
+        if seal == SealMarker::ENVELOPE {
+            println!("  user {user}: {email}, an envelope value");
+        } else {
+            println!("  user {user}: {email}, a keyring value sealed at seal epoch {seal}");
         }
     }
     Ok(())
@@ -137,9 +128,6 @@ enum MigrateError {
     Keyring(KeyringError),
     /// A stored value that does not parse as the layout its marker names.
     Value(KmsAeadError),
-    /// A row in a layout this application does not write, which stays behind for a person to
-    /// look at.
-    UnknownLayout(SealFormat),
 }
 
 impl From<KeyringError> for MigrateError {
@@ -160,13 +148,13 @@ impl Display for MigrateError {
         match self {
             MigrateError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
             MigrateError::Value(error) => write!(f, "a stored value failed with {}", error.code()),
-            MigrateError::UnknownLayout(format) => write!(f, "an unknown seal format {format:?}"),
         }
     }
 }
 
 /// Re-seals the row of `user` under the active version, from an envelope value or a keyring value
-/// under an older version, unless a writer did since the sweep's query.
+/// under an older version, and writes the current seal marker beside it. A keyring value that is
+/// current already gets the marker alone.
 async fn reseal(
     keyring: &UsersKeyring,
     table: &Table,
@@ -180,50 +168,53 @@ async fn reseal(
     let Some(row) = row else {
         return Ok(ResealOutcome::Skipped);
     };
+    // Read before the email is sealed, so that it never names an epoch newer than the version
+    // the email is sealed under.
+    let seal: SealMarker = keyring.record().seal_marker();
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let (email, from_compromised) = match row.seal.format {
-        SealFormat::Envelope => {
-            let email: Email = keyring
-                .decrypt_envelope_for_migration(
-                    &envelope_aad(user),
-                    &Encrypted::<Email, Envelope>::try_from(row.email)?,
-                    ENVELOPE_ALGORITHM,
-                )
-                .await?;
-            // Envelope values name no key version, so the record carries no trust to decide on.
-            (keyring.encrypt(&aad, &email).await?, false)
+    let (email, outcome) = if row.seal == SealMarker::ENVELOPE {
+        let email: Email = keyring
+            .decrypt_envelope_for_migration(
+                &envelope_aad(user),
+                &Encrypted::<Email, Envelope>::try_from(row.email)?,
+                ENVELOPE_ALGORITHM,
+            )
+            .await?;
+        // Envelope values name no key version, so the record carries no trust to decide on.
+        let resealed = ResealOutcome::Resealed {
+            from_compromised: false,
+        };
+        (keyring.encrypt(&aad, &email).await?, resealed)
+    } else {
+        let email = Encrypted::<Email, Randomized>::try_from(row.email)?;
+        let resealed: Option<Resealed<Email, Randomized>> = keyring.reseal(&aad, &email).await?;
+        match resealed {
+            Some(resealed) => {
+                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+                (resealed.value, ResealOutcome::Resealed { from_compromised })
+            }
+            None => (email, ResealOutcome::Skipped),
         }
-        SealFormat::Keyring => {
-            let email = Encrypted::<Email, Randomized>::try_from(row.email)?;
-            let Some(resealed): Option<Resealed<Email, Randomized>> =
-                keyring.reseal(&aad, &email).await?
-            else {
-                return Ok(ResealOutcome::Skipped);
-            };
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, from_compromised)
-        }
-        other => return Err(MigrateError::UnknownLayout(other)),
     };
     let row = UserRow {
-        seal: SealMarker::keyring([email.key_id()])?,
+        seal,
         email: email.into_value(),
     };
     table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .insert(user.to_string(), row);
-    Ok(ResealOutcome::Resealed { from_compromised })
+    Ok(outcome)
 }
 
-/// Sweeps every row behind the keyring's active versions, and prints the report.
+/// Sweeps every row whose seal marker is below the keyring's, and prints the report.
 async fn sweep_table(keyring: &UsersKeyring, table: &Table) {
-    let thresholds: SealThresholds = keyring.seal_thresholds();
+    let current: SealMarker = keyring.record().seal_marker();
     let candidates: Vec<String> = table
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
-        .filter(|(_, row)| row.seal.is_behind(&thresholds))
+        .filter(|(_, row)| row.seal < current)
         .map(|(user, _)| user.clone())
         .collect();
     let report: SweepReport = sweep::run(
@@ -282,7 +273,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let keyring: UsersKeyring = registry.open(provider(&material)?, TENANT).await?;
     print_rows(&keyring, &table).await?;
 
-    // The migration: every envelope row is behind any thresholds.
+    // The migration: an envelope row's marker, epoch 0, is below every keyring's.
     sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
 

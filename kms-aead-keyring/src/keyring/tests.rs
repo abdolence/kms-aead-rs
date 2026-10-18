@@ -6,7 +6,8 @@ use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::{Bare, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, DeterministicAlgorithm, KekProvider, KmsAeadResult, Plaintext,
+    AeadAlgorithm, AeadCipher, BeaconAlgorithm, DeterministicAlgorithm, KekProvider, KmsAeadResult,
+    Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde_json::Value;
@@ -14,6 +15,7 @@ use serde_json::Value;
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::KeyringStore;
+use crate::sweep::SealMarker;
 use crate::test_support::{
     email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
     TestStore, EMAIL, TENANT,
@@ -858,6 +860,109 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         assert_ne!(previous_encrypted_dek, current_encrypted_dek);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_seal_epoch_moves_on_once_per_write_that_activates_a_version() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let (admin, keyring) = (&fixture.admin, &fixture.keyring);
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(1));
+
+    let second = admin.rotate(Purpose::Randomized).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(1));
+    admin.promote(second).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(2));
+    let third = admin
+        .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
+        .await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(2));
+    admin.promote(third).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(3));
+
+    admin.mark_compromised(KeyId::new(1), None).await?;
+    admin.retire(second).await?;
+    admin.reinstate(second).await?;
+    admin.retire(second).await?;
+    admin.destroy(second).await?;
+    admin.reencrypt_deks().await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(3));
+
+    let replacement = admin
+        .mark_compromised(third, None)
+        .await?
+        .ok_or("the compromised active version is replaced")?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(4));
+    fixture
+        .provider
+        .calls
+        .fail_encryptions
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        admin.mark_compromised(replacement.current, None).await?,
+        None
+    );
+    fixture
+        .provider
+        .calls
+        .fail_encryptions
+        .store(false, Ordering::SeqCst);
+    admin
+        .destroy(admin.rotate(Purpose::Randomized).await?)
+        .await?;
+    admin.dangerously_destroy_all_versions().await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(4));
+    assert_eq!(
+        fixture
+            .other_process()
+            .await?
+            .keyring()
+            .record()
+            .seal_marker(),
+        SealMarker::of_epoch(4)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_promotions_move_the_seal_epoch_on_once_each() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let options = KeyringRegistryOptions::new().with_watch(false);
+    let creator = TestRegistry::new(memory.clone(), options.clone())?
+        .create(
+            provider.clone(),
+            TENANT,
+            KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+        )
+        .await?;
+    let randomized = creator.rotate(Purpose::Randomized).await?;
+    let beacon = creator.rotate(Purpose::Beacon).await?;
+    // Two processes whose loads take long enough that both writes read the same record, so that
+    // one of them loses its compare-and-swap and applies its promotion again on the other's.
+    let stores = [
+        TestStore::new(&memory, Duration::from_millis(50)),
+        TestStore::new(&memory, Duration::from_millis(50)),
+    ];
+    let first = TestRegistry::new(stores[0].clone(), options.clone())?
+        .admin(provider.clone(), TENANT)
+        .await?;
+    let second = TestRegistry::new(stores[1].clone(), options)?
+        .admin(provider, TENANT)
+        .await?;
+
+    let (first_rotation, second_rotation) =
+        tokio::join!(first.promote(randomized), second.promote(beacon));
+
+    first_rotation?;
+    second_rotation?;
+    let loads: usize = stores
+        .iter()
+        .map(|store| store.calls.loads.load(Ordering::SeqCst))
+        .sum();
+    assert_eq!(loads, 5, "two opens, two writes and one retry");
+    let stored = memory.load(&TENANT).await?.ok_or("the record is gone")?;
+    assert_eq!(stored.record.seal_marker(), SealMarker::of_epoch(3));
     Ok(())
 }
 

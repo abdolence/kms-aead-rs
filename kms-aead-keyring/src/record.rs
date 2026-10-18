@@ -12,6 +12,7 @@ use kms_aead::{
 use rsb_derive::Builder;
 
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, RegressionRule};
+use crate::sweep::SealMarker;
 use crate::{KeyId, Purpose};
 
 #[cfg(feature = "admin")]
@@ -463,14 +464,14 @@ struct RetainedDek {
 }
 
 /// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new
-/// versions, and every version ever created, in creation order. It is stored as one JSON
-/// document, the same in every store; see [`to_json`](Self::to_json).
+/// versions, the seal epoch, and every version ever created, in creation order. It is stored as
+/// one JSON document, the same in every store; see [`to_json`](Self::to_json).
 ///
 /// Every record that exists holds its invariants: at most one active and one pending version
 /// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
 /// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
-/// order, and at most 1 MiB of JSON: at about 400 bytes per version with its encrypted DEK, about
-/// 2,600 versions.
+/// order, a seal epoch of 1 or more, and at most 1 MiB of JSON: at about 400 bytes per version
+/// with its encrypted DEK, about 2,600 versions.
 ///
 /// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]
@@ -478,6 +479,7 @@ pub struct KeyringRecord {
     id: KeyringId,
     kek: KekRef,
     algorithms: KeyringAlgorithms,
+    seal_marker: SealMarker,
     versions: Vec<KeyVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -500,6 +502,19 @@ impl KeyringRecord {
     /// The algorithms new versions use.
     pub fn algorithms(&self) -> &KeyringAlgorithms {
         &self.algorithms
+    }
+
+    /// The marker of the record's seal epoch, which every administrative write that makes a
+    /// version active moves on by one: the keyring's creation, at epoch 1, `promote`, and the
+    /// replacement of a compromised active version by `mark_compromised`.
+    ///
+    /// A write of an application record stores it beside the encrypted fields it seals, and a
+    /// sweep visits the records whose marker is below it, see [`sweep`](crate::sweep). The
+    /// marker is read before the first field is sealed: the cached record moves forward only, so
+    /// such a marker is never newer than the versions the fields are sealed under, while one read
+    /// after them can be.
+    pub fn seal_marker(&self) -> SealMarker {
+        self.seal_marker
     }
 
     /// Every version ever created, in creation order.
@@ -563,7 +578,8 @@ impl KeyringRecord {
 
 /// Whether `next`, a record read from the store, moves forward from `held`: every version of
 /// `held` is still there, with the same algorithm and creation time, its compromised flag kept
-/// with its time, and its state moved along the lifecycle. New versions are free.
+/// with its time, and its state moved along the lifecycle, and the seal epoch is not below
+/// `held`'s. New versions are free.
 ///
 /// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
 pub(crate) fn check_successor(
@@ -588,6 +604,9 @@ pub(crate) fn check_successor(
         if !held.state().reaches(version.state()) {
             return Err(RegressionRule::StateReverted(key_id));
         }
+    }
+    if next.seal_marker < held.seal_marker {
+        return Err(RegressionRule::SealEpochReverted);
     }
     Ok(())
 }
