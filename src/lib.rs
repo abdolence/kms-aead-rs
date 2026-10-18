@@ -106,7 +106,7 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText, ValueStruct};
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
@@ -115,7 +115,8 @@
 //! let aad = b"orders/1042";
 //!
 //! let cipher_text = cipher.encrypt_value(aad, &secret_value, &key)?;
-//! let decrypted = cipher.decrypt_value(aad, &cipher_text, &key)?;
+//! let stored: &[u8] = cipher_text.value();
+//! let decrypted = cipher.decrypt_value(aad, &CipherText(stored.to_vec()), &key)?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -230,6 +231,10 @@ mod spans;
 
 mod types;
 pub use types::*;
+
+/// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
+/// [`CipherTextWithEncryptedKey`] and [`DeterministicCipherText`].
+pub use rvstruct::ValueStruct;
 
 pub mod providers;
 
