@@ -3,6 +3,9 @@ name = "kms-aead-keyring"
 version = "0.30.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
+# The oldest toolchain that builds the docs.rs feature set on dependencies resolved for it, which
+# the rust-version CI job checks: sqlx 0.9 needs 1.94.
+rust-version = "1.94"
 license = "Apache-2.0"
 description = "Field encryption over kms-aead with a keyring: key versions in a keyring store, Tink's value layout, rotation and a compromised flag"
 homepage = "https://github.com/abdolence/kms-aead-rs"

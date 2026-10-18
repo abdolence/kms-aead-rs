@@ -191,8 +191,8 @@ impl KeyringStore for TestStore {
         record: &KeyringRecord,
         expected: Option<&MemoryRevision>,
     ) -> KeyringResult<Swap<MemoryRevision>> {
-        // `try_update`, the name Rust 1.99 gives `fetch_update`, is above the crate's minimum
-        // Rust version.
+        // `try_update`, the name Rust 1.99 gives `fetch_update`, is above the keyring's
+        // `rust-version`, 1.94.
         #[allow(deprecated)]
         let conflict = self
             .calls

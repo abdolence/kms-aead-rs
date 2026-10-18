@@ -130,18 +130,20 @@ jobs:
       - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
       - run: cargo test --doc -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export"
       - run: cd docs && mdbook build
-  # `rust-version` in Cargo.toml: the docs.rs feature set builds on it, on dependencies resolved
-  # for it.
+  # `rust-version` in each crate's Cargo.toml: its docs.rs feature set builds on it, on
+  # dependencies resolved for it.
   msrv:
     name: rust-version
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    env:
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.91
+      - uses: dtolnay/rust-toolchain@1.94
       - run: cargo +1.91 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-        env:
-          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
+      - run: cargo +1.94 check -p kms-aead-keyring --lib --features "ring,deterministic,serde-json,firestore,postgres-tls-rustls,gcs-tls-roots,bigquery-export"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
