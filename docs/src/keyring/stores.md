@@ -61,8 +61,8 @@ let keyring = Keyring::open(
 project, database and credentials it chooses. The version of the `firestore` crate is part of
 this crate's API under the `firestore` feature.
 
-Each keyring opens one listener on its document, and Firestore's point-in-time recovery restores
-an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
+Each keyring holds one listen stream, on its document. Firestore's point-in-time recovery
+restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
 `firestore` target, documents included, so that level writes wrapped DEKs to the log. Keep it off
 where the log leaves the administrative principal's reach.
 
@@ -83,8 +83,9 @@ CREATE TABLE kms_keyrings (
 - The serving principal needs `SELECT` on it, and the administrative one also `INSERT` and
   `UPDATE`;
 - the table name is unqualified, so the connection's `search_path` selects the schema;
-- every write sends `NOTIFY <table>, '<keyring id>'` when it commits, and each keyring listens on
-  that channel with one connection of the pool;
+- every write sends `NOTIFY <table>, '<keyring id>'` when it commits. The keyrings of a store
+  share one listener on that channel, which holds one connection of the pool while any of them
+  watches;
 - PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
   `reload_min_interval` however many signals arrive, so a stray `NOTIFY` costs one read.
 

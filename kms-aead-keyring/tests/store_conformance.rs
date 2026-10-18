@@ -464,35 +464,107 @@ mod postgres {
         Ok(())
     }
 
-    /// A lost listener connection is reported, and the listener comes back on its own and
-    /// listens again: the keyring revalidates on `Reconnected`, since PostgreSQL drops the
-    /// notifications of a closed session.
+    /// A store and its clones share one listener connection, so a watch per keyring costs no
+    /// connection beyond the first.
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
-    async fn a_lost_listener_connection_signals_disconnected_then_reconnected() -> TestResult {
+    async fn many_watches_share_one_connection() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let pool = PgPoolOptions::new()
+            .max_connections(2)
+            .acquire_timeout(Duration::from_millis(500))
+            .connect_with(connect_options()?)
+            .await?;
+        let store = PostgresKeyringStore::new(pool).with_table(table.clone());
+        let mut watches = Vec::new();
+        for _ in 0..5 {
+            let tenant = store.clone();
+            watches.push(
+                tenant
+                    .watch(&unique_keyring_id()?)
+                    .await?
+                    .ok_or("the store has no push")?,
+            );
+        }
+        assert!(store.load(&unique_keyring_id()?).await?.is_none());
+        drop(watches);
+        drop_table(&admin, &table).await
+    }
+
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn a_change_signals_only_its_keyrings_watches() -> TestResult {
+        let admin = connect().await?;
+        let table = create_table(&admin).await?;
+        let store = PostgresKeyringStore::new(connect().await?).with_table(table.clone());
+        let changed = unique_keyring_id()?;
+        let mut changed_watches = [
+            store
+                .watch(&changed)
+                .await?
+                .ok_or("the store has no push")?,
+            store
+                .watch(&changed)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
+        let mut unchanged_watch = store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?;
+        written(store.compare_and_swap(&record(&changed, 0)?, None).await?)?;
+        for watch in &mut changed_watches {
+            assert_eq!(next_event(watch).await?, Some(WatchEvent::Changed));
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), unchanged_watch.next())
+                .await
+                .is_err(),
+            "a write of another keyring signalled the watch"
+        );
+        drop_table(&admin, &table).await
+    }
+
+    /// A lost listener connection is reported to every watch, and the listener comes back on
+    /// its own and listens again: the keyring revalidates on `Reconnected`, since PostgreSQL
+    /// drops the notifications of a closed session.
+    #[tokio::test]
+    #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
+    async fn a_lost_connection_reaches_every_watch() -> TestResult {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
         let application = format!("listener-{}", uuid::Uuid::now_v7().simple());
         let pool = PgPool::connect_with(connect_options()?.application_name(&application)).await?;
         let store = PostgresKeyringStore::new(pool).with_table(table.clone());
         let id = unique_keyring_id()?;
-        let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
+        let mut watches = [
+            store.watch(&id).await?.ok_or("the store has no push")?,
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
         sqlx::query(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = $1",
         )
         .bind(&application)
         .execute(&admin)
         .await?;
-        assert_eq!(
-            next_event(&mut watch).await?,
-            Some(WatchEvent::Disconnected)
-        );
-        assert_eq!(next_event(&mut watch).await?, Some(WatchEvent::Reconnected));
+        for watch in &mut watches {
+            assert_eq!(next_event(watch).await?, Some(WatchEvent::Disconnected));
+            assert_eq!(next_event(watch).await?, Some(WatchEvent::Reconnected));
+        }
         written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
-        assert_eq!(next_event(&mut watch).await?, Some(WatchEvent::Changed));
+        assert_eq!(
+            next_event(&mut watches[0]).await?,
+            Some(WatchEvent::Changed)
+        );
         drop_table(&admin, &table).await
     }
 
+    /// The shared listener holds its connection while any watch runs, and returns it once the
+    /// last one is dropped.
     #[tokio::test]
     #[ignore = "needs PostgreSQL at KMS_AEAD_KEYRING_POSTGRES_URL"]
     async fn dropping_the_watch_returns_its_connection() -> TestResult {
@@ -505,9 +577,14 @@ mod postgres {
             .await?;
         let store = PostgresKeyringStore::new(pool).with_table(table.clone());
         let id = unique_keyring_id()?;
-        let watch = store.watch(&id).await?.ok_or("the store has no push")?;
+        let first = store.watch(&id).await?.ok_or("the store has no push")?;
+        let last = store
+            .watch(&unique_keyring_id()?)
+            .await?
+            .ok_or("the store has no push")?;
+        drop(first);
         assert!(matches!(store.load(&id).await, Err(KeyringError::Store(_))));
-        drop(watch);
+        drop(last);
         let deadline = Instant::now() + Duration::from_secs(10);
         while store.load(&id).await.is_err() {
             assert!(Instant::now() < deadline, "the watch kept its connection");
