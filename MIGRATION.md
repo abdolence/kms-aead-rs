@@ -27,8 +27,9 @@ In short:
 - `EncryptedDataEncryptionKey` is the provider's bytes: store `value()` or `to_hex_string()`, and
   read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`;
 - to move stored values to the new format, upgrade every reader to 0.30 with `legacy-formats`,
-  rewrite the values with `KmsAeadEnvelope::upgrade_legacy_value` and
-  `upgrade_legacy_encrypted_key`, then turn the feature off.
+  rewrite the values with `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD
+  and opens the value before it writes, and `upgrade_legacy_encrypted_key`, then turn the
+  feature off.
 
 The full list of changes, with the old and new names, is in
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).

@@ -484,7 +484,9 @@ mod tests {
             let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
 
             let decrypted = encryption.decrypt_value(b"test-aad", &stored).await?;
-            let upgraded = encryption.upgrade_legacy_value(&stored).await?;
+            let upgraded = encryption
+                .upgrade_legacy_value(b"test-aad", &stored)
+                .await?;
 
             assert_eq!(decrypted, SecretValue::from("test-secret"));
             let upgraded = upgraded.expect("a legacy value is upgraded");
@@ -493,7 +495,10 @@ mod tests {
                 encryption.decrypt_value(b"test-aad", &upgraded).await?,
                 SecretValue::from("test-secret")
             );
-            assert!(encryption.upgrade_legacy_value(&upgraded).await?.is_none());
+            assert!(encryption
+                .upgrade_legacy_value(b"test-aad", &upgraded)
+                .await?
+                .is_none());
         }
         Ok(())
     }
