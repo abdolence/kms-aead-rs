@@ -198,8 +198,10 @@ mod encrypted_serde {
             Encrypted::try_from(bytes).map_err(E::custom)
         }
 
+        /// Grows the buffer as the bytes arrive: the sequence's length hint comes from the
+        /// input, and a hostile one claims any length.
         fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
-            let mut bytes = Vec::with_capacity(seq.size_hint().unwrap_or_default());
+            let mut bytes = Vec::new();
             while let Some(byte) = seq.next_element()? {
                 bytes.push(byte);
             }
@@ -303,6 +305,35 @@ mod tests {
         let json = serde_json::to_string(&value)?;
         assert!(json.starts_with("[1,0,0,0,7,171,"), "{json}");
         assert_eq!(serde_json::from_str::<Encrypted<String>>(&json)?, value);
+        Ok(())
+    }
+
+    /// Bytes whose length hint claims `usize::MAX` elements, as a hostile input can.
+    #[cfg(feature = "serde")]
+    struct OverstatedLength(std::vec::IntoIter<u8>);
+
+    #[cfg(feature = "serde")]
+    impl Iterator for OverstatedLength {
+        type Item = u8;
+
+        fn next(&mut self) -> Option<u8> {
+            self.0.next()
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            (usize::MAX, Some(usize::MAX))
+        }
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn a_sequence_overstating_its_length_deserializes() -> Result<(), Box<dyn std::error::Error>> {
+        use serde::de::value::{Error, SeqDeserializer};
+        use serde::Deserialize;
+
+        let bytes = OverstatedLength(randomized_bytes(7).into_iter());
+        let value = Encrypted::<String>::deserialize(SeqDeserializer::<_, Error>::new(bytes))?;
+        assert_eq!(value.as_bytes(), randomized_bytes(7));
         Ok(())
     }
 
