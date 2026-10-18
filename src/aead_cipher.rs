@@ -51,16 +51,9 @@ impl AeadCipher {
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn generate_key(&self) -> KmsAeadResult<DataEncryptionKey> {
-        let ops: &dyn AeadBackendOps = self.backend.into();
-        let mut key = SecretValue::new(vec![0; self.algorithm.key_len()]);
-        ops.fill_random(key.ref_sensitive_value_mut())
-            .map_err(|_| {
-                KmsAeadEncryptionError::create(
-                    "RANDOM_GENERATOR",
-                    "Unable to generate a random key",
-                )
-            })?;
-        Ok(DataEncryptionKey::from(key))
+        self.backend
+            .generate_random_bytes(self.algorithm.key_len())
+            .map(DataEncryptionKey::from)
     }
 
     /// A new key and the same key wrapped by `provider` with `binding`, to store. The key comes

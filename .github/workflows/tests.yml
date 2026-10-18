@@ -115,6 +115,31 @@ jobs:
       - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
         env:
           RUSTDOCFLAGS: -D warnings
+  # The book's code compiles as doctests only with the docs.rs feature set, which no build row has.
+  book:
+    name: book
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: '0.5.4'
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cd docs && mdbook build
+  # `rust-version` in Cargo.toml: the docs.rs feature set builds on it, on dependencies resolved
+  # for it.
+  msrv:
+    name: rust-version
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.91
+      - run: cargo +1.91 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+        env:
+          CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: fallback
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

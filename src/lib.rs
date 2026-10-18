@@ -25,7 +25,9 @@
 //! A wrap and an unwrap take an optional [`DekBinding`], which the KMS authenticates with the
 //! wrapped key: GCP as additional authenticated data, AWS as an encryption context, Vault Transit
 //! as associated data and the local KMS in its AAD. The Azure provider has no such input and
-//! refuses a binding. [`KmsAeadEnvelope`] wraps unbound.
+//! refuses a binding. [`KmsAeadEnvelope`] wraps and unwraps unbound, so a DEK wrapped with a
+//! binding fails at the KMS through its `*_with_encrypted_dek` calls. A bound DEK goes to the
+//! provider and to [`cache::DekCache`] directly.
 //!
 //! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
 //! wrapped under an alias that later moves to another key fails to unwrap with
@@ -62,7 +64,10 @@
 //! to renew it. Its DEK, and the DEKs of the values it reads, live in a
 //! [`cache::DekCache`], which serves each plaintext DEK for a TTL and zeroizes it as it leaves the
 //! cache: at the cache's next call after the TTL, or at
-//! [`purge_expired`](cache::DekCache::purge_expired). The per-call envelope, the default, keeps
+//! [`purge_expired`](cache::DekCache::purge_expired). The writer's DEK also leaves the cache when
+//! the cache evicts it for capacity, so in a cache shared with readers, size
+//! [`max_entries`](cache::DekCacheOptions::max_entries) above the number of distinct DEKs read
+//! per TTL, or give the writer a cache of its own. The per-call envelope, the default, keeps
 //! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
 //! plaintext DEK in request and response buffers that kms-aead cannot zeroize.
 //!
@@ -106,7 +111,7 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText, ValueStruct};
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
@@ -115,7 +120,8 @@
 //! let aad = b"orders/1042";
 //!
 //! let cipher_text = cipher.encrypt_value(aad, &secret_value, &key)?;
-//! let decrypted = cipher.decrypt_value(aad, &cipher_text, &key)?;
+//! let stored: &[u8] = cipher_text.value();
+//! let decrypted = cipher.decrypt_value(aad, &CipherText(stored.to_vec()), &key)?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -231,7 +237,28 @@ mod spans;
 mod types;
 pub use types::*;
 
+/// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
+/// [`CipherTextWithEncryptedKey`] and [`DeterministicCipherText`].
+pub use rvstruct::ValueStruct;
+
 pub mod providers;
+
+// The book's code uses every provider, backend and optional feature, so it compiles in the build
+// with the docs.rs feature set only.
+#[cfg(all(
+    doctest,
+    feature = "ring",
+    feature = "aws-lc",
+    feature = "rustcrypto",
+    feature = "deterministic",
+    feature = "legacy-formats",
+    feature = "serde",
+    feature = "gcp-kms-encryption",
+    feature = "aws-kms-encryption",
+    feature = "azure-kms-encryption",
+    feature = "hashicorp-vault-transit-kms-encryption"
+))]
+mod book;
 
 #[cfg(test)]
 mod test_provider;

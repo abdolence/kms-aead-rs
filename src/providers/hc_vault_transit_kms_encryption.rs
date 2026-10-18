@@ -453,7 +453,6 @@ struct DecryptRequest<'a> {
 #[derive(Deserialize)]
 struct TransitResponse<D> {
     data: D,
-    #[serde(default)]
     warnings: Option<Vec<String>>,
 }
 
@@ -1121,10 +1120,6 @@ mod tests {
             )
             .await;
 
-        println!(
-            "Vault refused another binding with {:?}",
-            result.as_ref().err().map(KmsAeadError::code)
-        );
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "VAULT_STATUS_400"),
             "{:?}",

@@ -1,0 +1,134 @@
+# Getting started
+
+Cargo.toml:
+
+```toml
+[dependencies]
+kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "aws-lc"] }
+```
+
+The crate has no default features. A build makes three choices, and they do not constrain each
+other:
+
+1. the KMS providers, any number of them, or none for AEAD without a KMS;
+2. the TLS root store and the TLS crypto provider of each provider that has a choice;
+3. the crypto backends that run the AEAD algorithms, one or more.
+
+## Features
+
+KMS providers:
+
+- `gcp-kms-encryption`: Google Cloud KMS, with the native TLS roots of the system. Be aware it
+  also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls
+  whatever its TLS feature;
+- `gcp-kms-encryption-webpki`: Google Cloud KMS with the bundled WebPKI roots;
+- `gcp-kms-encryption-base`: Google Cloud KMS without a TLS root store or crypto provider. The
+  application enables them with its own `gcloud-sdk` features, such as `tls-roots` or
+  `tls-webpki-roots`, and the crate does not build without one;
+- `aws-kms-encryption`: AWS KMS;
+- `azure-kms-encryption`: Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto
+  provider. Other TLS variants, choose one:
+    - `azure-kms-encryption-tls-aws-lc-rs`, the same as `azure-kms-encryption`;
+    - `azure-kms-encryption-tls-no-provider`, rustls with the crypto provider the application
+      installs. The application must install a process-default rustls `CryptoProvider` before
+      creating the provider, otherwise rustls panics;
+    - `azure-kms-encryption-native-tls`, the platform TLS library;
+- `hashicorp-vault-transit-kms-encryption`: HashiCorp Vault Transit, with the system root
+  certificates and the aws-lc-rs crypto provider. To choose them, enable one root store and one
+  crypto provider instead:
+    - `hashicorp-vault-transit-kms-encryption-tls-roots` or
+      `hashicorp-vault-transit-kms-encryption-tls-webpki`;
+    - `hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs` or
+      `hashicorp-vault-transit-kms-encryption-tls-ring`.
+
+The local KMS provider, `LocalKmsProvider`, is in every build and needs no feature.
+
+Crypto backends, see [Crypto backends](./crypto-backends.md):
+
+- `ring`: the ring library;
+- `aws-lc`: the aws-lc-rs library;
+- `aws-lc-fips`: the aws-lc-rs library on the AWS-LC FIPS module. Needs CMake and Go to build;
+- `rustcrypto`: the pure Rust RustCrypto crates, no C compiler needed.
+
+Other features:
+
+- `deterministic`: deterministic encryption with AES-SIV, see
+  [Deterministic encryption](./deterministic.md);
+- `legacy-formats`: reads the layouts written by 0.28.1 and earlier. Deprecated, see
+  [Formats](./formats.md);
+- `serde`: `Serialize` and `Deserialize` for `KmsAeadErrorPublicGenericDetails` and for
+  `SecretValue`.
+
+## Choosing a backend
+
+The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is the backend that adds
+no second crypto library to a provider build. `ring` and `rustcrypto` work with every provider
+too, and a build may enable several backends at once and pick one per envelope at runtime:
+
+```rust
+# fn example() -> kms_aead::KmsAeadResult<()> {
+use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+
+let cipher = AeadCipher::new(AeadBackend::AwsLc, AeadAlgorithm::Aes256Gcm)?;
+# let _ = cipher;
+# Ok(())
+# }
+```
+
+There is no default backend, so every constructor that seals or wraps takes an `AeadBackend`.
+
+## Feature rules
+
+The crate refuses some feature combinations at compile time with `compile_error!`:
+
+- a provider feature without a backend feature fails with "kms-aead needs a crypto backend for
+  its KMS providers: enable "ring", "aws-lc", "aws-lc-fips" or "rustcrypto"";
+- HashiCorp Vault Transit needs exactly one of `-tls-roots` and `-tls-webpki`, and exactly one
+  of `-tls-aws-lc-rs` and `-tls-ring`. `hashicorp-vault-transit-kms-encryption` already enables
+  `-tls-roots` and `-tls-aws-lc-rs`, so combine the other variants with
+  `hashicorp-vault-transit-kms-encryption-base` instead;
+- Azure needs exactly one of `azure-kms-encryption-tls-aws-lc-rs` (or `azure-kms-encryption`),
+  `azure-kms-encryption-tls-no-provider` and `azure-kms-encryption-native-tls`.
+
+The `aws-lc-rs` feature that `aws-lc` and `aws-lc-fips` enable is not a backend choice: enabled
+alone, the aws-lc-rs build fails. Use `aws-lc` or `aws-lc-fips`.
+
+A build without any backend feature compiles, and `LocalKmsProvider` is in it, but nothing that
+seals or wraps can be constructed, since `AeadBackend` has no variant.
+
+## First example
+
+The local KMS needs no cloud account, so it is the quickest way to try the library. An
+ephemeral KEK lives as long as the process:
+
+```rust
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> kms_aead::KmsAeadResult<()> {
+let provider = LocalKmsProvider::ephemeral(
+    LocalKekId::try_from("example".to_string())?,
+    AeadBackend::Ring,
+)?;
+let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+
+let aad = b"orders/1042";
+let secret = SecretValue::from("4111 1111 1111 1111");
+
+let encrypted = envelope.encrypt_value(aad, &secret).await?;
+let decrypted = envelope.decrypt_value(aad, &encrypted).await?;
+
+assert_eq!(decrypted, secret);
+# Ok(())
+# }
+```
+
+To move to a cloud KMS, replace the provider, see [KMS providers](./providers.md). The rest of
+the code stays the same.
+
+## MSRV
+
+The minimum supported Rust version is 1.91, for every feature, on dependencies resolved for it.
+The backends alone build from 1.89.

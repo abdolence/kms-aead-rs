@@ -3,9 +3,10 @@ name = "kms-aead"
 version = "0.29.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
-# The oldest toolchain that builds every feature on dependencies resolved for it: gcloud-sdk's
-# google-cloud-auth needs 1.91. The latest AWS SDK releases need 1.94.1, and an MSRV-aware
-# resolver picks older ones; the backends alone build from 1.89, the floor of aes 0.9.
+# The oldest toolchain that builds every feature on dependencies resolved for it, which the
+# rust-version CI job checks: gcloud-sdk's google-cloud-auth needs 1.91. Later releases of other
+# dependencies may need a newer toolchain, and an MSRV-aware resolver picks older ones. The
+# backends alone build from 1.89, the floor of aes 0.9.
 rust-version = "1.91"
 license = "Apache-2.0"
 description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit, with ring, aws-lc-rs or RustCrypto AEAD"
@@ -15,7 +16,7 @@ documentation = "https://docs.rs/kms-aead"
 categories = ["cryptography","api-bindings"]
 keywords = ["kms", "google", "aws", "azure", "vault"]
 readme = "README.md"
-include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md"]
+include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md", "docs/src/**/*.md"]
 
 [workspace]
 members = ["kms-aead-keyring"]
@@ -188,7 +189,6 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-rustdoc-args = ["--cfg", "docsrs"]
 features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
 
 [[example]]

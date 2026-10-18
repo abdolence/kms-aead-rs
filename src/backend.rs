@@ -4,7 +4,10 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::AeadAlgorithm;
+use secret_vault_value::SecretValue;
+
+use crate::errors::KmsAeadEncryptionError;
+use crate::{AeadAlgorithm, KmsAeadResult};
 
 #[cfg(feature = "ring")]
 mod ring;
@@ -61,6 +64,28 @@ pub enum AeadBackend {
     /// the Poly1305 and POLYVAL keys each call derives, are zeroized when dropped.
     #[cfg(feature = "rustcrypto")]
     RustCrypto,
+}
+
+impl AeadBackend {
+    /// `len` random bytes from the CSPRNG the backend draws its keys and nonces from: ring's
+    /// `SystemRandom`, AWS-LC's `RAND_bytes`, which is the FIPS module's DRBG with
+    /// `aws-lc-fips`, or `getrandom` for RustCrypto.
+    ///
+    /// # Errors
+    ///
+    /// `RANDOM_GENERATOR` when the CSPRNG fails.
+    pub fn generate_random_bytes(self, len: usize) -> KmsAeadResult<SecretValue> {
+        let ops: &dyn AeadBackendOps = self.into();
+        let mut random = SecretValue::new(vec![0; len]);
+        ops.fill_random(random.ref_sensitive_value_mut())
+            .map_err(|_| {
+                KmsAeadEncryptionError::create(
+                    "RANDOM_GENERATOR",
+                    "Unable to generate random bytes",
+                )
+            })?;
+        Ok(random)
+    }
 }
 
 /// `ring`, `aws-lc`, `rustcrypto`: the values of the `/kms_aead/backend` span field.

@@ -6,8 +6,6 @@
 //!   cargo test --features azure-kms-encryption --test azure_kms_emulator -- --ignored
 //! ```
 
-#![cfg(test)]
-
 use azure_core::http::{ClientOptions, RequestContent, Transport};
 use azure_security_keyvault_keys::models::{CreateKeyParameters, KeyOperation, KeyType};
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
@@ -15,6 +13,7 @@ use kms_aead::errors::KmsAeadError;
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
+use std::error::Error;
 use std::sync::Arc;
 
 mod common;
@@ -33,45 +32,45 @@ const BACKEND: AeadBackend = AeadBackend::RustCrypto;
 
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";
 
+type TestResult<T> = Result<T, Box<dyn Error>>;
+
 struct Emulator {
     vault_url: String,
     client: KeyClient,
 }
 
 impl Emulator {
-    fn connect() -> Self {
+    fn connect() -> TestResult<Self> {
         let vault_url = std::env::var(EMULATOR_URL_ENV)
-            .unwrap_or_else(|_| panic!("{EMULATOR_URL_ENV} must point at a Lowkey Vault"));
+            .map_err(|_| format!("{EMULATOR_URL_ENV} must point at a Lowkey Vault"))?;
         let client = KeyClient::new(
             &vault_url,
             Arc::new(FixedTokenCredential),
-            Some(Self::client_options()),
-        )
-        .unwrap();
-        Self { vault_url, client }
+            Some(Self::client_options()?),
+        )?;
+        Ok(Self { vault_url, client })
     }
 
     /// The emulator serves a self-signed certificate and names itself, not a Key Vault domain,
     /// as the authentication challenge resource.
-    fn client_options() -> KeyClientOptions {
+    fn client_options() -> TestResult<KeyClientOptions> {
         common::install_crypto_provider();
         let http_client = reqwest::Client::builder()
             .tls_danger_accept_invalid_certs(true)
-            .build()
-            .unwrap();
-        KeyClientOptions {
+            .build()?;
+        Ok(KeyClientOptions {
             client_options: ClientOptions {
                 transport: Some(Transport::new(Arc::new(http_client))),
                 ..Default::default()
             },
             verify_challenge_resource: Some(false),
             ..Default::default()
-        }
+        })
     }
 
     /// Creates a new RSA version of `key_name`, creating the key if it does not exist, and
     /// returns that version.
-    async fn create_rsa_key_version(&self, key_name: &str) -> KmsKeyVersion {
+    async fn create_rsa_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
         let parameters = CreateKeyParameters {
             kty: Some(KeyType::Rsa),
             key_size: Some(2048),
@@ -86,16 +85,14 @@ impl Emulator {
         };
         let key = self
             .client
-            .create_key(
-                key_name,
-                RequestContent::try_from(parameters).unwrap(),
-                None,
-            )
-            .await
-            .unwrap()
-            .into_model()
-            .unwrap();
-        KmsKeyVersion::try_from(key.resource_id().unwrap().version.unwrap()).unwrap()
+            .create_key(key_name, RequestContent::try_from(parameters)?, None)
+            .await?
+            .into_model()?;
+        let version = key
+            .resource_id()?
+            .version
+            .ok_or("Lowkey Vault returned a key id without a version")?;
+        Ok(KmsKeyVersion::try_from(version)?)
     }
 
     /// Lowkey Vault wraps only with an explicit key version.
@@ -103,77 +100,74 @@ impl Emulator {
         &self,
         key_name: &str,
         key_version: KmsKeyVersion,
-    ) -> KmsAeadEnvelope<AzureKmsProvider> {
+    ) -> TestResult<KmsAeadEnvelope<AzureKmsProvider>> {
         let key_ref = AzureKmsKeyRef::new(self.vault_url.clone(), key_name.to_string())
             .with_key_version(key_version);
         let provider = AzureKmsProvider::with_options(
             &key_ref,
-            AzureKmsProviderOptions::new().with_client_options(Self::client_options()),
+            AzureKmsProviderOptions::new().with_client_options(Self::client_options()?),
             Arc::new(FixedTokenCredential),
-        )
-        .unwrap();
-        KmsAeadEnvelope::new(provider, BACKEND).unwrap()
+        )?;
+        Ok(KmsAeadEnvelope::new(provider, BACKEND)?)
     }
 }
 
 /// Emulator state outlives a test run, so every run uses fresh key names.
-fn unique_name(prefix: &str) -> String {
+fn unique_name(prefix: &str) -> TestResult<String> {
     let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
-    format!("{prefix}-{nanos}")
+    Ok(format!("{prefix}-{nanos}"))
 }
 
 #[tokio::test]
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
-async fn value_encrypted_before_key_rotation_decrypts_after_it() {
-    let emulator = Emulator::connect();
-    let key_name = unique_name("dek-wrapping-key");
-    let first_version = emulator.create_rsa_key_version(&key_name).await;
+async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-wrapping-key")?;
+    let first_version = emulator.create_rsa_key_version(&key_name).await?;
     let aad = b"test-aad";
 
     let cipher_text = emulator
         .encryption(&key_name, first_version.clone())
-        .await
+        .await?
         .encrypt_value(aad, &SecretValue::from("test-secret"))
-        .await
-        .unwrap();
-    let (_, encrypted_key) = cipher_text.separate().unwrap();
+        .await?;
+    let (_, encrypted_key) = cipher_text.separate()?;
     assert_eq!(encrypted_key.key_version(), Some(&first_version));
 
-    let rotated_version = emulator.create_rsa_key_version(&key_name).await;
+    let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
     let decrypted = emulator
         .encryption(&key_name, rotated_version)
-        .await
+        .await?
         .decrypt_value(aad, &cipher_text)
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(decrypted.as_sensitive_str(), "test-secret");
+    Ok(())
 }
 
 #[tokio::test]
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
-async fn value_encrypted_with_another_key_fails_to_decrypt() {
-    let emulator = Emulator::connect();
-    let key_name = unique_name("dek-wrapping-key");
-    let other_key_name = unique_name("other-key");
-    let key_version = emulator.create_rsa_key_version(&key_name).await;
-    let other_key_version = emulator.create_rsa_key_version(&other_key_name).await;
+async fn value_encrypted_with_another_key_fails_to_decrypt() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-wrapping-key")?;
+    let other_key_name = unique_name("other-key")?;
+    let key_version = emulator.create_rsa_key_version(&key_name).await?;
+    let other_key_version = emulator.create_rsa_key_version(&other_key_name).await?;
     let aad = b"test-aad";
 
     let cipher_text = emulator
         .encryption(&other_key_name, other_key_version)
-        .await
+        .await?
         .encrypt_value(aad, &SecretValue::from("test-secret"))
-        .await
-        .unwrap();
+        .await?;
     let result = emulator
         .encryption(&key_name, key_version)
-        .await
+        .await?
         .decrypt_value(aad, &cipher_text)
         .await;
 
     assert!(matches!(result, Err(KmsAeadError::EncryptionError(_))));
+    Ok(())
 }

@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::num::NonZeroU64;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
@@ -76,9 +77,13 @@ pub struct KmsAeadEnvelopeOptions {
 ///
 /// The envelope keeps only the wrapped DEK. Its plaintext lives in the envelope's [`DekCache`],
 /// and the first encryption after it has left the cache renews it: past the cache's TTL,
-/// whatever `max_age`, or after [`DekCache::invalidate`] or [`DekCache::clear`]. The cache
-/// zeroizes the expired DEK at its next call or at [`DekCache::purge_expired`], so a writer that
-/// falls quiet leaves the DEK in memory until then: a process that can sit idle calls
+/// whatever `max_age`, after the cache evicts it for capacity, or after [`DekCache::invalidate`]
+/// with `envelope.provider().kek()` or [`DekCache::clear`]. In a cache shared with readers, size
+/// [`max_entries`](crate::cache::DekCacheOptions::max_entries) above the number of distinct DEKs
+/// read per TTL, or give the writer a cache of its own.
+///
+/// The cache zeroizes the expired DEK at its next call or at [`DekCache::purge_expired`], so a
+/// writer that falls quiet leaves the DEK in memory until then: a process that can sit idle calls
 /// `purge_expired` on a timer to drop it at the TTL. The values sealed while the cache holds the
 /// DEK are readable by whoever reads the process's memory in that window.
 #[derive(Debug, Clone, Builder)]
@@ -101,7 +106,12 @@ struct DekReuse {
     current: RwLock<Option<Arc<CurrentDek>>>,
     /// Held across a renewal's KMS calls, so that one writer renews at a time. It holds the error
     /// of the last attempt when that attempt failed.
-    renewal: tokio::sync::Mutex<Option<KmsAeadError>>,
+    ///
+    /// Neither tokio's mutex nor the error is unwind safe, and the assertion keeps the envelope
+    /// so. A panic in `renew`, the provider's code, leaves the state a cancelled renewal leaves:
+    /// tokio releases the guard without poisoning, and nothing under it is written before `renew`
+    /// returns. What runs after `renew` only counts, clones and stores.
+    renewal: AssertUnwindSafe<tokio::sync::Mutex<Option<KmsAeadError>>>,
     /// The renewal attempts that ended, which tells a writer whether one ended while it waited
     /// for `renewal`. A cancelled attempt does not end.
     ended_renewals: AtomicU64,
@@ -136,7 +146,7 @@ impl DekReuse {
         Ok(Self {
             policy,
             current: RwLock::new(None),
-            renewal: tokio::sync::Mutex::new(None),
+            renewal: AssertUnwindSafe(tokio::sync::Mutex::new(None)),
             ended_renewals: AtomicU64::new(0),
         })
     }
@@ -254,8 +264,14 @@ where
         self.cipher.algorithm()
     }
 
+    /// The provider this envelope wraps and unwraps DEKs with.
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
     /// The cache this envelope unwraps DEKs through, for [`DekCache::invalidate`] and
-    /// [`DekCache::clear`].
+    /// [`DekCache::clear`]. Pass `envelope.provider().kek()` to `invalidate`: a
+    /// [`KekRef`](crate::KekRef) built by hand that differs from it matches no entry.
     pub fn dek_cache(&self) -> &DekCache {
         &self.dek_cache
     }
@@ -366,8 +382,10 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and encrypts `plain_text` under it.
-    /// The caller stores the wrapped DEK beside the returned cipher text.
+    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and encrypts `plain_text`
+    /// under it. The caller stores the wrapped DEK beside the returned cipher text. A DEK
+    /// wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the KMS; it is
+    /// unwrapped through the provider or [`DekCache::with_key`] directly.
     ///
     /// # Errors
     ///
@@ -401,7 +419,9 @@ where
         })
     }
 
-    /// Unwraps `dek`, through the envelope's [`DekCache`], and opens `cipher_text` with it.
+    /// Unwraps `dek` unbound, through the envelope's [`DekCache`], and opens `cipher_text` with
+    /// it. A DEK wrapped with a [`DekBinding`](crate::DekBinding) fails to unwrap here, at the
+    /// KMS; it is unwrapped through the provider or [`DekCache::with_key`] directly.
     ///
     /// # Errors
     ///
@@ -1019,7 +1039,7 @@ mod tests {
             .1;
         envelope
             .dek_cache()
-            .invalidate(envelope.provider.kek(), &first, None);
+            .invalidate(envelope.provider().kek(), &first, None);
         let after_invalidate = envelope
             .encrypt_value(AAD, &plain_text)
             .await?
@@ -1081,5 +1101,11 @@ mod tests {
         assert_eq!(wraps_of_one_attempt, 1);
         assert_eq!(envelope.provider.wraps(), 2);
         Ok(())
+    }
+
+    #[test]
+    fn envelope_is_unwind_safe() {
+        fn unwind_safe<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        unwind_safe::<Envelope>();
     }
 }

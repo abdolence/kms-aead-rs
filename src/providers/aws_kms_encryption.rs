@@ -644,10 +644,6 @@ mod tests {
             )
             .await;
 
-        println!(
-            "AWS KMS refused another binding with {:?}",
-            result.as_ref().err().map(KmsAeadError::code)
-        );
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(e))
                 if e.public.code == "InvalidCiphertextException"),
