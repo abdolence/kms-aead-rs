@@ -187,11 +187,10 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let parameters =
-                self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
+            let parameters = self.key_operation(dek.value().ref_sensitive_value().clone())?;
             let wrapped = kms::timed(
                 self.client.wrap_key(
                     &self.azure_key_ref.key_name,
@@ -226,14 +225,12 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
                     "Azure Key Vault returned no encrypted DEK",
                 )
             })?;
-            let encrypted_dek = AzureWrappedKey {
+            let wrapped_key = AzureWrappedKey {
                 key_version: KmsKeyVersion::try_from(key_version)?,
                 wrapped: &encrypted_bytes,
             };
-            kms::record_key_version(encrypted_dek.key_version.as_str());
-            encrypted_dek
-                .to_bytes()
-                .map(EncryptedDataEncryptionKey::new)
+            kms::record_key_version(wrapped_key.key_version.as_str());
+            wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
         })
         .await
     }
@@ -243,16 +240,16 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
     /// earlier version of this one.
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let encrypted_dek = AzureWrappedKey::try_from(encrypted_key.value().as_slice())?;
-            kms::record_key_version(encrypted_dek.key_version.as_str());
+            let wrapped_key = AzureWrappedKey::try_from(encrypted_dek.value().as_slice())?;
+            kms::record_key_version(wrapped_key.key_version.as_str());
 
-            let parameters = self.key_operation(encrypted_dek.wrapped.to_vec())?;
+            let parameters = self.key_operation(wrapped_key.wrapped.to_vec())?;
             let unwrapped = kms::timed(self.client.unwrap_key(
                 &self.azure_key_ref.key_name,
-                encrypted_dek.key_version.as_str(),
+                wrapped_key.key_version.as_str(),
                 parameters,
                 None,
             ))

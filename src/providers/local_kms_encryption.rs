@@ -336,7 +336,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let (&version, kek) = self.keks.last_key_value().ok_or_else(|| {
@@ -347,11 +347,9 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             })?;
             kms::record_key_version(&version.to_string());
             let mut encrypted_dek = LocalEncryptedDek::header(self.kek.key(), version)?;
-            let sealed = kms::timed(async {
-                self.cipher
-                    .encrypt_value(&encrypted_dek, encryption_key.value(), kek)
-            })
-            .await?;
+            let sealed =
+                kms::timed(async { self.cipher.encrypt_value(&encrypted_dek, dek.value(), kek) })
+                    .await?;
             encrypted_dek.extend_from_slice(sealed.value());
             Ok(EncryptedDataEncryptionKey::new(encrypted_dek))
         })
@@ -360,10 +358,10 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let layout = LocalEncryptedDek::split(encrypted_key.value()).ok_or_else(|| {
+            let layout = LocalEncryptedDek::split(encrypted_dek.value()).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_ENCRYPTED_DEK_FORMAT",
                     "The encrypted DEK is not in the layout of the local KMS",
@@ -464,7 +462,7 @@ mod tests {
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
         )?;
-        let encrypted_by_old = old.encrypt_data_encryption_key(&dek).await?;
+        let old_encrypted_dek = old.encrypt_data_encryption_key(&dek).await?;
         let rotated = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
@@ -474,10 +472,10 @@ mod tests {
             ],
         )?;
 
-        let encrypted_by_new = rotated.encrypt_data_encryption_key(&dek).await?;
+        let new_encrypted_dek = rotated.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(&encrypted_by_new.value()[8..12], [0, 0, 0, 3]);
-        for encrypted_dek in [encrypted_by_old, encrypted_by_new] {
+        assert_eq!(&new_encrypted_dek.value()[8..12], [0, 0, 0, 3]);
+        for encrypted_dek in [old_encrypted_dek, new_encrypted_dek] {
             assert_eq!(
                 rotated.decrypt_data_encryption_key(&encrypted_dek).await?,
                 dek

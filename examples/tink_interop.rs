@@ -154,12 +154,12 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
     let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
-    let (key, encrypted_dek) = cipher.generate_dek(&provider).await?;
+    let (dek, encrypted_dek) = cipher.generate_dek(&provider).await?;
     let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
-    keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &key)?;
+    keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &dek)?;
     let aad = format!("orders/{kms}/{algorithm}");
     let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
-    let value = cipher.encrypt_field(EXPORTED_KEY_ID, aad.as_bytes(), &message, &key)?;
+    let value = cipher.encrypt_field(EXPORTED_KEY_ID, aad.as_bytes(), &message, &dek)?;
     println!(
         "{}",
         json!({
@@ -201,8 +201,8 @@ where
             let value = Encrypted::<Message, Randomized>::try_from(value)?;
             let encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(encrypted_dek)?;
             let (decrypted, _) = DekCache::disabled()
-                .with_key(&provider, &encrypted_dek, |key| {
-                    cipher.decrypt_field(&aad, &value, key)
+                .with_key(&provider, &encrypted_dek, |dek| {
+                    cipher.decrypt_field(&aad, &value, dek)
                 })
                 .await?;
             decrypted

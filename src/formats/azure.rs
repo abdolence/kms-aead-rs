@@ -81,18 +81,18 @@ mod tests {
 
     #[test]
     fn the_layout_is_pinned() -> KmsAeadResult<()> {
-        let encrypted_dek = AzureWrappedKey {
+        let wrapped_key = AzureWrappedKey {
             key_version: KmsKeyVersion::try_from(KEY_VERSION.to_string())?,
             wrapped: b"wrapped",
         };
 
-        let bytes = encrypted_dek.to_bytes()?;
+        let bytes = wrapped_key.to_bytes()?;
 
         assert_eq!(
             hex::encode(&bytes),
             format!("0120{}77726170706564", hex::encode(KEY_VERSION))
         );
-        assert_eq!(AzureWrappedKey::try_from(bytes.as_slice())?, encrypted_dek);
+        assert_eq!(AzureWrappedKey::try_from(bytes.as_slice())?, wrapped_key);
         Ok(())
     }
 

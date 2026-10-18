@@ -69,12 +69,12 @@ fn crypto_key_version<'n>(key: &str, name: &'n str) -> Option<&'n str> {
 /// Encrypts under the primary version of the CryptoKey `key`.
 fn encrypt_request(
     key: &str,
-    encryption_key: &DataEncryptionKey,
+    dek: &DataEncryptionKey,
 ) -> KmsAeadResult<tonic::Request<EncryptRequest>> {
     routed(
         EncryptRequest {
             name: key.to_string(),
-            plaintext: SecretValue::new(encryption_key.value().ref_sensitive_value().clone()),
+            plaintext: SecretValue::new(dek.value().ref_sensitive_value().clone()),
             ..Default::default()
         },
         key,
@@ -85,12 +85,12 @@ fn encrypt_request(
 /// Names the CryptoKey `key`, so that Cloud KMS refuses a key encrypted under another one.
 fn decrypt_request(
     key: &str,
-    encrypted_key: &EncryptedDataEncryptionKey,
+    encrypted_dek: &EncryptedDataEncryptionKey,
 ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
     routed(
         DecryptRequest {
             name: key.to_string(),
-            ciphertext: encrypted_key.value().clone(),
+            ciphertext: encrypted_dek.value().clone(),
             ..Default::default()
         },
         key,
@@ -182,10 +182,10 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let encrypt_request = encrypt_request(self.kek.key(), encryption_key)?;
+            let encrypt_request = encrypt_request(self.kek.key(), dek)?;
 
             let encrypt_response = kms::timed(self.client.get().encrypt(encrypt_request))
                 .await
@@ -205,10 +205,10 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let decrypt_request = decrypt_request(self.kek.key(), encrypted_key)?;
+            let decrypt_request = decrypt_request(self.kek.key(), encrypted_dek)?;
             let decrypt_response = kms::timed(self.client.get().decrypt(decrypt_request))
                 .await
                 .map_err(KmsAeadError::from_gcp_status)?;

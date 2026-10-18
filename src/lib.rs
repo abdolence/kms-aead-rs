@@ -138,13 +138,13 @@
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
-//! let key = cipher.generate_key()?;
+//! let dek = cipher.generate_key()?;
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
 //!
-//! let cipher_text = cipher.encrypt_value(aad, &secret_value, &key)?;
+//! let cipher_text = cipher.encrypt_value(aad, &secret_value, &dek)?;
 //! let stored: &[u8] = cipher_text.value();
-//! let decrypted = cipher.decrypt_value(aad, &CipherText(stored.to_vec()), &key)?;
+//! let decrypted = cipher.decrypt_value(aad, &CipherText(stored.to_vec()), &dek)?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())

@@ -127,22 +127,20 @@ impl AwsKmsProvider {
     }
 
     /// Encrypts under the configured key.
-    fn encrypt_request(&self, encryption_key: &DataEncryptionKey) -> EncryptFluentBuilder {
+    fn encrypt_request(&self, dek: &DataEncryptionKey) -> EncryptFluentBuilder {
         self.client
             .encrypt()
             .key_id(self.kek.key())
-            .plaintext(Blob::new(
-                encryption_key.value().ref_sensitive_value().as_slice(),
-            ))
+            .plaintext(Blob::new(dek.value().ref_sensitive_value().as_slice()))
     }
 
     /// Names the configured key: without it AWS KMS decrypts under whichever key the blob names,
     /// for any key the principal may decrypt with.
-    fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
+    fn decrypt_request(&self, encrypted_dek: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
         self.client
             .decrypt()
             .key_id(self.kek.key())
-            .ciphertext_blob(Blob::new(encrypted_key.value().as_slice()))
+            .ciphertext_blob(Blob::new(encrypted_dek.value().as_slice()))
     }
 }
 
@@ -154,10 +152,10 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
 
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let encrypt_response = kms::timed(self.encrypt_request(encryption_key).send())
+            let encrypt_response = kms::timed(self.encrypt_request(dek).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
@@ -176,10 +174,10 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
 
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
+            let decrypt_response = kms::timed(self.decrypt_request(encrypted_dek).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
 

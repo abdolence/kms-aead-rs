@@ -79,10 +79,10 @@ impl TinkKeyType {
     }
 }
 
-/// `key` serialised as a key of `key_type`. `version` 0 is proto3's default and so is not
+/// `dek` serialised as a key of `key_type`. `version` 0 is proto3's default and so is not
 /// written, as Tink writes it.
-pub(crate) fn serialize_tink_key(key_type: TinkKeyType, key: &DataEncryptionKey) -> SecretValue {
-    let key = key.value().ref_sensitive_value();
+pub(crate) fn serialize_tink_key(key_type: TinkKeyType, dek: &DataEncryptionKey) -> SecretValue {
+    let key = dek.value().ref_sensitive_value();
     let field = key_type.key_value_field();
     // Sized up front, since growing the buffer would leave a copy of the key in freed memory.
     let mut serialized =
@@ -179,20 +179,20 @@ impl TinkKeyset {
         })
     }
 
-    /// Adds `key` as the enabled key `key_id` of `key_type`. Tink requires the ids of a keyset
+    /// Adds `dek` as the enabled key `key_id` of `key_type`. Tink requires the ids of a keyset
     /// to be unique, and the primary id to name one of its keys.
     ///
     /// # Errors
     ///
-    /// `INVALID_KEY_LENGTH` when `key` does not have a length of `key_type`: 16 or 32 bytes for
+    /// `INVALID_KEY_LENGTH` when `dek` does not have a length of `key_type`: 16 or 32 bytes for
     /// `AesGcm` and `AesGcmSiv`, 32 for `ChaCha20Poly1305` and 64 for `AesSiv`.
     pub fn add_key(
         &mut self,
         key_id: KeyId,
         key_type: TinkKeyType,
-        key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<()> {
-        let len = key.value().ref_sensitive_value().len();
+        let len = dek.value().ref_sensitive_value().len();
         if !key_type.takes_key_len(len) {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_KEY_LENGTH",
@@ -202,7 +202,7 @@ impl TinkKeyset {
         self.0.key.push(Key {
             key_data: Some(KeyData {
                 type_url: key_type.type_url().to_string(),
-                value: std::mem::take(serialize_tink_key(key_type, key).ref_sensitive_value_mut()),
+                value: std::mem::take(serialize_tink_key(key_type, dek).ref_sensitive_value_mut()),
                 key_material_type: KEY_MATERIAL_SYMMETRIC,
             }),
             status: KEY_STATUS_ENABLED,
@@ -238,10 +238,10 @@ impl TinkKeyset {
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
-        let serialized = DataEncryptionKey::from(self.to_bytes());
+        let keyset_dek = DataEncryptionKey::from(self.to_bytes());
         drop(self);
         let encrypted_keyset = provider
-            .encrypt_data_encryption_key(&serialized)
+            .encrypt_data_encryption_key(&keyset_dek)
             .await?
             .into_value();
         Ok(EncryptedKeyset { encrypted_keyset }.encode_to_vec())
@@ -373,16 +373,16 @@ mod tests {
     #[test]
     fn keys_serialize_as_tink_writes_them_and_read_back() -> KmsAeadResult<()> {
         for tink_key in TINK_KEYS {
-            let key = DataEncryptionKey::from(SecretValue::new(hex::decode(tink_key.key).unwrap()));
+            let dek = DataEncryptionKey::from(SecretValue::new(hex::decode(tink_key.key).unwrap()));
             let serialized = hex::decode(tink_key.serialized).unwrap();
 
             assert_eq!(
-                *serialize_tink_key(tink_key.key_type, &key).ref_sensitive_value(),
+                *serialize_tink_key(tink_key.key_type, &dek).ref_sensitive_value(),
                 serialized,
                 "{:?}",
                 tink_key.key_type
             );
-            assert_eq!(read_tink_key(&serialized)?, key);
+            assert_eq!(read_tink_key(&serialized)?, dek);
         }
         Ok(())
     }
@@ -393,13 +393,13 @@ mod tests {
             algorithm in prop::sample::select(AeadAlgorithm::ALL.to_vec()),
             byte in any::<u8>(),
         ) {
-            let key = DataEncryptionKey::from(SecretValue::new(vec![byte; algorithm.key_len()]));
+            let dek = DataEncryptionKey::from(SecretValue::new(vec![byte; algorithm.key_len()]));
 
-            let serialized = serialize_tink_key(TinkKeyType::from(algorithm), &key);
+            let serialized = serialize_tink_key(TinkKeyType::from(algorithm), &dek);
 
             prop_assert_eq!(
                 read_tink_key(serialized.ref_sensitive_value()).unwrap(),
-                key
+                dek
             );
         }
 
@@ -441,12 +441,9 @@ mod tests {
     fn an_explicit_version_0_is_read() -> KmsAeadResult<()> {
         let key = [0x42; 32];
 
-        let read = read_tink_key(&[&[0x08, 0x00, 0x12, 0x20][..], &key].concat())?;
+        let dek = read_tink_key(&[&[0x08, 0x00, 0x12, 0x20][..], &key].concat())?;
 
-        assert_eq!(
-            read,
-            DataEncryptionKey::from(SecretValue::new(key.to_vec()))
-        );
+        assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(key.to_vec())));
         Ok(())
     }
 

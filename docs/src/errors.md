@@ -27,17 +27,17 @@ use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
-let key = cipher.generate_key()?;
-let cipher_text = cipher.encrypt_value(b"orders/1042", &SecretValue::from("secret"), &key)?;
+let dek = cipher.generate_key()?;
+let cipher_text = cipher.encrypt_value(b"orders/1042", &SecretValue::from("secret"), &dek)?;
 
-match cipher.decrypt_value(b"orders/1043", &cipher_text, &key) {
+match cipher.decrypt_value(b"orders/1043", &cipher_text, &dek) {
     Err(KmsAeadError::EncryptionError(error)) if error.public.code == "DECRYPT" => {
         // Not authentic under this key and AAD
     }
     other => panic!("{other:?}"),
 }
 
-let too_short = cipher.decrypt_value(b"orders/1042", &CipherText(vec![0; 8]), &key);
+let too_short = cipher.decrypt_value(b"orders/1042", &CipherText(vec![0; 8]), &dek);
 assert!(matches!(&too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"));
 # Ok(())
 # }

@@ -50,15 +50,15 @@ use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
 let cipher = DeterministicCipher::<Ring>::new(DeterministicAlgorithm::Aes256Siv)?;
-let key = cipher.generate_key()?;
+let dek = cipher.generate_key()?;
 
 let aad = b"customers/email";
-let first = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &key)?;
-let second = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &key)?;
+let first = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &dek)?;
+let second = cipher.encrypt_value(aad, &SecretValue::from("user@example.com"), &dek)?;
 
 // Equal values give equal cipher texts, to look up by
 assert_eq!(first, second);
-assert_eq!(cipher.decrypt_value(aad, &first, &key)?, SecretValue::from("user@example.com"));
+assert_eq!(cipher.decrypt_value(aad, &first, &dek)?, SecretValue::from("user@example.com"));
 # Ok(())
 # }
 ```
@@ -85,14 +85,14 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key encrypted, to store
-let (key, encrypted_key) = envelope.generate_new_deterministic_dek(algorithm).await?;
+let (dek, encrypted_dek) = envelope.generate_new_deterministic_dek(algorithm).await?;
 
 // Later: decrypt the stored key
-let decrypted = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
+let decrypted_dek = envelope.decrypt_deterministic_dek(algorithm, &encrypted_dek).await?;
 
 let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
-let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &key)?;
-assert_eq!(cipher.decrypt_value(b"aad", &sealed, &decrypted)?, SecretValue::from("value"));
+let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &dek)?;
+assert_eq!(cipher.decrypt_value(b"aad", &sealed, &decrypted_dek)?, SecretValue::from("value"));
 # Ok(())
 # }
 ```

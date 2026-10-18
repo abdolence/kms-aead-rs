@@ -273,13 +273,13 @@ impl<B: AeadBackend> BeaconMac<B> {
         .await
     }
 
-    /// The beacon of `value` under `key`, the beacon key `key_id`, for the field `context`,
+    /// The beacon of `value` under `dek`, the beacon key `key_id`, for the field `context`,
     /// keeping `bits` bits. `context` names the field, such as a table and a column, and never a
     /// row: equal values in one field must give equal beacons.
     ///
     /// # Errors
     ///
-    /// `INVALID_KEY_LENGTH` when `key` does not have `algorithm().key_len()` bytes,
+    /// `INVALID_KEY_LENGTH` when `dek` does not have `algorithm().key_len()` bytes,
     /// `INVALID_BEACON_CONTEXT` for a context longer than 2^32 - 1 bytes, `INVALID_PLAINTEXT`
     /// when the value does not encode, and `BEACON` when the backend fails.
     pub fn compute<T: Plaintext>(
@@ -288,9 +288,9 @@ impl<B: AeadBackend> BeaconMac<B> {
         context: &[u8],
         bits: BeaconBits,
         value: &T,
-        key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
-        let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
+        let key = checked_key_bytes(dek, self.algorithm, self.algorithm.key_len())?;
         let context_len = u32::try_from(context.len()).map_err(|_| {
             KmsAeadEncryptionError::create(
                 "INVALID_BEACON_CONTEXT",
@@ -365,14 +365,14 @@ mod tests {
 
     #[test]
     fn a_key_of_another_length_is_refused() {
-        let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
+        let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
 
         let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256).compute(
             KeyId::new(7),
             b"user/email",
             BeaconBits::DEFAULT,
             &"alice@example.com".to_string(),
-            &key,
+            &dek,
         );
 
         assert!(
