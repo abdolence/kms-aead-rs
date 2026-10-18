@@ -12,7 +12,8 @@ use kms_aead::{AwsLc, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 # async fn example() -> kms_aead::KmsAeadResult<()> {
-// VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE and VAULT_CACERT are read by the provider
+// VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE, VAULT_CACERT and VAULT_CLIENT_TIMEOUT are read by
+// the provider
 let key_ref = HcVaultTransitKeyRef::new("orders".to_string());
 
 let provider = HcVaultTransitProvider::new(&key_ref)?;
@@ -32,7 +33,10 @@ Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/mast
 
 `HcVaultTransitProvider::new` reads its options from the variables the Vault CLI reads, with
 `HcVaultTransitProviderOptions::from_env`: `VAULT_ADDR` (required), `VAULT_TOKEN`,
-`VAULT_NAMESPACE` and `VAULT_CACERT`. An empty variable counts as unset.
+`VAULT_NAMESPACE`, `VAULT_CACERT` and `VAULT_CLIENT_TIMEOUT`. An empty variable counts as unset.
+`VAULT_CLIENT_TIMEOUT` takes the formats the Vault CLI takes: whole seconds (`30`), whole days
+(`2d`) or a Go duration (`30s`, `1h30m`). Zero, which the Vault CLI reads as no time limit, is
+refused, as is a value in any other format.
 `HcVaultTransitProvider::with_options` takes them from the application:
 
 ```rust,no_run

@@ -126,12 +126,15 @@ impl HcVaultTransitProviderOptions {
     pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
     /// Options from the variables the Vault CLI reads: `VAULT_ADDR` (required), `VAULT_TOKEN`,
-    /// `VAULT_NAMESPACE` and `VAULT_CACERT`. An empty variable counts as unset.
+    /// `VAULT_NAMESPACE`, `VAULT_CACERT` and `VAULT_CLIENT_TIMEOUT`. An empty variable counts as
+    /// unset. `VAULT_CLIENT_TIMEOUT` sets [`timeout`](Self::timeout) in the formats the Vault CLI
+    /// reads: whole seconds (`30`), whole days (`2d`) or a Go duration (`30s`, `1h30m`, `1.5s`).
     ///
     /// # Errors
     ///
-    /// `VAULT_INVALID_OPTIONS` when `VAULT_ADDR` is unset, a variable is not valid Unicode, or
-    /// the token is not visible ASCII.
+    /// `VAULT_INVALID_OPTIONS` when `VAULT_ADDR` is unset, a variable is not valid Unicode, the
+    /// token is not visible ASCII, or `VAULT_CLIENT_TIMEOUT` is not a positive duration in one of
+    /// those formats.
     pub fn from_env() -> KmsAeadResult<Self> {
         let address = env_var("VAULT_ADDR")?.ok_or_else(|| {
             KmsAeadSystemError::create(
@@ -143,10 +146,16 @@ impl HcVaultTransitProviderOptions {
             .map(|token| HcVaultTransitToken::try_from(SecretValue::from(token)))
             .transpose()?;
 
+        let timeout = env_var("VAULT_CLIENT_TIMEOUT")?
+            .map(|timeout| vault_timeout(&timeout))
+            .transpose()?
+            .unwrap_or(Self::DEFAULT_TIMEOUT);
+
         Ok(Self::new(address)
             .opt_token(token)
             .opt_namespace(env_var("VAULT_NAMESPACE")?)
-            .opt_ca_certificate(env_var("VAULT_CACERT")?.map(PathBuf::from)))
+            .opt_ca_certificate(env_var("VAULT_CACERT")?.map(PathBuf::from))
+            .with_timeout(timeout))
     }
 }
 
@@ -518,6 +527,84 @@ fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
     }
 }
 
+/// A `VAULT_CLIENT_TIMEOUT` value in the formats the Vault CLI reads: whole seconds (`30`), whole
+/// days (`2d`) or a Go duration (`30s`, `1h30m`, `1.5s`). Zero and negative values are refused:
+/// to the Vault CLI zero means no time limit, which this provider does not offer.
+fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
+    let timeout = if let Ok(seconds) = text.parse::<u64>() {
+        Some(Duration::from_secs(seconds))
+    } else if let Some(days) = text.strip_suffix('d') {
+        days.parse::<u64>()
+            .ok()
+            .and_then(|days| days.checked_mul(24 * 60 * 60))
+            .map(Duration::from_secs)
+    } else {
+        go_duration(text)
+    };
+    timeout.filter(|timeout| !timeout.is_zero()).ok_or_else(|| {
+        KmsAeadSystemError::create(
+            "VAULT_INVALID_OPTIONS",
+            &format!(
+                "VAULT_CLIENT_TIMEOUT `{text}` is not a positive number of seconds or a duration such as `30s`"
+            ),
+        )
+    })
+}
+
+/// A non-negative duration in the syntax of Go's `time.ParseDuration`: an optional `+`, then
+/// decimal numbers that each carry a unit of `ns`, `us`, `µs`, `ms`, `s`, `m` or `h`. Digits of
+/// a fraction below one nanosecond are dropped, as Go drops them. `None` for anything else.
+fn go_duration(text: &str) -> Option<Duration> {
+    let mut rest = text.strip_prefix('+').unwrap_or(text);
+    if rest == "0" {
+        return Some(Duration::ZERO);
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    let mut nanos: u128 = 0;
+    while !rest.is_empty() {
+        let number_end = rest
+            .find(|c: char| !c.is_ascii_digit() && c != '.')
+            .unwrap_or(rest.len());
+        let (number, after_number) = rest.split_at(number_end);
+        let unit_end = after_number
+            .find(|c: char| c.is_ascii_digit() || c == '.')
+            .unwrap_or(after_number.len());
+        let (unit, after_unit) = after_number.split_at(unit_end);
+        let unit_nanos: u128 = match unit {
+            "ns" => 1,
+            "us" | "µs" | "μs" => 1_000,
+            "ms" => 1_000_000,
+            "s" => 1_000_000_000,
+            "m" => 60 * 1_000_000_000,
+            "h" => 60 * 60 * 1_000_000_000,
+            _ => return None,
+        };
+        let (whole, fraction) = number.split_once('.').unwrap_or((number, ""));
+        if (whole.is_empty() && fraction.is_empty()) || fraction.contains('.') {
+            return None;
+        }
+        let whole: u128 = if whole.is_empty() {
+            0
+        } else {
+            whole.parse().ok()?
+        };
+        let mut fraction_nanos = 0;
+        let mut digit_nanos = unit_nanos;
+        for digit in fraction.bytes() {
+            digit_nanos /= 10;
+            fraction_nanos += u128::from(digit - b'0') * digit_nanos;
+        }
+        nanos = whole
+            .checked_mul(unit_nanos)?
+            .checked_add(fraction_nanos)?
+            .checked_add(nanos)?;
+        rest = after_unit;
+    }
+    u64::try_from(nanos).ok().map(Duration::from_nanos)
+}
+
 /// A Vault address: an `http` or `https` URI with a host and no query. Its text without the
 /// trailing `/` is the API base, which keeps the path of a Vault served under a path prefix.
 fn vault_address(address: &str) -> KmsAeadResult<Uri> {
@@ -842,6 +929,39 @@ mod tests {
         let token = HcVaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
 
         assert!(!format!("{token:?}").contains(TOKEN));
+    }
+
+    #[test]
+    fn client_timeout_reads_the_vault_cli_formats() -> KmsAeadResult<()> {
+        for (text, expected) in [
+            ("30", Duration::from_secs(30)),
+            ("+30", Duration::from_secs(30)),
+            ("2d", Duration::from_secs(2 * 24 * 60 * 60)),
+            ("30s", Duration::from_secs(30)),
+            ("1h30m", Duration::from_secs(90 * 60)),
+            ("1.5s", Duration::from_millis(1500)),
+            (".5m", Duration::from_secs(30)),
+            ("250ms", Duration::from_millis(250)),
+            ("10us", Duration::from_micros(10)),
+            ("10µs", Duration::from_micros(10)),
+            ("100ns", Duration::from_nanos(100)),
+        ] {
+            assert_eq!(vault_timeout(text)?, expected, "{text}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn client_timeout_that_is_not_a_positive_duration_is_refused() {
+        for text in [
+            "0", "0s", "-5", "-5s", "5x", "s", "1.2.3s", "1h30", "30 s", "1.5d", "abc",
+        ] {
+            let Err(error) = vault_timeout(text) else {
+                panic!("`{text}` is not a positive Vault client timeout");
+            };
+            assert!(matches!(error, KmsAeadError::SystemError(_)), "{text}");
+            assert_eq!(error.code(), "VAULT_INVALID_OPTIONS", "{text}");
+        }
     }
 
     #[test]
