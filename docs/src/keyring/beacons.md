@@ -35,14 +35,15 @@ A keyring with beacon versions names the algorithm in its policy, HMAC-SHA256, t
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, KmsAeadResult, Ring};
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Plaintext, Randomized,
+    KeyringPolicy, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Email(String);
 
 impl Email {

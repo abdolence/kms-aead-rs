@@ -38,12 +38,14 @@ pub(crate) trait EncodingRules {
 /// The keyset of `export_bigquery_keyset`: the KMS ciphertext of the serialised `Keyset`, with no
 /// associated data, which is the `first_level_keyset` of BigQuery's `KEYS.KEYSET_CHAIN`.
 /// BigQuery decrypts it with Cloud KMS only and reads its AES-256-GCM and AES-SIV keys only.
+#[derive(Debug, Clone, Copy)]
 pub enum BigQuery {}
 
 /// The keyset of [`export_tink_keyset`](crate::Keyring::export_tink_keyset): Tink's
 /// `EncryptedKeyset` message around the KMS ciphertext of the serialised `Keyset`, which Tink's
 /// keyset readers take with the KMS client of the KEK's Tink key URI. Its keys are the ones every
 /// Tink language reads in a keyset: AES-GCM, AES-GCM-SIV and AES-SIV.
+#[derive(Debug, Clone, Copy)]
 pub enum Tink {}
 
 impl KeysetEncoding for BigQuery {}

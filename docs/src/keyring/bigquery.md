@@ -6,10 +6,11 @@ keyring writes, and the keyring reads theirs, given the same keys under the same
 ## Wire format
 
 Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id, followed
-by what the version's algorithm writes, see [Typed fields](../formats.md#typed-fields). These are
-the layouts of Tink's AEAD and deterministic AEAD primitives, and of BigQuery's `AEAD.ENCRYPT` and
-`DETERMINISTIC_ENCRYPT`. A randomised version with another algorithm, such as ChaCha20-Poly1305,
-writes the same prefix before its own body, which only kms-aead reads.
+by what the version's algorithm writes, see
+[Formats of `Encrypted`](../formats.md#formats-of-encrypted). These are the layouts of Tink's AEAD
+and deterministic AEAD primitives, and of BigQuery's `AEAD.ENCRYPT` and `DETERMINISTIC_ENCRYPT`. A
+randomised version with another algorithm, such as ChaCha20-Poly1305, writes the same prefix
+before its own body, which only kms-aead reads.
 
 The prefix is not authenticated. A value relabelled with another key id selects another version,
 whose key the body does not open under.
@@ -55,13 +56,15 @@ cannot read.
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::errors::{InteropError, InteropRequirement};
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringError,
-    KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Randomized,
+    KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
+#[derive(Clone)]
 struct Email(String);
 
 impl Plaintext for Email {
@@ -188,7 +191,8 @@ Beacon versions are never exported: a selection of the beacon purpose fails with
 The type parameter of a `EncryptedKeyset` is its encoding, from the `encodings` module, which names
 the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export returns:
 
-- `as_bytes()`: the encrypted keyset, as a `BYTES` column or query parameter holds it;
+- `value()` and `into_value()`: the encrypted keyset, as a `BYTES` column or query parameter holds
+  it;
 - `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`. Only a
   `EncryptedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
   `EncryptedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
@@ -306,7 +310,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 let keyset: EncryptedKeyset<encodings::Tink> = keyring
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-std::fs::write("tenant-42.keyset", keyset.as_bytes())?;
+std::fs::write("tenant-42.keyset", keyset.value())?;
 println!("{}", keyset.key_uri());
 # Ok(())
 # }

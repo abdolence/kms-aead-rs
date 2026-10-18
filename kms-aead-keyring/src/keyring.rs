@@ -6,14 +6,13 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use kms_aead::formats::Randomized;
+use kms_aead::formats::{Envelope, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, CipherTextWithEncryptedKey,
-    DataEncryptionKey, DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey,
-    KmsAeadEncryptionProvider, Plaintext,
+    AeadAlgorithm, AeadBackend, AeadCipher, BeaconAlgorithm, BeaconMac, DataEncryptionKey,
+    DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    Plaintext,
 };
 use rsb_derive::Builder;
-use secret_vault_value::SecretValue;
 use tokio::task::AbortHandle;
 
 use crate::encodings::Encoding;
@@ -201,8 +200,8 @@ where
             self.check_interop(aad.interop, version)?;
             let cipher = self.cipher(version)?;
             let (sealed, outcome) = self
-                .with_cached_key(&record, version.id(), encrypted_dek, |dek| {
-                    cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
+                .with_cached_dek(&record, version.id(), encrypted_dek, |dek| {
+                    cipher.encrypt(version.id(), &aad.bytes, value, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -669,15 +668,15 @@ where
     ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
         let (opened, outcome) = self
-            .with_cached_key(record, version.id(), encrypted_dek, |dek| {
-                cipher.decrypt_field(&aad.bytes, value, dek)
+            .with_cached_dek(record, version.id(), encrypted_dek, |dek| {
+                cipher.decrypt(&aad.bytes, value, dek)
             })
             .await?;
         spans::record_dek_cache(outcome);
         Ok(opened?)
     }
 
-    /// Runs `use_key` with the key that `encrypted_dek` holds, through the [`DekCache`], and
+    /// Runs `use_dek` with the key that `encrypted_dek` holds, through the [`DekCache`], and
     /// returns its result and where the key came from, for the caller to record. `record` is the
     /// record `encrypted_dek` was read from, as the encrypted DEK of `key_id`.
     ///
@@ -685,16 +684,16 @@ where
     /// that read `encrypted_dek` from the record before and decrypts it after that eviction caches
     /// it again, so on a miss the key is evicted here when the cached record has since withdrawn
     /// it.
-    async fn with_cached_key<T>(
+    async fn with_cached_dek<T>(
         &self,
         record: &KeyringRecord,
         key_id: KeyId,
         encrypted_dek: &EncryptedDataEncryptionKey,
-        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+        use_dek: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<(T, DekCacheOutcome)> {
         let (result, outcome) = self
             .dek_cache()
-            .with_key(&self.provider, encrypted_dek, use_key)
+            .with_dek(&self.provider, encrypted_dek, use_dek)
             .await?;
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
@@ -709,15 +708,15 @@ where
         Ok((result, outcome))
     }
 
-    /// Runs `use_key` with the key that `encrypted_dek` holds, which the provider decrypts for this
+    /// Runs `use_dek` with the key that `encrypted_dek` holds, which the provider decrypts for this
     /// call only and which never enters the [`DekCache`].
-    async fn with_uncached_key<T>(
+    async fn with_uncached_dek<T>(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
-        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+        use_dek: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<T> {
         let (result, _) = DekCache::disabled()
-            .with_key(&self.provider, encrypted_dek, use_key)
+            .with_dek(&self.provider, encrypted_dek, use_dek)
             .await?;
         spans::record_dek_cache_bypassed();
         Ok(result)
@@ -752,9 +751,7 @@ where
     ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
         Ok(self
-            .with_uncached_key(encrypted_dek, |dek| {
-                cipher.decrypt_field(&aad.bytes, value, dek)
-            })
+            .with_uncached_dek(encrypted_dek, |dek| cipher.decrypt(&aad.bytes, value, dek))
             .await??)
     }
 
@@ -777,8 +774,8 @@ where
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
     /// store-less, with the `aad` the application gave it and the `algorithm` of the envelope
     /// that wrote it: the read of a record whose [`SealMarker`](crate::SealMarker) says
-    /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. The application
-    /// decodes a value it stored as hex before the call.
+    /// [`Envelope`](crate::SealFormat::Envelope), until a sweep re-seals it. A value stored as hex
+    /// is read with `Encrypted::try_from_hex_string`.
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
@@ -788,24 +785,24 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
-    /// value is not in Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement
-    /// `algorithm`, the provider's error when the key does not decrypt, `INVALID_KEY_FORMAT` when
-    /// what it decrypts is not a serialised Tink key, and code `DECRYPT` when the value is not
-    /// authentic under it and `aad`.
-    pub async fn decrypt_envelope_value(
+    /// [`KeyringError::Kms`] with the errors of `Encrypted::separate` when the value is not in
+    /// Tink's KMS envelope, `UNSUPPORTED_ALGORITHM` when `B` does not implement `algorithm`, the
+    /// provider's error when the key does not decrypt, `INVALID_KEY_FORMAT` when what it decrypts
+    /// is not a serialised Tink key, code `DECRYPT` when the value is not authentic under it and
+    /// `aad`, and `INVALID_PLAINTEXT` when the bytes do not decode as `T`.
+    pub async fn decrypt_envelope<T: Plaintext>(
         &self,
-        aad: &[u8],
-        value: &CipherTextWithEncryptedKey,
+        aad: &(impl AsRef<[u8]> + ?Sized),
+        value: &Encrypted<T, Envelope>,
         algorithm: AeadAlgorithm,
-    ) -> KeyringResult<SecretValue> {
+    ) -> KeyringResult<T> {
         spans::in_span(spans::decrypt_envelope(self.id()), async {
-            let (cipher_text, encrypted_dek) = value.separate()?;
+            let (bare, encrypted_dek) = value.separate()?;
             let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
                 .dek_cache()
-                .with_key(&self.provider, &encrypted_dek, |dek| {
-                    cipher.decrypt_value(aad, &cipher_text, dek)
+                .with_dek(&self.provider, &encrypted_dek, |dek| {
+                    cipher.decrypt_bare(aad, &bare, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -830,14 +827,14 @@ impl NewVersion {
         let encrypted_dek = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
                 let (_, encrypted_dek) = AeadCipher::<B>::new(algorithm)?
-                    .generate_dek(provider)
+                    .generate_encrypted_dek(provider)
                     .await?;
                 encrypted_dek
             }
             #[cfg(feature = "deterministic")]
             KeyAlgorithm::Deterministic(algorithm) => {
                 let (_, encrypted_dek) = kms_aead::DeterministicCipher::<B>::new(algorithm)?
-                    .generate_dek(provider)
+                    .generate_encrypted_dek(provider)
                     .await?;
                 encrypted_dek
             }
@@ -845,7 +842,7 @@ impl NewVersion {
             KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
             KeyAlgorithm::Beacon(algorithm) => {
                 let (_, encrypted_dek) = BeaconMac::<B>::new(algorithm)
-                    .generate_dek(provider)
+                    .generate_encrypted_dek(provider)
                     .await?;
                 encrypted_dek
             }

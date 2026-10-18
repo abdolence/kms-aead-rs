@@ -41,13 +41,14 @@ A keyring on the memory store with a local KEK, which needs no cloud credentials
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
-    KeyringOptions, KeyringPolicy, Plaintext, Purpose, Randomized,
+    KeyringOptions, KeyringPolicy, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Email(String);
 
 impl Plaintext for Email {

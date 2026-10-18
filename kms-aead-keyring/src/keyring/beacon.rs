@@ -48,8 +48,8 @@ where
             let mac = self.beacon_mac(version)?;
             let context = field.context();
             let (beacon, outcome) = self
-                .with_cached_key(&record, version.id(), encrypted_dek, |dek| {
-                    mac.compute(version.id(), &context, field.beacon_bits(), value, dek)
+                .with_cached_dek(&record, version.id(), encrypted_dek, |dek| {
+                    mac.beacon(version.id(), &context, field.beacon_bits(), value, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -90,15 +90,15 @@ where
             let mut probes = Vec::with_capacity(versions.len());
             for (version, encrypted_dek, compromise) in versions {
                 let mac = self.beacon_mac(version)?;
-                let compute =
-                    |dek: &_| mac.compute(version.id(), &context, field.beacon_bits(), value, dek);
+                let beacon =
+                    |dek: &_| mac.beacon(version.id(), &context, field.beacon_bits(), value, dek);
                 let probe = match compromise {
                     None => {
-                        self.with_cached_key(&record, version.id(), encrypted_dek, compute)
+                        self.with_cached_dek(&record, version.id(), encrypted_dek, beacon)
                             .await?
                             .0
                     }
-                    Some(_) => self.with_uncached_key(encrypted_dek, compute).await?,
+                    Some(_) => self.with_uncached_dek(encrypted_dek, beacon).await?,
                 };
                 probes.push(probe?);
             }
@@ -126,7 +126,7 @@ where
 ))]
 mod tests {
     use kms_aead::cache::DekCache;
-    use kms_aead::{BeaconAlgorithm, BeaconBits, BeaconMac, ValueStruct};
+    use kms_aead::{BeaconAlgorithm, BeaconBits, BeaconMac};
 
     use super::*;
     use crate::test_support::{TestBackend, TestKeyring, TestProvider, TestResult, TENANT};
@@ -173,8 +173,8 @@ mod tests {
             .ok_or("the first beacon version holds no key")?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (expected, _) = DekCache::disabled()
-            .with_key(&provider, encrypted_dek, |dek| {
-                mac.compute(first, b"user/email", BeaconBits::DEFAULT, &alice, dek)
+            .with_dek(&provider, encrypted_dek, |dek| {
+                mac.beacon(first, b"user/email", BeaconBits::DEFAULT, &alice, dek)
             })
             .await?;
         assert_eq!(beacon, expected?);

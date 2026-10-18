@@ -14,7 +14,7 @@
 //! variables are not set is skipped.
 
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadAlgorithm, AwsLc, KmsAeadEncryptionProvider, ValueStruct};
+use kms_aead::{AeadAlgorithm, AwsLc, KmsAeadEncryptionProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
@@ -85,8 +85,8 @@ where
             "kms": kms,
             "algorithm": algorithm.to_string(),
             "key_uri": keyset.key_uri(),
-            "keyset": hex(keyset.as_bytes()),
-            "aad": hex(aad.as_bytes()),
+            "keyset": hex(keyset.value()),
+            "aad": hex(aad.value()),
             "plain_text": hex(plain_text.as_bytes()),
             "value": hex(value.value()),
         })

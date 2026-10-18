@@ -4,10 +4,8 @@ use std::time::Duration;
 
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
-use kms_aead::formats::Randomized;
-use kms_aead::{
-    AeadAlgorithm, AeadCipher, CipherText, KekProvider, KmsAeadResult, Plaintext, ValueStruct,
-};
+use kms_aead::formats::{Bare, Randomized};
+use kms_aead::{AeadAlgorithm, AeadCipher, KekProvider, KmsAeadResult, Plaintext};
 use secret_vault_value::SecretValue;
 use serde_json::Value;
 
@@ -88,12 +86,13 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
+    let bare = Encrypted::<String, Bare>::try_from(bytes[5..].to_vec())?;
     let (opened, _) = DekCache::disabled()
-        .with_key(&fixture.provider, encrypted_dek, |dek| {
-            cipher.decrypt_value(&aad.bytes, &CipherText(bytes[5..].to_vec()), dek)
+        .with_dek(&fixture.provider, encrypted_dek, |dek| {
+            cipher.decrypt_bare(&aad.bytes, &bare, dek)
         })
         .await?;
-    assert_eq!(opened?.as_sensitive_str(), ALICE);
+    assert_eq!(opened?, ALICE);
     Ok(())
 }
 
@@ -142,7 +141,7 @@ async fn a_newtype_field_is_sealed_as_its_string() -> TestResult {
     let alice = Email(ALICE.to_string());
 
     let sealed: Encrypted<Email, Randomized> = fixture.keyring.encrypt(&aad, &alice).await?;
-    let as_string = Encrypted::<String, Randomized>::try_from(sealed.value().clone())?;
+    let as_string = Encrypted::<String, Randomized>::try_from(sealed.value().to_vec())?;
 
     assert_eq!(fixture.keyring.decrypt(&aad, &sealed).await?, alice);
     assert_eq!(fixture.keyring.decrypt(&aad, &as_string).await?, ALICE);
@@ -160,14 +159,14 @@ async fn a_value_opens_only_with_its_aad() -> TestResult {
     for aad in [
         email_of("43")?,
         email_of("42")?.with_context(b"eu"),
-        FieldAad::custom(b"user/42/email/".to_vec()),
+        FieldAad::custom(b"user/42/email/"),
     ] {
         assert!(matches!(
             keyring.decrypt(&aad, &value).await,
             Err(KeyringError::Kms(KmsAeadError::EncryptionError(error))) if error.public.code == "DECRYPT"
         ));
     }
-    let same_bytes = FieldAad::custom(b"user/42/email".to_vec());
+    let same_bytes = FieldAad::custom(b"user/42/email");
     assert_eq!(keyring.decrypt(&same_bytes, &value).await?, ALICE);
     Ok(())
 }
@@ -511,12 +510,12 @@ async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
 
     fixture
         .keyring
-        .with_cached_key(&held, KeyId::new(1), encrypted_dek, |_| ())
+        .with_cached_dek(&held, KeyId::new(1), encrypted_dek, |_| ())
         .await?;
     let ((), outcome) = fixture
         .keyring
         .dek_cache()
-        .with_key(&fixture.provider, encrypted_dek, |_| ())
+        .with_dek(&fixture.provider, encrypted_dek, |_| ())
         .await?;
     assert_eq!(outcome, DekCacheOutcome::Miss);
     Ok(())
@@ -561,8 +560,8 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let first = KeyId::new(1);
     let (forged, _) = DekCache::disabled()
-        .with_key(&fixture.provider, encrypted_dek, |leaked_dek| {
-            cipher.encrypt_field(
+        .with_dek(&fixture.provider, encrypted_dek, |leaked_dek| {
+            cipher.encrypt(
                 first,
                 &aad.bytes,
                 &"mallory@example.com".to_string(),

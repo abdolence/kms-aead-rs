@@ -91,8 +91,8 @@ where
                 self.apply_read_policy(version, compromise)?;
                 let cipher = self.deterministic_cipher(version)?;
                 let (opened, outcome) = self
-                    .with_cached_key(&record, key_id, encrypted_dek, |dek| {
-                        cipher.decrypt_field(&aad.bytes, value, dek)
+                    .with_cached_dek(&record, key_id, encrypted_dek, |dek| {
+                        cipher.decrypt(&aad.bytes, value, dek)
                     })
                     .await?;
                 spans::record_dek_cache(outcome);
@@ -125,17 +125,17 @@ where
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 let cipher = self.deterministic_cipher(version)?;
-                let open = |dek: &_| cipher.decrypt_field(&aad.bytes, value, dek);
+                let open = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
                 let (opened, trust) = match compromise {
                     None => {
                         let (opened, outcome) = self
-                            .with_cached_key(&record, key_id, encrypted_dek, open)
+                            .with_cached_dek(&record, key_id, encrypted_dek, open)
                             .await?;
                         spans::record_dek_cache(outcome);
                         (opened?, KeyTrust::Trusted)
                     }
                     Some(compromise) => (
-                        self.with_uncached_key(encrypted_dek, open).await??,
+                        self.with_uncached_dek(encrypted_dek, open).await??,
                         KeyTrust::Compromised(compromise.clone()),
                     ),
                 };
@@ -197,8 +197,8 @@ where
                     }
                     Some(_) => {
                         let cipher = self.deterministic_cipher(version)?;
-                        self.with_uncached_key(encrypted_dek, |dek| {
-                            cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
+                        self.with_uncached_dek(encrypted_dek, |dek| {
+                            cipher.encrypt(version.id(), &aad.bytes, value, dek)
                         })
                         .await??
                     }
@@ -234,8 +234,8 @@ where
     ) -> KeyringResult<(Encrypted<T, Deterministic>, DekCacheOutcome)> {
         let cipher = self.deterministic_cipher(version)?;
         let (sealed, outcome) = self
-            .with_cached_key(record, version.id(), encrypted_dek, |dek| {
-                cipher.encrypt_field(version.id(), &aad.bytes, value, dek)
+            .with_cached_dek(record, version.id(), encrypted_dek, |dek| {
+                cipher.encrypt(version.id(), &aad.bytes, value, dek)
             })
             .await?;
         Ok((sealed?, outcome))
@@ -249,7 +249,7 @@ where
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use kms_aead::{DeterministicAlgorithm, KekProvider, ValueStruct};
+    use kms_aead::{DeterministicAlgorithm, KekProvider};
 
     use crate::errors::InteropRequirement;
     use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};

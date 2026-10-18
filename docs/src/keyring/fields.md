@@ -5,11 +5,11 @@
 A keyring value is kms-aead's `Encrypted<T, Randomized>`, re-exported by the keyring: the bytes
 to store, which decrypt to a `T`. `T` is any type that implements `Plaintext`, usually an
 application newtype such as `Email`, so a field names what it holds. Its layout is in
-[Typed fields](../formats.md#typed-fields). The keyring seals and opens it with kms-aead's
-`AeadCipher::encrypt_field` and `decrypt_field` under the key of the version, the calls an
+[Formats of `Encrypted`](../formats.md#formats-of-encrypted). The keyring seals and opens it with
+kms-aead's `AeadCipher::encrypt` and `decrypt` under the key of the version, the calls an
 application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes itself.
 
-- `value()` and `into_value()`, of `kms_aead::ValueStruct`, return the bytes;
+- `value()` and `into_value()` return the bytes;
 - `key_id()` returns the key id of the version that sealed it;
 - `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
   when the value is made, and fail on bytes that are no keyring value before any decryption;
@@ -41,15 +41,16 @@ serde_json an array of numbers.
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Plaintext, Randomized,
+    KeyringPolicy, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Email(String);
 
 impl Plaintext for Email {
@@ -109,11 +110,13 @@ slice of values as a `BYTEA[]` for `= ANY($1)`:
 use kms_aead::providers::LocalKmsProvider;
 use kms_aead::Ring;
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring, Randomized};
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::{Encrypted, EntityId, FieldSpec, Keyring};
 use tokio_postgres::{Client, NoTls};
 # use kms_aead::KmsAeadResult;
 # use kms_aead_keyring::Plaintext;
 # use secret_vault_value::SecretValue;
+# #[derive(Clone)]
 # struct Email(String);
 # impl Plaintext for Email {
 #     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> { self.0.to_plaintext() }

@@ -46,7 +46,7 @@
 //!
 //! With the `deterministic` feature, `Keyring::encrypt_deterministic` seals a value under the
 //! active AES-SIV version, so that equal plaintexts give equal [`Encrypted<T,
-//! Deterministic>`](Deterministic) values, and `Keyring::equality_probes` seals a plaintext
+//! Deterministic>`](formats::Deterministic) values, and `Keyring::equality_probes` seals a plaintext
 //! under every version that still decrypts, for the `IN` list of an equality query across a
 //! rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id,
 //! so a value opens in any row of its kind and field, and a deterministic field never decides
@@ -125,14 +125,15 @@
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 //! use kms_aead::{KmsAeadResult, Ring};
+//! use kms_aead_keyring::formats::Randomized;
 //! use kms_aead_keyring::testing::MemoryKeyringStore;
 //! use kms_aead_keyring::{
 //!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-//!     KeyringPolicy, Plaintext, Purpose, Randomized,
+//!     KeyringPolicy, Plaintext, Purpose,
 //! };
 //! use secret_vault_value::SecretValue;
 //!
-//! #[derive(Debug, PartialEq)]
+//! #[derive(Debug, Clone, PartialEq)]
 //! struct Email(String);
 //!
 //! impl Plaintext for Email {
@@ -189,7 +190,7 @@ pub use errors::{KeyringError, KeyringResult};
 mod keyring;
 pub use keyring::*;
 
-pub use kms_aead::formats::{Deterministic, Randomized};
+pub use kms_aead::formats;
 #[cfg(feature = "serde-json")]
 pub use kms_aead::Json;
 pub use kms_aead::{Encrypted, KeyId, Plaintext};

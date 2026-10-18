@@ -57,17 +57,24 @@ impl KeysetSelection {
 /// until it is exported again.
 ///
 /// `Debug` shows the key URI, the encoding and the key ids, never the encrypted keyset.
+#[derive(Clone)]
 pub struct EncryptedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
     key_ids: Vec<KeyId>,
-    encoding: PhantomData<E>,
+    /// Tags the bytes with the encoding of the export that made them; holds no `E`.
+    marker: PhantomData<E>,
 }
 
 impl<E: KeysetEncoding> EncryptedKeyset<E> {
     /// The encrypted keyset, as a `BYTES` column, a query parameter or a file holds it.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn value(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// The encrypted keyset, taking the export.
+    pub fn into_value(self) -> Vec<u8> {
+        self.bytes
     }
 
     /// The key ids of the versions in the keyset, in ascending order.
@@ -95,17 +102,6 @@ impl EncryptedKeyset<BigQuery> {
         }
         literal.push('\'');
         literal
-    }
-}
-
-impl<E: KeysetEncoding> Clone for EncryptedKeyset<E> {
-    fn clone(&self) -> Self {
-        EncryptedKeyset {
-            bytes: self.bytes.clone(),
-            key_uri: self.key_uri.clone(),
-            key_ids: self.key_ids.clone(),
-            encoding: PhantomData,
-        }
     }
 }
 
@@ -214,7 +210,7 @@ where
                 // Uncached, so that the export leaves no key in the cache of a process that
                 // serves no reads under it.
                 let (added, _) = DekCache::disabled()
-                    .with_key(&self.provider, encrypted_dek, |dek| {
+                    .with_dek(&self.provider, encrypted_dek, |dek| {
                         keyset.add_key(*key_id, *key_type, dek)
                     })
                     .await?;
@@ -238,7 +234,7 @@ where
                 bytes,
                 key_uri,
                 key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
-                encoding: PhantomData,
+                marker: PhantomData,
             })
         })
         .await
@@ -310,9 +306,8 @@ type ExportedVersion<'r> = (KeyId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use kms_aead::{
-        AeadAlgorithm, BeaconAlgorithm, CipherText, CipherTextWithEncryptedKey, KekProvider,
-    };
+    use kms_aead::formats::{Bare, Envelope};
+    use kms_aead::{AeadAlgorithm, BeaconAlgorithm, Encrypted, KekProvider};
     use secret_vault_value::SecretValue;
 
     use super::*;
@@ -354,7 +349,7 @@ mod tests {
                 .and_then(KeyVersion::encrypted_dek)
                 .ok_or("the version holds no key")?;
             let (added, _) = DekCache::disabled()
-                .with_key(provider, encrypted_dek, |dek| {
+                .with_dek(provider, encrypted_dek, |dek| {
                     keyset.add_key(key_id, TinkKeyType::AesGcm, dek)
                 })
                 .await?;
@@ -406,7 +401,7 @@ mod tests {
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                exported.as_bytes().to_vec(),
+                exported.value().to_vec(),
             ))
             .await?;
 
@@ -425,7 +420,7 @@ mod tests {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
             key_ids: vec![KeyId::new(1)],
-            encoding: PhantomData,
+            marker: PhantomData,
         };
 
         let debug = format!("{keyset:?}");
@@ -453,7 +448,7 @@ mod tests {
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                exported.as_bytes().to_vec(),
+                exported.value().to_vec(),
             ))
             .await?;
 
@@ -495,15 +490,15 @@ mod tests {
         let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
-        let value = CipherTextWithEncryptedKey::join(
-            &CipherText(vec![0; 32]),
-            &EncryptedDataEncryptionKey::new(exported.as_bytes().to_vec()),
+        let value = Encrypted::<SecretValue, Envelope>::join(
+            &Encrypted::<SecretValue, Bare>::try_from(vec![0; 32])?,
+            &EncryptedDataEncryptionKey::new(exported.value().to_vec()),
         )?;
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         for _ in 0..2 {
             let opened = keyring
-                .decrypt_envelope_value(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
+                .decrypt_envelope(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
                 .await;
             assert!(matches!(
                 opened,
@@ -529,7 +524,7 @@ mod tests {
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                exported.as_bytes().to_vec(),
+                exported.value().to_vec(),
             ))
             .await?;
         assert_eq!(exported.key_ids(), [KeyId::new(1), staged]);

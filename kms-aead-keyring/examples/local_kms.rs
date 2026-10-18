@@ -21,7 +21,7 @@ const EMAIL: FieldSpec = FieldSpec::new(
 );
 
 /// The application's email type, sealed as the UTF-8 of the address.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Email(String);
 
 impl Plaintext for Email {

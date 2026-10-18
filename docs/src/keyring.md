@@ -8,7 +8,7 @@ Compared to an envelope, a keyring value carries a 4-byte key id instead of its 
 
 - no KMS call on write, and on read only one decryption per key version per DEK cache TTL;
 - 33 bytes of overhead per value, 21 for deterministic values, see
-  [Typed fields](./formats.md#typed-fields);
+  [Formats of `Encrypted`](./formats.md#formats-of-encrypted);
 - central staged rotation, retirement, destruction and a compromised flag, for every process
   that uses the keyring;
 - deterministic fields that a data store finds by equality, across rotations;
@@ -57,14 +57,15 @@ cloud credentials:
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring,
-    KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose, Randomized,
+    KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Email(String);
 
 impl Plaintext for Email {

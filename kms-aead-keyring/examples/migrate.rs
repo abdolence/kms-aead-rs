@@ -14,14 +14,15 @@ use std::sync::{Mutex, PoisonError};
 use futures_util::stream;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, CipherTextWithEncryptedKey, DekReusePolicy, KmsAeadEnvelope,
-    KmsAeadEnvelopeOptions, KmsAeadResult, Ring, ValueStruct,
+    AeadAlgorithm, AeadCipher, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
+    KmsAeadResult, Ring,
 };
+use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::sweep::{self, Outcome};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, KeyringResult, Plaintext, Randomized, SealFormat, SealMarker,
+    KeyringPolicy, KeyringResult, Plaintext, SealFormat, SealMarker,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,7 @@ struct UserRow {
 type Table = Mutex<BTreeMap<String, UserRow>>;
 
 /// The application's email type, sealed as the UTF-8 of the address.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Email(String);
 
 impl Plaintext for Email {
@@ -86,11 +87,10 @@ async fn read_email(
 ) -> Result<Email, Box<dyn std::error::Error>> {
     match row.seal.format {
         SealFormat::Envelope => {
-            let value = CipherTextWithEncryptedKey::from(row.email);
-            let email = keyring
-                .decrypt_envelope_value(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
-                .await?;
-            Ok(Email::from_plaintext(email)?)
+            let value = Encrypted::<Email, Envelope>::try_from(row.email)?;
+            Ok(keyring
+                .decrypt_envelope(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
+                .await?)
         }
         SealFormat::Keyring => {
             let value = Encrypted::<Email, Randomized>::try_from(row.email)?;
@@ -134,17 +134,15 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
     let Some(row) = row.filter(|row| row.seal.format == SealFormat::Envelope) else {
         return Ok(Outcome::Skipped);
     };
-    let email = keyring
-        .decrypt_envelope_value(
+    let email: Email = keyring
+        .decrypt_envelope(
             &envelope_aad(user),
-            &CipherTextWithEncryptedKey::from(row.email),
+            &Encrypted::<Email, Envelope>::try_from(row.email)?,
             ENVELOPE_ALGORITHM,
         )
         .await?;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let resealed = keyring
-        .encrypt(&aad, &Email::from_plaintext(email)?)
-        .await?;
+    let resealed = keyring.encrypt(&aad, &email).await?;
     let row = UserRow {
         seal: SealMarker::keyring([resealed.key_id()])?,
         email: resealed.into_value(),
@@ -160,7 +158,7 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let material = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?
-        .generate_key()?
+        .generate_dek()?
         .value()
         .clone();
 
@@ -177,10 +175,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("42", "alice@example.com"),
         ("43", "bob@example.com"),
     ] {
-        let value = envelope
-            .encrypt_value(&envelope_aad(user), &SecretValue::from(email))
+        let value: Encrypted<Email, Envelope> = envelope
+            .encrypt(&envelope_aad(user), &Email(email.to_string()))
             .await?;
-        let row = serde_json::from_value(serde_json::json!({ "email": value.0 }))?;
+        let row = serde_json::from_value(serde_json::json!({ "email": value.into_value() }))?;
         table
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

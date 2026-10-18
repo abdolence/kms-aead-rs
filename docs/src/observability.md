@@ -158,7 +158,7 @@ in the filter beside `kms_aead=debug`.
 | Span | Opened by | Fields |
 |---|---|---|
 | `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `equality_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
-| `Keyring decrypt` | `decrypt`, `decrypt_with_status`, their deterministic pair, `decrypt_envelope_value` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
+| `Keyring decrypt` | `decrypt`, `decrypt_with_status`, their deterministic pair, `decrypt_envelope` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
 | `Keyring load` | every store read: `open`, a revalidation, a reload, the read before an administrative write | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
 | `Keyring beacon` | `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
 | `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `to_key_id`, `cas_retries`, `error_code` |

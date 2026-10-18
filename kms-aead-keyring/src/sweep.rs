@@ -31,7 +31,7 @@
 //! 1. the model gains `seal: SealMarker` with `#[serde(default)]`, or a column default, so that
 //!    every record without one reads as [`SealMarker::ENVELOPE`];
 //! 2. the field keeps its stored bytes, whose layout the marker names;
-//! 3. reads go through the marker: [`Keyring::decrypt_envelope_value`](crate::Keyring::decrypt_envelope_value)
+//! 3. reads go through the marker: [`Keyring::decrypt_envelope`](crate::Keyring::decrypt_envelope)
 //!    opens an envelope value, with the AAD the application used for it, and
 //!    [`Keyring::decrypt`](crate::Keyring::decrypt) a keyring value;
 //! 4. a sweep over `seal.format = 'envelope'` re-seals each record as keyring values and writes
@@ -383,7 +383,6 @@ mod tests {
         use std::sync::{Mutex, PoisonError};
 
         use kms_aead::{AeadAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
-        use secret_vault_value::SecretValue;
 
         use super::*;
         use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider};
@@ -456,20 +455,16 @@ mod tests {
                 KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
             )?;
             let values = [
-                envelope
-                    .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE))
-                    .await?,
-                envelope
-                    .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE))
-                    .await?,
+                envelope.encrypt(ENVELOPE_AAD, &ALICE.to_string()).await?,
+                envelope.encrypt(ENVELOPE_AAD, &ALICE.to_string()).await?,
             ];
             let keyring = keyring(provider).await?;
 
             for value in &values {
                 let opened = keyring
-                    .decrypt_envelope_value(ENVELOPE_AAD, value, AeadAlgorithm::Aes256Gcm)
+                    .decrypt_envelope(ENVELOPE_AAD, value, AeadAlgorithm::Aes256Gcm)
                     .await?;
-                assert_eq!(opened.as_sensitive_str(), ALICE);
+                assert_eq!(opened, ALICE);
             }
             Ok(())
         }

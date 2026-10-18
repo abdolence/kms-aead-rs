@@ -8,7 +8,7 @@ use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClien
 use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{DeterministicAlgorithm, Ring, ValueStruct};
+use kms_aead::{DeterministicAlgorithm, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringId, KeyringOptions,
@@ -114,7 +114,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .promote(keyring.rotate(Purpose::Randomized).await?)
         .await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    let mut relabelled = first.value().clone();
+    let mut relabelled = first.value().to_vec();
     relabelled[1..5].copy_from_slice(&ABSENT_KEY_ID.to_be_bytes());
     let deterministic = keyring
         .encrypt_deterministic(&deterministic_aad, &ALICE.to_string())

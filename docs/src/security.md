@@ -142,7 +142,7 @@ version.
 - **an RSA key on Azure Key Vault encrypts for anyone.** With an RSA key the encryption is a
   public-key operation, so whoever holds the public key encrypts a DEK of their own into the record.
   Use an AES key, from Managed HSM;
-- **`decrypt_envelope_value` knows no key version.** It decrypts the encrypted DEK an envelope value
+- **`decrypt_envelope` knows no key version.** It decrypts the encrypted DEK an envelope value
   carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
   values through it. Keep it in the read path for the migration only;
 - **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the

@@ -35,14 +35,15 @@ A keyring with deterministic versions names the algorithm in its policy, AES-SIV
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+use kms_aead_keyring::formats::Deterministic;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring,
-    KeyringId, KeyringOptions, KeyringPolicy, Plaintext,
+    DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringId,
+    KeyringOptions, KeyringPolicy, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Email(String);
 
 impl Plaintext for Email {
@@ -114,13 +115,14 @@ So an equality query matches against every version that still decrypts, with
 ```rust
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 # use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
+# use kms_aead_keyring::formats::Deterministic;
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{
-#     Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId,
-#     Keyring, KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose,
+#     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
+#     KeyringOptions, KeyringPolicy, Plaintext, Purpose,
 # };
 # use secret_vault_value::SecretValue;
-# #[derive(Debug, PartialEq)]
+# #[derive(Debug, Clone, PartialEq)]
 # struct Email(String);
 # impl Plaintext for Email {
 #     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> { self.0.to_plaintext() }

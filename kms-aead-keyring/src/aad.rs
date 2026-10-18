@@ -269,9 +269,9 @@ pub struct FieldAad {
 impl FieldAad {
     /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadCipher`. SQL cannot
     /// rebuild it, so it carries [`Interop::None`] and a field BigQuery reads cannot use it.
-    pub fn custom(bytes: Vec<u8>) -> Self {
+    pub fn custom(bytes: &(impl AsRef<[u8]> + ?Sized)) -> Self {
         Self {
-            bytes,
+            bytes: bytes.as_ref().to_vec(),
             interop: Interop::None,
         }
     }
@@ -279,14 +279,14 @@ impl FieldAad {
     /// Appends `/` and `context`, any bytes; a value sealed with a context opens only with the
     /// same context. `context` may itself hold `/`, so two contexts can produce the same AAD
     /// from different splits: the caller owns both sides of its AAD and keeps them apart.
-    pub fn with_context(mut self, context: &[u8]) -> Self {
+    pub fn with_context(mut self, context: &(impl AsRef<[u8]> + ?Sized)) -> Self {
         self.bytes.push(b'/');
-        self.bytes.extend_from_slice(context);
+        self.bytes.extend_from_slice(context.as_ref());
         self
     }
 
     /// The bytes, for a reader that rebuilds the AAD elsewhere, such as in a SQL query.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn value(&self) -> &[u8] {
         &self.bytes
     }
 }
@@ -317,15 +317,15 @@ pub struct DeterministicAad {
 impl DeterministicAad {
     /// Appends `/` and `context`. A context that differs per row defeats equality across rows,
     /// so it is a constant, such as a tenant.
-    pub fn with_context(mut self, context: &[u8]) -> Self {
+    pub fn with_context(mut self, context: &(impl AsRef<[u8]> + ?Sized)) -> Self {
         self.bytes.push(b'/');
-        self.bytes.extend_from_slice(context);
+        self.bytes.extend_from_slice(context.as_ref());
         self
     }
 
     /// The bytes, for a reader that rebuilds the AAD elsewhere, such as the literal of a
     /// BigQuery `DETERMINISTIC_DECRYPT_STRING`.
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn value(&self) -> &[u8] {
         &self.bytes
     }
 }
@@ -352,17 +352,17 @@ mod tests {
     #[test]
     fn the_default_aad_is_kind_id_field() -> KeyringResult<()> {
         let aad = email()?.aad(&EntityId::try_from("42")?);
-        assert_eq!(aad.as_bytes(), b"user/42/email");
-        assert_eq!(aad.with_context(b"eu/1").as_bytes(), b"user/42/email/eu/1");
+        assert_eq!(aad.value(), b"user/42/email");
+        assert_eq!(aad.with_context(b"eu/1").value(), b"user/42/email/eu/1");
         Ok(())
     }
 
     #[test]
     fn the_deterministic_aad_leaves_the_entity_id_out() -> KeyringResult<()> {
         let aad = email()?.deterministic_aad();
-        assert_eq!(aad.as_bytes(), b"user/email");
+        assert_eq!(aad.value(), b"user/email");
         assert_eq!(
-            aad.with_context(b"tenant-7").as_bytes(),
+            aad.with_context(b"tenant-7").value(),
             b"user/email/tenant-7"
         );
         Ok(())
