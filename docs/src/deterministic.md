@@ -33,6 +33,9 @@ So do not use deterministic encryption:
 The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.
 
+A beacon finds rows by equality as well and keeps the value randomized, see
+[Beacon or deterministic field](./envelope-encryption.md#beacon-or-deterministic-field).
+
 ## Usage
 
 `DeterministicCipher` seals and opens with a `DataEncryptionKey` of
