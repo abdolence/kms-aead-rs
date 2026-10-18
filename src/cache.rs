@@ -533,6 +533,19 @@ impl DekCache {
             .randomized
             .cached(&CacheKey::new(kek.clone(), encrypted))
     }
+
+    /// The deterministic key cached for `encrypted` under `kek`, as [`KeyMap::cached`] gives it.
+    #[cfg(feature = "deterministic")]
+    fn cached_deterministic_dek(
+        &self,
+        kek: &KekRef,
+        encrypted: &EncryptedDataEncryptionKey,
+    ) -> Option<Weak<DeterministicDataEncryptionKey>> {
+        let cache = self.0.as_ref()?;
+        cache
+            .deterministic
+            .cached(&CacheKey::new(kek.clone(), encrypted))
+    }
 }
 
 #[cfg(test)]
@@ -553,18 +566,6 @@ mod tests {
     const ORDERS_DEK: [u8; 64] = [0x42; 64];
     const BILLING_DEK: [u8; 64] = [0x24; 64];
     const SHORT_TTL: Duration = Duration::from_millis(200);
-
-    #[cfg(feature = "deterministic")]
-    fn cached_deterministic_dek(
-        cache: &DekCache,
-        kek: &KekRef,
-        encrypted: &EncryptedDataEncryptionKey,
-    ) -> Option<Weak<DeterministicDataEncryptionKey>> {
-        let cache = cache.0.as_ref()?;
-        cache
-            .deterministic
-            .cached(&CacheKey::new(kek.clone(), encrypted))
-    }
 
     #[tokio::test]
     async fn n_concurrent_misses_make_one_unwrap() -> KmsAeadResult<()> {
@@ -705,8 +706,11 @@ mod tests {
                 cache
                     .with_deterministic_key(&provider, algorithm, &encrypted, |_| ())
                     .await?;
-                deterministic
-                    .push(cached_deterministic_dek(&cache, &provider.kek(), &encrypted).unwrap());
+                deterministic.push(
+                    cache
+                        .cached_deterministic_dek(&provider.kek(), &encrypted)
+                        .unwrap(),
+                );
             }
 
             assert!(randomized[1].strong_count() > 0 && randomized[2].strong_count() > 0);
@@ -751,7 +755,9 @@ mod tests {
             .with_deterministic_key(&provider, algorithm, &encrypted, |_| ())
             .await?;
         let randomized = cache.cached_dek(&provider.kek(), &encrypted).unwrap();
-        let deterministic = cached_deterministic_dek(&cache, &provider.kek(), &encrypted).unwrap();
+        let deterministic = cache
+            .cached_deterministic_dek(&provider.kek(), &encrypted)
+            .unwrap();
         cache.invalidate(&provider.kek(), &encrypted);
         let ((), outcome) = cache
             .with_deterministic_key(&provider, algorithm, &encrypted, |_| ())
@@ -848,7 +854,9 @@ mod tests {
             cache
                 .with_deterministic_key(&provider, algorithm, &encrypted[0], |_| ())
                 .await?;
-            cached_deterministic_dek(&cache, &provider.kek(), &encrypted[0]).unwrap()
+            cache
+                .cached_deterministic_dek(&provider.kek(), &encrypted[0])
+                .unwrap()
         };
         cache.clear();
 
