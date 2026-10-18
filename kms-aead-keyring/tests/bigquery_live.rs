@@ -8,8 +8,8 @@ use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClien
 use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadBackend, DeterministicAlgorithm};
-use kms_aead_keyring::store::MemoryKeyringStore;
+use kms_aead::{DeterministicAlgorithm, Ring, ValueStruct};
+use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringId, KeyringOptions,
     KeyringPolicy, KeysetSelection, Purpose,
@@ -97,10 +97,9 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         env("KMS_KEY_RING")?,
         env("KMS_KEY")?,
     );
-    let keyring = Keyring::create(
+    let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::create(
         MemoryKeyringStore::new(),
         GcpKmsProvider::new(&key_ref).await?,
-        AeadBackend::Ring,
         KeyringId::try_from(format!("bigquery-live-{}", uuid::Uuid::now_v7()))?,
         KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
         KeyringOptions::new().with_watch(false),
@@ -113,7 +112,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     keyring.rotate(Purpose::Randomized).await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    let mut relabelled = first.as_bytes().to_vec();
+    let mut relabelled = first.value().clone();
     relabelled[1..5].copy_from_slice(&ABSENT_KEY_ID.to_be_bytes());
     let deterministic = keyring
         .encrypt_deterministic(&deterministic_aad, &ALICE.to_string())
@@ -122,7 +121,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
     let deterministic_keyset = keyring
-        .export_bigquery_keyset(KeysetSelection::Single(deterministic.key_id()))
+        .export_bigquery_keyset(KeysetSelection::Single(KeyId::try_from(&deterministic)?))
         .await?;
     let randomized_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
@@ -151,10 +150,10 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
                DETERMINISTIC_DECRYPT_STRING({deterministic_chain}, u.email_det, 'user/email'),
                TO_HEX(DETERMINISTIC_ENCRYPT({deterministic_chain}, '{ALICE}', 'user/email'))
              FROM users u",
-            first = hex(first.as_bytes()),
-            second = hex(second.as_bytes()),
+            first = hex(first.value()),
+            second = hex(second.value()),
             relabelled = hex(&relabelled),
-            deterministic = hex(deterministic.as_bytes()),
+            deterministic = hex(deterministic.value()),
         ),
     )
     .await?;
@@ -170,7 +169,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
             Some(ALICE.to_string()),
             None,
             Some(ALICE.to_string()),
-            Some(hex(deterministic.as_bytes())),
+            Some(hex(deterministic.value())),
         ]
     );
     Ok(())
