@@ -53,7 +53,8 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 
 use crate::errors::KeyringResult;
-use crate::{spans, KeyTrust, KeyVersionId, KeyringId, Purpose};
+use crate::purpose::{optional_key_id, unreserved};
+use crate::{spans, KeyId, KeyTrust, KeyringId, Purpose};
 
 /// Which layout a record's encrypted fields are in, and the oldest key version of each purpose
 /// among them, stored beside those fields as plain fields an index covers: in Firestore the
@@ -67,11 +68,14 @@ pub struct SealMarker {
     /// The layout of the record's encrypted fields.
     pub format: SealFormat,
     /// The oldest randomised key version among the record's fields, if any.
-    pub randomized: Option<KeyVersionId>,
+    #[serde(with = "optional_key_id")]
+    pub randomized: Option<KeyId>,
     /// The oldest deterministic key version among the record's fields, if any.
-    pub deterministic: Option<KeyVersionId>,
+    #[serde(with = "optional_key_id")]
+    pub deterministic: Option<KeyId>,
     /// The oldest beacon key version among the record's beacons, if any.
-    pub beacon: Option<KeyVersionId>,
+    #[serde(with = "optional_key_id")]
+    pub beacon: Option<KeyId>,
 }
 
 /// The layout of a record's encrypted fields, serialised as `"envelope"` or `"keyring"`.
@@ -94,8 +98,14 @@ impl SealMarker {
         beacon: None,
     };
 
-    /// The marker of a record whose fields are keyring values and beacons under `key_ids`.
-    pub fn keyring(key_ids: impl IntoIterator<Item = KeyVersionId>) -> Self {
+    /// The marker of a record whose fields are keyring values and beacons under `key_ids`, the
+    /// [`key_id`](crate::Encrypted::key_id)s of its values and beacons.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::ReservedKeyId`](crate::KeyringError::ReservedKeyId) for a reserved key
+    /// id, which no version has.
+    pub fn keyring(key_ids: impl IntoIterator<Item = KeyId>) -> KeyringResult<Self> {
         let mut marker = Self {
             format: SealFormat::Keyring,
             randomized: None,
@@ -103,14 +113,16 @@ impl SealMarker {
             beacon: None,
         };
         for key_id in key_ids {
-            let oldest = match key_id.purpose() {
+            let oldest = match Purpose::of(unreserved(key_id)?) {
                 Purpose::Randomized => &mut marker.randomized,
                 Purpose::Deterministic => &mut marker.deterministic,
                 Purpose::Beacon => &mut marker.beacon,
             };
-            *oldest = Some(oldest.map_or(key_id, |oldest| oldest.min(key_id)));
+            *oldest = Some(oldest.map_or(key_id, |oldest| {
+                std::cmp::min_by_key(oldest, key_id, |key_id| key_id.as_u32())
+            }));
         }
-        marker
+        Ok(marker)
     }
 }
 
@@ -245,23 +257,23 @@ mod tests {
             4,
         ]
         .into_iter()
-        .map(KeyVersionId::try_from)
-        .collect::<KeyringResult<Vec<_>>>()?;
+        .map(KeyId::new)
+        .collect::<Vec<_>>();
 
         assert_eq!(
-            SealMarker::keyring(key_ids),
+            SealMarker::keyring(key_ids)?,
             SealMarker {
                 format: SealFormat::Keyring,
-                randomized: Some(KeyVersionId::try_from(1)?),
-                deterministic: Some(KeyVersionId::try_from(DETERMINISTIC | 2)?),
-                beacon: Some(KeyVersionId::try_from(BEACON | 2)?),
+                randomized: Some(KeyId::new(1)),
+                deterministic: Some(KeyId::new(DETERMINISTIC | 2)),
+                beacon: Some(KeyId::new(BEACON | 2)),
             }
         );
         assert_eq!(
-            SealMarker::keyring([KeyVersionId::try_from(7)?]),
+            SealMarker::keyring([KeyId::new(7)])?,
             SealMarker {
                 format: SealFormat::Keyring,
-                randomized: Some(KeyVersionId::try_from(7)?),
+                randomized: Some(KeyId::new(7)),
                 deterministic: None,
                 beacon: None,
             }
@@ -270,12 +282,20 @@ mod tests {
     }
 
     #[test]
+    fn a_marker_of_a_reserved_key_id_is_refused() {
+        assert!(matches!(
+            SealMarker::keyring([KeyId::new(1), KeyId::new(0)]),
+            Err(KeyringError::ReservedKeyId)
+        ));
+    }
+
+    #[test]
     fn a_marker_is_stored_as_plain_fields() -> TestResult {
         let marker = SealMarker::keyring([
-            KeyVersionId::try_from(2)?,
-            KeyVersionId::try_from(DETERMINISTIC | 1)?,
-            KeyVersionId::try_from(BEACON | 1)?,
-        ]);
+            KeyId::new(2),
+            KeyId::new(DETERMINISTIC | 1),
+            KeyId::new(BEACON | 1),
+        ])?;
         let stored = json!({
             "format": "keyring",
             "randomized": 2,
@@ -396,9 +416,7 @@ mod tests {
             let email_aad = email_of("42")?;
             let phone_aad = PHONE.aad(&EntityId::try_from("42")?);
             let email = keyring.encrypt(&email_aad, &ALICE.to_string()).await?;
-            keyring
-                .mark_compromised(KeyVersionId::try_from(&email)?, None)
-                .await?;
+            keyring.mark_compromised(email.key_id(), None).await?;
             let phone = keyring
                 .encrypt(&phone_aad, &ALICE_PHONE.to_string())
                 .await?;

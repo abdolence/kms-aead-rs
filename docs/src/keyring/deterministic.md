@@ -116,7 +116,7 @@ So an equality query matches against every version that still decrypts, with
 # use kms_aead::{DeterministicAlgorithm, KmsAeadResult, Ring};
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{
-#     Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyVersionId,
+#     Deterministic, DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId,
 #     Keyring, KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose,
 # };
 # use secret_vault_value::SecretValue;
@@ -145,7 +145,7 @@ let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
 let before: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
 
-let staged: KeyVersionId = keyring.rotate(Purpose::Deterministic).await?;
+let staged: KeyId = keyring.rotate(Purpose::Deterministic).await?;
 keyring.promote(staged).await?;
 
 // One probe per version that still decrypts, newest first

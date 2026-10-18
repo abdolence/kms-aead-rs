@@ -70,7 +70,7 @@ an index covers:
 
 A write that touches any encrypted field of a record re-seals all of them under the active
 versions, computes its beacons again, and writes `SealMarker::keyring` of their key ids, which
-`KeyVersionId::try_from(&value)` reads. Then one query finds every record a sweep still has to
+`value.key_id()` reads. Then one query finds every record a sweep still has to
 visit: after the promotion of randomised key id `n`, the records whose `seal.randomized < n`, and
 likewise for deterministic and beacon versions. A key id goes up to 2^32 - 1, so a SQL column
 holding one is a `BIGINT`.
@@ -91,7 +91,7 @@ use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::sweep::{self, Outcome, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring,
+    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring,
     KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Purpose, Randomized,
     Rotation, SealMarker,
 };
@@ -136,7 +136,7 @@ async fn reseal(
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
     let decrypted: Decrypted<Email> = keyring.decrypt_with_status(&aad, &row.email).await?;
     let email: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &decrypted.value).await?;
-    let seal = SealMarker::keyring([KeyVersionId::try_from(&email)?]);
+    let seal = SealMarker::keyring([email.key_id()])?;
     table
         .lock()
         .unwrap()
@@ -158,10 +158,10 @@ async fn reseal(
 #     let email = keyring
 #         .encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &Email(email.to_string()))
 #         .await?;
-#     let seal = SealMarker::keyring([KeyVersionId::try_from(&email)?]);
+#     let seal = SealMarker::keyring([email.key_id()])?;
 #     table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
 # }
-let staged: KeyVersionId = keyring.rotate(Purpose::Randomized).await?;
+let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 // After the wait for every process to see the staged version
 let rotation: Rotation = keyring.promote(staged).await?;
 
@@ -170,7 +170,9 @@ let candidates = table
     .lock()
     .unwrap()
     .iter()
-    .filter(|(_, row)| row.seal.randomized < Some(rotation.current))
+    .filter(|(_, row)| {
+        row.seal.randomized.map(KeyId::as_u32) < Some(rotation.current.as_u32())
+    })
     .map(|(user, _)| user.clone())
     .collect::<Vec<String>>();
 
@@ -209,7 +211,7 @@ In a real data store the re-seal is a transaction per record or per batch:
   it with the marker. A concurrent application write wins, and the candidate is `Skipped`;
 - PostgreSQL: `SELECT … WHERE seal_randomized < $1 ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED` in a
   transaction per batch, then the `UPDATE` and the commit. `$1` is the new version's
-  `KeyVersionId::as_u32()`, bound as a `BIGINT`.
+  `KeyId::as_u32()`, bound as a `BIGINT`.
 
 Once a sweep reports `failed == 0` and the query returns nothing, `retire` the old version. Keep it
 retired for a while before `destroy`: `reinstate` brings a retired version back for a value that

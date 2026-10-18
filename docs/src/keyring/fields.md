@@ -10,7 +10,7 @@ application newtype such as `Email`, so a field names what it holds. Its layout 
 application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes itself.
 
 - `value()` and `into_value()`, of `kms_aead::ValueStruct`, return the bytes;
-- `KeyVersionId::try_from(&value)` returns the version that sealed it;
+- `key_id()` returns the key id of the version that sealed it;
 - `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
   when the value is made, and fail on bytes that are no keyring value before any decryption;
 - `decrypt` checks the key id first, and fails with `ReservedKeyId` on a reserved id and with

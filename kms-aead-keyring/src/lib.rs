@@ -186,16 +186,16 @@ pub mod encodings;
 pub mod errors;
 pub use errors::{KeyringError, KeyringResult};
 
-mod key_version_id;
-pub use key_version_id::*;
-
 mod keyring;
 pub use keyring::*;
 
 pub use kms_aead::formats::{Deterministic, Randomized};
 #[cfg(feature = "serde-json")]
 pub use kms_aead::Json;
-pub use kms_aead::{Encrypted, Plaintext};
+pub use kms_aead::{Encrypted, KeyId, Plaintext};
+
+mod purpose;
+pub use purpose::Purpose;
 
 mod record;
 pub use record::*;

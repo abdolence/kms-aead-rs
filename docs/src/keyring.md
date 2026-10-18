@@ -59,7 +59,7 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyVersionId, Keyring,
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring,
     KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose, Randomized,
 };
 use secret_vault_value::SecretValue;
@@ -100,10 +100,10 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
 let aad: FieldAad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
 let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
-assert_eq!(KeyVersionId::try_from(&value)?, KeyVersionId::try_from(1)?);
+assert_eq!(value.key_id(), KeyId::new(1));
 
 // A staged rotation keeps the previous version decrypting
-let staged: KeyVersionId = keyring.rotate(Purpose::Randomized).await?;
+let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 keyring.promote(staged).await?;
 assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 # Ok(())

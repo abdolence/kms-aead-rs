@@ -21,13 +21,14 @@ use crate::errors::{
     InteropRequirement, KekMismatchError, KeyVersionCompromisedError, KeyVersionError,
     KeyringError, KeyringResult, RecordInvalidReason,
 };
+use crate::purpose::unreserved;
 use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
 use crate::spans;
 use crate::store::{KeyringStore, Stored, Swap};
 use crate::{
-    Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyVersion, KeyVersionId,
-    KeyVersionState, KeyringId, KeyringRecord, Purpose,
+    Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
+    KeyringId, KeyringRecord, Purpose,
 };
 
 mod beacon;
@@ -201,7 +202,7 @@ where
             let cipher = self.cipher(version)?;
             let (sealed, outcome) = self
                 .with_cached_key(&record, version.id(), dek, |key| {
-                    cipher.encrypt_field(version.id().into(), &aad.bytes, value, key)
+                    cipher.encrypt_field(version.id(), &aad.bytes, value, key)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -231,14 +232,17 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
-        let key_id = KeyVersionId::try_from(value)?;
-        spans::in_span(spans::decrypt(self.id(), key_id), async {
-            let (record, reload) = self.cache.find(key_id).await;
-            spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, key_id)?;
-            self.apply_read_policy(version, compromise)?;
-            self.open_cached(&record, version, dek, aad, value).await
-        })
+        let key_id = Purpose::Randomized.check(value.key_id())?;
+        spans::in_span(
+            spans::decrypt(self.id(), Purpose::Randomized, key_id),
+            async {
+                let (record, reload) = self.cache.find(key_id).await;
+                spans::record_reload(reload);
+                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                self.apply_read_policy(version, compromise)?;
+                self.open_cached(&record, version, dek, aad, value).await
+            },
+        )
         .await
     }
 
@@ -255,27 +259,30 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
-        let key_id = KeyVersionId::try_from(value)?;
-        spans::in_span(spans::decrypt(self.id(), key_id), async {
-            let (record, reload) = self.cache.find(key_id).await;
-            spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, key_id)?;
-            let (opened, trust) = match compromise {
-                None => (
-                    self.open_cached(&record, version, dek, aad, value).await?,
-                    KeyTrust::Trusted,
-                ),
-                Some(compromise) => (
-                    self.open_uncached(version, dek, aad, value).await?,
-                    KeyTrust::Compromised(compromise.clone()),
-                ),
-            };
-            Ok(Decrypted {
-                value: opened,
-                key_version_id: version.id(),
-                trust,
-            })
-        })
+        let key_id = Purpose::Randomized.check(value.key_id())?;
+        spans::in_span(
+            spans::decrypt(self.id(), Purpose::Randomized, key_id),
+            async {
+                let (record, reload) = self.cache.find(key_id).await;
+                spans::record_reload(reload);
+                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let (opened, trust) = match compromise {
+                    None => (
+                        self.open_cached(&record, version, dek, aad, value).await?,
+                        KeyTrust::Trusted,
+                    ),
+                    Some(compromise) => (
+                        self.open_uncached(version, dek, aad, value).await?,
+                        KeyTrust::Compromised(compromise.clone()),
+                    ),
+                };
+                Ok(Decrypted {
+                    value: opened,
+                    key_id: version.id(),
+                    trust,
+                })
+            },
+        )
         .await
     }
 
@@ -296,7 +303,7 @@ where
     /// purpose has one already, [`KeyringError::RecordRegressed`] when the stored record moves
     /// backwards from the cached one, and [`KeyringError::RecordConflict`] after
     /// [`cas_retries`](KeyringOptions::cas_retries) conflicts.
-    pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyVersionId> {
+    pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), purpose), async {
             let staged = self
                 .cache
@@ -321,10 +328,12 @@ where
     ///
     /// # Errors
     ///
-    /// The store's errors, [`KeyringError::KeyVersionUnknown`],
-    /// [`KeyringError::InvalidTransition`] for a version that is not pending, and the errors of
-    /// a write as for [`rotate`](Self::rotate).
-    pub async fn promote(&self, key_id: KeyVersionId) -> KeyringResult<Rotation> {
+    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
+    /// store's errors, [`KeyringError::KeyVersionUnknown`], [`KeyringError::InvalidTransition`]
+    /// for a version that is not pending, and the errors of a write as for
+    /// [`rotate`](Self::rotate).
+    pub async fn promote(&self, key_id: KeyId) -> KeyringResult<Rotation> {
+        unreserved(key_id)?;
         spans::in_span(spans::promote(self.id(), key_id), async {
             let rotation = self
                 .cache
@@ -345,7 +354,7 @@ where
     ///
     /// As [`rotate`](Self::rotate), and `UNSUPPORTED_ALGORITHM` from kms-aead when the backend
     /// does not implement `algorithm`.
-    pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyVersionId> {
+    pub async fn change_algorithm(&self, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         spans::in_span(spans::rotate(self.id(), algorithm.purpose()), async {
             let staged = self
                 .cache
@@ -375,22 +384,26 @@ where
     ///
     /// # Errors
     ///
-    /// The store's errors, [`KeyringError::KeyVersionUnknown`],
+    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
+    /// store's errors, [`KeyringError::KeyVersionUnknown`],
     /// [`KeyringError::InvalidTransition`] for a pending, destroyed or already compromised
     /// version, and the errors of a write as for [`rotate`](Self::rotate). A pending version
     /// never sealed a value: [`destroy`](Self::destroy) it instead.
     pub async fn mark_compromised(
         &self,
-        key_id: KeyVersionId,
+        key_id: KeyId,
         note: Option<String>,
     ) -> KeyringResult<Option<Rotation>> {
+        unreserved(key_id)?;
         spans::in_span(spans::mark_compromised(self.id(), key_id), async {
             let rotation = self
                 .cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
                     let record = edit.record();
-                    let replacement = match record.version(key_id).map(KeyVersion::state) {
-                        Some(KeyVersionState::Active) => self.replacement(record, key_id).await,
+                    let replacement = match record.version(key_id) {
+                        Some(version) if version.state() == KeyVersionState::Active => {
+                            self.replacement(record, version).await
+                        }
                         _ => None,
                     };
                     let now = Timestamp::now();
@@ -415,10 +428,12 @@ where
     ///
     /// # Errors
     ///
-    /// The store's errors, [`KeyringError::KeyVersionUnknown`],
+    /// [`KeyringError::ReservedKeyId`], before any store call, for a reserved key id; the
+    /// store's errors, [`KeyringError::KeyVersionUnknown`],
     /// [`KeyringError::InvalidTransition`] for any version that is not decrypt-only, and the
     /// errors of a write as for [`rotate`](Self::rotate).
-    pub async fn retire(&self, key_id: KeyVersionId) -> KeyringResult<()> {
+    pub async fn retire(&self, key_id: KeyId) -> KeyringResult<()> {
+        unreserved(key_id)?;
         spans::in_span(spans::retire(self.id(), key_id), async {
             self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
@@ -435,7 +450,8 @@ where
     /// # Errors
     ///
     /// As [`retire`](Self::retire), for any version that is not retired.
-    pub async fn reinstate(&self, key_id: KeyVersionId) -> KeyringResult<()> {
+    pub async fn reinstate(&self, key_id: KeyId) -> KeyringResult<()> {
+        unreserved(key_id)?;
         spans::in_span(spans::reinstate(self.id(), key_id), async {
             self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
@@ -453,7 +469,8 @@ where
     /// # Errors
     ///
     /// As [`retire`](Self::retire), for any version that is neither retired nor pending.
-    pub async fn destroy(&self, key_id: KeyVersionId) -> KeyringResult<()> {
+    pub async fn destroy(&self, key_id: KeyId) -> KeyringResult<()> {
+        unreserved(key_id)?;
         spans::in_span(spans::destroy(self.id(), key_id), async {
             self.cache
                 .write(self.cas_retries, async |edit: &mut RecordEdit| {
@@ -540,7 +557,7 @@ where
     fn readable<'r>(
         &self,
         record: &'r KeyringRecord,
-        key_id: KeyVersionId,
+        key_id: KeyId,
     ) -> KeyringResult<(
         &'r KeyVersion,
         &'r EncryptedDataEncryptionKey,
@@ -664,7 +681,7 @@ where
     async fn with_cached_key<T>(
         &self,
         record: &KeyringRecord,
-        key_id: KeyVersionId,
+        key_id: KeyId,
         dek: &EncryptedDataEncryptionKey,
         use_key: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KeyringResult<(T, DekCacheOutcome)> {
@@ -697,20 +714,22 @@ where
         Ok(result)
     }
 
-    /// A new version to replace the active version `key_id` that is being flagged compromised,
+    /// A new version to replace `replaced`, the active version being flagged compromised,
     /// or `None`, with a `WARN`, when its key cannot be encrypted: the flag goes in without it.
     async fn replacement(
         &self,
         record: &KeyringRecord,
-        key_id: KeyVersionId,
+        replaced: &KeyVersion,
     ) -> Option<NewVersion> {
-        let purpose = key_id.purpose();
+        let purpose = replaced.algorithm().purpose();
         let new = match record.algorithms().of(purpose) {
             Some(algorithm) => self.new_version(record, algorithm).await,
             None => Err(KeyringError::no_algorithm(self.id(), purpose)),
         };
-        new.inspect_err(|error| spans::compromised_without_rotation(self.id(), key_id, error))
-            .ok()
+        new.inspect_err(|error| {
+            spans::compromised_without_rotation(self.id(), replaced.id(), error)
+        })
+        .ok()
     }
 
     /// Opens `value` with a key the provider decrypts for this call only, which never enters the
@@ -729,11 +748,7 @@ where
     }
 
     /// Stages a new version of `algorithm` in `edit`.
-    async fn stage(
-        &self,
-        edit: &mut RecordEdit,
-        algorithm: KeyAlgorithm,
-    ) -> KeyringResult<KeyVersionId> {
+    async fn stage(&self, edit: &mut RecordEdit, algorithm: KeyAlgorithm) -> KeyringResult<KeyId> {
         let new = self.new_version(edit.record(), algorithm).await?;
         edit.stage(new, Timestamp::now())
     }
@@ -793,7 +808,7 @@ impl NewVersion {
     /// Version `key_id` with a new key for `algorithm`, from the KMS generator when the provider
     /// uses one and from the CSPRNG of `B` otherwise, encrypted by `provider`.
     async fn generate<P, B>(
-        key_id: KeyVersionId,
+        key_id: KeyId,
         algorithm: KeyAlgorithm,
         provider: &P,
     ) -> KeyringResult<Self>
@@ -907,9 +922,9 @@ pub struct Rotation {
     /// The purpose rotated.
     pub purpose: Purpose,
     /// The version that was active before, and decrypts only now.
-    pub previous: Option<KeyVersionId>,
+    pub previous: Option<KeyId>,
     /// The new active version.
-    pub current: KeyVersionId,
+    pub current: KeyId,
 }
 
 /// The algorithms of a new keyring.
@@ -1000,7 +1015,7 @@ pub struct Decrypted<T> {
     /// The value.
     pub value: T,
     /// The version that opened it.
-    pub key_version_id: KeyVersionId,
+    pub key_id: KeyId,
     /// Whether the version is compromised.
     pub trust: KeyTrust,
 }

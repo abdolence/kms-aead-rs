@@ -8,8 +8,8 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{AeadAlgorithm, ValueStruct};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyVersion,
-    KeyVersionId, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose, Randomized,
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
+    KeyVersion, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose, Randomized,
 };
 
 #[cfg(feature = "ring")]
@@ -59,7 +59,7 @@ async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
             .iter()
             .map(KeyVersion::id)
             .collect::<Vec<_>>(),
-        [KeyVersionId::try_from(1)?]
+        [KeyId::new(1)]
     );
     Ok(())
 }

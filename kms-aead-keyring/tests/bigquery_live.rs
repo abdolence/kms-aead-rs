@@ -11,8 +11,8 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{DeterministicAlgorithm, Ring, ValueStruct};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyVersionId, Keyring, KeyringId,
-    KeyringOptions, KeyringPolicy, KeysetSelection, Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringId, KeyringOptions,
+    KeyringPolicy, KeysetSelection, Purpose,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -123,9 +123,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
     let deterministic_keyset = keyring
-        .export_bigquery_keyset(KeysetSelection::Single(KeyVersionId::try_from(
-            &deterministic,
-        )?))
+        .export_bigquery_keyset(KeysetSelection::Single(deterministic.key_id()))
         .await?;
     let randomized_chain = format!(
         "KEYS.KEYSET_CHAIN('{}', {})",
@@ -162,10 +160,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     )
     .await?;
 
-    assert_eq!(
-        randomized_keyset.key_version_ids(),
-        [KeyVersionId::try_from(1)?, KeyVersionId::try_from(2)?]
-    );
+    assert_eq!(randomized_keyset.key_ids(), [KeyId::new(1), KeyId::new(2)]);
     assert_eq!(
         row,
         [

@@ -250,7 +250,7 @@ staged, with the encrypted DEKs shortened:
       "compromised": null,
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "wrapped_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
     },
     {
       "key_id": 2147483649,
@@ -259,7 +259,7 @@ staged, with the encrypted DEKs shortened:
       "compromised": null,
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "wrapped_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
     },
     {
       "key_id": 1073741825,
@@ -268,7 +268,7 @@ staged, with the encrypted DEKs shortened:
       "compromised": null,
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "wrapped_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
     },
     {
       "key_id": 2,
@@ -277,7 +277,7 @@ staged, with the encrypted DEKs shortened:
       "compromised": null,
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "wrapped_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
     },
     {
       "key_id": 3,
@@ -286,7 +286,7 @@ staged, with the encrypted DEKs shortened:
       "compromised": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
-      "wrapped_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
     }
   ],
   "created_at": "2026-10-18T12:18:31.053483320Z",
@@ -303,7 +303,7 @@ staged, with the encrypted DEKs shortened:
 - `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
   `state_changed_at` is the time it was staged;
 - `compromised` is `null`, or `{"at": "<time>", "note": "<the operator's note, or null>"}`;
-- `wrapped_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
+- `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
   provider returned, here the local KMS layout. It is `null` for a destroyed version;
 - the times are RFC 3339, in UTC.
 

@@ -15,7 +15,8 @@ use super::{
     RetainedDek, VersionState,
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
-use crate::{KeyVersionId, Purpose};
+use crate::purpose::is_reserved;
+use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
 /// version, so this holds a few thousand versions.
@@ -58,7 +59,6 @@ struct StoredVersion {
     state_changed_at: Timestamp,
     /// The standard base64 of the encrypted DEK's bytes, as the provider returned them; `None`
     /// once destroyed.
-    #[serde(rename = "wrapped_dek")]
     encrypted_dek: Option<String>,
 }
 
@@ -197,15 +197,16 @@ impl KeyringRecord {
             if !seen.insert(key_id) {
                 return Err(RecordInvalidReason::DuplicateKeyId(key_id));
             }
-            if version.algorithm.purpose() != key_id.purpose() {
+            let purpose = version.algorithm.purpose();
+            if purpose != Purpose::of(key_id) {
                 return Err(RecordInvalidReason::PurposeMismatch(key_id));
             }
-            let last = match key_id.purpose() {
+            let last = match purpose {
                 Purpose::Randomized => &mut last_randomized,
                 Purpose::Deterministic => &mut last_deterministic,
                 Purpose::Beacon => &mut last_beacon,
             };
-            if last.is_some_and(|last| last > key_id) {
+            if last.is_some_and(|last: KeyId| last.as_u32() > key_id.as_u32()) {
                 return Err(RecordInvalidReason::OrdinalOrder(key_id));
             }
             *last = Some(key_id);
@@ -215,7 +216,7 @@ impl KeyringRecord {
                 self.versions
                     .iter()
                     .filter(|version| {
-                        version.key_id.purpose() == purpose && version.state() == state
+                        version.algorithm.purpose() == purpose && version.state() == state
                     })
                     .count()
             };
@@ -235,8 +236,10 @@ impl TryFrom<StoredVersion> for KeyVersion {
 
     /// Checks one version on its own; the checks across versions are the record's.
     fn try_from(stored: StoredVersion) -> Result<Self, RecordInvalidReason> {
-        let key_id = KeyVersionId::try_from(stored.key_id)
-            .map_err(|_| RecordInvalidReason::ReservedKeyId)?;
+        let key_id = KeyId::new(stored.key_id);
+        if is_reserved(key_id) {
+            return Err(RecordInvalidReason::ReservedKeyId);
+        }
         let algorithm: KeyAlgorithm = stored
             .algorithm
             .parse()

@@ -16,7 +16,7 @@ use tracing::{debug_span, field, Instrument, Span};
 use crate::errors::{KeyringResult, RegressionRule};
 use crate::store::StoreKind;
 use crate::sweep::SweepReport;
-use crate::{KeyVersion, KeyVersionId, KeyringError, KeyringId, Purpose};
+use crate::{KeyId, KeyVersion, KeyringError, KeyringId, Purpose};
 
 const KEYRING: &str = "/kms_aead_keyring/keyring";
 const PURPOSE: &str = "/kms_aead_keyring/purpose";
@@ -77,13 +77,13 @@ pub(crate) fn beacon(keyring: &KeyringId) -> Span {
     )
 }
 
-/// `Keyring decrypt`, for the value's key id.
-pub(crate) fn decrypt(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+/// `Keyring decrypt`, for the value's key id, of `purpose`.
+pub(crate) fn decrypt(keyring: &KeyringId, purpose: Purpose, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring decrypt",
         { KEYRING } = keyring.as_str(),
-        { PURPOSE } = %key_id.purpose(),
-        { KEY_ID } = %key_id,
+        { PURPOSE } = %purpose,
+        { KEY_ID } = %key_id.as_u32(),
         { KEY_STATE } = field::Empty,
         { RELOAD } = field::Empty,
         { DEK_CACHE } = field::Empty,
@@ -133,11 +133,11 @@ pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
 }
 
 /// `Keyring promote`, for the pending version `key_id`.
-pub(crate) fn promote(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+pub(crate) fn promote(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring promote",
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { FROM_KEY_ID } = field::Empty,
         { TO_KEY_ID } = field::Empty,
         { CAS_RETRIES } = field::Empty,
@@ -145,42 +145,42 @@ pub(crate) fn promote(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
     )
 }
 
-pub(crate) fn mark_compromised(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+pub(crate) fn mark_compromised(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring mark compromised",
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { TO_KEY_ID } = field::Empty,
         { CAS_RETRIES } = field::Empty,
         { ERROR_CODE } = field::Empty,
     )
 }
 
-pub(crate) fn retire(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+pub(crate) fn retire(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring retire",
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { CAS_RETRIES } = field::Empty,
         { ERROR_CODE } = field::Empty,
     )
 }
 
-pub(crate) fn reinstate(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+pub(crate) fn reinstate(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring reinstate",
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { CAS_RETRIES } = field::Empty,
         { ERROR_CODE } = field::Empty,
     )
 }
 
-pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyVersionId) -> Span {
+pub(crate) fn destroy(keyring: &KeyringId, key_id: KeyId) -> Span {
     debug_span!(
         "Keyring destroy",
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { CAS_RETRIES } = field::Empty,
         { ERROR_CODE } = field::Empty,
     )
@@ -214,7 +214,7 @@ pub(crate) async fn in_span<T>(
 /// Records on the current `Keyring encrypt` span the version that seals.
 pub(crate) fn record_sealing_version(version: &KeyVersion) {
     let span = Span::current();
-    span.record(KEY_ID, field::display(version.id()));
+    span.record(KEY_ID, field::display(version.id().as_u32()));
     span.record(ALGORITHM, field::display(version.algorithm()));
 }
 
@@ -249,12 +249,12 @@ pub(crate) fn record_dek_cache_bypassed() {
 }
 
 /// Records on the current span the versions of a rotation.
-pub(crate) fn record_rotation(previous: Option<KeyVersionId>, current: KeyVersionId) {
+pub(crate) fn record_rotation(previous: Option<KeyId>, current: KeyId) {
     let span = Span::current();
     if let Some(previous) = previous {
-        span.record(FROM_KEY_ID, field::display(previous));
+        span.record(FROM_KEY_ID, field::display(previous.as_u32()));
     }
-    span.record(TO_KEY_ID, field::display(current));
+    span.record(TO_KEY_ID, field::display(current.as_u32()));
 }
 
 /// Records on the current span the conflicts an administrative write retried.
@@ -288,10 +288,10 @@ pub(crate) async fn timed<T>(request: impl Future<Output = T>) -> T {
 }
 
 /// A read of a compromised version under `CompromisedReadPolicy::Allow`.
-pub(crate) fn compromised_read_allowed(keyring: &KeyringId, key_id: KeyVersionId) {
+pub(crate) fn compromised_read_allowed(keyring: &KeyringId, key_id: KeyId) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         "Decrypted a value under a compromised key version, as the Allow policy permits"
     );
 }
@@ -301,17 +301,17 @@ pub(crate) fn compromised_read_allowed(keyring: &KeyringId, key_id: KeyVersionId
 pub(crate) fn read_refused(keyring: &KeyringId, version: &KeyVersion) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %version.id(),
+        { KEY_ID } = %version.id().as_u32(),
         { KEY_STATE } = %version.state(),
         "Refused a value under a key version that no longer decrypts"
     );
 }
 
 /// A reload for an unknown key id refused inside the reload interval.
-pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyVersionId) {
+pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId) {
     tracing::debug!(
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         "Not reloading the keyring record for an unknown key id inside the reload interval"
     );
 }
@@ -346,12 +346,12 @@ pub(crate) fn record_regressed(keyring: &KeyringId, rule: RegressionRule) {
 /// A compromised flag written without a rotation, because the new key could not be encrypted.
 pub(crate) fn compromised_without_rotation(
     keyring: &KeyringId,
-    key_id: KeyVersionId,
+    key_id: KeyId,
     error: &KeyringError,
 ) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { KEY_ID } = %key_id,
+        { KEY_ID } = %key_id.as_u32(),
         { ERROR_CODE } = error.code(),
         "Flagged the active key version compromised without a new one, since the new key could \
          not be encrypted: nothing encrypts until rotate succeeds"
@@ -362,14 +362,14 @@ pub(crate) fn compromised_without_rotation(
 pub(crate) fn active_version_changed(
     keyring: &KeyringId,
     purpose: Purpose,
-    from: Option<KeyVersionId>,
-    to: Option<KeyVersionId>,
+    from: Option<KeyId>,
+    to: Option<KeyId>,
 ) {
     tracing::info!(
         { KEYRING } = keyring.as_str(),
         { PURPOSE } = %purpose,
-        { FROM_KEY_ID } = from.map(field::display),
-        { TO_KEY_ID } = to.map(field::display),
+        { FROM_KEY_ID } = from.map(|key_id| field::display(key_id.as_u32())),
+        { TO_KEY_ID } = to.map(|key_id| field::display(key_id.as_u32())),
         "The active key version changed"
     );
 }

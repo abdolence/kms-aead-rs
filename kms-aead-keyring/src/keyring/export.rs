@@ -15,9 +15,10 @@ use kms_aead::{
 
 use crate::encodings::{BigQuery, Encoding, KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
+use crate::purpose::unreserved;
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{KeyVersionId, KeyVersionState, Keyring, KeyringRecord, Purpose};
+use crate::{KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,14 +31,19 @@ pub enum KeysetSelection {
     /// The one version, as the primary, also when it is compromised, and never a pending one:
     /// the keyset of `DETERMINISTIC_ENCRYPT` for the probe of one version, since BigQuery
     /// encrypts under the primary, and of a read through a compromised version.
-    Single(KeyVersionId),
+    Single(KeyId),
 }
 
 impl KeysetSelection {
-    fn purpose(self) -> Purpose {
+    /// The purpose of the selected versions.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::ReservedKeyId`] for `Single` of a reserved key id.
+    fn purpose(self) -> KeyringResult<Purpose> {
         match self {
-            KeysetSelection::Readable(purpose) => purpose,
-            KeysetSelection::Single(key_id) => key_id.purpose(),
+            KeysetSelection::Readable(purpose) => Ok(purpose),
+            KeysetSelection::Single(key_id) => Ok(Purpose::of(unreserved(key_id)?)),
         }
     }
 }
@@ -54,7 +60,7 @@ impl KeysetSelection {
 pub struct EncryptedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
-    key_version_ids: Vec<KeyVersionId>,
+    key_ids: Vec<KeyId>,
     encoding: PhantomData<E>,
 }
 
@@ -64,9 +70,9 @@ impl<E: KeysetEncoding> EncryptedKeyset<E> {
         &self.bytes
     }
 
-    /// The versions in the keyset, in ascending order.
-    pub fn key_version_ids(&self) -> &[KeyVersionId] {
-        &self.key_version_ids
+    /// The key ids of the versions in the keyset, in ascending order.
+    pub fn key_ids(&self) -> &[KeyId] {
+        &self.key_ids
     }
 
     /// Tink's key URI of the KMS key that encrypts the keyset, such as
@@ -97,7 +103,7 @@ impl<E: KeysetEncoding> Clone for EncryptedKeyset<E> {
         EncryptedKeyset {
             bytes: self.bytes.clone(),
             key_uri: self.key_uri.clone(),
-            key_version_ids: self.key_version_ids.clone(),
+            key_ids: self.key_ids.clone(),
             encoding: PhantomData,
         }
     }
@@ -108,7 +114,7 @@ impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
         f.debug_struct("EncryptedKeyset")
             .field("encoding", &E::ENCODING)
             .field("key_uri", &self.key_uri)
-            .field("key_version_ids", &self.key_version_ids)
+            .field("key_ids", &self.key_ids)
             .finish_non_exhaustive()
     }
 }
@@ -135,6 +141,8 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     ///
     /// - the store's errors, [`KeyringError::RecordMissing`], [`KeyringError::RecordInvalid`]
     ///   and [`KeyringError::RecordRegressed`], from the read of the record;
+    /// - [`KeyringError::ReservedKeyId`], before any store or KMS call, for `Single` of a
+    ///   reserved key id;
     /// - [`KeyringError::NoActiveVersion`] for `Readable` of a purpose with no active version;
     /// - [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`] and
     ///   [`KeyringError::KeyVersionDestroyed`] for `Single` of a version that does not decrypt,
@@ -187,7 +195,7 @@ where
         &self,
         selection: KeysetSelection,
     ) -> KeyringResult<EncryptedKeyset<E>> {
-        spans::in_span(spans::export(self.id(), selection.purpose()), async {
+        spans::in_span(spans::export(self.id(), selection.purpose()?), async {
             let encoding = E::ENCODING;
             let kek = self.provider.kek();
             let key_uri = encoding.key_uri(kek).ok_or_else(|| {
@@ -201,13 +209,13 @@ where
             // flagged compromised since this process last refreshed is never exported.
             let record = self.cache.reload("export").await?;
             let (primary, versions) = self.exported_versions(&record, selection, encoding)?;
-            let mut keyset = TinkKeyset::new(primary.into());
+            let mut keyset = TinkKeyset::new(primary);
             for (key_id, key_type, dek) in &versions {
                 // Uncached, so that the export leaves no key in the cache of a process that
                 // serves no reads under it.
                 let (added, _) = DekCache::disabled()
                     .with_key(&self.provider, dek, |key| {
-                        keyset.add_key((*key_id).into(), *key_type, key)
+                        keyset.add_key(*key_id, *key_type, key)
                     })
                     .await?;
                 added?;
@@ -229,7 +237,7 @@ where
             Ok(EncryptedKeyset {
                 bytes,
                 key_uri,
-                key_version_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
+                key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
                 encoding: PhantomData,
             })
         })
@@ -243,8 +251,8 @@ where
         record: &'r KeyringRecord,
         selection: KeysetSelection,
         encoding: Encoding,
-    ) -> KeyringResult<(KeyVersionId, Vec<ExportedVersion<'r>>)> {
-        let (primary, versions): (KeyVersionId, Vec<_>) = match selection {
+    ) -> KeyringResult<(KeyId, Vec<ExportedVersion<'r>>)> {
+        let (primary, versions): (KeyId, Vec<_>) = match selection {
             KeysetSelection::Readable(purpose) => {
                 let primary = record
                     .active(purpose)
@@ -252,7 +260,7 @@ where
                 let versions = record
                     .versions()
                     .iter()
-                    .filter(|version| version.id().purpose() == purpose)
+                    .filter(|version| version.algorithm().purpose() == purpose)
                     .filter_map(|version| match version.readable_dek() {
                         Some((dek, None)) => Some((version, dek)),
                         _ => None,
@@ -293,7 +301,7 @@ where
 }
 
 /// A selected version: its key id, its Tink key type and its encrypted DEK.
-type ExportedVersion<'r> = (KeyVersionId, TinkKeyType, &'r EncryptedDataEncryptionKey);
+type ExportedVersion<'r> = (KeyId, TinkKeyType, &'r EncryptedDataEncryptionKey);
 
 #[cfg(all(
     test,
@@ -338,16 +346,16 @@ mod tests {
         key_ids: &[u32],
     ) -> Result<SecretValue, Box<dyn std::error::Error>> {
         let record = keyring.record();
-        let mut keyset = TinkKeyset::new(KeyVersionId::try_from(primary)?.into());
+        let mut keyset = TinkKeyset::new(KeyId::new(primary));
         for key_id in key_ids {
-            let key_id = KeyVersionId::try_from(*key_id)?;
+            let key_id = KeyId::new(*key_id);
             let dek = record
                 .version(key_id)
                 .and_then(KeyVersion::encrypted_dek)
                 .ok_or("the version holds no key")?;
             let (added, _) = DekCache::disabled()
                 .with_key(provider, dek, |key| {
-                    keyset.add_key(key_id.into(), TinkKeyType::AesGcm, key)
+                    keyset.add_key(key_id, TinkKeyType::AesGcm, key)
                 })
                 .await?;
             added?;
@@ -367,15 +375,15 @@ mod tests {
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await;
         let first = keyring
-            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyVersionId::try_from(1)?))
+            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyId::new(1)))
             .await?;
 
         assert!(matches!(
             readable,
             Err(KeyringError::ExportAlgorithmUnsupported(KeyVersionError { key_id, .. }))
-                if key_id == KeyVersionId::try_from(2)?
+                if key_id == KeyId::new(2)
         ));
-        assert_eq!(first.key_version_ids(), [KeyVersionId::try_from(1)?]);
+        assert_eq!(first.key_ids(), [KeyId::new(1)]);
         assert_eq!(
             provider.calls.decryptions.load(Ordering::SeqCst),
             decryptions + 1
@@ -391,9 +399,7 @@ mod tests {
                 .promote(keyring.rotate(Purpose::Randomized).await?)
                 .await?;
         }
-        keyring
-            .mark_compromised(KeyVersionId::try_from(2)?, None)
-            .await?;
+        keyring.mark_compromised(KeyId::new(2), None).await?;
 
         let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
@@ -404,10 +410,7 @@ mod tests {
             ))
             .await?;
 
-        assert_eq!(
-            exported.key_version_ids(),
-            [KeyVersionId::try_from(1)?, KeyVersionId::try_from(3)?]
-        );
+        assert_eq!(exported.key_ids(), [KeyId::new(1), KeyId::new(3)]);
         assert_eq!(
             *keyset.value(),
             keyset_of(&keyring, &provider, 3, &[1, 3]).await?
@@ -421,7 +424,7 @@ mod tests {
         let keyset = EncryptedKeyset::<Tink> {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
-            key_version_ids: vec![KeyVersionId::try_from(1)?],
+            key_ids: vec![KeyId::new(1)],
             encoding: PhantomData,
         };
 
@@ -442,7 +445,7 @@ mod tests {
             KeyringOptions::new().with_watch(false),
         )
         .await?;
-        let leaked = KeyVersionId::try_from(1)?;
+        let leaked = KeyId::new(1);
         administrator.mark_compromised(leaked, None).await?;
 
         let exported = exporter
@@ -454,7 +457,7 @@ mod tests {
             ))
             .await?;
 
-        assert_eq!(exported.key_version_ids(), [KeyVersionId::try_from(2)?]);
+        assert_eq!(exported.key_ids(), [KeyId::new(2)]);
         assert_eq!(
             *keyset.value(),
             keyset_of(&exporter, &provider, 2, &[2]).await?
@@ -529,10 +532,7 @@ mod tests {
                 exported.as_bytes().to_vec(),
             ))
             .await?;
-        assert_eq!(
-            exported.key_version_ids(),
-            [KeyVersionId::try_from(1)?, staged]
-        );
+        assert_eq!(exported.key_ids(), [KeyId::new(1), staged]);
         assert_eq!(
             *keyset.value(),
             keyset_of(&keyring, &provider, 1, &[1, staged.as_u32()]).await?
@@ -565,7 +565,7 @@ mod tests {
     #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
         let (keyring, _) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
-        let first = KeyVersionId::try_from(1)?;
+        let first = KeyId::new(1);
         keyring
             .promote(keyring.rotate(Purpose::Randomized).await?)
             .await?;
@@ -622,17 +622,13 @@ mod tests {
                 .promote(keyring.rotate(Purpose::Randomized).await?)
                 .await?;
         }
-        let compromised = KeyVersionId::try_from(2)?;
+        let compromised = KeyId::new(2);
         keyring.mark_compromised(compromised, None).await?;
         let pending = keyring.rotate(Purpose::Randomized).await?;
         let cases = [
             (
                 KeysetSelection::Readable(Purpose::Randomized),
-                Ok(vec![
-                    KeyVersionId::try_from(1)?,
-                    KeyVersionId::try_from(3)?,
-                    pending,
-                ]),
+                Ok(vec![KeyId::new(1), KeyId::new(3), pending]),
             ),
             (KeysetSelection::Single(compromised), Ok(vec![compromised])),
             (KeysetSelection::Single(pending), Err("KEY_VERSION_PENDING")),
@@ -645,16 +641,16 @@ mod tests {
         for (selection, expected) in cases {
             let bigquery = keyring.export_keyset::<BigQuery>(selection).await;
             let tink = keyring.export_keyset::<Tink>(selection).await;
-            for key_version_ids in [
+            for key_ids in [
                 bigquery
                     .as_ref()
-                    .map(|keyset| keyset.key_version_ids().to_vec())
+                    .map(|keyset| keyset.key_ids().to_vec())
                     .map_err(KeyringError::code),
                 tink.as_ref()
-                    .map(|keyset| keyset.key_version_ids().to_vec())
+                    .map(|keyset| keyset.key_ids().to_vec())
                     .map_err(KeyringError::code),
             ] {
-                assert_eq!(key_version_ids, expected, "{selection:?}");
+                assert_eq!(key_ids, expected, "{selection:?}");
             }
         }
         Ok(())

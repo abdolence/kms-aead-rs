@@ -84,7 +84,7 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
 
     let record = fixture.keyring.record();
     let dek = record
-        .version(KeyVersionId::try_from(1)?)
+        .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
@@ -183,11 +183,8 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
         .await?;
     let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(
-        (
-            KeyVersionId::try_from(&first)?,
-            KeyVersionId::try_from(&second)?
-        ),
-        (KeyVersionId::try_from(1)?, KeyVersionId::try_from(2)?)
+        (first.key_id(), second.key_id()),
+        (KeyId::new(1), KeyId::new(2))
     );
 
     assert!(matches!(
@@ -229,6 +226,37 @@ async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call()
         fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         decryptions
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_operation_on_a_reserved_key_id_fails_before_any_store_call() -> TestResult {
+    let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
+    let keyring = &fixture.keyring;
+    let store_calls = || {
+        (
+            fixture.store.calls.loads.load(Ordering::SeqCst),
+            fixture.store.calls.revalidations.load(Ordering::SeqCst),
+        )
+    };
+    let before = store_calls();
+
+    for reserved in [0, 1 << 31, 1 << 30, (3 << 30) | 1].map(KeyId::new) {
+        for refused in [
+            keyring.promote(reserved).await.map(|_| ()),
+            keyring.mark_compromised(reserved, None).await.map(|_| ()),
+            keyring.retire(reserved).await,
+            keyring.reinstate(reserved).await,
+            keyring.destroy(reserved).await,
+            keyring
+                .export_tink_keyset(KeysetSelection::Single(reserved))
+                .await
+                .map(|_| ()),
+        ] {
+            assert!(matches!(refused, Err(KeyringError::ReservedKeyId)));
+        }
+    }
+    assert_eq!(store_calls(), before);
     Ok(())
 }
 
@@ -281,7 +309,7 @@ async fn reload_is_rate_limited() -> TestResult {
     for _ in 0..3 {
         assert!(matches!(
             fixture.keyring.decrypt(&aad, &unknown).await,
-            Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == KeyVersionId::try_from(9)?
+            Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == KeyId::new(9)
         ));
         assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
     }
@@ -301,7 +329,7 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
         .await?;
 
     let cached = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyVersionId::try_from(&cached)?, KeyVersionId::try_from(1)?);
+    assert_eq!(cached.key_id(), KeyId::new(1));
     assert_eq!(
         (
             fixture.store.calls.loads.load(Ordering::SeqCst),
@@ -312,10 +340,7 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     let refreshed = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(
-        KeyVersionId::try_from(&refreshed)?,
-        KeyVersionId::try_from(2)?
-    );
+    assert_eq!(refreshed.key_id(), KeyId::new(2));
     fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     assert_eq!(
         (
@@ -327,10 +352,7 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     let unchanged = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(
-        KeyVersionId::try_from(&unchanged)?,
-        KeyVersionId::try_from(2)?
-    );
+    assert_eq!(unchanged.key_id(), KeyId::new(2));
     assert_eq!(
         (
             fixture.store.calls.loads.load(Ordering::SeqCst),
@@ -350,8 +372,8 @@ async fn a_missing_record_keeps_the_cached_one() -> TestResult {
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     assert_eq!(
-        KeyVersionId::try_from(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?)?,
-        KeyVersionId::try_from(1)?
+        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        KeyId::new(1)
     );
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.keyring.decrypt(&aad, &value).await?, ALICE);
@@ -417,7 +439,7 @@ async fn cas_conflicts_are_retried_then_refused() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false).with_cas_retries(2)).await?;
     fixture.store.calls.conflicts.store(2, Ordering::SeqCst);
     let staged = fixture.keyring.rotate(Purpose::Randomized).await?;
-    assert_eq!(staged, KeyVersionId::try_from(2)?);
+    assert_eq!(staged, KeyId::new(2));
     assert_eq!(fixture.store.calls.loads.load(Ordering::SeqCst), 3);
 
     fixture.store.calls.conflicts.store(3, Ordering::SeqCst);
@@ -451,11 +473,11 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 
     let rotation = fixture
         .keyring
-        .mark_compromised(KeyVersionId::try_from(1)?, Some("laptop lost".to_string()))
+        .mark_compromised(KeyId::new(1), Some("laptop lost".to_string()))
         .await?;
     assert_eq!(
         rotation.map(|rotation| rotation.current),
-        Some(KeyVersionId::try_from(2)?)
+        Some(KeyId::new(2))
     );
     assert_eq!(fixture.keyring.decrypt(&aad, &value).await?, ALICE);
     assert_eq!(
@@ -477,19 +499,19 @@ async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
     let dek = held
-        .version(KeyVersionId::try_from(1)?)
+        .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     fixture
         .other_process()
         .await?
-        .mark_compromised(KeyVersionId::try_from(1)?, None)
+        .mark_compromised(KeyId::new(1), None)
         .await?;
     fixture.keyring.reload().await?;
 
     fixture
         .keyring
-        .with_cached_key(&held, KeyVersionId::try_from(1)?, dek, |_| ())
+        .with_cached_key(&held, KeyId::new(1), dek, |_| ())
         .await?;
     let ((), outcome) = fixture
         .keyring
@@ -507,13 +529,13 @@ async fn block_refuses_before_decrypting() -> TestResult {
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     fixture
         .keyring
-        .mark_compromised(KeyVersionId::try_from(1)?, None)
+        .mark_compromised(KeyId::new(1), None)
         .await?;
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
     assert!(matches!(
         fixture.keyring.decrypt(&aad, &value).await,
-        Err(KeyringError::KeyVersionCompromised(error)) if error.key_id == KeyVersionId::try_from(1)?
+        Err(KeyringError::KeyVersionCompromised(error)) if error.key_id == KeyId::new(1)
     ));
     let other = fixture.other_process().await?;
     assert!(matches!(
@@ -533,15 +555,15 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let aad = email_of("42")?;
     let record = fixture.keyring.record();
     let dek = record
-        .version(KeyVersionId::try_from(1)?)
+        .version(KeyId::new(1))
         .and_then(KeyVersion::encrypted_dek)
         .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
-    let first = KeyVersionId::try_from(1)?;
+    let first = KeyId::new(1);
     let (forged, _) = DekCache::disabled()
         .with_key(&fixture.provider, dek, |leaked| {
             cipher.encrypt_field(
-                first.into(),
+                first,
                 &aad.bytes,
                 &"mallory@example.com".to_string(),
                 leaked,
@@ -551,7 +573,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let forged: Encrypted<String, Randomized> = forged?;
     fixture
         .keyring
-        .mark_compromised(KeyVersionId::try_from(1)?, Some("dek leaked".to_string()))
+        .mark_compromised(KeyId::new(1), Some("dek leaked".to_string()))
         .await?;
 
     assert!(matches!(
@@ -560,7 +582,7 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     ));
     let status = fixture.keyring.decrypt_with_status(&aad, &forged).await?;
     assert_eq!(status.value, "mallory@example.com");
-    assert_eq!(status.key_version_id, KeyVersionId::try_from(1)?);
+    assert_eq!(status.key_id, KeyId::new(1));
     assert!(matches!(
         status.trust,
         KeyTrust::Compromised(compromise) if compromise.note() == Some("dek leaked")
@@ -580,7 +602,7 @@ async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> 
     let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     fixture
         .keyring
-        .mark_compromised(KeyVersionId::try_from(1)?, None)
+        .mark_compromised(KeyId::new(1), None)
         .await?;
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
@@ -602,8 +624,8 @@ async fn decrypt_with_status_decrypts_a_compromised_version_past_the_cache() -> 
     let trusted = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
     let status = fixture.keyring.decrypt_with_status(&aad, &trusted).await?;
     assert_eq!(
-        (status.key_version_id, status.trust),
-        (KeyVersionId::try_from(2)?, KeyTrust::Trusted)
+        (status.key_id, status.trust),
+        (KeyId::new(2), KeyTrust::Trusted)
     );
     Ok(())
 }
@@ -621,7 +643,7 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
     assert_eq!(
         fixture
             .keyring
-            .mark_compromised(KeyVersionId::try_from(1)?, None)
+            .mark_compromised(KeyId::new(1), None)
             .await?,
         None
     );
@@ -629,9 +651,7 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
         fixture.keyring.record(),
         fixture.other_process().await?.record(),
     ] {
-        let version = record
-            .version(KeyVersionId::try_from(1)?)
-            .ok_or("version 1 is gone")?;
+        let version = record.version(KeyId::new(1)).ok_or("version 1 is gone")?;
         assert_eq!(version.state(), KeyVersionState::DecryptOnly);
         assert!(version.compromised().is_some());
         assert!(record.active(Purpose::Randomized).is_none());
@@ -656,13 +676,10 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
         Err(KeyringError::NoActiveVersion(_))
     ));
     let rotation = fixture.keyring.promote(staged).await?;
+    assert_eq!((rotation.previous, rotation.current), (None, KeyId::new(2)));
     assert_eq!(
-        (rotation.previous, rotation.current),
-        (None, KeyVersionId::try_from(2)?)
-    );
-    assert_eq!(
-        KeyVersionId::try_from(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?)?,
-        KeyVersionId::try_from(2)?
+        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        KeyId::new(2)
     );
     Ok(())
 }
@@ -677,7 +694,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
         .promote(keyring.rotate(Purpose::Randomized).await?)
         .await?;
 
-    keyring.retire(KeyVersionId::try_from(1)?).await?;
+    keyring.retire(KeyId::new(1)).await?;
     assert!(matches!(
         keyring.decrypt(&aad, &old).await,
         Err(KeyringError::KeyVersionRetired(_))
@@ -686,24 +703,22 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
         keyring.decrypt_with_status(&aad, &old).await,
         Err(KeyringError::KeyVersionRetired(_))
     ));
-    keyring.reinstate(KeyVersionId::try_from(1)?).await?;
+    keyring.reinstate(KeyId::new(1)).await?;
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
 
-    keyring.retire(KeyVersionId::try_from(1)?).await?;
-    keyring.destroy(KeyVersionId::try_from(1)?).await?;
+    keyring.retire(KeyId::new(1)).await?;
+    keyring.destroy(KeyId::new(1)).await?;
     assert!(matches!(
         keyring.decrypt(&aad, &old).await,
         Err(KeyringError::KeyVersionDestroyed(_))
     ));
     assert!(matches!(
-        keyring.retire(KeyVersionId::try_from(2)?).await,
+        keyring.retire(KeyId::new(2)).await,
         Err(KeyringError::InvalidTransition(error))
             if error.from == KeyVersionState::Active && error.transition == Transition::Retire
     ));
     let stored = fixture.other_process().await?.record();
-    let destroyed = stored
-        .version(KeyVersionId::try_from(1)?)
-        .ok_or("version 1 is gone")?;
+    let destroyed = stored.version(KeyId::new(1)).ok_or("version 1 is gone")?;
     assert_eq!(destroyed.state(), KeyVersionState::Destroyed);
     assert!(destroyed.encrypted_dek().is_none());
     Ok(())
@@ -759,7 +774,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
     assert_eq!(
         (active.id(), active.algorithm()),
         (
-            KeyVersionId::try_from(1)?,
+            KeyId::new(1),
             KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm)
         )
     );
@@ -811,7 +826,7 @@ async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
     );
     keyring.promote(staged).await?;
     let new = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyVersionId::try_from(&new)?, staged);
+    assert_eq!(new.key_id(), staged);
     assert_eq!(keyring.decrypt(&aad, &new).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     Ok(())
@@ -850,11 +865,11 @@ async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
     let record = keyring.record();
     assert_eq!(
         record.active(Purpose::Deterministic).map(KeyVersion::id),
-        Some(KeyVersionId::try_from(0x8000_0001)?)
+        Some(KeyId::new(0x8000_0001))
     );
     assert_eq!(
         keyring.rotate(Purpose::Deterministic).await?,
-        KeyVersionId::try_from(0x8000_0002)?
+        KeyId::new(0x8000_0002)
     );
     Ok(())
 }
@@ -884,7 +899,7 @@ async fn a_regressed_record_is_refused() -> TestResult {
     fixture
         .other_process()
         .await?
-        .mark_compromised(KeyVersionId::try_from(1)?, None)
+        .mark_compromised(KeyId::new(1), None)
         .await?;
     fixture.keyring.reload().await?;
     let held = fixture.keyring.record().to_json()?;
@@ -896,14 +911,14 @@ async fn a_regressed_record_is_refused() -> TestResult {
         .memory
         .compare_and_swap(&regressed, Some(&stored.revision))
         .await?;
-    let rule = RegressionRule::CompromiseCleared(KeyVersionId::try_from(1)?);
+    let rule = RegressionRule::CompromiseCleared(KeyId::new(1));
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     let value = fixture
         .keyring
         .encrypt(&email_of("42")?, &ALICE.to_string())
         .await?;
-    assert_eq!(KeyVersionId::try_from(&value)?, KeyVersionId::try_from(2)?);
+    assert_eq!(value.key_id(), KeyId::new(2));
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
     assert!(matches!(
         fixture.keyring.reload().await,
@@ -932,12 +947,12 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
     fixture
         .other_process()
         .await?
-        .mark_compromised(KeyVersionId::try_from(1)?, None)
+        .mark_compromised(KeyId::new(1), None)
         .await?;
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     assert_eq!(
-        KeyVersionId::try_from(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?)?,
-        KeyVersionId::try_from(2)?
+        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        KeyId::new(2)
     );
     assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 2);
     fixture.keyring.decrypt(&aad, &value).await?;
@@ -980,7 +995,7 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
             .record()
             .active(Purpose::Randomized)
             .map(KeyVersion::id),
-        Some(KeyVersionId::try_from(2)?)
+        Some(KeyId::new(2))
     );
     Ok(())
 }
@@ -993,7 +1008,7 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
     admin.rotate(Purpose::Randomized).await?;
     tokio::time::sleep(Duration::from_millis(1)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
-    admin.promote(KeyVersionId::try_from(2)?).await?;
+    admin.promote(KeyId::new(2)).await?;
     for _ in 0..4 {
         admin
             .promote(admin.rotate(Purpose::Randomized).await?)
@@ -1010,7 +1025,7 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
             .record()
             .active(Purpose::Randomized)
             .map(KeyVersion::id),
-        Some(KeyVersionId::try_from(6)?)
+        Some(KeyId::new(6))
     );
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 2);
@@ -1022,7 +1037,7 @@ async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
     let fixture = Fixture::new(KeyringOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
-    let first = KeyVersionId::try_from(1)?;
+    let first = KeyId::new(1);
 
     let staged = keyring.rotate(Purpose::Randomized).await?;
     let record = keyring.record();
@@ -1030,12 +1045,12 @@ async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
     assert_eq!(version.state(), KeyVersionState::Pending);
     assert_eq!(version.staged_at(), Some(version.created_at()));
     let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyVersionId::try_from(&value)?, first);
+    assert_eq!(value.key_id(), first);
 
     let rotation = keyring.promote(staged).await?;
     assert_eq!((rotation.previous, rotation.current), (Some(first), staged));
     let promoted = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyVersionId::try_from(&promoted)?, staged);
+    assert_eq!(promoted.key_id(), staged);
     assert_eq!(keyring.decrypt(&aad, &promoted).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
     Ok(())
@@ -1052,10 +1067,7 @@ async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestRes
     let staged = admin.rotate(Purpose::Randomized).await?;
     tokio::time::advance(KeyringOptions::DEFAULT_RECORD_TTL).await;
     let sealed_before = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(
-        KeyVersionId::try_from(&sealed_before)?,
-        KeyVersionId::try_from(1)?
-    );
+    assert_eq!(sealed_before.key_id(), KeyId::new(1));
     assert_eq!(
         fixture
             .keyring
@@ -1071,7 +1083,7 @@ async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestRes
 
     admin.promote(staged).await?;
     let promoted = admin.encrypt(&aad, &ALICE.to_string()).await?;
-    assert_eq!(KeyVersionId::try_from(&promoted)?, staged);
+    assert_eq!(promoted.key_id(), staged);
 
     assert_eq!(fixture.keyring.decrypt(&aad, &promoted).await?, ALICE);
     assert_eq!(
@@ -1121,7 +1133,7 @@ async fn a_pending_version_is_destroyed_or_promoted_and_blocks_another_rotation(
             if error.from == KeyVersionState::Destroyed && error.transition == Transition::Promote
     ));
     let restaged = keyring.rotate(Purpose::Randomized).await?;
-    assert_eq!(restaged, KeyVersionId::try_from(3)?);
+    assert_eq!(restaged, KeyId::new(3));
     Ok(())
 }
 

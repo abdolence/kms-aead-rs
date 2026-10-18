@@ -24,7 +24,7 @@ use crate::errors::{KeyringResult, RecordConflictError, RecordRegressedError, Re
 use crate::record::{check_successor, withdrawn_deks, RecordEdit};
 use crate::spans;
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, Swap, WatchEvent};
-use crate::{KeyVersion, KeyVersionId, KeyringError, KeyringId, KeyringRecord, Purpose};
+use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
 pub(crate) struct RecordCache<S: KeyringStore> {
@@ -115,7 +115,7 @@ impl<S: KeyringStore> RecordCache<S> {
     /// The cached record, reloaded first when it has no version `key_id`: once for all the
     /// calls that miss it together, and at most once per reload interval. Returns the record,
     /// which may still lack the version, and what the miss caused, the `reload` span value.
-    pub(crate) async fn find(&self, key_id: KeyVersionId) -> (Arc<KeyringRecord>, &'static str) {
+    pub(crate) async fn find(&self, key_id: KeyId) -> (Arc<KeyringRecord>, &'static str) {
         let record = self.current().await;
         if record.version(key_id).is_some() {
             return (record, "none");

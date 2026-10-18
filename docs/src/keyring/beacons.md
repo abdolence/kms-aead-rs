@@ -157,6 +157,6 @@ is re-indexed:
 5. once the sweep reports no failure and that query returns nothing, `retire` the old version, and
    its probe drops out of every lookup.
 
-`KeyVersionId::try_from(&beacon)` reads the key id of a stored beacon, for the marker. Beacon
+`beacon.key_id()` reads the key id of a stored beacon, for the marker. Beacon
 versions are rotated by policy and on compromise only: each one adds a probe to every lookup until
 the re-index is done.

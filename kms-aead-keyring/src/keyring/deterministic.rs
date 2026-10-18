@@ -14,8 +14,8 @@ use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{
-    Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, KeyVersionId, Keyring,
-    KeyringRecord, Purpose,
+    Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
+    Purpose,
 };
 
 /// Deterministic fields: equal plaintexts under one version give equal values, so that a data
@@ -78,21 +78,24 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<T> {
-        let key_id = KeyVersionId::try_from(value)?;
-        spans::in_span(spans::decrypt(self.id(), key_id), async {
-            let (record, reload) = self.cache.find(key_id).await;
-            spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, key_id)?;
-            self.apply_read_policy(version, compromise)?;
-            let cipher = self.deterministic_cipher(version)?;
-            let (opened, outcome) = self
-                .with_cached_key(&record, key_id, dek, |key| {
-                    cipher.decrypt_field(&aad.bytes, value, key)
-                })
-                .await?;
-            spans::record_dek_cache(outcome);
-            Ok(opened?)
-        })
+        let key_id = Purpose::Deterministic.check(value.key_id())?;
+        spans::in_span(
+            spans::decrypt(self.id(), Purpose::Deterministic, key_id),
+            async {
+                let (record, reload) = self.cache.find(key_id).await;
+                spans::record_reload(reload);
+                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                self.apply_read_policy(version, compromise)?;
+                let cipher = self.deterministic_cipher(version)?;
+                let (opened, outcome) = self
+                    .with_cached_key(&record, key_id, dek, |key| {
+                        cipher.decrypt_field(&aad.bytes, value, key)
+                    })
+                    .await?;
+                spans::record_dek_cache(outcome);
+                Ok(opened?)
+            },
+        )
         .await
     }
 
@@ -111,31 +114,34 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Decrypted<T>> {
-        let key_id = KeyVersionId::try_from(value)?;
-        spans::in_span(spans::decrypt(self.id(), key_id), async {
-            let (record, reload) = self.cache.find(key_id).await;
-            spans::record_reload(reload);
-            let (version, dek, compromise) = self.readable(&record, key_id)?;
-            let cipher = self.deterministic_cipher(version)?;
-            let open = |key: &_| cipher.decrypt_field(&aad.bytes, value, key);
-            let (opened, trust) = match compromise {
-                None => {
-                    let (opened, outcome) =
-                        self.with_cached_key(&record, key_id, dek, open).await?;
-                    spans::record_dek_cache(outcome);
-                    (opened?, KeyTrust::Trusted)
-                }
-                Some(compromise) => (
-                    self.with_uncached_key(dek, open).await??,
-                    KeyTrust::Compromised(compromise.clone()),
-                ),
-            };
-            Ok(Decrypted {
-                value: opened,
-                key_version_id: key_id,
-                trust,
-            })
-        })
+        let key_id = Purpose::Deterministic.check(value.key_id())?;
+        spans::in_span(
+            spans::decrypt(self.id(), Purpose::Deterministic, key_id),
+            async {
+                let (record, reload) = self.cache.find(key_id).await;
+                spans::record_reload(reload);
+                let (version, dek, compromise) = self.readable(&record, key_id)?;
+                let cipher = self.deterministic_cipher(version)?;
+                let open = |key: &_| cipher.decrypt_field(&aad.bytes, value, key);
+                let (opened, trust) = match compromise {
+                    None => {
+                        let (opened, outcome) =
+                            self.with_cached_key(&record, key_id, dek, open).await?;
+                        spans::record_dek_cache(outcome);
+                        (opened?, KeyTrust::Trusted)
+                    }
+                    Some(compromise) => (
+                        self.with_uncached_key(dek, open).await??,
+                        KeyTrust::Compromised(compromise.clone()),
+                    ),
+                };
+                Ok(Decrypted {
+                    value: opened,
+                    key_id,
+                    trust,
+                })
+            },
+        )
         .await
     }
 
@@ -167,7 +173,7 @@ where
             let mut versions = record
                 .versions()
                 .iter()
-                .filter(|version| version.id().purpose() == Purpose::Deterministic)
+                .filter(|version| version.algorithm().purpose() == Purpose::Deterministic)
                 .filter_map(|version| {
                     let (dek, compromise) = version.readable_dek()?;
                     Some(
@@ -176,7 +182,7 @@ where
                     )
                 })
                 .collect::<KeyringResult<Vec<_>>>()?;
-            versions.sort_by_key(|(version, ..)| Reverse(version.id()));
+            versions.sort_by_key(|(version, ..)| Reverse(version.id().as_u32()));
             let mut probes = Vec::with_capacity(versions.len());
             for (version, dek, compromise) in versions {
                 probes.push(match compromise {
@@ -184,7 +190,7 @@ where
                     Some(_) => {
                         let cipher = self.deterministic_cipher(version)?;
                         self.with_uncached_key(dek, |key| {
-                            cipher.encrypt_field(version.id().into(), &aad.bytes, value, key)
+                            cipher.encrypt_field(version.id(), &aad.bytes, value, key)
                         })
                         .await??
                     }
@@ -221,7 +227,7 @@ where
         let cipher = self.deterministic_cipher(version)?;
         let (sealed, outcome) = self
             .with_cached_key(record, version.id(), dek, |key| {
-                cipher.encrypt_field(version.id().into(), &aad.bytes, value, key)
+                cipher.encrypt_field(version.id(), &aad.bytes, value, key)
             })
             .await?;
         Ok((sealed?, outcome))
@@ -241,8 +247,8 @@ mod tests {
     use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
     use crate::{
-        EntityKind, FieldName, FieldSpec, Interop, KeyTrust, KeyVersionId, KeyringError,
-        KeyringOptions, KeyringPolicy, KeyringResult, Purpose,
+        EntityKind, FieldName, FieldSpec, Interop, KeyId, KeyTrust, KeyringError, KeyringOptions,
+        KeyringPolicy, KeyringResult, Purpose,
     };
 
     const EMAIL: FieldSpec = FieldSpec::new(
@@ -286,10 +292,7 @@ mod tests {
                 .await?,
             alice
         );
-        assert_eq!(
-            KeyVersionId::try_from(&alice)?,
-            KeyVersionId::try_from(0x8000_0001)?
-        );
+        assert_eq!(alice.key_id(), KeyId::new(0x8000_0001));
         assert_eq!(alice.value().len(), 5 + 16 + ALICE.len());
         assert_eq!(keyring.decrypt_deterministic(&aad, &alice).await?, ALICE);
         Ok(())
@@ -312,13 +315,9 @@ mod tests {
         assert_eq!(
             probes
                 .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
-            [
-                pending,
-                KeyVersionId::try_from(0x8000_0002)?,
-                KeyVersionId::try_from(0x8000_0001)?,
-            ]
+                .map(|probe| probe.key_id())
+                .collect::<Vec<_>>(),
+            [pending, KeyId::new(0x8000_0002), KeyId::new(0x8000_0001),]
         );
         assert_eq!(
             probes[1],
@@ -365,16 +364,16 @@ mod tests {
         keyring
             .promote(keyring.rotate(Purpose::Deterministic).await?)
             .await?;
-        let first = KeyVersionId::try_from(0x8000_0001)?;
-        let current = [KeyVersionId::try_from(0x8000_0002)?];
+        let first = KeyId::new(0x8000_0001);
+        let current = [KeyId::new(0x8000_0002)];
 
         keyring.retire(first).await?;
         let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
         assert_eq!(
             probes
                 .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
+                .map(|probe| probe.key_id())
+                .collect::<Vec<_>>(),
             current
         );
 
@@ -383,8 +382,8 @@ mod tests {
         assert_eq!(
             probes
                 .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
+                .map(|probe| probe.key_id())
+                .collect::<Vec<_>>(),
             current
         );
         Ok(())
@@ -398,20 +397,15 @@ mod tests {
         let first = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
-        keyring
-            .mark_compromised(KeyVersionId::try_from(&first)?, None)
-            .await?;
+        keyring.mark_compromised(first.key_id(), None).await?;
 
         let probes = keyring.equality_probes(&aad, &ALICE.to_string()).await?;
         assert_eq!(
             probes
                 .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
-            [
-                KeyVersionId::try_from(0x8000_0002)?,
-                KeyVersionId::try_from(&first)?
-            ]
+                .map(|probe| probe.key_id())
+                .collect::<Vec<_>>(),
+            [KeyId::new(0x8000_0002), first.key_id()]
         );
         assert_eq!(probes[1], first);
 
@@ -433,7 +427,7 @@ mod tests {
         let value = keyring
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
-        let key_id = KeyVersionId::try_from(&value)?;
+        let key_id = value.key_id();
         keyring.mark_compromised(key_id, None).await?;
 
         assert!(matches!(
@@ -444,7 +438,7 @@ mod tests {
             .decrypt_deterministic_with_status(&aad, &value)
             .await?;
         assert_eq!(decrypted.value, ALICE);
-        assert_eq!(decrypted.key_version_id, key_id);
+        assert_eq!(decrypted.key_id, key_id);
         assert!(matches!(decrypted.trust, KeyTrust::Compromised(_)));
         Ok(())
     }

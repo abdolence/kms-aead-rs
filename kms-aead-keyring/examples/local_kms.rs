@@ -9,8 +9,8 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Plaintext, Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy,
+    Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -52,17 +52,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let before = keyring.encrypt(&aad, &alice).await?;
     let staged = keyring.rotate(Purpose::Randomized).await?;
-    println!("staged key version {staged}");
+    println!("staged key version {}", staged.as_u32());
     let rotation = keyring.promote(staged).await?;
     let after = keyring.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
-        Some(previous) => println!("promoted key version {} over {previous}", rotation.current),
-        None => println!("promoted key version {}", rotation.current),
+        Some(previous) => println!(
+            "promoted key version {} over {}",
+            rotation.current.as_u32(),
+            previous.as_u32()
+        ),
+        None => println!("promoted key version {}", rotation.current.as_u32()),
     }
     for value in [before, after] {
         let Email(email) = keyring.decrypt(&aad, &value).await?;
-        println!("value under {}: {email}", KeyVersionId::try_from(&value)?);
+        println!("value under {}: {email}", value.key_id().as_u32());
     }
     Ok(())
 }

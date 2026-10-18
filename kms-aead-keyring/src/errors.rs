@@ -14,8 +14,7 @@ use rsb_derive::Builder;
 
 use crate::store::{StoreKind, StoreOperation};
 use crate::{
-    Compromise, Interop, KeyAlgorithm, KeyVersionId, KeyVersionState, KeyringId, Purpose,
-    Transition,
+    Compromise, Interop, KeyAlgorithm, KeyId, KeyVersionState, KeyringId, Purpose, Transition,
 };
 
 /// The result of every fallible operation of the crate.
@@ -70,8 +69,8 @@ pub enum KeyringError {
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
     InvalidTransition(InvalidTransitionError),
-    /// A value or beacon whose key id is reserved: its ordinal is zero, or it sets both purpose
-    /// bits, so no version has it.
+    /// A key id that a value or beacon carries, or that an operation names, is reserved: its
+    /// ordinal is zero, or it sets both purpose bits, so no version has it.
     ReservedKeyId,
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
@@ -137,7 +136,7 @@ impl KeyringError {
         })
     }
 
-    pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyVersionId) -> Self {
+    pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyId) -> Self {
         KeyringError::KeyVersionUnknown(KeyVersionError {
             keyring: keyring.clone(),
             key_id,
@@ -234,41 +233,41 @@ impl Display for KeyringError {
             KeyringError::KeyVersionUnknown(error) => write!(
                 f,
                 "The keyring {} has no key version {}",
-                error.keyring, error.key_id
+                error.keyring, error.key_id.as_u32()
             ),
             KeyringError::KeyVersionRetired(error) => write!(
                 f,
                 "The key version {} of the keyring {} is retired",
-                error.key_id, error.keyring
+                error.key_id.as_u32(), error.keyring
             ),
             KeyringError::KeyVersionDestroyed(error) => write!(
                 f,
                 "The key version {} of the keyring {} is destroyed",
-                error.key_id, error.keyring
+                error.key_id.as_u32(), error.keyring
             ),
             KeyringError::KeyVersionPending(error) => write!(
                 f,
                 "The key version {} of the keyring {} is pending",
-                error.key_id, error.keyring
+                error.key_id.as_u32(), error.keyring
             ),
             KeyringError::KeyVersionCompromised(error) => write!(
                 f,
                 "The key version {} of the keyring {} is compromised since {}",
-                error.key_id,
+                error.key_id.as_u32(),
                 error.keyring,
                 error.compromise.at()
             ),
             KeyringError::KeyPurposeMismatch(error) => write!(
                 f,
                 "The key id {} is not a {} key id",
-                error.key_id, error.expected
+                error.key_id.as_u32(), error.expected
             ),
             KeyringError::InvalidTransition(error) => write!(
                 f,
                 "The key version {} of the keyring {} is {}: {} does not apply",
-                error.key_id, error.keyring, error.from, error.transition
+                error.key_id.as_u32(), error.keyring, error.from, error.transition
             ),
-            KeyringError::ReservedKeyId => f.write_str("The key id of the value is reserved"),
+            KeyringError::ReservedKeyId => f.write_str("The key id is reserved"),
             KeyringError::DeterministicDisabled => {
                 f.write_str("Creating a deterministic key version needs the deterministic feature")
             }
@@ -280,7 +279,7 @@ impl Display for KeyringError {
             KeyringError::ExportAlgorithmUnsupported(error) => write!(
                 f,
                 "The key version {} of the keyring {} has an algorithm the keyset's reader does not read",
-                error.key_id, error.keyring
+                error.key_id.as_u32(), error.keyring
             ),
             KeyringError::UnknownKeyVersionState => f.write_str(
                 "Not the name of a key version state: the names are active, decrypt_only, \
@@ -336,8 +335,8 @@ pub struct InvalidIdentifierError {
 pub enum Identifier {
     /// [`KeyringId`].
     KeyringId,
-    /// [`KeyVersionId`].
-    KeyVersionId,
+    /// [`KeyId`].
+    KeyId,
     /// [`EntityKind`](crate::EntityKind).
     EntityKind,
     /// [`EntityId`](crate::EntityId).
@@ -356,7 +355,7 @@ impl Display for Identifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Identifier::KeyringId => "keyring id",
-            Identifier::KeyVersionId => "key id",
+            Identifier::KeyId => "key id",
             Identifier::EntityKind => "entity kind",
             Identifier::EntityId => "entity id",
             Identifier::FieldName => "field name",
@@ -422,31 +421,31 @@ pub enum RecordInvalidReason {
     IdMismatch,
     /// An algorithm name this release does not know: of the version with this key id, or of
     /// the record's algorithms for new versions when there is none.
-    UnknownAlgorithm(Option<KeyVersionId>),
+    UnknownAlgorithm(Option<KeyId>),
     /// A state name this release does not know, on the version with this key id.
-    UnknownState(KeyVersionId),
+    UnknownState(KeyId),
     /// A key id whose ordinal is zero or that sets both purpose bits, which names no version.
     ReservedKeyId,
     /// Two versions with one key id.
-    DuplicateKeyId(KeyVersionId),
+    DuplicateKeyId(KeyId),
     /// The key id's purpose is not its algorithm's.
-    PurposeMismatch(KeyVersionId),
+    PurposeMismatch(KeyId),
     /// Two active versions of one purpose.
     TwoActiveVersions(Purpose),
     /// Two pending versions of one purpose.
     TwoPendingVersions(Purpose),
     /// An active version flagged compromised.
-    CompromisedActive(KeyVersionId),
+    CompromisedActive(KeyId),
     /// A pending version flagged compromised.
-    CompromisedPending(KeyVersionId),
+    CompromisedPending(KeyId),
     /// A destroyed version that still holds an encrypted DEK.
-    DestroyedWithMaterial(KeyVersionId),
+    DestroyedWithMaterial(KeyId),
     /// A version that is not destroyed and holds no encrypted DEK.
-    MissingMaterial(KeyVersionId),
+    MissingMaterial(KeyId),
     /// A version whose ordinal is not above every earlier version of its purpose.
-    OrdinalOrder(KeyVersionId),
+    OrdinalOrder(KeyId),
     /// An encrypted DEK that is not standard base64 of one byte or more.
-    MalformedEncryptedDek(KeyVersionId),
+    MalformedEncryptedDek(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
 }
@@ -470,21 +469,34 @@ impl Display for RecordInvalidReason {
             }
             RecordInvalidReason::IdMismatch => f.write_str("the record names another keyring"),
             RecordInvalidReason::UnknownAlgorithm(Some(key_id)) => {
-                write!(f, "key version {key_id} names an unknown algorithm")
+                write!(
+                    f,
+                    "key version {key_id} names an unknown algorithm",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::UnknownAlgorithm(None) => {
                 f.write_str("the algorithms for new versions name an unknown algorithm")
             }
             RecordInvalidReason::UnknownState(key_id) => {
-                write!(f, "key version {key_id} names an unknown state")
+                write!(
+                    f,
+                    "key version {key_id} names an unknown state",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::ReservedKeyId => f.write_str("a reserved key id"),
             RecordInvalidReason::DuplicateKeyId(key_id) => {
-                write!(f, "two versions with key id {key_id}")
+                write!(
+                    f,
+                    "two versions with key id {key_id}",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::PurposeMismatch(key_id) => write!(
                 f,
-                "the purpose of key id {key_id} is not the purpose of its algorithm"
+                "the purpose of key id {key_id} is not the purpose of its algorithm",
+                key_id = key_id.as_u32()
             ),
             RecordInvalidReason::TwoActiveVersions(purpose) => {
                 write!(f, "two active {purpose} versions")
@@ -493,28 +505,43 @@ impl Display for RecordInvalidReason {
                 write!(f, "two pending {purpose} versions")
             }
             RecordInvalidReason::CompromisedActive(key_id) => {
-                write!(f, "the active key version {key_id} is compromised")
+                write!(
+                    f,
+                    "the active key version {key_id} is compromised",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::CompromisedPending(key_id) => {
-                write!(f, "the pending key version {key_id} is compromised")
+                write!(
+                    f,
+                    "the pending key version {key_id} is compromised",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::DestroyedWithMaterial(key_id) => {
                 write!(
                     f,
-                    "the destroyed key version {key_id} holds an encrypted DEK"
+                    "the destroyed key version {key_id} holds an encrypted DEK",
+                    key_id = key_id.as_u32()
                 )
             }
             RecordInvalidReason::MissingMaterial(key_id) => {
-                write!(f, "key version {key_id} holds no encrypted DEK")
+                write!(
+                    f,
+                    "key version {key_id} holds no encrypted DEK",
+                    key_id = key_id.as_u32()
+                )
             }
             RecordInvalidReason::OrdinalOrder(key_id) => write!(
                 f,
-                "key version {key_id} is not above every earlier version of its purpose"
+                "key version {key_id} is not above every earlier version of its purpose",
+                key_id = key_id.as_u32()
             ),
             RecordInvalidReason::MalformedEncryptedDek(key_id) => {
                 write!(
                     f,
-                    "the encrypted DEK of key version {key_id} does not parse"
+                    "the encrypted DEK of key version {key_id} does not parse",
+                    key_id = key_id.as_u32()
                 )
             }
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
@@ -555,37 +582,49 @@ pub struct RecordRegressedError {
 #[non_exhaustive]
 pub enum RegressionRule {
     /// The version is gone.
-    VersionMissing(KeyVersionId),
+    VersionMissing(KeyId),
     /// The version's algorithm or creation time changed.
-    VersionAltered(KeyVersionId),
+    VersionAltered(KeyId),
     /// The version's compromised flag was cleared.
-    CompromiseCleared(KeyVersionId),
+    CompromiseCleared(KeyId),
     /// The time the version was flagged compromised changed.
-    CompromiseAltered(KeyVersionId),
+    CompromiseAltered(KeyId),
     /// The version's state moved against the lifecycle, back to `Active` or out of
     /// `Destroyed`.
-    StateReverted(KeyVersionId),
+    StateReverted(KeyId),
 }
 
 impl Display for RegressionRule {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RegressionRule::VersionMissing(key_id) => write!(f, "key version {key_id} is gone"),
+            RegressionRule::VersionMissing(key_id) => {
+                write!(f, "key version {key_id} is gone", key_id = key_id.as_u32())
+            }
             RegressionRule::VersionAltered(key_id) => write!(
                 f,
-                "key version {key_id} changed its algorithm or creation time"
+                "key version {key_id} changed its algorithm or creation time",
+                key_id = key_id.as_u32()
             ),
             RegressionRule::CompromiseCleared(key_id) => {
-                write!(f, "key version {key_id} is no longer compromised")
+                write!(
+                    f,
+                    "key version {key_id} is no longer compromised",
+                    key_id = key_id.as_u32()
+                )
             }
             RegressionRule::CompromiseAltered(key_id) => {
                 write!(
                     f,
-                    "key version {key_id} changed the time it was compromised"
+                    "key version {key_id} changed the time it was compromised",
+                    key_id = key_id.as_u32()
                 )
             }
             RegressionRule::StateReverted(key_id) => {
-                write!(f, "key version {key_id} moved back in its lifecycle")
+                write!(
+                    f,
+                    "key version {key_id} moved back in its lifecycle",
+                    key_id = key_id.as_u32()
+                )
             }
         }
     }
@@ -633,7 +672,7 @@ pub struct KeyVersionError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The value's key id.
-    pub key_id: KeyVersionId,
+    pub key_id: KeyId,
 }
 
 /// See [`KeyringError::KeyVersionCompromised`].
@@ -643,7 +682,7 @@ pub struct KeyVersionCompromisedError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The value's key id.
-    pub key_id: KeyVersionId,
+    pub key_id: KeyId,
     /// When the version was flagged, and the operator's note.
     pub compromise: Compromise,
 }
@@ -655,7 +694,7 @@ pub struct KeyPurposeMismatchError {
     /// The purpose of the value's type.
     pub expected: Purpose,
     /// The key id the value carries.
-    pub key_id: KeyVersionId,
+    pub key_id: KeyId,
 }
 
 /// See [`KeyringError::InvalidTransition`].
@@ -665,7 +704,7 @@ pub struct InvalidTransitionError {
     /// The keyring.
     pub keyring: KeyringId,
     /// The version the operation named.
-    pub key_id: KeyVersionId,
+    pub key_id: KeyId,
     /// The version's state.
     pub from: KeyVersionState,
     /// The operation.

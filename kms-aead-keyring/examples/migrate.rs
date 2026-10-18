@@ -20,8 +20,8 @@ use kms_aead::{
 use kms_aead_keyring::sweep::{self, Outcome};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring, KeyringId,
-    KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Randomized, SealFormat, SealMarker,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
+    KeyringPolicy, KeyringResult, Plaintext, Randomized, SealFormat, SealMarker,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -113,7 +113,10 @@ async fn print_rows(
         let Email(email) = read_email(keyring, &user, row).await?;
         match marker.randomized {
             Some(key_id) => {
-                println!("  user {user}: {email}, a keyring value under key id {key_id}")
+                println!(
+                    "  user {user}: {email}, a keyring value under key id {}",
+                    key_id.as_u32()
+                )
             }
             None => println!("  user {user}: {email}, an envelope value"),
         }
@@ -143,7 +146,7 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
         .encrypt(&aad, &Email::from_plaintext(email)?)
         .await?;
     let row = UserRow {
-        seal: SealMarker::keyring([KeyVersionId::try_from(&resealed)?]),
+        seal: SealMarker::keyring([resealed.key_id()])?,
         email: resealed.into_value(),
     };
     table

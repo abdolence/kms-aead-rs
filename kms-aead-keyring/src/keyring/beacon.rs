@@ -49,13 +49,7 @@ where
             let context = field.context();
             let (beacon, outcome) = self
                 .with_cached_key(&record, version.id(), dek, |key| {
-                    mac.compute(
-                        version.id().into(),
-                        &context,
-                        field.beacon_bits(),
-                        value,
-                        key,
-                    )
+                    mac.compute(version.id(), &context, field.beacon_bits(), value, key)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
@@ -86,25 +80,18 @@ where
             let mut versions = record
                 .versions()
                 .iter()
-                .filter(|version| version.id().purpose() == Purpose::Beacon)
+                .filter(|version| version.algorithm().purpose() == Purpose::Beacon)
                 .filter_map(|version| {
                     let (dek, compromise) = version.readable_dek()?;
                     Some((version, dek, compromise))
                 })
                 .collect::<Vec<_>>();
-            versions.sort_by_key(|(version, ..)| Reverse(version.id()));
+            versions.sort_by_key(|(version, ..)| Reverse(version.id().as_u32()));
             let mut probes = Vec::with_capacity(versions.len());
             for (version, dek, compromise) in versions {
                 let mac = self.beacon_mac(version)?;
-                let compute = |key: &_| {
-                    mac.compute(
-                        version.id().into(),
-                        &context,
-                        field.beacon_bits(),
-                        value,
-                        key,
-                    )
-                };
+                let compute =
+                    |key: &_| mac.compute(version.id(), &context, field.beacon_bits(), value, key);
                 let probe = match compromise {
                     None => {
                         self.with_cached_key(&record, version.id(), dek, compute)
@@ -144,7 +131,7 @@ mod tests {
     use super::*;
     use crate::test_support::{TestBackend, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
-    use crate::{EntityKind, FieldName, KeyVersion, KeyVersionId, KeyringOptions, KeyringPolicy};
+    use crate::{EntityKind, FieldName, KeyId, KeyVersion, KeyringOptions, KeyringPolicy};
 
     const EMAIL: FieldSpec = FieldSpec::new(
         EntityKind::from_static("user"),
@@ -174,7 +161,7 @@ mod tests {
     async fn a_beacon_is_the_hmac_of_the_field_under_the_active_version() -> TestResult {
         let provider = TestProvider::new("tenant-42-kek")?;
         let keyring = beacon_keyring(provider.clone()).await?;
-        let first = KeyVersionId::try_from((1 << 30) | 1)?;
+        let first = KeyId::new((1 << 30) | 1);
         let alice = ALICE.to_string();
 
         let beacon = keyring.beacon(&EMAIL, &alice).await?;
@@ -187,17 +174,11 @@ mod tests {
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (expected, _) = DekCache::disabled()
             .with_key(&provider, dek, |key| {
-                mac.compute(
-                    first.into(),
-                    b"user/email",
-                    BeaconBits::DEFAULT,
-                    &alice,
-                    key,
-                )
+                mac.compute(first, b"user/email", BeaconBits::DEFAULT, &alice, key)
             })
             .await?;
         assert_eq!(beacon, expected?);
-        assert_eq!(KeyVersionId::try_from(&beacon)?, first);
+        assert_eq!(beacon.key_id(), first);
         assert_eq!(keyring.beacon(&EMAIL, &alice).await?, beacon);
         assert_ne!(keyring.beacon(&NAME, &alice).await?, beacon);
         let wide = EMAIL.with_beacon_bits(BeaconBits::new(64).ok_or("64 bits are in range")?);
@@ -216,22 +197,16 @@ mod tests {
 
         let probes = keyring.beacon_probes(&EMAIL, &alice).await?;
         assert_eq!(
-            probes
-                .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
-            [pending, second, KeyVersionId::try_from(&first)?]
+            probes.iter().map(Beacon::key_id).collect::<Vec<_>>(),
+            [pending, second, first.key_id()]
         );
         assert_eq!(probes[1], keyring.beacon(&EMAIL, &alice).await?);
         assert_eq!(probes[2], first);
 
-        keyring.retire(KeyVersionId::try_from(&first)?).await?;
+        keyring.retire(first.key_id()).await?;
         let probes = keyring.beacon_probes(&EMAIL, &alice).await?;
         assert_eq!(
-            probes
-                .iter()
-                .map(KeyVersionId::try_from)
-                .collect::<KeyringResult<Vec<_>>>()?,
+            probes.iter().map(Beacon::key_id).collect::<Vec<_>>(),
             [pending, second]
         );
         Ok(())

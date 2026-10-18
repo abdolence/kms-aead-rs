@@ -29,10 +29,14 @@ the configured KEK.
 Every value carries the key id of the version that sealed it, and the id names the version's
 purpose: randomised, deterministic or beacon. So a value of one purpose never opens under a
 version of another, and the purpose of a value is known from its bytes, see
-[Keyring key ids](../formats.md#keyring-key-ids). Ids are never reused: a destroyed version keeps
-its id in the record.
+[Keyring key ids](../formats.md#keyring-key-ids). The keyring numbers the versions of each purpose
+from its first id: randomised versions are `1`, `2`, `3`, …, deterministic ones `2147483649`,
+`2147483650`, … and beacon ones `1073741825`, `1073741826`, …. Ids are never reused: a destroyed
+version keeps its id in the record.
 
-`KeyVersionId::try_from(&value)` reads the key id of a stored value.
+A key id is a `kms_aead::KeyId`, which the keyring re-exports. `value.key_id()` reads the key id
+of a stored value, and `version.algorithm().purpose()` the purpose of a version. An operation that
+names a reserved key id fails with `ReservedKeyId` before any store call.
 
 ## States
 
@@ -118,7 +122,7 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyVersionId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,
+    KeyId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,
     Rotation,
 };
 
@@ -136,7 +140,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
 .await?;
 
 // The administrative job stages the version
-let staged: KeyVersionId = keyring.rotate(Purpose::Randomized).await?;
+let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
 let record = keyring.record();
 let pending = record
     .pending(Purpose::Randomized)
@@ -146,7 +150,7 @@ assert_eq!(pending.state(), KeyVersionState::Pending);
 // Once the wait from `pending.staged_at()` is over, the job promotes it
 let rotation: Rotation = keyring.promote(staged).await?;
 assert_eq!(rotation.current, staged);
-assert_eq!(rotation.previous, Some(KeyVersionId::try_from(1)?));
+assert_eq!(rotation.previous, Some(KeyId::new(1)));
 # Ok(())
 # }
 ```
@@ -181,6 +185,6 @@ version:
   that id meanwhile.
 
 `decrypt_with_status` opens the value whatever the policy, and returns a `Decrypted` with the
-value, the `KeyVersionId` of the version that opened it and its `KeyTrust`, `Trusted` or
+value, the key id of the version that opened it and its `KeyTrust`, `Trusted` or
 `Compromised`. It is the call for a [sweep](../operations.md#sweeps). A compromised version's DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.

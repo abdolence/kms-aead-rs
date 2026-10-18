@@ -35,7 +35,7 @@ fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
     record_holding(id, rotations, ENCRYPTED_DEK)
 }
 
-/// As [`record`], with every version's encrypted DEK in `wrapped_dek`, in standard base64.
+/// As [`record`], with every version's encrypted DEK in `encrypted_dek`, in standard base64.
 fn record_holding(
     id: &KeyringId,
     rotations: u32,
@@ -50,7 +50,7 @@ fn record_holding(
                 "compromised": null,
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
-                "wrapped_dek": encrypted_dek,
+                "encrypted_dek": encrypted_dek,
             })
         })
         .collect();

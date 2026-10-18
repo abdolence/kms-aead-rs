@@ -42,7 +42,7 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{KmsAeadResult, Ring};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyVersionId, Keyring, KeyringId,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
     KeyringOptions, KeyringPolicy, Plaintext, Purpose, Randomized,
 };
 use secret_vault_value::SecretValue;
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
 
     // A rotation is staged, then promoted; the previous version keeps decrypting
-    let staged: KeyVersionId = keyring.rotate(Purpose::Randomized).await?;
+    let staged: KeyId = keyring.rotate(Purpose::Randomized).await?;
     keyring.promote(staged).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
