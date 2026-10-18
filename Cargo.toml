@@ -85,11 +85,15 @@ default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
 # AEAD backends: any number of them in one build.
 ring = ["dep:ring"]
-aws-lc = ["dep:aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
+# `aws-lc-rs` is the implicit feature of the optional dependency, the one gate of the AwsLc
+# backend for both features below. Enabled alone it fails aws-lc-rs's build: "one of the following
+# features must be specified: `aws-lc-sys`, `non-fips`, or `fips`". Enable `aws-lc` or
+# `aws-lc-fips` instead.
+aws-lc = ["aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
 # The AwsLc backend on the FIPS module, without the non-FIPS aws-lc-sys. Moves every aws-lc-rs
 # user in the build, the rustls aws-lc-rs provider included, to the FIPS module. Needs CMake and
 # Go to build. With `aws-lc` as well, both C libraries are built and aws-lc-rs runs on the FIPS one.
-aws-lc-fips = ["dep:aws-lc-rs", "aws-lc-rs/fips"]
+aws-lc-fips = ["aws-lc-rs", "aws-lc-rs/fips"]
 rustcrypto = [
     "dep:aes-gcm",
     "dep:aes-gcm-siv",

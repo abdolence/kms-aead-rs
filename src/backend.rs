@@ -9,7 +9,7 @@ use crate::AeadAlgorithm;
 #[cfg(feature = "ring")]
 mod ring;
 
-#[cfg(any(feature = "aws-lc", feature = "aws-lc-fips"))]
+#[cfg(feature = "aws-lc-rs")]
 mod aws_lc;
 
 #[cfg(feature = "rustcrypto")]
@@ -17,12 +17,7 @@ mod rust_crypto;
 
 #[cfg(all(
     test,
-    any(
-        feature = "ring",
-        feature = "aws-lc",
-        feature = "aws-lc-fips",
-        feature = "rustcrypto"
-    )
+    any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")
 ))]
 mod contract;
 
@@ -54,7 +49,7 @@ pub enum AeadBackend {
     /// installed through `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on
     /// its own whether freed memory is cleared. The record keys AES-256-GCM-SIV derives from the
     /// key and the nonce for each call live on the stack, and AWS-LC does not clear them.
-    #[cfg(any(feature = "aws-lc", feature = "aws-lc-fips"))]
+    #[cfg(feature = "aws-lc-rs")]
     AwsLc,
     /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the
     /// `rustcrypto` feature: every [`AeadAlgorithm`], with `getrandom` as the CSPRNG. Needs no C
@@ -78,7 +73,7 @@ impl From<AeadBackend> for &'static dyn AeadBackendOps {
         match backend {
             #[cfg(feature = "ring")]
             AeadBackend::Ring => &ring::RingOps,
-            #[cfg(any(feature = "aws-lc", feature = "aws-lc-fips"))]
+            #[cfg(feature = "aws-lc-rs")]
             AeadBackend::AwsLc => &aws_lc::AwsLcOps,
             #[cfg(feature = "rustcrypto")]
             AeadBackend::RustCrypto => &rust_crypto::RustCryptoOps,
@@ -92,12 +87,7 @@ pub(crate) type Tag = [u8; AeadAlgorithm::TAG_LEN];
 /// Crypto libraries report no detail on failure, and none is lost here.
 // Only the backends construct it, and a build without a backend feature has none.
 #[cfg_attr(
-    not(any(
-        feature = "ring",
-        feature = "aws-lc",
-        feature = "aws-lc-fips",
-        feature = "rustcrypto"
-    )),
+    not(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")),
     allow(dead_code)
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

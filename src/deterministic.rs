@@ -412,12 +412,7 @@ mod aes_siv_cipher {
             assert_ne!(sealed(AAD, &key), sealed(b"orders/1043", &key));
         }
 
-        #[cfg(any(
-            feature = "ring",
-            feature = "aws-lc",
-            feature = "aws-lc-fips",
-            feature = "rustcrypto"
-        ))]
+        #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
         mod envelope {
             use super::*;
             use crate::test_provider::{TestKmsProvider, TEST_BACKEND};

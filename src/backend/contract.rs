@@ -18,7 +18,7 @@ use crate::{
 const BACKENDS: &[AeadBackend] = &[
     #[cfg(feature = "ring")]
     AeadBackend::Ring,
-    #[cfg(any(feature = "aws-lc", feature = "aws-lc-fips"))]
+    #[cfg(feature = "aws-lc-rs")]
     AeadBackend::AwsLc,
     #[cfg(feature = "rustcrypto")]
     AeadBackend::RustCrypto,

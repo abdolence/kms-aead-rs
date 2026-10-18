@@ -8,12 +8,7 @@ use secret_vault_value::SecretValue;
 use tokio::sync::watch;
 
 use crate::errors::KmsAeadEncryptionError;
-#[cfg(any(
-    feature = "ring",
-    feature = "aws-lc",
-    feature = "aws-lc-fips",
-    feature = "rustcrypto"
-))]
+#[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 use crate::AeadBackend;
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
@@ -22,14 +17,11 @@ use crate::{
 
 #[cfg(feature = "ring")]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::Ring;
-#[cfg(all(
-    not(feature = "ring"),
-    any(feature = "aws-lc", feature = "aws-lc-fips")
-))]
+#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::AwsLc;
 #[cfg(all(
     not(feature = "ring"),
-    not(any(feature = "aws-lc", feature = "aws-lc-fips")),
+    not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
 pub(crate) const TEST_BACKEND: AeadBackend = AeadBackend::RustCrypto;
@@ -40,21 +32,11 @@ pub(crate) const CONCURRENT_CALLS: usize = 16;
 #[derive(Debug, Clone)]
 pub(crate) enum TestKmsProvider {
     Working,
-    #[cfg(any(
-        feature = "ring",
-        feature = "aws-lc",
-        feature = "aws-lc-fips",
-        feature = "rustcrypto"
-    ))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     FailingToWrap,
     FailingToUnwrap,
     /// Returns its key material from `generate_key_material`, as a KMS generator would.
-    #[cfg(any(
-        feature = "ring",
-        feature = "aws-lc",
-        feature = "aws-lc-fips",
-        feature = "rustcrypto"
-    ))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     Generating(SecretValue),
 }
 
@@ -69,12 +51,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
         encryption_key: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
-            #[cfg(any(
-                feature = "ring",
-                feature = "aws-lc",
-                feature = "aws-lc-fips",
-                feature = "rustcrypto"
-            ))]
+            #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
             TestKmsProvider::FailingToWrap => Err(KmsAeadEncryptionError::create(
                 "TEST_WRAP",
                 "The test provider fails to wrap",
@@ -103,12 +80,7 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
 
     async fn generate_key_material(&self, _len: usize) -> KmsAeadResult<Option<SecretValue>> {
         match self {
-            #[cfg(any(
-                feature = "ring",
-                feature = "aws-lc",
-                feature = "aws-lc-fips",
-                feature = "rustcrypto"
-            ))]
+            #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
             TestKmsProvider::Generating(key_material) => Ok(Some(key_material.clone())),
             _ => Ok(None),
         }
@@ -148,12 +120,7 @@ impl CountingKmsProvider {
         self.gate.send_replace(true);
     }
 
-    #[cfg(any(
-        feature = "ring",
-        feature = "aws-lc",
-        feature = "aws-lc-fips",
-        feature = "rustcrypto"
-    ))]
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     pub(crate) fn wraps(&self) -> usize {
         self.wraps.load(Ordering::SeqCst)
     }

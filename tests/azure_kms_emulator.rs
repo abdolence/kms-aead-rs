@@ -20,14 +20,11 @@ use common::FixedTokenCredential;
 
 #[cfg(feature = "ring")]
 const BACKEND: AeadBackend = AeadBackend::Ring;
-#[cfg(all(
-    not(feature = "ring"),
-    any(feature = "aws-lc", feature = "aws-lc-fips")
-))]
+#[cfg(all(not(feature = "ring"), feature = "aws-lc-rs"))]
 const BACKEND: AeadBackend = AeadBackend::AwsLc;
 #[cfg(all(
     not(feature = "ring"),
-    not(any(feature = "aws-lc", feature = "aws-lc-fips")),
+    not(feature = "aws-lc-rs"),
     feature = "rustcrypto"
 ))]
 const BACKEND: AeadBackend = AeadBackend::RustCrypto;
