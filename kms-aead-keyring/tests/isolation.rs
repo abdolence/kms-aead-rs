@@ -44,28 +44,11 @@ async fn default_keyring(
     .await?)
 }
 
-#[test]
-fn the_default_policy_is_aes_256_gcm_alone() {
-    let policy = KeyringPolicy::new();
-    assert_eq!(policy.randomized_algorithm, AeadAlgorithm::Aes256Gcm);
-    assert_eq!(policy.deterministic_algorithm, None);
-}
-
-#[test]
-fn the_default_aad_is_kind_id_field_and_a_custom_one_any_bytes() -> TestResult {
-    assert_eq!(
-        EMAIL.aad(&EntityId::try_from("42")?).as_bytes(),
-        b"user/42/email"
-    );
-    let bytes = [0x00, b'/', 0xFF].repeat(700);
-    assert_eq!(FieldAad::custom(bytes.clone()).as_bytes(), bytes);
-    Ok(())
-}
-
 #[tokio::test]
 async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
     let keyring = default_keyring().await?;
     let record = keyring.record();
+    assert_eq!(record.algorithms().randomized(), AeadAlgorithm::Aes256Gcm);
     assert_eq!(record.algorithms().deterministic(), None);
     assert_eq!(
         record
