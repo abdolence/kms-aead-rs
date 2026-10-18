@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0fe3c487.js";
+            window.path_to_searchindex_js = "searchindex-45561308.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f8bc823.js"></script>
@@ -288,7 +288,7 @@ the closure returns, whatever leaves the cache meanwhile. The closure must not k
 key: a copy taken out of it outlives the cache’s control of its lifetime.</p>
 <h2 id="store-less-dek-reuse"><a class="header" href="#store-less-dek-reuse">Store-less DEK reuse</a></h2>
 <p>A <code>KmsAeadEnvelope</code> with a <code>DekReusePolicy</code> encrypts many values under one DEK and renews it at
-the first encryption past <code>max_age</code> or past <code>max_uses</code>, whichever comes first. A renewal makes one
+the first encryption past <code>max_age</code>, past <code>max_uses</code> or past <code>max_bytes</code>, whichever comes first. A renewal makes one
 KMS encrypt call. Each value still carries its encrypted DEK in Tink’s KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -327,6 +327,42 @@ assert_eq!(decrypted_second, SecretValue::from("second"));
 <p>The defaults are a <code>max_age</code> of 24 hours and a <code>max_uses</code> of 2^24. <code>max_age</code> must be longer than
 zero and <code>max_uses</code> at most 2^32, the bound for random 96-bit nonces under one key, otherwise the
 envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
+<h3 id="volume-limit"><a class="header" href="#volume-limit">Volume limit</a></h3>
+<p><code>max_bytes</code> counts the plaintext bytes sealed under the DEK. Its default depends on the algorithm:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Algorithm</th><th>Default <code>max_bytes</code></th><th>Most allowed</th></tr>
+</thead>
+<tbody>
+<tr><td>AES-128-GCM, AES-256-GCM</td><td>2^38 bytes (256 GiB)</td><td>2^52 bytes</td></tr>
+<tr><td>AES-256-GCM-SIV</td><td>no limit beyond <code>max_uses</code></td><td>any</td></tr>
+<tr><td>ChaCha20-Poly1305</td><td>no limit beyond <code>max_uses</code></td><td>any</td></tr>
+</tbody>
+</table>
+</div>
+<p>The figures come from these bounds:</p>
+<ul>
+<li>AES-GCM: RFC 8446, section 5.5, allows “up to 2^24.5 full-size records (about 24 million)” of
+2^14 bytes, 2^38.5 bytes, “while keeping a safety margin of approximately 2^-57 for
+Authenticated Encryption (AE) security”. Luykx and Paterson, “Limits on Authenticated Encryption
+Use in TLS”, table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60. The
+default of 2^38 bytes stays below that. The most allowed, 2^52 bytes, is the 2^48 blocks RFC
+8452, section 9, allows under one AES-GCM key for an advantage of 2^-32;</li>
+<li>AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
+random nonces for an advantage of 2^-32, so <code>max_uses</code> bounds it already;</li>
+<li>ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
+beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
+attempts, which no writer can count.</li>
+</ul>
+<p>A <code>max_bytes</code> set in the policy replaces the default, under any algorithm. Above the most
+allowed, the envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
+<p>A value that would take the count past <code>max_bytes</code> renews the DEK before it is sealed. A value
+longer than <code>max_bytes</code> alone is sealed under a new DEK of its own, as the per-call envelope does,
+and the current DEK stays in use for the next values.</p>
+<p>The bounds count blocks of plaintext and AAD, and one more block per value, and <code>max_bytes</code> counts
+plaintext bytes only. At the default <code>max_uses</code> and an AAD of 16 bytes or less, the difference is
+at most 3 × 2^24 blocks beside the 2^34 blocks of the default.</p>
 <h3 id="the-dek-lives-in-the-cache"><a class="header" href="#the-dek-lives-in-the-cache">The DEK lives in the cache</a></h3>
 <p>The envelope keeps only the encrypted DEK. Its plaintext lives in the envelope’s <code>DekCache</code>, which a
 store-less envelope always has: <code>DekCache::new(DekCacheOptions::new())</code> unless the options give it

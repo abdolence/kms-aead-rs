@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0fe3c487.js";
+            window.path_to_searchindex_js = "searchindex-45561308.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f8bc823.js"></script>
@@ -222,6 +222,17 @@ encryptions. Add a new version before that.</li>
 <p>AES-256-GCM-SIV (RFC 8452) resists nonce misuse: a repeated nonce reveals only whether the two
 values sealed with it are equal, and does not break integrity.</p>
 <p>Deterministic encryption with AES-SIV takes no random nonce.</p>
+<h2 id="data-volume"><a class="header" href="#data-volume">Data volume</a></h2>
+<p>AES-GCM also has a bound on the data under one key, whatever the nonces: RFC 8446, section 5.5,
+allows 2^24.5 records of 2^14 bytes, 2^38.5 bytes, for an AE advantage of about 2^-57. The bound
+applies to AES-GCM keys this way:</p>
+<ul>
+<li>a store-less envelope renews its DEK at <code>max_bytes</code>, 2^38 bytes by default under AES-GCM and at
+most 2^52, see <a href="./dek-caching.html#volume-limit">Volume limit</a>. AES-256-GCM-SIV and
+ChaCha20-Poly1305 have no default volume limit;</li>
+<li>with <code>encrypt_with_dek</code> and <code>AeadCipher</code>, the application counts the bytes it seals under one
+AES-GCM key too, and moves to a new key before 2^38 bytes.</li>
+</ul>
 <h2 id="key-lifetime-and-zeroisation"><a class="header" href="#key-lifetime-and-zeroisation">Key lifetime and zeroisation</a></h2>
 <p><code>DataEncryptionKey</code>, <code>LocalKek</code> and the Vault token are zeroised on drop and shown as <code>***</code> by
 <code>Debug</code>. The DEK cache zeroises a key when its entry leaves the cache and no <code>with_dek</code> closure
