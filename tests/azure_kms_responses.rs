@@ -9,7 +9,7 @@ use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
 use kms_aead::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 mod common;
 use common::FixedTokenCredential;
@@ -19,16 +19,28 @@ const KEY_NAME: &str = "dek-wrapping-key";
 const KEY_VERSION: &str = "4387e9f3d6e14c459867679a90fd0f79";
 const LEAK_MARKER: &str = "body-marker-that-must-not-leak";
 
-/// Answers every request with one canned response.
+/// Answers every request with one canned response and keeps the URL of each request.
 #[derive(Debug)]
 struct CannedHttpClient {
     status: StatusCode,
     body: String,
+    urls: Mutex<Vec<String>>,
+}
+
+impl CannedHttpClient {
+    fn new(status: StatusCode, body: String) -> Self {
+        Self {
+            status,
+            body,
+            urls: Mutex::new(Vec::new()),
+        }
+    }
 }
 
 #[async_trait::async_trait]
 impl HttpClient for CannedHttpClient {
-    async fn execute_request(&self, _request: &Request) -> azure_core::Result<AsyncRawResponse> {
+    async fn execute_request(&self, request: &Request) -> azure_core::Result<AsyncRawResponse> {
+        self.urls.lock().unwrap().push(request.url().to_string());
         let mut headers = Headers::new();
         headers.insert(headers::CONTENT_TYPE, "application/json");
         Ok(AsyncRawResponse::from_bytes(
@@ -40,10 +52,14 @@ impl HttpClient for CannedHttpClient {
 }
 
 fn options_over(status: StatusCode, body: String) -> AzureKmsProviderOptions {
+    options_with(Arc::new(CannedHttpClient::new(status, body)))
+}
+
+fn options_with(http_client: Arc<CannedHttpClient>) -> AzureKmsProviderOptions {
     common::install_crypto_provider();
     AzureKmsProviderOptions::new().with_client_options(KeyClientOptions {
         client_options: ClientOptions {
-            transport: Some(Transport::new(Arc::new(CannedHttpClient { status, body }))),
+            transport: Some(Transport::new(http_client)),
             retry: RetryOptions::none(),
             ..Default::default()
         },
@@ -66,6 +82,70 @@ fn key_version() -> KmsKeyVersion {
 
 fn data_encryption_key() -> DataEncryptionKey {
     DataEncryptionKey::from(secret_vault_value::SecretValue::new(vec![7u8; 32]))
+}
+
+#[tokio::test]
+async fn unwrap_names_the_configured_kek() {
+    let http_client = Arc::new(CannedHttpClient::new(
+        StatusCode::Ok,
+        format!(
+            r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "{}"}}"#,
+            azure_core::base64::encode_url_safe([7u8; 32])
+        ),
+    ));
+    let provider = AzureKmsProvider::with_options(
+        &AzureKmsKeyRef::new(VAULT_URL.into(), KEY_NAME.into()),
+        options_with(http_client.clone()),
+        Arc::new(FixedTokenCredential),
+    )
+    .unwrap();
+
+    provider
+        .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+            b"wrapped".to_vec(),
+            Some(key_version()),
+        ))
+        .await
+        .unwrap();
+
+    let urls = http_client.urls.lock().unwrap();
+    assert!(
+        urls.iter().all(|url| url.starts_with(&format!(
+            "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}/unwrapkey?"
+        ))),
+        "{urls:?}"
+    );
+    assert!(!urls.is_empty());
+    assert_eq!(
+        provider.kek(),
+        KekRef::new(KekProvider::Azure, format!("{VAULT_URL}/keys/{KEY_NAME}"))
+    );
+}
+
+#[tokio::test]
+async fn provider_errors_carry_no_key_material() {
+    let key_marker = azure_core::base64::encode_url_safe(LEAK_MARKER);
+    let encrypted_key = EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), Some(key_version()));
+    let responses = [
+        // A successful unwrap whose body is not the expected model.
+        (StatusCode::Ok, format!(r#"{{"value": ["{key_marker}"]}}"#)),
+        (StatusCode::Ok, format!(r#"{{"value": "{key_marker}""#)),
+        (
+            StatusCode::InternalServerError,
+            format!(r#"{{"value": "{key_marker}"}}"#),
+        ),
+    ];
+
+    for (status, body) in responses {
+        let err = provider_over(status, body)
+            .decrypt_data_encryption_key(&encrypted_key)
+            .await
+            .unwrap_err();
+
+        for text in [format!("{err}"), format!("{err:?}")] {
+            assert!(!text.contains(&key_marker), "{status}: {text}");
+        }
+    }
 }
 
 #[tokio::test]

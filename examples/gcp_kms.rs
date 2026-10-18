@@ -24,8 +24,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         google_kms_key,
     );
 
-    let encryption = kms_aead::KmsAeadRingEnvelopeEncryption::new(
+    let encryption = KmsAeadEnvelope::new(
         kms_aead::providers::GcpKmsProvider::new(&kms_ref).await?,
+        AeadBackend::Ring,
     )
     .await?;
 

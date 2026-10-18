@@ -4,7 +4,7 @@ version = "0.29.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
 license = "Apache-2.0"
-description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS, HashiCorp Vault Transit and Ring AEAD encryption"
+description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit, with ring, aws-lc-rs or RustCrypto AEAD"
 homepage = "https://github.com/abdolence/kms-aead-rs"
 repository = "https://github.com/abdolence/kms-aead-rs"
 documentation = "https://docs.rs/kms-aead"
@@ -23,17 +23,37 @@ bench = false
 
 [dependencies]
 tracing = "0.1"
-secret-vault-value = { version = "1.0" }
-rvstruct = "0.3"
+secret-vault-value = { version = "1.0.4", features = ["base64"] }
+rvstruct = "0.3.4"
 rsb_derive = "0.5"
 async-trait = "0.1"
 hex = "0.4"
 ring = { version = "0.17", features = ["default", "std"], optional = true }
+# The oldest release that exports every algorithm the AwsLc backend offers, so that an
+# application can pin an older aws-lc-rs to stay on an older FIPS module.
+aws-lc-rs = { version = "1.16.3", default-features = false, optional = true }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes"], optional = true }
+aes-gcm-siv = { version = "0.12.1", default-features = false, features = ["aes"], optional = true }
+chacha20poly1305 = { version = "0.11.0", default-features = false, optional = true }
+aes-siv = { version = "0.8.0", default-features = false, optional = true }
+# Depended on only to turn on their `zeroize` features. The AES and CMAC key schedules inside
+# aes-gcm-siv and aes-siv are not zeroized otherwise: aes-siv's own `zeroize` does not reach them.
+aes = { version = "0.9", default-features = false, optional = true }
+cmac = { version = "0.8", default-features = false, optional = true }
+# Depended on only to turn on their `zeroize` features. ChaCha20-Poly1305's one-time Poly1305 key
+# and the POLYVAL key of AES-256-GCM-SIV are not zeroized otherwise.
+poly1305 = { version = "0.9", default-features = false, optional = true }
+polyval = { version = "0.7", default-features = false, optional = true }
+# The major version `aead` 0.6 depends on, so that one copy is in the tree.
+getrandom = { version = "0.4", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 gcloud-sdk = { version = "0.33", optional = true, default-features = false }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = "2.6.1"
+# `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
+# the store-less DEK renewal to one caller at a time.
+tokio = { version = "1", default-features = false, features = ["sync"] }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"], optional = true }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1"], optional = true }
@@ -43,7 +63,6 @@ rustls-native-certs = { version = "0.8", optional = true }
 webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
 serde_json = { version = "1", optional = true }
-tokio = { version = "1", default-features = false, features = ["time"], optional = true }
 azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
 azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
 # Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
@@ -52,6 +71,7 @@ reqwest = { version = "0.13.2", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 serde_json = { version = "1" }
 proptest = "1.4"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -63,16 +83,55 @@ azure_identity = { version = "1.0", default-features = false }
 [features]
 default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
-ring-aead-encryption = ["dep:ring"]
+# AEAD backends: any number of them in one build.
+ring = ["dep:ring"]
+# `aws-lc-rs` is the implicit feature of the optional dependency, the one gate of the AwsLc
+# backend for both features below. Enabled alone it fails aws-lc-rs's build: "one of the following
+# features must be specified: `aws-lc-sys`, `non-fips`, or `fips`". Enable `aws-lc` or
+# `aws-lc-fips` instead.
+aws-lc = ["aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
+# The AwsLc backend on the FIPS module, without the non-FIPS aws-lc-sys. Moves every aws-lc-rs
+# user in the build, the rustls aws-lc-rs provider included, to the FIPS module. Needs CMake and
+# Go to build. With `aws-lc` as well, both C libraries are built and aws-lc-rs runs on the FIPS one.
+aws-lc-fips = ["aws-lc-rs", "aws-lc-rs/fips"]
+rustcrypto = [
+    "dep:aes-gcm",
+    "dep:aes-gcm-siv",
+    "dep:chacha20poly1305",
+    "dep:getrandom",
+    "aes-gcm/zeroize",
+    "aes-gcm-siv/zeroize",
+    "chacha20poly1305/zeroize",
+    "dep:aes",
+    "aes/zeroize",
+    "dep:poly1305",
+    "poly1305/zeroize",
+    "dep:polyval",
+    "polyval/zeroize",
+]
+# `aes-siv/alloc` carries the `siv::Aes256Siv` calls that take the associated data as a list.
+deterministic = [
+    "dep:aes-siv",
+    "aes-siv/alloc",
+    "aes-siv/zeroize",
+    "dep:aes",
+    "aes/zeroize",
+    "dep:cmac",
+    "cmac/zeroize",
+    "dep:getrandom",
+]
+# Deprecated: reads the layouts written up to 0.28.1. Reading them will be removed in a later
+# breaking release.
+legacy-formats = []
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
 # store feature from the application to build.
-gcp-kms-encryption-base = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "gcloud-sdk/google-longrunning", "ring-aead-encryption"]
+gcp-kms-encryption-base = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "gcloud-sdk/google-longrunning"]
 gcp-kms-encryption = ["gcp-kms-encryption-base", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
 gcp-kms-encryption-webpki = ["gcp-kms-encryption-base", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 aws = ["dep:aws-config"]
-aws-kms-encryption = ["aws", "dep:aws-sdk-kms", "ring-aead-encryption"]
-azure-kms-encryption-base = ["dep:azure_core", "dep:azure_security_keyvault_keys", "dep:reqwest", "ring-aead-encryption"]
+aws-kms-encryption = ["aws", "dep:aws-sdk-kms"]
+azure-kms-encryption-base = ["dep:azure_core", "dep:azure_security_keyvault_keys", "dep:reqwest"]
 # TLS variants - user can choose one
 azure-kms-encryption-tls-aws-lc-rs = ["azure-kms-encryption-base", "azure_core/reqwest_rustls"]
 azure-kms-encryption-tls-no-provider = ["azure-kms-encryption-base", "reqwest/rustls-no-provider"]
@@ -80,8 +139,7 @@ azure-kms-encryption-native-tls = ["azure-kms-encryption-base", "reqwest/native-
 azure-kms-encryption = ["azure-kms-encryption-tls-aws-lc-rs"]
 ci-gcp = ["gcp-kms-encryption"] # Live tests against a GCP KMS key
 ci-aws = ["aws-kms-encryption"] # Live tests against an AWS KMS key
-vault-transit-kms-encryption-base = [
-    "ring-aead-encryption",
+hashicorp-vault-transit-kms-encryption-base = [
     "dep:hyper",
     "dep:hyper-util",
     "dep:hyper-rustls",
@@ -90,40 +148,39 @@ vault-transit-kms-encryption-base = [
     "dep:percent-encoding",
     "dep:serde",
     "dep:serde_json",
-    "secret-vault-value/base64",
-    "dep:tokio",
+    "tokio/time",
 ]
 # TLS root store variants - user can choose one
-vault-transit-kms-encryption-tls-roots = ["vault-transit-kms-encryption-base", "dep:rustls-native-certs"]
-vault-transit-kms-encryption-tls-webpki = ["vault-transit-kms-encryption-base", "dep:webpki-roots"]
+hashicorp-vault-transit-kms-encryption-tls-roots = ["hashicorp-vault-transit-kms-encryption-base", "dep:rustls-native-certs"]
+hashicorp-vault-transit-kms-encryption-tls-webpki = ["hashicorp-vault-transit-kms-encryption-base", "dep:webpki-roots"]
 # TLS crypto provider variants - user can choose one
-vault-transit-kms-encryption-tls-aws-lc-rs = ["vault-transit-kms-encryption-base", "rustls/aws_lc_rs"]
-vault-transit-kms-encryption-tls-ring = ["vault-transit-kms-encryption-base", "rustls/ring"]
-vault-transit-kms-encryption = ["vault-transit-kms-encryption-tls-roots", "vault-transit-kms-encryption-tls-aws-lc-rs"]
+hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs = ["hashicorp-vault-transit-kms-encryption-base", "rustls/aws_lc_rs"]
+hashicorp-vault-transit-kms-encryption-tls-ring = ["hashicorp-vault-transit-kms-encryption-base", "rustls/ring"]
+hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryption-tls-roots", "hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs"]
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring-aead-encryption", "gcp-kms-encryption", "aws-kms-encryption", "vault-transit-kms-encryption", "serde"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
 
 [[example]]
 name = "aws_kms"
 path = "examples/aws_kms.rs"
-required-features = ["aws-kms-encryption"]
+required-features = ["aws-kms-encryption", "ring"]
 
 [[example]]
 name = "gcp_kms"
 path = "examples/gcp_kms.rs"
-required-features = ["gcp-kms-encryption"]
+required-features = ["gcp-kms-encryption", "ring"]
 
 [[example]]
-name = "vault_transit_kms"
-path = "examples/vault_transit_kms.rs"
-required-features = ["vault-transit-kms-encryption-base"]
+name = "hc_vault_transit_kms"
+path = "examples/hc_vault_transit_kms.rs"
+required-features = ["hashicorp-vault-transit-kms-encryption-base", "ring"]
 
 [[example]]
 name = "azure_kms"
 path = "examples/azure_kms.rs"
-required-features = ["azure-kms-encryption-base"]
+required-features = ["azure-kms-encryption-base", "ring"]
 
 [[test]]
 name = "azure_kms_emulator"
@@ -138,4 +195,9 @@ required-features = ["azure-kms-encryption-base"]
 [[example]]
 name = "only_aead"
 path = "examples/only_aead.rs"
-required-features = ["ring-aead-encryption"]
+required-features = ["ring"]
+
+[[example]]
+name = "tracing"
+path = "examples/tracing.rs"
+required-features = ["ring"]
