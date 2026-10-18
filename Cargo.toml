@@ -3,11 +3,7 @@ name = "kms-aead"
 version = "0.29.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
-# The oldest toolchain that builds every feature on dependencies resolved for it, which the
-# rust-version CI job checks: gcloud-sdk's google-cloud-auth needs 1.91. Later releases of other
-# dependencies may need a newer toolchain, and an MSRV-aware resolver picks older ones. The
-# backends alone build from 1.89, the floor of aes 0.9.
-rust-version = "1.91"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit, with ring, aws-lc-rs or RustCrypto AEAD"
 homepage = "https://github.com/abdolence/kms-aead-rs"
@@ -22,6 +18,9 @@ include = ["Cargo.toml", "src/**/*.rs", "README.md", "LICENSE", "SECURITY.md", "
 maintenance = { status = "actively-developed" }
 
 [workspace]
+
+[workspace.package]
+rust-version = "1.99"
 
 [workspace.lints.clippy]
 mod_module_files = "deny"

@@ -130,5 +130,4 @@ the code stays the same.
 
 ## MSRV
 
-The minimum supported Rust version is 1.91, for every feature, on dependencies resolved for it.
-The backends alone build from 1.89.
+The minimum supported Rust version is 1.99, for every feature.

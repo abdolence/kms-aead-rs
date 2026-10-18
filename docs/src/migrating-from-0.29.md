@@ -21,7 +21,7 @@ ring is no longer turned on by the provider features. A 0.29 build that relied o
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
 no second crypto library to a cloud provider build, see [Choosing a backend](./getting-started.md#choosing-a-backend).
 
-The crate declares `rust-version = "1.91"`.
+The crate declares `rust-version = "1.99"`.
 
 ## Names
 
