@@ -15,8 +15,12 @@
 //! `failed == 0` and that query returns nothing, the old version can be
 //! [`retire`](crate::Keyring::retire)d.
 //!
+//! [`Keyring::seal_thresholds`](crate::Keyring::seal_thresholds) gives each purpose's `n`,
+//! [`SealMarker::is_behind`] makes the query's test on a record in hand, and
+//! [`Keyring::reseal`](crate::Keyring::reseal) seals one value again under the active version.
+//!
 //! The re-seal reads every field with [`decrypt_with_trust`](crate::Keyring::decrypt_with_trust),
-//! and reports in [`ResealOutcome::Resealed`] whether the [`KeyTrust`](crate::KeyTrust) of any
+//! as `reseal` does, and reports in [`ResealOutcome::Resealed`] whether the [`KeyTrust`](crate::KeyTrust) of any
 //! of them is compromised. A value read under a compromised version is untrusted data, since
 //! whoever holds the leaked key can have forged it, and re-sealing makes it read as trusted
 //! everywhere. The application decides per record before it
@@ -137,6 +141,41 @@ impl SealMarker {
             }));
         }
         Ok(marker)
+    }
+}
+
+/// The active key version of each purpose of a keyring, from
+/// [`Keyring::seal_thresholds`](crate::Keyring::seal_thresholds): a record whose
+/// [`SealMarker`] names a version below one of them has a value or a beacon that a sweep re-seals.
+///
+/// Key ids compare by [`as_u32`](KeyId::as_u32) within one purpose, the order in which the
+/// keyring numbers its versions, so a marker query uses the same comparison: the records whose
+/// `seal.randomized < randomized`, and likewise for the other two purposes, plus the records
+/// whose `seal.format` is `envelope`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealThresholds {
+    /// The active randomised version, or `None` when the keyring has none.
+    pub randomized: Option<KeyId>,
+    /// The active deterministic version, or `None` when the keyring has none.
+    pub deterministic: Option<KeyId>,
+    /// The active beacon version, or `None` when the keyring has none.
+    pub beacon: Option<KeyId>,
+}
+
+impl SealMarker {
+    /// Whether the record this marker describes holds envelope values, or a value or beacon of
+    /// a purpose under a version below that purpose's threshold: the test the marker query
+    /// makes, for a candidate read back before its re-seal. A purpose without a threshold has no
+    /// active version to re-seal under, and holds no record behind.
+    pub fn is_behind(&self, thresholds: &SealThresholds) -> bool {
+        let below = |oldest: Option<KeyId>, threshold: Option<KeyId>| match (oldest, threshold) {
+            (Some(oldest), Some(threshold)) => oldest.as_u32() < threshold.as_u32(),
+            _ => false,
+        };
+        self.format == SealFormat::Envelope
+            || below(self.randomized, thresholds.randomized)
+            || below(self.deterministic, thresholds.deterministic)
+            || below(self.beacon, thresholds.beacon)
     }
 }
 
@@ -316,6 +355,54 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn a_marker_is_behind_when_envelope_or_any_purpose_is_below_its_threshold() {
+        let thresholds = SealThresholds {
+            randomized: Some(KeyId::new(3)),
+            deterministic: Some(KeyId::new(DETERMINISTIC | 2)),
+            beacon: Some(KeyId::new(BEACON | 2)),
+        };
+        let current = SealMarker {
+            format: SealFormat::Keyring,
+            randomized: Some(KeyId::new(3)),
+            deterministic: Some(KeyId::new(DETERMINISTIC | 2)),
+            beacon: Some(KeyId::new(BEACON | 2)),
+        };
+
+        assert!(!current.is_behind(&thresholds));
+        assert!(SealMarker {
+            randomized: Some(KeyId::new(2)),
+            ..current
+        }
+        .is_behind(&thresholds));
+        assert!(SealMarker {
+            deterministic: Some(KeyId::new(DETERMINISTIC | 1)),
+            ..current
+        }
+        .is_behind(&thresholds));
+        assert!(SealMarker {
+            beacon: Some(KeyId::new(BEACON | 1)),
+            ..current
+        }
+        .is_behind(&thresholds));
+        assert!(!SealMarker {
+            deterministic: None,
+            beacon: None,
+            ..current
+        }
+        .is_behind(&thresholds));
+        assert!(!current.is_behind(&SealThresholds {
+            randomized: None,
+            ..thresholds
+        }));
+        assert!(SealMarker::ENVELOPE.is_behind(&thresholds));
+        assert!(SealMarker::ENVELOPE.is_behind(&SealThresholds {
+            randomized: None,
+            deterministic: None,
+            beacon: None,
+        }));
+    }
+
     #[tokio::test]
     async fn run_counts_scanned_resealed_skipped_failed() {
         let report = run(
@@ -353,7 +440,11 @@ mod tests {
     mod with_backend {
         use std::sync::{Mutex, PoisonError};
 
-        use kms_aead::{AeadAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+        #[cfg(feature = "deterministic")]
+        use kms_aead::DeterministicAlgorithm;
+        use kms_aead::{
+            AeadAlgorithm, BeaconAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
+        };
 
         use super::*;
         use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider, TestRegistry};
@@ -364,6 +455,11 @@ mod tests {
 
         const ALICE: &str = "alice@example.com";
         const ALICE_PHONE: &str = "+44 20 7946 0000";
+        #[cfg(feature = "deterministic")]
+        const EMAIL: FieldSpec = FieldSpec::new(
+            EntityKind::from_static("user"),
+            FieldName::from_static("email"),
+        );
         const PHONE: FieldSpec = FieldSpec::new(
             EntityKind::from_static("user"),
             FieldName::from_static("phone"),
@@ -419,6 +515,113 @@ mod tests {
             ));
             assert_eq!(report.resealed, 1);
             assert_eq!(report.resealed_from_compromised, 1);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn thresholds_are_the_active_version_of_each_purpose() -> TestResult {
+            let keyring = TestRegistry::new(
+                MemoryKeyringStore::new(),
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(
+                TestProvider::new("tenant-42-kek")?,
+                TENANT,
+                KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+            )
+            .await?;
+            let staged = keyring.rotate(Purpose::Randomized).await?;
+
+            assert_eq!(
+                keyring.seal_thresholds(),
+                SealThresholds {
+                    randomized: Some(KeyId::new(1)),
+                    deterministic: None,
+                    beacon: Some(KeyId::new(BEACON | 1)),
+                }
+            );
+            keyring.promote(staged).await?;
+            assert_eq!(keyring.seal_thresholds().randomized, Some(staged));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn reseal_moves_only_a_value_behind_the_active_version() -> TestResult {
+            let keyring = keyring(TestProvider::new("tenant-42-kek")?).await?;
+            let aad = email_of("42")?;
+            let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+            assert!(keyring.reseal(&aad, &old).await?.is_none());
+
+            let rotation = keyring
+                .promote(keyring.rotate(Purpose::Randomized).await?)
+                .await?;
+            let resealed = keyring
+                .reseal(&aad, &old)
+                .await?
+                .ok_or("a value under the previous version is re-sealed")?;
+
+            assert_eq!(resealed.value.key_id(), rotation.current);
+            assert_eq!(resealed.trust, KeyTrust::Trusted);
+            assert_eq!(keyring.decrypt(&aad, &resealed.value).await?, ALICE);
+            assert!(keyring.reseal(&aad, &resealed.value).await?.is_none());
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn reseal_reports_the_trust_of_a_compromised_value() -> TestResult {
+            let keyring = keyring(TestProvider::new("tenant-42-kek")?).await?;
+            let aad = email_of("42")?;
+            let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+            let rotation = keyring
+                .mark_compromised(old.key_id(), None)
+                .await?
+                .ok_or("the compromised active version is replaced")?;
+
+            let resealed = keyring
+                .reseal(&aad, &old)
+                .await?
+                .ok_or("a value under the compromised version is re-sealed")?;
+
+            assert!(matches!(resealed.trust, KeyTrust::Compromised(_)));
+            assert_eq!(resealed.value.key_id(), rotation.current);
+            Ok(())
+        }
+
+        #[cfg(feature = "deterministic")]
+        #[tokio::test]
+        async fn reseal_deterministic_moves_only_a_value_behind_the_active_version() -> TestResult {
+            let keyring = TestRegistry::new(
+                MemoryKeyringStore::new(),
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(
+                TestProvider::new("tenant-42-kek")?,
+                TENANT,
+                KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+            )
+            .await?;
+            let aad = EMAIL.deterministic_aad();
+            let old = keyring
+                .encrypt_deterministic(&aad, &ALICE.to_string())
+                .await?;
+            assert!(keyring.reseal_deterministic(&aad, &old).await?.is_none());
+
+            let rotation = keyring
+                .promote(keyring.rotate(Purpose::Deterministic).await?)
+                .await?;
+            let resealed = keyring
+                .reseal_deterministic(&aad, &old)
+                .await?
+                .ok_or("a value under the previous version is re-sealed")?;
+
+            assert_eq!(resealed.trust, KeyTrust::Trusted);
+            assert_eq!(
+                resealed.value,
+                keyring
+                    .encrypt_deterministic(&aad, &ALICE.to_string())
+                    .await?
+            );
+            assert_eq!(resealed.value.key_id(), rotation.current);
             Ok(())
         }
 

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
-use kms_aead::formats::{Envelope, Randomized};
+use kms_aead::formats::{Envelope, Format, Randomized};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, BeaconMac, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
     KmsAeadEncryptionProvider, Plaintext,
@@ -22,6 +22,7 @@ use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
+use crate::sweep::SealThresholds;
 use crate::{
     Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
     KeyringAlgorithms, KeyringId, KeyringRecord, Purpose,
@@ -225,6 +226,55 @@ where
             },
         )
         .await
+    }
+
+    /// The active version of each purpose in the cached record, against which a sweep's query
+    /// and [`SealMarker::is_behind`](crate::sweep::SealMarker::is_behind) find the records to
+    /// re-seal. A job that starts right after a promotion in another process
+    /// [`reload`](Self::reload)s first.
+    pub fn seal_thresholds(&self) -> SealThresholds {
+        let record = self.record();
+        let active = |purpose| record.active(purpose).map(KeyVersion::id);
+        SealThresholds {
+            randomized: active(Purpose::Randomized),
+            deterministic: active(Purpose::Deterministic),
+            beacon: active(Purpose::Beacon),
+        }
+    }
+
+    /// `value` sealed again with `aad` under the active randomised version, with the trust of
+    /// the version it was read under, or `None` when it is under the active version already, or
+    /// under a newer one that a process with a fresher record sealed it under.
+    ///
+    /// The value is read with [`decrypt_with_trust`](Self::decrypt_with_trust), so a value under
+    /// a compromised version is re-sealed too, and [`Resealed::trust`] says so: the caller
+    /// decides whether to keep it, see [`ResealOutcome`](crate::sweep::ResealOutcome).
+    ///
+    /// [`Resealed`] holds no plaintext, and a value under the active version is not opened, so a
+    /// field with a beacon is read with `decrypt_with_trust` instead: its plaintext gives both
+    /// the value under the active version, through [`encrypt`](Self::encrypt), and the beacon
+    /// under the active beacon version, through [`beacon`](Self::beacon), since a beacon rotation
+    /// leaves the value itself current.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`] for the value's
+    /// key id, before any store or KMS call; [`KeyringError::NoActiveVersion`] before any
+    /// decryption; and the errors of `decrypt_with_trust` and [`encrypt`](Self::encrypt).
+    pub async fn reseal<T: Plaintext>(
+        &self,
+        aad: &FieldAad,
+        value: &Encrypted<T, Randomized>,
+    ) -> KeyringResult<Option<Resealed<T, Randomized>>> {
+        let key_id = Purpose::Randomized.check(value.key_id())?;
+        if !self.is_behind_active(Purpose::Randomized, key_id).await? {
+            return Ok(None);
+        }
+        let decrypted = self.decrypt_with_trust(aad, value).await?;
+        Ok(Some(Resealed {
+            value: self.encrypt(aad, &decrypted.value).await?,
+            trust: decrypted.trust,
+        }))
     }
 
     /// Stages a new version of `purpose`, with the record's algorithm for it, and returns its
@@ -511,6 +561,16 @@ where
             Ok(versions)
         })
         .await
+    }
+
+    /// Whether `key_id` of `purpose` is below the purpose's active version in the current
+    /// record, or [`KeyringError::NoActiveVersion`] when it has none.
+    async fn is_behind_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
+        let record = self.cache.current().await;
+        let active = record
+            .active(purpose)
+            .ok_or_else(|| KeyringError::no_active_version(self.id(), purpose))?;
+        Ok(key_id.as_u32() < active.id().as_u32())
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error
@@ -898,6 +958,16 @@ pub struct Decrypted<T> {
     /// The version that opened it.
     pub key_id: KeyId,
     /// Whether the version is compromised.
+    pub trust: KeyTrust,
+}
+
+/// A value sealed again under the active version of its purpose, by [`Keyring::reseal`] or
+/// `reseal_deterministic`, with the trust of the version the old value was read under.
+pub struct Resealed<T, F: Format> {
+    /// The value under the active version, to write in place of the old one.
+    pub value: Encrypted<T, F>,
+    /// Whether the version the old value was read under is compromised: a value forged under a
+    /// leaked key reads as trusted once it is re-sealed, so the caller decides before it writes.
     pub trust: KeyTrust,
 }
 

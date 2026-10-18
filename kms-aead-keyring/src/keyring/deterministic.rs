@@ -16,7 +16,7 @@ use crate::spans;
 use crate::store::KeyringStore;
 use crate::{
     Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
-    Purpose,
+    Purpose, Resealed,
 };
 
 /// Deterministic fields: equal plaintexts under one version give equal values, so that a data
@@ -148,6 +148,36 @@ where
             },
         )
         .await
+    }
+
+    /// `value` sealed again with `aad` under the active deterministic version, with the trust of
+    /// the version it was read under, or `None` when it is under the active version already, or
+    /// a newer one, as [`reseal`](Self::reseal) does for randomised values. Once no value is left
+    /// under the old version, it is retired, and the equality queries of
+    /// [`deterministic_probes`](Self::deterministic_probes) drop its probe.
+    ///
+    /// # Errors
+    ///
+    /// As `reseal`, with the errors of
+    /// [`decrypt_deterministic_with_trust`](Self::decrypt_deterministic_with_trust) and
+    /// [`encrypt_deterministic`](Self::encrypt_deterministic).
+    pub async fn reseal_deterministic<T: Plaintext>(
+        &self,
+        aad: &DeterministicAad,
+        value: &Encrypted<T, Deterministic>,
+    ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
+        let key_id = Purpose::Deterministic.check(value.key_id())?;
+        if !self
+            .is_behind_active(Purpose::Deterministic, key_id)
+            .await?
+        {
+            return Ok(None);
+        }
+        let decrypted = self.decrypt_deterministic_with_trust(aad, value).await?;
+        Ok(Some(Resealed {
+            value: self.encrypt_deterministic(aad, &decrypted.value).await?,
+            trust: decrypted.trust,
+        }))
     }
 
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
