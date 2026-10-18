@@ -273,7 +273,7 @@ impl Display for KeyringError {
             }
             KeyringError::Interop(error) => write!(
                 f,
-                "{:?} does not read the keyring {}: {}",
+                "{} does not read the keyring {}: {}",
                 error.interop, error.keyring, error.requirement
             ),
             KeyringError::ExportAlgorithmUnsupported(error) => write!(

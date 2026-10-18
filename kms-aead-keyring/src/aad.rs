@@ -5,9 +5,11 @@
 use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 
-use kms_aead::BeaconBits;
+use kms_aead::formats::TinkKeyType;
+use kms_aead::{AeadAlgorithm, BeaconBits, DeterministicAlgorithm, KekProvider, KekRef};
 
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
+use crate::KeyAlgorithm;
 
 /// The bytes an AAD part may hold: 1 to 255 bytes of UTF-8 without `/`, which separates the
 /// parts, and without NUL or another ASCII control character. A loop, since slice methods are
@@ -168,13 +170,11 @@ impl Display for FieldName {
 }
 
 /// Which reader other than this crate decrypts a field's values, and so what
-/// [`Keyring`](crate::Keyring) checks before it seals one. A value that was written always
-/// decrypts: only sealing checks.
+/// [`Keyring`](crate::Keyring) checks before it seals one. A field without one takes any
+/// algorithm, any AAD and any KEK. A value that was written always decrypts: only sealing checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Interop {
-    /// No other reader: any algorithm, any AAD and any KEK.
-    None,
     /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
     /// and AES-SIV only and decrypts with Cloud KMS only: sealing needs an AES-256-GCM version
     /// for a randomised value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
@@ -189,31 +189,69 @@ pub enum Interop {
     Tink,
 }
 
+impl Interop {
+    /// The Tink key type the reader reads `algorithm`'s keys as, or `None` for an algorithm it
+    /// does not implement.
+    pub(crate) fn key_type(self, algorithm: KeyAlgorithm) -> Option<TinkKeyType> {
+        match algorithm {
+            KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm) => Some(TinkKeyType::AesGcm),
+            KeyAlgorithm::Randomized(
+                algorithm @ (AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256GcmSiv),
+            ) if self == Interop::Tink => Some(algorithm.into()),
+            KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => {
+                Some(TinkKeyType::AesSiv)
+            }
+            KeyAlgorithm::Randomized(_)
+            | KeyAlgorithm::Deterministic(_)
+            | KeyAlgorithm::Beacon(_) => None,
+        }
+    }
+
+    /// Tink's key URI of `kek`, or `None` for a KEK the reader does not decrypt with.
+    pub(crate) fn key_uri(self, kek: &KekRef) -> Option<String> {
+        let key_uri = kek.tink_key_uri();
+        match self {
+            Interop::BigQuery => key_uri.filter(|_| *kek.provider() == KekProvider::Gcp),
+            Interop::Tink => key_uri,
+        }
+    }
+}
+
+/// `BigQuery` or `Tink`.
+impl Display for Interop {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Interop::BigQuery => "BigQuery",
+            Interop::Tink => "Tink",
+        })
+    }
+}
+
 /// An encrypted field of one kind of entity: the source of the default AAD of its values, of
 /// the interop requirement that AAD carries, and of the context and bits of its beacons.
 #[derive(Debug, Clone)]
 pub struct FieldSpec {
     kind: EntityKind,
     field: FieldName,
-    interop: Interop,
+    interop: Option<Interop>,
     beacon_bits: BeaconBits,
 }
 
 impl FieldSpec {
-    /// The field `field` of the entities of `kind`, with [`Interop::None`] and beacons of
+    /// The field `field` of the entities of `kind`, read by no other reader, and with beacons of
     /// [`BeaconBits::DEFAULT`].
     pub const fn new(kind: EntityKind, field: FieldName) -> Self {
         Self {
             kind,
             field,
-            interop: Interop::None,
+            interop: None,
             beacon_bits: BeaconBits::DEFAULT,
         }
     }
 
     /// The same field, read by `interop` as well.
     pub const fn with_interop(mut self, interop: Interop) -> Self {
-        self.interop = interop;
+        self.interop = Some(interop);
         self
     }
 
@@ -263,16 +301,16 @@ impl FieldSpec {
 /// id.
 pub struct FieldAad {
     pub(crate) bytes: Vec<u8>,
-    pub(crate) interop: Interop,
+    pub(crate) interop: Option<Interop>,
 }
 
 impl FieldAad {
     /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadCipher`. SQL cannot
-    /// rebuild it, so it carries [`Interop::None`] and a field BigQuery reads cannot use it.
+    /// rebuild it, so it carries no [`Interop`] and a field BigQuery reads cannot use it.
     pub fn custom(bytes: &(impl AsRef<[u8]> + ?Sized)) -> Self {
         Self {
             bytes: bytes.as_ref().to_vec(),
-            interop: Interop::None,
+            interop: None,
         }
     }
 
@@ -311,7 +349,7 @@ pub struct DeterministicAad {
         not(feature = "deterministic"),
         expect(dead_code, reason = "only the deterministic calls seal")
     )]
-    pub(crate) interop: Interop,
+    pub(crate) interop: Option<Interop>,
 }
 
 impl DeterministicAad {

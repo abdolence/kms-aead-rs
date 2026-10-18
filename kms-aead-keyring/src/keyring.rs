@@ -16,7 +16,6 @@ use kms_aead::{
 use rsb_derive::Builder;
 use tokio::task::AbortHandle;
 
-use crate::encodings::Encoding;
 use crate::errors::{
     InteropRequirement, KekMismatchError, KeyVersionCompromisedError, KeyVersionError,
     KeyringError, KeyringResult, RecordInvalidReason,
@@ -619,23 +618,21 @@ where
     }
 
     /// Fails with the first requirement of `interop` that sealing under `version` breaks. The
-    /// AAD requirement holds by construction: an AAD that SQL cannot rebuild carries
-    /// [`Interop::None`].
-    fn check_interop(&self, interop: Interop, version: &KeyVersion) -> KeyringResult<()> {
-        let encoding = match interop {
-            Interop::None => return Ok(()),
-            Interop::BigQuery => Encoding::BigQuery,
-            Interop::Tink => Encoding::Tink,
+    /// AAD requirement holds by construction: an AAD that SQL cannot rebuild carries no
+    /// [`Interop`].
+    fn check_interop(&self, interop: Option<Interop>, version: &KeyVersion) -> KeyringResult<()> {
+        let Some(interop) = interop else {
+            return Ok(());
         };
         let kek = self.provider.kek();
-        if encoding.key_type(version.algorithm()).is_none() {
+        if interop.key_type(version.algorithm()).is_none() {
             return Err(KeyringError::interop(
                 self.id(),
                 interop,
                 InteropRequirement::Algorithm(version.algorithm()),
             ));
         }
-        match encoding.key_uri(kek) {
+        match interop.key_uri(kek) {
             Some(_) => Ok(()),
             None => Err(KeyringError::interop(
                 self.id(),

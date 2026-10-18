@@ -13,12 +13,12 @@ use kms_aead::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, ValueStruct,
 };
 
-use crate::encodings::{BigQuery, Encoding, KeysetEncoding, Tink};
+use crate::encodings::{BigQuery, KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
 use crate::purpose::unreserved;
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
+use crate::{Interop, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,7 @@ impl EncryptedKeyset<BigQuery> {
 impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncryptedKeyset")
-            .field("encoding", &E::ENCODING)
+            .field("encoding", &E::INTEROP)
             .field("key_uri", &self.key_uri)
             .field("key_ids", &self.key_ids)
             .finish_non_exhaustive()
@@ -192,19 +192,19 @@ where
         selection: KeysetSelection,
     ) -> KeyringResult<EncryptedKeyset<E>> {
         spans::in_span(spans::export(self.id(), selection.purpose()?), async {
-            let encoding = E::ENCODING;
+            let interop = E::INTEROP;
             let kek = self.provider.kek();
-            let key_uri = encoding.key_uri(kek).ok_or_else(|| {
+            let key_uri = interop.key_uri(kek).ok_or_else(|| {
                 KeyringError::interop(
                     self.id(),
-                    encoding.interop(),
+                    interop,
                     InteropRequirement::Kek(kek.provider().clone()),
                 )
             })?;
             // The store's record rather than the cached one, so that a version another process
             // flagged compromised since this process last refreshed is never exported.
             let record = self.cache.reload("export").await?;
-            let (primary, versions) = self.exported_versions(&record, selection, encoding)?;
+            let (primary, versions) = self.exported_versions(&record, selection, interop)?;
             let mut keyset = TinkKeyset::new(primary);
             for (key_id, key_type, encrypted_dek) in &versions {
                 // Uncached, so that the export leaves no key in the cache of a process that
@@ -216,8 +216,8 @@ where
                     .await?;
                 added?;
             }
-            let bytes = match encoding {
-                Encoding::BigQuery => {
+            let bytes = match interop {
+                Interop::BigQuery => {
                     let keyset_dek = DataEncryptionKey::from(keyset.to_bytes());
                     // Zeroises the keys inside the keyset before the KMS round trip, so that the
                     // serialised keyset is the one copy left while it is encrypted.
@@ -227,7 +227,7 @@ where
                         .await?
                         .into_value()
                 }
-                Encoding::Tink => keyset.into_encrypted_bytes(&self.provider).await?,
+                Interop::Tink => keyset.into_encrypted_bytes(&self.provider).await?,
             };
             spans::record_versions(versions.len());
             Ok(EncryptedKeyset {
@@ -241,12 +241,12 @@ where
     }
 
     /// The primary and the versions of `selection` in `record`, each with its Tink key type in
-    /// `encoding` and its encrypted DEK.
+    /// the keyset `interop` reads, and its encrypted DEK.
     fn exported_versions<'r>(
         &self,
         record: &'r KeyringRecord,
         selection: KeysetSelection,
-        encoding: Encoding,
+        interop: Interop,
     ) -> KeyringResult<(KeyId, Vec<ExportedVersion<'r>>)> {
         let (primary, versions): (KeyId, Vec<_>) = match selection {
             KeysetSelection::Readable(purpose) => {
@@ -283,7 +283,7 @@ where
         let versions = versions
             .into_iter()
             .map(|(version, encrypted_dek)| {
-                let key_type = encoding.key_type(version.algorithm()).ok_or_else(|| {
+                let key_type = interop.key_type(version.algorithm()).ok_or_else(|| {
                     KeyringError::ExportAlgorithmUnsupported(KeyVersionError {
                         keyring: self.id().clone(),
                         key_id: version.id(),
