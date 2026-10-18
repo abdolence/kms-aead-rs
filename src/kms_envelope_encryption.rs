@@ -22,7 +22,7 @@ use crate::{
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
 /// allows 2^32 invocations of authenticated encryption under one key with random 96-bit IVs, the
 /// nonces every [`AeadAlgorithm`] draws.
-const MAX_USES: u64 = 1 << 32;
+const MAX_ENCRYPTIONS_PER_DEK: u64 = 1 << 32;
 
 /// Envelope encryption: AEAD under data encryption keys (DEKs) on the backend `B`, and the DEKs
 /// encrypted by a key encryption key (KEK) through the provider `P`.
@@ -149,7 +149,7 @@ impl DekReuse {
     /// The reuse of `policy`, which must be in range, with its DEK in `dek_cache`, which must be
     /// enabled.
     fn new(policy: DekReusePolicy, dek_cache: &DekCache) -> KmsAeadResult<Self> {
-        if policy.max_age.is_zero() || policy.max_uses.get() > MAX_USES {
+        if policy.max_age.is_zero() || policy.max_uses.get() > MAX_ENCRYPTIONS_PER_DEK {
             return Err(KmsAeadSystemError::create(
                 "INVALID_DEK_REUSE_POLICY",
                 &format!(

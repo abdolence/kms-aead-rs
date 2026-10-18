@@ -31,13 +31,13 @@ const VAULT_NAMESPACE_HEADER: &str = "x-vault-namespace";
 const VAULT_REQUEST_HEADER: &str = "x-vault-request";
 /// A Transit response carries one encrypted or decrypted data key, so a response this large is not
 /// one and is not buffered.
-const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
+const MAX_VAULT_RESPONSE_LEN: usize = 1024 * 1024;
 /// The longest Vault error text quoted into an error. A misbehaving proxy may echo the request
 /// or other data into `errors`, so only a short prefix of the first one is kept.
 const MAX_VAULT_ERROR_CHARS: usize = 256;
 
-/// Characters a path segment keeps as they are: the RFC 3986 unreserved set.
-const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+/// The characters percent-encoded in a path segment: every one outside the RFC 3986 unreserved set.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
@@ -318,14 +318,16 @@ impl HcVaultTransitProvider {
                 .map_err(KmsAeadError::from_vault_http_error)?;
             let status = response.status();
             // The body buffer belongs to the HTTP stack and is freed without being zeroised.
-            let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
+            let body = Limited::new(response.into_body(), MAX_VAULT_RESPONSE_LEN)
                 .collect()
                 .await
                 .map_err(|e| {
                     if e.is::<LengthLimitError>() {
                         KmsAeadEncryptionError::create(
                             "VAULT_RESPONSE_TOO_LARGE",
-                            &format!("The Vault response is larger than {MAX_RESPONSE_SIZE} bytes"),
+                            &format!(
+                                "The Vault response is larger than {MAX_VAULT_RESPONSE_LEN} bytes"
+                            ),
                         )
                     } else {
                         KmsAeadError::NetworkError(KmsAeadNetworkError::with_error_chain(
@@ -582,7 +584,7 @@ fn encoded_vault_path(field: &str, path: &str) -> KmsAeadResult<String> {
                 "VAULT_INVALID_OPTIONS",
                 &format!("`{path}` is not a valid Vault {field}: its segments must not be empty, `.` or `..`"),
             )),
-            segment => Ok(utf8_percent_encode(segment, PATH_SEGMENT).to_string()),
+            segment => Ok(utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string()),
         })
         .collect::<KmsAeadResult<Vec<_>>>()
         .map(|segments| segments.join("/"))

@@ -13,12 +13,12 @@ use tracing::{debug_span, field, Instrument, Span};
 use crate::cache::{DekCache, DekCacheOutcome};
 use crate::KmsAeadResult;
 
-const MODE: &str = "/kms_aead/mode";
-const ALGORITHM: &str = "/kms_aead/algorithm";
-const BACKEND: &str = "/kms_aead/backend";
-const DEK_CACHE: &str = "/kms_aead/dek_cache";
-const PURPOSE: &str = "/kms_aead/purpose";
-const ERROR_CODE: &str = "/kms_aead/error_code";
+const FIELD_MODE: &str = "/kms_aead/mode";
+const FIELD_ALGORITHM: &str = "/kms_aead/algorithm";
+const FIELD_BACKEND: &str = "/kms_aead/backend";
+const FIELD_DEK_CACHE: &str = "/kms_aead/dek_cache";
+const FIELD_PURPOSE: &str = "/kms_aead/purpose";
+const FIELD_ERROR_CODE: &str = "/kms_aead/error_code";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the envelope has
 /// a cache.
@@ -32,26 +32,26 @@ pub(crate) mod kms {
 
     use tracing::{debug_span, field, Span};
 
-    use super::ERROR_CODE;
+    use super::FIELD_ERROR_CODE;
     use crate::KekRef;
 
-    const PROVIDER: &str = "/kms_aead/provider";
-    const KEY: &str = "/kms_aead/key";
-    const KEY_VERSION: &str = "/kms_aead/key_version";
-    const KEY_VERSIONS: &str = "/kms_aead/key_versions";
-    const RESPONSE_TIME: &str = "/kms_aead/response_time";
+    const FIELD_PROVIDER: &str = "/kms_aead/provider";
+    const FIELD_KEY: &str = "/kms_aead/key";
+    const FIELD_KEY_VERSION: &str = "/kms_aead/key_version";
+    const FIELD_KEY_VERSIONS: &str = "/kms_aead/key_versions";
+    const FIELD_RESPONSE_TIME: &str = "/kms_aead/response_time";
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
-    const LEN: &str = "/kms_aead/len";
+    const FIELD_LEN: &str = "/kms_aead/len";
 
     /// `KMS encrypt DEK`, around a provider's `encrypt_data_encryption_key`.
     pub(crate) fn encrypt_span(kek: &KekRef) -> Span {
         debug_span!(
             "KMS encrypt DEK",
-            { PROVIDER } = %kek.provider(),
-            { KEY } = kek.key(),
-            { KEY_VERSION } = field::Empty,
-            { RESPONSE_TIME } = field::Empty,
-            { ERROR_CODE } = field::Empty,
+            { FIELD_PROVIDER } = %kek.provider(),
+            { FIELD_KEY } = kek.key(),
+            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
         )
     }
 
@@ -59,11 +59,11 @@ pub(crate) mod kms {
     pub(crate) fn decrypt_span(kek: &KekRef) -> Span {
         debug_span!(
             "KMS decrypt DEK",
-            { PROVIDER } = %kek.provider(),
-            { KEY } = kek.key(),
-            { KEY_VERSION } = field::Empty,
-            { RESPONSE_TIME } = field::Empty,
-            { ERROR_CODE } = field::Empty,
+            { FIELD_PROVIDER } = %kek.provider(),
+            { FIELD_KEY } = kek.key(),
+            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
         )
     }
 
@@ -77,14 +77,14 @@ pub(crate) mod kms {
     ) -> Span {
         let span = debug_span!(
             "KMS random",
-            { PROVIDER } = %provider,
-            { KEY } = field::Empty,
-            { LEN } = len,
-            { RESPONSE_TIME } = field::Empty,
-            { ERROR_CODE } = field::Empty,
+            { FIELD_PROVIDER } = %provider,
+            { FIELD_KEY } = field::Empty,
+            { FIELD_LEN } = len,
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
         );
         if let Some(key) = key {
-            span.record(KEY, key);
+            span.record(FIELD_KEY, key);
         }
         span
     }
@@ -93,8 +93,8 @@ pub(crate) mod kms {
     /// where it came from, such as `1 (file), 2 (secret)`.
     pub(crate) fn local_kek_loaded(key: &impl std::fmt::Display, versions: &str) {
         tracing::info!(
-            { KEY } = %key,
-            { KEY_VERSIONS } = versions,
+            { FIELD_KEY } = %key,
+            { FIELD_KEY_VERSIONS } = versions,
             "A local KEK encrypts and decrypts data encryption keys"
         );
     }
@@ -102,7 +102,7 @@ pub(crate) mod kms {
     /// Records on the current KMS span the version of the KMS key that encrypts or encrypted the
     /// key: from the KMS response on encryption, from the encrypted DEK on decryption.
     pub(crate) fn record_key_version(key_version: &str) {
-        Span::current().record(KEY_VERSION, key_version);
+        Span::current().record(FIELD_KEY_VERSION, key_version);
     }
 
     /// Sends a KMS request and records on the current span how long it took, in milliseconds.
@@ -110,7 +110,7 @@ pub(crate) mod kms {
         let started = Instant::now();
         let response = request.await;
         let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        Span::current().record(RESPONSE_TIME, elapsed);
+        Span::current().record(FIELD_RESPONSE_TIME, elapsed);
         response
     }
 }
@@ -125,11 +125,11 @@ pub(crate) fn aead_encrypt(
 ) -> Span {
     let span = debug_span!(
         "KMS AEAD encrypt",
-        { MODE } = mode,
-        { ALGORITHM } = %algorithm,
-        { BACKEND } = %backend,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_MODE } = mode,
+        { FIELD_ALGORITHM } = %algorithm,
+        { FIELD_BACKEND } = %backend,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     );
     record_disabled_cache(&span, dek_cache);
     span
@@ -144,11 +144,11 @@ pub(crate) fn aead_decrypt(
 ) -> Span {
     let span = debug_span!(
         "KMS AEAD decrypt",
-        { MODE } = mode,
-        { ALGORITHM } = %algorithm,
-        { BACKEND } = %backend,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_MODE } = mode,
+        { FIELD_ALGORITHM } = %algorithm,
+        { FIELD_BACKEND } = %backend,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     );
     record_disabled_cache(&span, dek_cache);
     span
@@ -158,23 +158,23 @@ pub(crate) fn aead_decrypt(
 /// what its lookup found, and a call that looks nothing up leaves the field unrecorded.
 fn record_disabled_cache(span: &Span, dek_cache: &DekCache) {
     if !dek_cache.is_enabled() {
-        span.record(DEK_CACHE, field::display(DekCacheOutcome::Disabled));
+        span.record(FIELD_DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
 }
 
 /// Records on the current envelope span where the key of the call came from.
 pub(crate) fn record_dek_cache(outcome: DekCacheOutcome) {
-    Span::current().record(DEK_CACHE, field::display(outcome));
+    Span::current().record(FIELD_DEK_CACHE, field::display(outcome));
 }
 
 /// `KMS AEAD beacon`, around the envelope's beacon of a value.
 pub(crate) fn beacon(algorithm: impl Display, backend: &str, dek_cache: &DekCache) -> Span {
     let span = debug_span!(
         "KMS AEAD beacon",
-        { ALGORITHM } = %algorithm,
-        { BACKEND } = %backend,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_ALGORITHM } = %algorithm,
+        { FIELD_BACKEND } = %backend,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     );
     record_disabled_cache(&span, dek_cache);
     span
@@ -185,10 +185,10 @@ pub(crate) fn beacon(algorithm: impl Display, backend: &str, dek_cache: &DekCach
 pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str) -> Span {
     debug_span!(
         "KMS AEAD generate DEK",
-        { PURPOSE } = purpose,
-        { ALGORITHM } = %algorithm,
-        { BACKEND } = %backend,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_PURPOSE } = purpose,
+        { FIELD_ALGORITHM } = %algorithm,
+        { FIELD_BACKEND } = %backend,
+        { FIELD_ERROR_CODE } = field::Empty,
     )
 }
 
@@ -198,15 +198,15 @@ pub(crate) fn generate_dek(purpose: &str, algorithm: impl Display, backend: &str
 pub(crate) fn decrypt_dek(algorithm: impl Display, dek_cache: &DekCache) -> Span {
     let span = debug_span!(
         "KMS AEAD decrypt DEK",
-        { PURPOSE } = "deterministic",
-        { ALGORITHM } = %algorithm,
-        { DEK_CACHE } = field::Empty,
-        { ERROR_CODE } = field::Empty,
+        { FIELD_PURPOSE } = "deterministic",
+        { FIELD_ALGORITHM } = %algorithm,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
     );
     if dek_cache.is_enabled() {
-        span.record(DEK_CACHE, DEK_CACHE_BYPASSED);
+        span.record(FIELD_DEK_CACHE, DEK_CACHE_BYPASSED);
     } else {
-        span.record(DEK_CACHE, field::display(DekCacheOutcome::Disabled));
+        span.record(FIELD_DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
     span
 }
@@ -218,7 +218,7 @@ pub(crate) fn in_scope<T>(
 ) -> KmsAeadResult<T> {
     let result = span.in_scope(operation);
     if let Err(error) = &result {
-        span.record(ERROR_CODE, error.code());
+        span.record(FIELD_ERROR_CODE, error.code());
     }
     result
 }
@@ -231,7 +231,7 @@ pub(crate) async fn in_span<T>(
 ) -> KmsAeadResult<T> {
     let result = operation.instrument(span.clone()).await;
     if let Err(error) = &result {
-        span.record(ERROR_CODE, error.code());
+        span.record(FIELD_ERROR_CODE, error.code());
     }
     result
 }
