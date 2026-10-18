@@ -28,8 +28,8 @@ one field never matches a beacon of another.
 
 ## Usage
 
-A keyring with beacon versions names the algorithm in its policy, HMAC-SHA256, the one
-`BeaconAlgorithm` has. `beacon` computes the beacon of a value under the active beacon version, and
+A keyring with beacon versions names their algorithm in its `KeyringAlgorithms`: HMAC-SHA256, the
+one `BeaconAlgorithm` has. `beacon` computes the beacon of a value under the active beacon version, and
 `beacon_probes` the beacons of a value under every beacon version a lookup matches:
 
 ```rust
@@ -39,8 +39,8 @@ use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, KmsAeadResult};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
+    KeyringOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -78,7 +78,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
     MemoryKeyringStore::new(),
     provider,
     KeyringId::from_static("tenant-42"),
-    KeyringPolicy::new().with_beacon_algorithm(BeaconAlgorithm::HmacSha256),
+    KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
     KeyringOptions::new(),
 )
 .await?;

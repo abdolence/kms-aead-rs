@@ -60,8 +60,8 @@ use kms_aead_keyring::errors::{InteropError, InteropRequirement};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringError,
-    KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring, KeyringAlgorithms,
+    KeyringError, KeyringId, KeyringOptions, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -93,7 +93,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
     MemoryKeyringStore::new(),
     provider,
     KeyringId::from_static("tenant-42"),
-    KeyringPolicy::new(),
+    KeyringAlgorithms::new(),
     KeyringOptions::new(),
 )
 .await?;

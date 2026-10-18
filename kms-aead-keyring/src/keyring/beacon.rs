@@ -132,7 +132,7 @@ mod tests {
     use super::*;
     use crate::test_support::{TestBackend, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
-    use crate::{EntityKind, FieldName, KeyId, KeyVersion, KeyringOptions, KeyringPolicy};
+    use crate::{EntityKind, FieldName, KeyId, KeyVersion, KeyringAlgorithms, KeyringOptions};
 
     const EMAIL: FieldSpec = FieldSpec::new(
         EntityKind::from_static("user"),
@@ -152,7 +152,7 @@ mod tests {
             MemoryKeyringStore::new(),
             provider,
             TENANT,
-            KeyringPolicy::new().with_beacon_algorithm(BeaconAlgorithm::HmacSha256),
+            KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
             KeyringOptions::new().with_watch(false),
         )
         .await

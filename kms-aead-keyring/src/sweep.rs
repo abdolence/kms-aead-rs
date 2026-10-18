@@ -345,7 +345,9 @@ mod tests {
         use super::*;
         use crate::test_support::{email_of, TestBackend, TestKeyring, TestProvider};
         use crate::testing::MemoryKeyringStore;
-        use crate::{EntityId, EntityKind, FieldName, FieldSpec, KeyringOptions, KeyringPolicy};
+        use crate::{
+            EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringOptions,
+        };
 
         const ALICE: &str = "alice@example.com";
         const ALICE_PHONE: &str = "+44 20 7946 0000";
@@ -361,7 +363,7 @@ mod tests {
                 MemoryKeyringStore::new(),
                 provider,
                 TENANT,
-                KeyringPolicy::new(),
+                KeyringAlgorithms::new(),
                 KeyringOptions::new().with_watch(false),
             )
             .await

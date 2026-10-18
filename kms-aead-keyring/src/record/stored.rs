@@ -11,8 +11,8 @@ use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef, ValueStruct};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Algorithms, Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringId, KeyringRecord,
-    RetainedDek, VersionState,
+    Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
+    KeyringRecord, RetainedDek, VersionState,
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::purpose::is_reserved;
@@ -148,7 +148,7 @@ impl KeyringRecord {
         if stored.id != id.as_str() {
             return Err(invalid(RecordInvalidReason::IdMismatch));
         }
-        let algorithms = Algorithms {
+        let algorithms = KeyringAlgorithms {
             randomized: match stored.algorithms.randomized.parse() {
                 Ok(KeyAlgorithm::Randomized(algorithm)) => algorithm,
                 _ => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),

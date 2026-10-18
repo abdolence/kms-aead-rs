@@ -617,7 +617,7 @@ mod postgres {
             StoreKind, Stored, Swap,
         };
         use kms_aead_keyring::{
-            Keyring, KeyringId, KeyringOptions, KeyringPolicy, KeyringRecord, KeyringResult,
+            Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, KeyringRecord, KeyringResult,
         };
 
         use tokio_postgres::NoTls;
@@ -683,7 +683,7 @@ mod postgres {
                 store,
                 LocalKmsProvider::ephemeral(LocalKekId::try_from("postgres-kek".to_string())?)?,
                 id.clone(),
-                KeyringPolicy::new(),
+                KeyringAlgorithms::new(),
                 KeyringOptions::new().with_reload_min_interval(interval),
             )
             .await?;

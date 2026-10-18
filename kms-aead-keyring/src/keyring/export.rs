@@ -314,18 +314,18 @@ mod tests {
     use crate::errors::{InteropError, KeyVersionError};
     use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
-    use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringOptions, KeyringPolicy};
+    use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringOptions};
 
-    /// A keyring on `provider` with one version of each purpose the policy names.
+    /// A keyring on `provider` with one version of each purpose `algorithms` names.
     async fn keyring(
         provider: TestProvider,
-        policy: KeyringPolicy,
+        algorithms: KeyringAlgorithms,
     ) -> KeyringResult<(TestKeyring<MemoryKeyringStore>, TestProvider)> {
         let keyring = TestKeyring::create(
             MemoryKeyringStore::new(),
             provider.clone(),
             TENANT,
-            policy,
+            algorithms,
             KeyringOptions::new().with_watch(false),
         )
         .await?;
@@ -360,7 +360,8 @@ mod tests {
 
     #[tokio::test]
     async fn export_refuses_a_version_of_another_algorithm() -> TestResult {
-        let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, provider) =
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         keyring
             .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
             .await?;
@@ -388,7 +389,8 @@ mod tests {
 
     #[tokio::test]
     async fn readable_omits_compromised_versions() -> TestResult {
-        let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, provider) =
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         for _ in 0..2 {
             keyring
                 .promote(keyring.rotate(Purpose::Randomized).await?)
@@ -432,7 +434,7 @@ mod tests {
     #[tokio::test]
     async fn readable_follows_a_compromise_by_another_process() -> TestResult {
         let (exporter, provider) =
-            keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let administrator = TestKeyring::open(
             exporter.cache.store().clone(),
             provider.clone(),
@@ -462,7 +464,8 @@ mod tests {
 
     #[tokio::test]
     async fn export_does_not_populate_the_cache() -> TestResult {
-        let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, provider) =
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let aad = email_of("42")?;
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
@@ -486,7 +489,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
-        let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, provider) =
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
@@ -516,7 +520,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_pending_version_is_readable_and_never_the_primary() -> TestResult {
-        let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, provider) =
+            keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let staged = keyring.rotate(Purpose::Randomized).await?;
 
         let exported = keyring
@@ -543,8 +548,8 @@ mod tests {
 
     #[tokio::test]
     async fn beacon_keys_are_never_exported() -> TestResult {
-        let policy = KeyringPolicy::new().with_beacon_algorithm(BeaconAlgorithm::HmacSha256);
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, policy).await?;
+        let algorithms = KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256);
+        let (keyring, _) = keyring(TestProvider::cloud_kms()?, algorithms).await?;
 
         let exported = keyring
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Beacon))
@@ -559,7 +564,7 @@ mod tests {
 
     #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
+        let (keyring, _) = keyring(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let first = KeyId::new(1);
         keyring
             .promote(keyring.rotate(Purpose::Randomized).await?)
@@ -580,8 +585,11 @@ mod tests {
 
     #[tokio::test]
     async fn tink_export_refuses_a_kek_without_a_tink_key_uri() -> TestResult {
-        let (keyring, provider) =
-            keyring(TestProvider::new("tenant-42-kek")?, KeyringPolicy::new()).await?;
+        let (keyring, provider) = keyring(
+            TestProvider::new("tenant-42-kek")?,
+            KeyringAlgorithms::new(),
+        )
+        .await?;
         let encryptions = provider.calls.encryptions.load(Ordering::SeqCst);
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
@@ -610,8 +618,8 @@ mod tests {
 
     #[tokio::test]
     async fn tink_export_selects_the_versions_of_the_bigquery_export() -> TestResult {
-        let policy = KeyringPolicy::new().with_beacon_algorithm(BeaconAlgorithm::HmacSha256);
-        let (keyring, _) = keyring(TestProvider::cloud_kms()?, policy).await?;
+        let algorithms = KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256);
+        let (keyring, _) = keyring(TestProvider::cloud_kms()?, algorithms).await?;
         for _ in 0..2 {
             keyring
                 .promote(keyring.rotate(Purpose::Randomized).await?)

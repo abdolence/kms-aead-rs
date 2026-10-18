@@ -9,6 +9,7 @@ use jiff::Timestamp;
 use kms_aead::{
     AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
 };
+use rsb_derive::Builder;
 
 use crate::errors::{
     Identifier, IdentifierRule, InvalidTransitionError, KeyringError, KeyringResult,
@@ -111,41 +112,27 @@ impl Display for KeyringId {
     }
 }
 
-/// The algorithms new versions of each purpose use.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Algorithms {
-    randomized: AeadAlgorithm,
-    deterministic: Option<DeterministicAlgorithm>,
-    beacon: Option<BeaconAlgorithm>,
+/// The algorithms new versions of each purpose use: those a new keyring is created with, and
+/// those its record names from then on, which
+/// [`change_algorithm`](crate::Keyring::change_algorithm) changes per purpose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Builder)]
+#[non_exhaustive]
+pub struct KeyringAlgorithms {
+    /// The algorithm of new randomised versions:
+    /// [`DEFAULT_RANDOMIZED`](Self::DEFAULT_RANDOMIZED) by default.
+    #[default = "Self::DEFAULT_RANDOMIZED"]
+    pub randomized: AeadAlgorithm,
+    /// The algorithm of new deterministic versions, or `None`, the default, for a keyring without
+    /// them. Creating one needs the `deterministic` feature.
+    pub deterministic: Option<DeterministicAlgorithm>,
+    /// The algorithm of new beacon versions, or `None`, the default, for a keyring without them.
+    pub beacon: Option<BeaconAlgorithm>,
 }
 
-impl Algorithms {
-    pub(crate) fn new(
-        randomized: AeadAlgorithm,
-        deterministic: Option<DeterministicAlgorithm>,
-        beacon: Option<BeaconAlgorithm>,
-    ) -> Self {
-        Self {
-            randomized,
-            deterministic,
-            beacon,
-        }
-    }
-
-    /// The algorithm of new randomised versions.
-    pub fn randomized(&self) -> AeadAlgorithm {
-        self.randomized
-    }
-
-    /// The algorithm of new deterministic versions, or `None` for a keyring without them.
-    pub fn deterministic(&self) -> Option<DeterministicAlgorithm> {
-        self.deterministic
-    }
-
-    /// The algorithm of new beacon versions, or `None` for a keyring without them.
-    pub fn beacon(&self) -> Option<BeaconAlgorithm> {
-        self.beacon
-    }
+impl KeyringAlgorithms {
+    /// The default [`randomized`](Self::randomized) algorithm: AES-256-GCM, the one Tink and
+    /// BigQuery read.
+    pub const DEFAULT_RANDOMIZED: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
     pub(crate) fn of(&self, purpose: Purpose) -> Option<KeyAlgorithm> {
         match purpose {
@@ -517,7 +504,7 @@ pub(crate) struct NewVersion {
 pub struct KeyringRecord {
     id: KeyringId,
     kek: KekRef,
-    algorithms: Algorithms,
+    algorithms: KeyringAlgorithms,
     versions: Vec<KeyVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -526,7 +513,12 @@ pub struct KeyringRecord {
 impl KeyringRecord {
     /// A record with no version yet, to which the creation of a keyring stages and promotes the
     /// first version of each purpose.
-    pub(crate) fn new(id: KeyringId, kek: KekRef, algorithms: Algorithms, now: Timestamp) -> Self {
+    pub(crate) fn new(
+        id: KeyringId,
+        kek: KekRef,
+        algorithms: KeyringAlgorithms,
+        now: Timestamp,
+    ) -> Self {
         Self {
             id,
             kek,
@@ -551,7 +543,7 @@ impl KeyringRecord {
     }
 
     /// The algorithms new versions use.
-    pub fn algorithms(&self) -> &Algorithms {
+    pub fn algorithms(&self) -> &KeyringAlgorithms {
         &self.algorithms
     }
 

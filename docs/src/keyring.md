@@ -65,7 +65,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring,
-    KeyringId, KeyringOptions, KeyringPolicy, Plaintext, Purpose,
+    KeyringAlgorithms, KeyringId, KeyringOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -96,7 +96,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
     MemoryKeyringStore::new(),
     provider,
     TENANT,
-    KeyringPolicy::new(),
+    KeyringAlgorithms::new(),
     KeyringOptions::new(),
 )
 .await?;
@@ -116,7 +116,7 @@ assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 ```
 
 `Keyring::open_or_create` creates the record on the first start, with one active version of each
-purpose the `KeyringPolicy` names, and opens it on every later start. `Keyring::open` only
+purpose its `KeyringAlgorithms` name, and opens it on every later start. `Keyring::open` only
 opens, and fails with `RecordMissing` when there is no record. `Keyring::create` only creates, and
 is the call for the administrative job, see [Principals](#principals). The three take the store,
 the provider and the backend as the type parameters of `Keyring<S, P, B>`.

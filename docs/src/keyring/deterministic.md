@@ -29,8 +29,8 @@ See also [Deterministic encryption](../deterministic.md) in kms-aead.
 
 ## Usage
 
-A keyring with deterministic versions names the algorithm in its policy, AES-SIV, the one
-`DeterministicAlgorithm` has:
+A keyring with deterministic versions names their algorithm in its `KeyringAlgorithms`: AES-SIV,
+the one `DeterministicAlgorithm` has:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -39,8 +39,8 @@ use kms_aead::{DeterministicAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::Deterministic;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringId,
-    KeyringOptions, KeyringPolicy, Plaintext,
+    DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms,
+    KeyringId, KeyringOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -70,7 +70,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
     MemoryKeyringStore::new(),
     provider,
     KeyringId::from_static("tenant-42"),
-    KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
+    KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
     KeyringOptions::new(),
 )
 .await?;
@@ -120,8 +120,8 @@ So an equality query matches against every version that still decrypts, with
 # use kms_aead_keyring::formats::Deterministic;
 # use kms_aead_keyring::testing::MemoryKeyringStore;
 # use kms_aead_keyring::{
-#     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringId,
-#     KeyringOptions, KeyringPolicy, Plaintext, Purpose,
+#     DeterministicAad, Encrypted, EntityKind, FieldName, FieldSpec, KeyId, Keyring,
+#     KeyringAlgorithms, KeyringId, KeyringOptions, Plaintext, Purpose,
 # };
 # use secret_vault_value::SecretValue;
 # #[derive(Debug, Clone, PartialEq)]
@@ -141,7 +141,7 @@ So an equality query matches against every version that still decrypts, with
 #     MemoryKeyringStore::new(),
 #     provider,
 #     KeyringId::from_static("tenant-42"),
-#     KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
+#     KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
 #     KeyringOptions::new(),
 # )
 # .await?;

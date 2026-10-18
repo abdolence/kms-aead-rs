@@ -256,8 +256,8 @@ mod tests {
     use crate::test_support::{email_of, TestKeyring, TestProvider, TestResult, TENANT};
     use crate::testing::MemoryKeyringStore;
     use crate::{
-        EntityKind, FieldName, FieldSpec, Interop, KeyId, KeyTrust, KeyringError, KeyringOptions,
-        KeyringPolicy, KeyringResult, Purpose,
+        EntityKind, FieldName, FieldSpec, Interop, KeyId, KeyTrust, KeyringAlgorithms,
+        KeyringError, KeyringOptions, KeyringResult, Purpose,
     };
 
     const EMAIL: FieldSpec = FieldSpec::new(
@@ -275,7 +275,7 @@ mod tests {
             MemoryKeyringStore::new(),
             provider,
             TENANT,
-            KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
+            KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
             KeyringOptions::new().with_watch(false),
         )
         .await

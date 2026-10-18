@@ -10,7 +10,7 @@ use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyAlgorithm, KeyId,
-    KeyVersion, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,
+    KeyVersion, Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, Purpose,
 };
 
 #[cfg(feature = "ring")]
@@ -31,14 +31,14 @@ const ALICE: &str = "alice@example.com";
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// A keyring under the default policy and options, on a local KEK.
+/// A keyring with the default algorithms and options, on a local KEK.
 async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
     let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
     Ok(LocalKeyring::create(
         MemoryKeyringStore::new(),
         provider,
         KeyringId::from_static("tenant-42"),
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new().with_watch(false),
     )
     .await?)
@@ -48,8 +48,8 @@ async fn default_keyring() -> Result<LocalKeyring, Box<dyn std::error::Error>> {
 async fn a_default_keyring_has_randomized_versions_only() -> TestResult {
     let keyring = default_keyring().await?;
     let record = keyring.record();
-    assert_eq!(record.algorithms().randomized(), AeadAlgorithm::Aes256Gcm);
-    assert_eq!(record.algorithms().deterministic(), None);
+    assert_eq!(record.algorithms().randomized, AeadAlgorithm::Aes256Gcm);
+    assert_eq!(record.algorithms().deterministic, None);
     assert_eq!(
         record.active(Purpose::Deterministic).map(KeyVersion::id),
         None

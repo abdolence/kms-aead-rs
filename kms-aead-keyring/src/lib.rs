@@ -56,8 +56,8 @@
 //!
 //! A beacon, or blind index, is a truncated HMAC-SHA256 of a field's plaintext under a beacon
 //! version, stored beside the field's randomised value so that a data store finds rows by
-//! equality. A keyring whose policy names
-//! [`with_beacon_algorithm`](KeyringPolicy::with_beacon_algorithm) has beacon versions:
+//! equality. A keyring created with a [`beacon`](KeyringAlgorithms::beacon) algorithm has beacon
+//! versions:
 //! [`Keyring::beacon`] computes the beacon of a value under the active one, and
 //! [`Keyring::beacon_probes`] under every version a lookup matches across a rotation. A beacon
 //! column leaks which rows are likely to hold equal values; [`FieldSpec::with_beacon_bits`] sets
@@ -129,8 +129,8 @@
 //! use kms_aead_keyring::formats::Randomized;
 //! use kms_aead_keyring::testing::MemoryKeyringStore;
 //! use kms_aead_keyring::{
-//!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-//!     KeyringPolicy, Plaintext, Purpose,
+//!     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
+//!     KeyringOptions, Plaintext, Purpose,
 //! };
 //! use secret_vault_value::SecretValue;
 //!
@@ -159,7 +159,7 @@
 //!     MemoryKeyringStore::new(),
 //!     provider,
 //!     TENANT,
-//!     KeyringPolicy::new(),
+//!     KeyringAlgorithms::new(),
 //!     KeyringOptions::new(),
 //! )
 //! .await?;

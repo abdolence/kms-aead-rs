@@ -9,9 +9,8 @@ use kms_aead::backends::AeadBackend;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::formats::{Envelope, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, BeaconAlgorithm, BeaconMac, DataEncryptionKey,
-    DeterministicAlgorithm, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
-    Plaintext,
+    AeadAlgorithm, AeadCipher, BeaconMac, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
+    KmsAeadEncryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
 use tokio::task::AbortHandle;
@@ -26,8 +25,8 @@ use crate::record_cache::RecordCache;
 use crate::spans::{self, LoadReason};
 use crate::store::{KeyringStore, Stored, Swap};
 use crate::{
-    Algorithms, Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
-    KeyringId, KeyringRecord, Purpose,
+    Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
+    KeyringAlgorithms, KeyringId, KeyringRecord, Purpose,
 };
 
 mod beacon;
@@ -93,24 +92,24 @@ where
         Self::start(store, provider, options, stored).await
     }
 
-    /// Creates the record of the keyring `id`, with one active version of each purpose `policy`
-    /// names an algorithm for, and opens it. Encrypts one key per version, so it needs the KMS's
-    /// encrypt right.
+    /// Creates the record of the keyring `id`, with one active version of each purpose
+    /// `algorithms` names an algorithm for, and opens it. Encrypts one key per version, so it
+    /// needs the KMS's encrypt right.
     ///
     /// # Errors
     ///
     /// The provider's and the store's errors, [`KeyringError::RecordExists`] when the store
     /// already holds a record, `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement
-    /// the policy's algorithm, and [`KeyringError::DeterministicDisabled`] for a deterministic
-    /// algorithm without the `deterministic` feature.
+    /// an algorithm of `algorithms`, and [`KeyringError::DeterministicDisabled`] for a
+    /// deterministic algorithm without the `deterministic` feature.
     pub async fn create(
         store: S,
         provider: P,
         id: KeyringId,
-        policy: KeyringPolicy,
+        algorithms: KeyringAlgorithms,
         options: KeyringOptions,
     ) -> KeyringResult<Self> {
-        let record = policy.new_record::<P, B>(id, &provider).await?;
+        let record = algorithms.new_record::<P, B>(id, &provider).await?;
         match store.compare_and_swap(&record, None).await? {
             Swap::Written(revision) => {
                 Self::start(store, provider, options, Stored { record, revision }).await
@@ -130,13 +129,13 @@ where
         store: S,
         provider: P,
         id: KeyringId,
-        policy: KeyringPolicy,
+        algorithms: KeyringAlgorithms,
         options: KeyringOptions,
     ) -> KeyringResult<Self> {
         let stored = match RecordCache::read(&store, &id).await? {
             Some(stored) => stored,
             None => {
-                let record = policy.new_record::<P, B>(id.clone(), &provider).await?;
+                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
                 match store.compare_and_swap(&record, None).await? {
                     Swap::Written(revision) => Stored { record, revision },
                     Swap::Conflict => RecordCache::read(&store, &id)
@@ -932,28 +931,18 @@ impl Drop for WatchTask {
     }
 }
 
-impl KeyringPolicy {
-    /// The record of a new keyring `id` under this policy, with one active version per purpose
-    /// it names an algorithm for, each encrypted by `provider`.
+impl KeyringAlgorithms {
+    /// The record of a new keyring `id` with these algorithms, and one active version of each
+    /// purpose they name an algorithm for, each encrypted by `provider`.
     async fn new_record<P, B>(&self, id: KeyringId, provider: &P) -> KeyringResult<KeyringRecord>
     where
         P: KmsAeadEncryptionProvider + Sync,
         B: AeadBackend,
     {
         let now = Timestamp::now();
-        let algorithms = Algorithms::new(
-            self.randomized_algorithm,
-            self.deterministic_algorithm,
-            self.beacon_algorithm,
-        );
-        let mut edit = RecordEdit::from(KeyringRecord::new(
-            id,
-            provider.kek().clone(),
-            algorithms,
-            now,
-        ));
+        let mut edit = RecordEdit::from(KeyringRecord::new(id, provider.kek().clone(), *self, now));
         for purpose in Purpose::ALL {
-            if let Some(algorithm) = algorithms.of(purpose) {
+            if let Some(algorithm) = self.of(purpose) {
                 let new = NewVersion::generate::<P, B>(algorithm, provider).await?;
                 let key_id = edit.stage(new, now)?;
                 edit.promote(key_id, now)?;
@@ -972,27 +961,6 @@ pub struct Rotation {
     pub previous: Option<KeyId>,
     /// The new active version.
     pub current: KeyId,
-}
-
-/// The algorithms of a new keyring.
-#[derive(Debug, Clone, Builder)]
-#[non_exhaustive]
-pub struct KeyringPolicy {
-    /// The algorithm of randomised versions:
-    /// [`DEFAULT_RANDOMIZED_ALGORITHM`](Self::DEFAULT_RANDOMIZED_ALGORITHM) by default.
-    #[default = "Self::DEFAULT_RANDOMIZED_ALGORITHM"]
-    pub randomized_algorithm: AeadAlgorithm,
-    /// The algorithm of deterministic versions, or `None`, the default, for a keyring without
-    /// them. Creating one needs the `deterministic` feature.
-    pub deterministic_algorithm: Option<DeterministicAlgorithm>,
-    /// The algorithm of beacon versions, or `None`, the default, for a keyring without them.
-    pub beacon_algorithm: Option<BeaconAlgorithm>,
-}
-
-impl KeyringPolicy {
-    /// The default [`randomized_algorithm`](Self::randomized_algorithm): AES-256-GCM, the one
-    /// Tink and BigQuery read.
-    pub const DEFAULT_RANDOMIZED_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 }
 
 /// How a [`Keyring`] caches its record and writes it.

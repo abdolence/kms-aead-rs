@@ -22,8 +22,8 @@ use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealFormat, SealMarker};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, KeyringResult, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
+    KeyringOptions, KeyringResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryKeyringStore::new(),
         provider(&material)?,
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new(),
     )
     .await?;

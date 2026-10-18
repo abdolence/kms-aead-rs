@@ -12,8 +12,8 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::DeterministicAlgorithm;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, KeysetSelection, Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId, Keyring, KeyringAlgorithms,
+    KeyringId, KeyringOptions, KeysetSelection, Purpose,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -102,7 +102,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         MemoryKeyringStore::new(),
         GcpKmsProvider::new(&key_ref).await?,
         KeyringId::try_from(format!("bigquery-live-{}", uuid::Uuid::now_v7()))?,
-        KeyringPolicy::new().with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv),
+        KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
         KeyringOptions::new().with_watch(false),
     )
     .await?;

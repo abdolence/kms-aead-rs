@@ -122,7 +122,7 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, Keyring, KeyringId, KeyringOptions, KeyringPolicy, Purpose,
+    KeyId, KeyVersionState, Keyring, KeyringAlgorithms, KeyringId, KeyringOptions, Purpose,
     Rotation,
 };
 
@@ -134,7 +134,7 @@ let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_
     MemoryKeyringStore::new(),
     provider,
     KeyringId::from_static("tenant-42"),
-    KeyringPolicy::new(),
+    KeyringAlgorithms::new(),
     KeyringOptions::new(),
 )
 .await?;

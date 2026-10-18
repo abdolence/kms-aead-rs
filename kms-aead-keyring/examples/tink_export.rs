@@ -19,7 +19,7 @@ use kms_aead::{AeadAlgorithm, KmsAeadEncryptionProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     encodings, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
-    KeyringId, KeyringOptions, KeyringPolicy, KeysetSelection, Purpose,
+    KeyringAlgorithms, KeyringId, KeyringOptions, KeysetSelection, Purpose,
 };
 use serde_json::json;
 
@@ -67,7 +67,7 @@ where
         MemoryKeyringStore::new(),
         provider,
         KeyringId::from_static("tenant-42"),
-        KeyringPolicy::new().with_randomized_algorithm(algorithm),
+        KeyringAlgorithms::new().with_randomized(algorithm),
         KeyringOptions::new().with_watch(false),
     )
     .await?;

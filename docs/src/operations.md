@@ -94,7 +94,7 @@ use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring,
-    KeyringId, KeyringOptions, KeyringPolicy, KeyringResult, Plaintext, Purpose, Rotation,
+    KeyringAlgorithms, KeyringId, KeyringOptions, KeyringResult, Plaintext, Purpose, Rotation,
 };
 use secret_vault_value::SecretValue;
 
@@ -153,7 +153,7 @@ async fn reseal(
 # let provider =
 #     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
 # let keyring = Keyring::<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>::open_or_create(
-#     MemoryKeyringStore::new(), provider, TENANT, KeyringPolicy::new(), KeyringOptions::new(),
+#     MemoryKeyringStore::new(), provider, TENANT, KeyringAlgorithms::new(), KeyringOptions::new(),
 # )
 # .await?;
 # let table = Table::default();

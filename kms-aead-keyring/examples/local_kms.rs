@@ -10,8 +10,8 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions, KeyringPolicy,
-    Plaintext, Purpose,
+    EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
+    KeyringOptions, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 
@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryKeyringStore::new(),
         provider,
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new(),
     )
     .await?;

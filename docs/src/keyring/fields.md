@@ -45,8 +45,8 @@ use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringId, KeyringOptions,
-    KeyringPolicy, Plaintext,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringAlgorithms, KeyringId,
+    KeyringOptions, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -83,7 +83,7 @@ struct User {
 #     MemoryKeyringStore::new(),
 #     provider,
 #     KeyringId::from_static("tenant-42"),
-#     KeyringPolicy::new(),
+#     KeyringAlgorithms::new(),
 #     KeyringOptions::new(),
 # )
 # .await?;

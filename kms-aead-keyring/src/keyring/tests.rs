@@ -5,7 +5,9 @@ use std::time::Duration;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::{Bare, Randomized};
-use kms_aead::{AeadAlgorithm, AeadCipher, KekProvider, KmsAeadResult, Plaintext};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, DeterministicAlgorithm, KekProvider, KmsAeadResult, Plaintext,
+};
 use secret_vault_value::SecretValue;
 use serde_json::Value;
 
@@ -35,7 +37,7 @@ impl Fixture {
             store.clone(),
             provider.clone(),
             TENANT,
-            KeyringPolicy::new(),
+            KeyringAlgorithms::new(),
             options,
         )
         .await?;
@@ -267,7 +269,7 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
         memory.clone(),
         provider.clone(),
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new().with_watch(false),
     )
     .await?;
@@ -756,7 +758,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
         fixture.memory.clone(),
         fixture.provider.clone(),
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new().with_watch(false),
     )
     .await;
@@ -766,7 +768,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
         fixture.memory.clone(),
         fixture.provider.clone(),
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new().with_watch(false),
     )
     .await?;
@@ -788,7 +790,7 @@ async fn create_refuses_an_existing_record_and_open_or_create_opens_it() -> Test
         empty,
         fixture.provider.clone(),
         TENANT,
-        KeyringPolicy::new(),
+        KeyringAlgorithms::new(),
         KeyringOptions::new().with_watch(false),
     )
     .await?;
@@ -843,7 +845,7 @@ async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
     let staged = keyring.change_algorithm(chacha).await?;
     let record = keyring.record();
     assert_eq!(
-        record.algorithms().randomized(),
+        record.algorithms().randomized,
         AeadAlgorithm::ChaCha20Poly1305
     );
     let version = record.version(staged).ok_or("the staged version is gone")?;
@@ -879,13 +881,12 @@ async fn an_algorithm_the_backend_lacks_is_refused_before_any_write() -> TestRes
 #[tokio::test]
 async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
     let provider = TestProvider::new("tenant-42-kek")?;
-    let policy = KeyringPolicy::new()
-        .with_deterministic_algorithm(kms_aead::DeterministicAlgorithm::Aes256Siv);
+    let algorithms = KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv);
     let keyring = TestKeyring::create(
         MemoryKeyringStore::new(),
         provider.clone(),
         TENANT,
-        policy,
+        algorithms,
         KeyringOptions::new().with_watch(false),
     )
     .await?;
@@ -904,13 +905,12 @@ async fn a_deterministic_policy_creates_deterministic_versions() -> TestResult {
 #[cfg(not(feature = "deterministic"))]
 #[tokio::test]
 async fn a_deterministic_policy_needs_the_feature() -> TestResult {
-    let policy = KeyringPolicy::new()
-        .with_deterministic_algorithm(kms_aead::DeterministicAlgorithm::Aes256Siv);
+    let algorithms = KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv);
     let created = TestKeyring::create(
         MemoryKeyringStore::new(),
         TestProvider::new("tenant-42-kek")?,
         TENANT,
-        policy,
+        algorithms,
         KeyringOptions::new().with_watch(false),
     )
     .await;
@@ -1175,14 +1175,14 @@ const BIGQUERY_EMAIL: FieldSpec = FieldSpec::new(
 async fn bigquery_keyring(
     provider: TestProvider,
 ) -> KeyringResult<TestKeyring<MemoryKeyringStore>> {
-    let policy = KeyringPolicy::new();
+    let algorithms = KeyringAlgorithms::new();
     #[cfg(feature = "deterministic")]
-    let policy = policy.with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv);
+    let algorithms = algorithms.with_deterministic(DeterministicAlgorithm::Aes256Siv);
     TestKeyring::create(
         MemoryKeyringStore::new(),
         provider,
         TENANT,
-        policy,
+        algorithms,
         KeyringOptions::new().with_watch(false),
     )
     .await
