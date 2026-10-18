@@ -6,9 +6,13 @@ Randomized encryption gives a different cipher text every time, even for the sam
 deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
 sealed column can be compared, joined or looked up by equality without opening it.
 
-The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`,
-on the RustCrypto `aes-siv` crate, whatever AEAD backend the build enables. Its name for
-`FromStr` and `Display` is `aes-256-siv`.
+The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`.
+Its name for `FromStr` and `Display` is `aes-256-siv`. `DeterministicCipher` takes a backend, as
+`AeadCipher` does, and draws its keys from the backend's CSPRNG. Every backend seals and opens with
+the RustCrypto `aes-siv` crate, so a value sealed under one backend opens under any other.
+
+AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
+validated boundary, also on `aws-lc-fips`, where the keys come from the FIPS module's DRBG.
 
 ## What it leaks
 
@@ -31,16 +35,18 @@ equal values of two tenants apart.
 
 ## Usage
 
-`DeterministicCipher` seals and opens with a `DeterministicDataEncryptionKey`. It is a type of its
-own, with no conversion to or from `DataEncryptionKey`, so a key is not handed to the cipher of the
-other purpose by mistake.
+`DeterministicCipher` seals and opens with a `DataEncryptionKey` of
+`DeterministicAlgorithm::key_len()` bytes, 64 for AES-SIV, and refuses a key of another length
+with `INVALID_KEY_LENGTH`, such as the 16 or 32 bytes of a randomized algorithm's key. The
+application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
+key ids.
 
 ```rust
-use kms_aead::{DeterministicAlgorithm, DeterministicCipher};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, Ring};
 use secret_vault_value::SecretValue;
 
 # fn main() -> kms_aead::KmsAeadResult<()> {
-let cipher = DeterministicCipher::new(DeterministicAlgorithm::Aes256Siv)?;
+let cipher = DeterministicCipher::<Ring>::new(DeterministicAlgorithm::Aes256Siv)?;
 let key = cipher.generate_key()?;
 
 let aad = b"customers/email";
@@ -64,13 +70,13 @@ The envelope generates and unwraps deterministic keys with its provider:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, DeterministicAlgorithm, DeterministicCipher, KmsAeadEnvelope};
+use kms_aead::{DeterministicAlgorithm, DeterministicCipher, KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key wrapped, to store
@@ -79,7 +85,7 @@ let (key, encrypted_key) = envelope.generate_new_deterministic_dek(algorithm).aw
 // Later: unwrap the stored key
 let unwrapped = envelope.decrypt_deterministic_dek(algorithm, &encrypted_key).await?;
 
-let cipher = DeterministicCipher::new(algorithm)?;
+let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
 let sealed = cipher.encrypt_value(b"aad", &SecretValue::from("value"), &key)?;
 assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from("value"));
 # Ok(())
@@ -87,8 +93,7 @@ assert_eq!(cipher.decrypt_value(b"aad", &sealed, &unwrapped)?, SecretValue::from
 ```
 
 `decrypt_deterministic_dek` calls the provider every time and does not go through the envelope's
-DEK cache. To cache deterministic keys, use `DekCache::with_deterministic_key`, which keeps them
-apart from randomized keys.
+DEK cache. To cache deterministic keys, use `DekCache::with_key`, which holds the keys of both
+kinds of algorithm.
 
-`DeterministicCipher::generate_wrapped_key` does the same with any provider and an optional
-`DekBinding`.
+`DeterministicCipher::generate_wrapped_key` does the same with any provider.

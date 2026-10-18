@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadEncryptionError;
-use crate::{DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KmsAeadResult};
+use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 
 /// Wraps and unwraps data encryption keys with a key encryption key (KEK) held by a KMS.
 ///
@@ -27,9 +27,7 @@ pub trait KmsAeadEncryptionProvider {
     fn kek(&self) -> &KekRef;
 
     /// Wraps `encryption_key` with the KEK, recording the KEK version that wrapped it when the
-    /// KMS reports one. With `Some(binding)`, the KMS authenticates the binding with the wrapped
-    /// key, and only an unwrap that names the same binding opens it. A provider whose KMS
-    /// cannot bind fails with `Some` and never wraps unbound in its place. `None` wraps unbound.
+    /// KMS reports one.
     ///
     /// # Errors
     ///
@@ -38,12 +36,10 @@ pub trait KmsAeadEncryptionProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
 
-    /// Unwraps `encrypted_key` with the KEK, naming the configured KEK and `binding` to the
-    /// KMS, which refuses a key wrapped under another KEK or another binding, or wrapped
-    /// unbound when `binding` is `Some`.
+    /// Unwraps `encrypted_key` with the KEK. The request names the configured KEK, so a key
+    /// wrapped under another KEK is refused by the KMS.
     ///
     /// # Errors
     ///
@@ -51,7 +47,6 @@ pub trait KmsAeadEncryptionProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey>;
 
     /// `len` random bytes from the KMS's own generator, for a provider configured to use it.

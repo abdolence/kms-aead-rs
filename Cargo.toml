@@ -3,11 +3,7 @@ name = "kms-aead"
 version = "0.29.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
-# The oldest toolchain that builds every feature on dependencies resolved for it, which the
-# rust-version CI job checks: gcloud-sdk's google-cloud-auth needs 1.91. Later releases of other
-# dependencies may need a newer toolchain, and an MSRV-aware resolver picks older ones. The
-# backends alone build from 1.89, the floor of aes 0.9.
-rust-version = "1.91"
+rust-version.workspace = true
 license = "Apache-2.0"
 description = "KMS/AEAD envelope encryption for GCP/AWS/Azure KMS and HashiCorp Vault Transit, with ring, aws-lc-rs or RustCrypto AEAD"
 homepage = "https://github.com/abdolence/kms-aead-rs"
@@ -26,6 +22,7 @@ members = ["kms-aead-keyring"]
 [workspace.dependencies]
 async-trait = "0.1"
 gcloud-sdk = { version = "0.33", default-features = false }
+prost = "0.14"
 proptest = "1.4"
 rsb_derive = "0.5"
 secret-vault-value = { version = "1.0.4", features = ["base64"] }
@@ -34,6 +31,10 @@ serde_json = "1"
 subtle = "2.6.1"
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
+zeroize = "1"
+
+[workspace.package]
+rust-version = "1.99"
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -80,6 +81,10 @@ gcloud-sdk = { workspace = true, optional = true }
 aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = { workspace = true }
+# Tink's key and keyset messages. The version gcloud-sdk depends on, so that one copy is in the tree.
+prost = { workspace = true }
+# Zeroizes the serialized keys inside Tink's keyset messages.
+zeroize = { workspace = true }
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
 tokio = { workspace = true, features = ["sync"] }
@@ -97,6 +102,13 @@ azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-fea
 # Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
 # version azure_core depends on.
 reqwest = { version = "0.13.2", optional = true, default-features = false }
+postgres-types = { version = "0.2", optional = true }
+# The buffer `ToSql::to_sql` writes into, which postgres-types does not re-export.
+bytes = { version = "1", optional = true }
+# The smallest sqlx crates that carry its encoding traits and its Postgres types, so that the
+# `sqlx` feature brings in no runtime and no TLS stack.
+sqlx-core = { version = "0.9", optional = true, default-features = false }
+sqlx-postgres = { version = "0.9", optional = true, default-features = false }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -108,10 +120,18 @@ criterion = { version = "0.8", features = ["async", "async_futures", "cargo_benc
 cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
 rustls = "0.23"
 azure_identity = { version = "1.0", default-features = false }
+tokio-postgres = "0.7"
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
 
 [features]
 default = []
 serde = ["dep:serde", "secret-vault-value/serde"]
+# `Json`, a plaintext stored as its JSON.
+serde-json = ["serde", "dep:serde_json"]
+# `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`.
+postgres = ["dep:postgres-types", "dep:bytes"]
+# sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for `Encrypted` on Postgres, as `BYTEA`.
+sqlx = ["dep:sqlx-core", "dep:sqlx-postgres"]
 # AEAD backends: any number of them in one build.
 ring = ["dep:ring"]
 # `aws-lc-rs` is the implicit feature of the optional dependency, the one gate of the AwsLc
@@ -147,10 +167,9 @@ deterministic = [
     "aes/zeroize",
     "dep:cmac",
     "cmac/zeroize",
-    "dep:getrandom",
 ]
-# Deprecated: reads the layouts written up to 0.28.1. Reading them will be removed in a later
-# breaking release.
+# Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
+# later breaking release.
 legacy-formats = []
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
@@ -189,7 +208,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
 
 [[example]]
 name = "aws_kms"
@@ -212,6 +231,11 @@ path = "examples/azure_kms.rs"
 required-features = ["azure-kms-encryption-base", "aws-lc"]
 
 [[test]]
+name = "postgres_fields"
+path = "tests/postgres_fields.rs"
+required-features = ["postgres", "sqlx", "ring"]
+
+[[test]]
 name = "azure_kms_emulator"
 path = "tests/azure_kms_emulator.rs"
 required-features = ["azure-kms-encryption-base"]
@@ -220,6 +244,11 @@ required-features = ["azure-kms-encryption-base"]
 name = "azure_kms_responses"
 path = "tests/azure_kms_responses.rs"
 required-features = ["azure-kms-encryption-base"]
+
+[[example]]
+name = "tink_interop"
+path = "examples/tink_interop.rs"
+required-features = ["gcp-kms-encryption", "aws-kms-encryption", "aws-lc"]
 
 [[example]]
 name = "only_aead"

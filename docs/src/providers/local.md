@@ -41,16 +41,13 @@ DEKs it wraps cannot be unwrapped once the process exits. It suits tests:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-let provider = LocalKmsProvider::ephemeral(
-    LocalKekId::try_from("tests".to_string())?,
-    AeadBackend::Ring,
-)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tests".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let encrypted = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))
@@ -72,15 +69,14 @@ openssl rand -base64 32
 
 ```rust,no_run
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::AeadBackend;
+use kms_aead::Ring;
 use std::num::NonZeroU32;
 
 # fn example() -> kms_aead::KmsAeadResult<()> {
 let version = LocalKekVersion::from(NonZeroU32::MIN);
-let provider = LocalKmsProvider::new(
+let provider = LocalKmsProvider::<Ring>::new(
     LocalKekId::try_from("dev".to_string())?,
     vec![LocalKek::from_env(version, "APP_DEV_KEK")?],
-    AeadBackend::Ring,
 )?;
 # let _ = provider;
 # Ok(())
@@ -105,7 +101,7 @@ systemd decrypts it into `$CREDENTIALS_DIRECTORY`, readable only by the service:
 
 ```rust,no_run
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::AeadBackend;
+use kms_aead::AwsLc;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
@@ -113,10 +109,9 @@ use std::path::PathBuf;
 let credentials = PathBuf::from(std::env::var("CREDENTIALS_DIRECTORY")?);
 let version = LocalKekVersion::from(NonZeroU32::MIN);
 
-let provider = LocalKmsProvider::new(
+let provider = LocalKmsProvider::<AwsLc>::new(
     LocalKekId::try_from("orders-host-1".to_string())?,
     vec![LocalKek::from_file(version, &credentials.join("kek-v1"))?],
-    AeadBackend::AwsLc,
 )?;
 # let _ = provider;
 # Ok(())
@@ -144,7 +139,7 @@ A wrap fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. An unwrap 
 `LOCAL_WRAPPED_KEY_FORMAT` when the wrapped DEK is not in the local layout,
 `LOCAL_KEK_ID_MISMATCH` when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION`
 when the provider does not hold its version, and `DECRYPT` when it is not authentic under that
-version or names another binding.
+version.
 
 Creating a provider fails with `INVALID_LOCAL_KEK_ID` for an invalid id, `LOCAL_KEK_VERSIONS`
 when the versions are empty or list one version twice, and `LOCAL_KEK_SOURCE` or

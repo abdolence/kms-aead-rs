@@ -6,21 +6,20 @@ with, and wraps the DEKs with the KEK of its provider. A call that makes no KMS 
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadAlgorithm, AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-// ChaCha20-Poly1305 by default
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+// AES-256-GCM by default
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // Or another algorithm
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::with_options(
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
-    AeadBackend::Ring,
-    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm),
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
 )?;
 # let _ = envelope;
 # Ok(())
@@ -29,7 +28,10 @@ let envelope = KmsAeadEnvelope::with_options(
 
 The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-[Crypto backends](./crypto-backends.md).
+[Crypto backends](./crypto-backends.md). The default, AES-256-GCM, is read by every Tink
+implementation too, see [Formats](./formats.md#tinks-kms-envelope). Values that 0.29 and earlier
+sealed under their default open only with ChaCha20-Poly1305 configured, see
+[Migrating from 0.29](./migrating-from-0.29.md#default-algorithm).
 
 ## Encrypting values
 
@@ -39,13 +41,13 @@ the value:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, CipherTextWithEncryptedKey, KmsAeadEnvelope, ValueStruct};
+use kms_aead::{CipherTextWithEncryptedKey, KmsAeadEnvelope, Ring, ValueStruct};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope
@@ -63,11 +65,113 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 ```
 
 `ValueStruct` is re-exported by the crate: its `value()` and `into_value()` read the bytes of
-`CipherText`, `CipherTextWithEncryptedKey` and `DeterministicCipherText`. `to_hex_string()`
-returns them as lowercase hex.
+`CipherText`, `CipherTextWithEncryptedKey`, `EncryptedDataEncryptionKey`,
+`DeterministicCipherText` and `Encrypted`. `to_hex_string()` returns the bytes of the first four
+as lowercase hex.
+
+The value is in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads
+it with the same KMS key and algorithm, see [Formats](./formats.md#tinks-kms-envelope).
 
 A new DEK comes from the backend's CSPRNG, or from the KMS generator when the provider is
 configured to use one, see [KMS random generators](./providers.md#kms-random-generators).
+
+## Typed fields
+
+`encrypt_field` and `decrypt_field` encrypt and decrypt a value of a Rust type, the way
+`encrypt_value` and `decrypt_value` do. The value is encoded by its `Plaintext` implementation,
+and the result is an `Encrypted<T, Envelope>`, the bytes to store:
+
+```rust
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext, Ring, ValueStruct};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, PartialEq)]
+struct Email(String);
+
+// Sealed as the same UTF-8 bytes as a String
+impl Plaintext for Email {
+    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> KmsAeadResult<()> {
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
+
+let aad = b"users/1042/email";
+let email = Email("alice@example.com".to_string());
+let encrypted: Encrypted<Email, Envelope> = envelope.encrypt_field(aad, &email).await?;
+
+// The bytes to store, and the field read back from them
+let stored: Vec<u8> = encrypted.into_value();
+let read_back = Encrypted::<Email, Envelope>::try_from(stored)?;
+
+assert_eq!(envelope.decrypt_field(aad, &read_back).await?, email);
+# Ok(())
+# }
+```
+
+- `Plaintext` is implemented for `String`, `Vec<u8>`, `SecretValue`, `bool`, `i32`, `i64`, `u32`
+  and `u64`, and with the `serde-json` feature for `Json<T>`, any serde type stored as its compact
+  JSON. An application type maps to one of them, as `Email` does;
+- the calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and unwrap
+  through the envelope's DEK cache, as `encrypt_value` and `decrypt_value` do;
+- `Encrypted::try_from` checks the stored bytes against Tink's KMS envelope layout, so a
+  truncated or foreign value fails when it is read, before any KMS call, with
+  `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_CIPHER_TEXT_FORMAT` or `LEGACY_FORMAT`. It checks the
+  framing only: a changed value fails to decrypt with `DECRYPT`;
+- `decrypt_field` fails with `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`;
+- a value written by `encrypt_value` reads as an `Encrypted<SecretValue, Envelope>`, or as the
+  type whose encoding its plaintext is, such as `String` for UTF-8 text.
+
+`Encrypted<T, Envelope>` has no `==`: two values of the same plaintext differ. `Debug` shows the
+length only. See [Formats](./formats.md#typed-fields) for its layout.
+
+### Storing typed fields
+
+Three features store `Encrypted` as bytes, and each one reads it back through `TryFrom`, so a
+malformed stored value fails in the decode:
+
+- `serde`: `Serialize` and `Deserialize`, a `bytes` value in Firestore and an array of numbers in
+  serde_json;
+- `postgres`: `ToSql` and `FromSql` of postgres-types, for tokio-postgres, as `BYTEA`, and a
+  slice as `BYTEA[]` for `= ANY($1)`;
+- `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for PostgreSQL, as `BYTEA`. It
+  depends on `sqlx-core` and `sqlx-postgres` only, so the application chooses sqlx's runtime and
+  TLS stack.
+
+With sqlx:
+
+```rust,no_run
+use kms_aead::formats::Envelope;
+use kms_aead::Encrypted;
+use sqlx::PgPool;
+
+# struct Email(String);
+async fn store(pool: &PgPool, id: i64, email: &Encrypted<Email, Envelope>) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO users (id, email) VALUES ($1, $2)")
+        .bind(id)
+        .bind(email)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+async fn load(pool: &PgPool, id: i64) -> sqlx::Result<Encrypted<Email, Envelope>> {
+    sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+}
+```
 
 ## AAD
 
@@ -86,13 +190,13 @@ cipher texts are `CipherText` values without a wrapped key.
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // One KMS call: a new DEK and the same DEK wrapped
 let (dek, encrypted_dek) = envelope.generate_new_dek().await?;
@@ -124,30 +228,26 @@ The calls are:
 Be aware not to seal more than about 2^32 values under one DEK: every value takes a random 96-bit
 nonce, see [Security considerations](./security.md#nonces).
 
-The envelope wraps and unwraps unbound. A DEK wrapped with a `DekBinding` fails to unwrap through
-the `*_with_encrypted_dek` calls, and goes to the provider or to `DekCache::with_key` directly,
-see [Binding a wrapped key](./providers.md#binding-a-wrapped-key).
-
 ## Storing wrapped DEKs
 
-`EncryptedDataEncryptionKey` holds the wrapped DEK and the version of the KMS key that wrapped
-it, when the provider reports one. Store both with `to_bytes()` or `to_hex_string()`, and read
-them back with `TryFrom<&[u8]>` or `try_from_hex_string()`:
+`EncryptedDataEncryptionKey` holds the bytes the provider returned, which also name the KMS key
+version where the KMS needs one to unwrap after a rotation. Store `value()` or `to_hex_string()`,
+and read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string()`:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, EncryptedDataEncryptionKey, KmsAeadEnvelope};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-# let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("example".to_string())?, AeadBackend::Ring)?;
-# let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
-let stored: Vec<u8> = encrypted_dek.to_bytes()?;
-let read_back = EncryptedDataEncryptionKey::try_from(stored.as_slice())?;
+let stored: Vec<u8> = encrypted_dek.value().clone();
+let read_back = EncryptedDataEncryptionKey::from(stored);
 
-let stored_hex: String = encrypted_dek.to_hex_string()?;
+let stored_hex: String = encrypted_dek.to_hex_string();
 let read_back_hex = EncryptedDataEncryptionKey::try_from_hex_string(&stored_hex)?;
 
 assert_eq!(read_back, read_back_hex);
@@ -155,6 +255,6 @@ assert_eq!(read_back, read_back_hex);
 # }
 ```
 
-Be aware not to store `wrapped()`, which drops the key version, and not to read stored keys with
-`EncryptedDataEncryptionKey::new`, which takes the bytes a KMS returned. Azure needs the key
-version to unwrap after a key rotation. See [Formats](./formats.md) for the layout.
+The wrapped DEK is the one Tink stores in its KMS envelope, so `CipherTextWithEncryptedKey::join`
+of a value and its wrapped DEK is a value Tink reads. See [Formats](./formats.md#wrapped-deks) for
+each provider's bytes.

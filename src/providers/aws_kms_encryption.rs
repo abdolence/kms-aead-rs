@@ -9,11 +9,6 @@ use aws_sdk_kms::operation::encrypt::builders::EncryptFluentBuilder;
 use aws_sdk_kms::primitives::Blob;
 
 use secret_vault_value::SecretValue;
-use std::collections::HashMap;
-
-/// The encryption context key a [`DekBinding`] is sent under. Changing it makes every bound key
-/// wrapped before the change fail to unwrap.
-const BINDING_CONTEXT_KEY: &str = "kms-aead";
 
 /// An AWS KMS key that wraps data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
@@ -56,9 +51,16 @@ impl AwsKmsKeyRef {
 #[non_exhaustive]
 pub struct AwsKmsProviderOptions {
     /// Generates data encryption keys with AWS KMS `GenerateRandom` instead of the backend's
-    /// CSPRNG, at the cost of one more KMS request per key. Off by default.
-    #[default = "false"]
+    /// CSPRNG, at the cost of one more KMS request per key.
+    /// [`DEFAULT_USE_KMS_RANDOM_GEN`](Self::DEFAULT_USE_KMS_RANDOM_GEN) by default.
+    #[default = "Self::DEFAULT_USE_KMS_RANDOM_GEN"]
     pub use_kms_random_gen: bool,
+}
+
+impl AwsKmsProviderOptions {
+    /// The default [`use_kms_random_gen`](Self::use_kms_random_gen): `false`, the backend's
+    /// CSPRNG generates the keys.
+    pub const DEFAULT_USE_KMS_RANDOM_GEN: bool = false;
 }
 
 /// Wraps and unwraps data encryption keys with an AWS KMS key.
@@ -66,11 +68,6 @@ pub struct AwsKmsProviderOptions {
 /// Every error is an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose code
 /// is the AWS error code, such as `IncorrectKeyException` or `NotFoundException`, and whose
 /// message is the one AWS KMS returned. Its root cause is the SDK error.
-///
-/// A [`DekBinding`] is sent as the encryption context `{"kms-aead": <binding>}` of Encrypt and
-/// Decrypt. An unwrap that names another binding, or none, fails with
-/// `InvalidCiphertextException`. CloudTrail logs the encryption context in plain text, and a key
-/// policy can match it with the `kms:EncryptionContext:kms-aead` condition key.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
@@ -129,43 +126,24 @@ impl AwsKmsProvider {
         }
     }
 
-    /// Wraps under the configured key, with `binding` as the encryption context.
-    fn encrypt_request(
-        &self,
-        encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
-    ) -> EncryptFluentBuilder {
+    /// Wraps under the configured key.
+    fn encrypt_request(&self, encryption_key: &DataEncryptionKey) -> EncryptFluentBuilder {
         self.client
             .encrypt()
             .key_id(self.kek.key())
             .plaintext(Blob::new(
                 encryption_key.value().ref_sensitive_value().as_slice(),
             ))
-            .set_encryption_context(binding.map(binding_context))
     }
 
     /// Names the configured key: without it AWS KMS unwraps under whichever key the blob names,
-    /// for any key the principal may decrypt with. `binding` is the encryption context, which
-    /// must equal the wrap's.
-    fn decrypt_request(
-        &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
-    ) -> DecryptFluentBuilder {
+    /// for any key the principal may decrypt with.
+    fn decrypt_request(&self, encrypted_key: &EncryptedDataEncryptionKey) -> DecryptFluentBuilder {
         self.client
             .decrypt()
             .key_id(self.kek.key())
-            .ciphertext_blob(Blob::new(encrypted_key.wrapped()))
-            .set_encryption_context(binding.map(binding_context))
+            .ciphertext_blob(Blob::new(encrypted_key.value().as_slice()))
     }
-}
-
-/// The one-pair encryption context that carries `binding`.
-fn binding_context(binding: &DekBinding) -> HashMap<String, String> {
-    HashMap::from([(
-        BINDING_CONTEXT_KEY.to_string(),
-        binding.as_str().to_string(),
-    )])
 }
 
 #[async_trait]
@@ -177,18 +155,13 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
-            let encrypt_response = kms::timed(self.encrypt_request(encryption_key, binding).send())
+            let encrypt_response = kms::timed(self.encrypt_request(encryption_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
-                Some(blob) => {
-                    let encrypted_key = EncryptedDataEncryptionKey::new(blob.into_inner(), None);
-                    kms::record_wrap(&encrypted_key);
-                    Ok(encrypted_key)
-                }
+                Some(blob) => Ok(EncryptedDataEncryptionKey::new(blob.into_inner())),
                 None => Err(KmsAeadEncryptionError::create(
                     "AWS_ERROR",
                     &format!(
@@ -204,11 +177,9 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
-        spans::in_span(span, async {
-            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key, binding).send())
+        spans::in_span(kms::unwrap_span(&self.kek), async {
+            let decrypt_response = kms::timed(self.decrypt_request(encrypted_key).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
 
@@ -272,6 +243,8 @@ mod tests {
     use rvstruct::ValueStruct;
     use tokio::net::TcpListener;
 
+    use crate::test_provider::{TestBackend, TinkEnvelope};
+
     const REGION: &str = "eu-west-1";
     const ACCOUNT_ID: &str = "123456789012";
     const KEY_ID: &str = "1234abcd-12ab-34cd-56ef-1234567890ab";
@@ -300,10 +273,7 @@ mod tests {
 
     fn decrypt_key_id(configured_key_id: &str) -> Option<String> {
         provider_for(configured_key_id, aws_sdk_kms::Config::builder())
-            .decrypt_request(
-                &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-                None,
-            )
+            .decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()))
             .get_key_id()
             .clone()
     }
@@ -349,10 +319,8 @@ mod tests {
     fn unwrap_names_the_configured_kek() {
         let provider = offline_provider();
 
-        let request = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
-        );
+        let request =
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()));
 
         assert_eq!(request.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
@@ -363,33 +331,13 @@ mod tests {
     }
 
     #[test]
-    fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
-        let provider = offline_provider();
-        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
-        let context = HashMap::from([("kms-aead".to_string(), "tenant-42/3".to_string())]);
-        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
-
-        let encrypt = provider.encrypt_request(&dek, Some(&binding));
-        let decrypt = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            Some(&binding),
-        );
-
-        assert_eq!(encrypt.get_encryption_context().as_ref(), Some(&context));
-        assert_eq!(decrypt.get_encryption_context().as_ref(), Some(&context));
-        Ok(())
-    }
-
-    #[test]
-    fn an_unbound_wrap_builds_the_0_29_request() {
+    fn wrap_and_unwrap_build_the_0_29_requests() {
         let provider = offline_provider();
         let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
 
-        let encrypt = provider.encrypt_request(&dek, None);
-        let decrypt = provider.decrypt_request(
-            &EncryptedDataEncryptionKey::new(b"wrapped".to_vec(), None),
-            None,
-        );
+        let encrypt = provider.encrypt_request(&dek);
+        let decrypt =
+            provider.decrypt_request(&EncryptedDataEncryptionKey::new(b"wrapped".to_vec()));
 
         assert_eq!(encrypt.get_key_id().as_deref(), Some(KEY_ARN));
         assert_eq!(
@@ -434,10 +382,7 @@ mod tests {
         .await;
 
         let error = provider
-            .encrypt_data_encryption_key(
-                &DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])),
-                None,
-            )
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])))
             .await
             .unwrap_err();
 
@@ -511,76 +456,115 @@ mod tests {
         }
     }
 
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and by layout v1, with
-    // the AWS key that the live test configures. That key stays enabled while these exist.
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_28_1: &str = "00000000000000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f9016d64cc226f7525698a42aa79440d72eb0000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c0197410ab39e7f2e03fcb949020110803b199d4e5e7f622192544e6afd92c61bf191d969c8e2bd79558786d3adf0453ebe0883967e7031d5c67d4dbebddd4f05aeca971b7636dbde5946860e8b8069a47514d7c98af6d41f881e50d921ed7eb7568617f632b87134c3d01dc25b292fb39badbe";
-    const ENVELOPE_V1: &str = "010000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901328f5ffd046ddc430b18ba1d85738d440000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c2fb61160bcd48c2e564c02d5020110803b5d02b9463971cf911780d692666861a56101335c3d3d047dad9187a4dd15295189e5489017cb4c745c93064abfe217335d46e0cd8f6da27c8997e5ec392560da00e258e81877a60cc0e2a1d06cedfaef2b10d45bb80fda1cb2b81a5f038b24e8c607";
+    /// Tink 1.16.1 for Python, `KmsEnvelopeAead` on the AWS key the live tests configure, which
+    /// stays enabled while these exist; `tests/tink_interop.py` writes them.
+    const TINK_ENVELOPES: &[TinkEnvelope] = &[
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes128Gcm,
+            aad: "orders/aws/aes-128-gcm",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000aa01020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901d4e770136e2cd7b89c2359c808aef01800000070306e06092a864886f70d010706a061305f020100305a06092a864886f70d010701301e060960864801650304012e3011040cc2369d5a5fcb48672876a33e020110802d54365e9dddb00e682312c83705ece381ab479a9ed00702dbe49848d0402bd7919b29de2ee4a183a15913b11f5e99c0b3b17910209e6aac4c0119fd2b43a813cf3a49a08a8870957b406b818df41d946d416d6037527ab00ef596c389b14b",
+        },
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes256Gcm,
+            aad: "orders/aws/aes-256-gcm",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000ba01020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901daab91f1efca5ecdfc32d1a4afd1b5c400000080307e06092a864886f70d010706a071306f020100306a06092a864886f70d010701301e060960864801650304012e3011040c5a77f0b4ca9335fcc70cd08a020110803df618fb2f75d06206bc4a85f3a78b81475195779392e7aa4da51dd11c40a38f4ffd7af4a1f2987b8f6594c44775d39bc68311ecdca1681f586a2271cc46259fb02152553b45eda34fbcdd65e3d986a06e8079223c6feca1af6d6455de05be6887754b61a009110102439707d1e5d8",
+        },
+        TinkEnvelope {
+            algorithm: AeadAlgorithm::Aes256GcmSiv,
+            aad: "orders/aws/aes-256-gcm-siv",
+            plain_text: "sealed by Tink 1.16.1",
+            value: "000000ba01020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f90103876be1d3aad7a662cab60fc762652600000080307e06092a864886f70d010706a071306f020100306a06092a864886f70d010701301e060960864801650304012e3011040ce0b11d0d01bb2c290edf5779020110803de712e319619be931e6d5f9ca826e88695152d7547b42cba5975506760e3662515f9e710ec6f8a0e0dcd689dd99c5e26ffa09b1c93f4a1ab04998e80e1813414dea869d3dc65a4770456707fd3e2d5644559561e3a5057e73a14c341444a435004f3cc875fc51fef29476d42152f3",
+        },
+    ];
 
     #[test]
-    fn envelope_v1_from_a_live_key_splits_into_key_version_and_wrapped_key() {
-        let (v1_cipher_text, v1_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_V1).unwrap())
-                .separate()
-                .unwrap();
+    fn a_tink_envelope_of_aws_kms_separates_into_its_wrapped_key() -> KmsAeadResult<()> {
+        for tink in TINK_ENVELOPES {
+            let (cipher_text, encrypted_dek) =
+                CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap()).separate()?;
 
-        assert_eq!(v1_dek.key_version(), None);
-        assert_eq!(v1_dek.wrapped().len(), 184);
-        // Nonce, the 11 bytes of `test-secret` and the tag.
-        assert_eq!(v1_cipher_text.value().len(), 12 + 11 + 16);
+            assert_eq!(encrypted_dek.value()[0], 0x01, "{:?}", tink.algorithm);
+            assert_eq!(
+                cipher_text.value().len(),
+                12 + tink.plain_text.len() + 16,
+                "{:?}",
+                tink.algorithm
+            );
+        }
+        Ok(())
     }
 
-    #[cfg(feature = "legacy-formats")]
-    #[test]
-    fn envelope_from_0_28_1_splits_into_a_wrapped_key_without_key_version() {
-        let (legacy_cipher_text, legacy_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
-                .separate()
-                .unwrap();
-
-        assert_eq!(legacy_dek.key_version(), None);
-        assert_eq!(legacy_dek.wrapped().len(), 184);
-        assert_eq!(legacy_cipher_text.value().len(), 12 + 11 + 16);
-    }
-
-    #[cfg(feature = "legacy-formats")]
-    #[test]
-    fn wrapped_key_stored_by_0_28_1_reads_as_a_bare_wrapped_key() {
-        let (_, legacy_dek) =
-            CipherTextWithEncryptedKey::from(hex::decode(ENVELOPE_FROM_0_28_1).unwrap())
-                .separate()
-                .unwrap();
-
-        assert_eq!(
-            EncryptedDataEncryptionKey::try_from(legacy_dek.wrapped()).unwrap(),
-            legacy_dek
-        );
-        assert_eq!(
-            EncryptedDataEncryptionKey::try_from_hex_string(&hex::encode(legacy_dek.wrapped()))
-                .unwrap(),
-            legacy_dek
-        );
-    }
-
-    #[tokio::test]
-    #[cfg(feature = "ring")]
-    #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    async fn live_key_decrypts_stored_envelopes() -> KmsAeadResult<()> {
-        let key_ref = AwsKmsKeyRef::new(
+    fn live_key_ref() -> AwsKmsKeyRef {
+        AwsKmsKeyRef::new(
             std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
-        );
-        let encryption =
-            KmsAeadEnvelope::new(AwsKmsProvider::new(&key_ref).await?, AeadBackend::Ring)?;
-        let envelopes = [
-            #[cfg(feature = "legacy-formats")]
-            ENVELOPE_FROM_0_28_1,
-            ENVELOPE_V1,
-        ];
-        for envelope in envelopes {
-            let envelope = CipherTextWithEncryptedKey::from(hex::decode(envelope).unwrap());
-            let secret = encryption.decrypt_value(b"test-aad", &envelope).await?;
-            assert_eq!(secret, SecretValue::from("test-secret"));
+        )
+    }
+
+    /// Decrypts the values of the algorithms the test backend implements: every one but
+    /// AES-256-GCM-SIV on ring.
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    async fn live_key_decrypts_tink_envelopes() -> KmsAeadResult<()> {
+        let key_ref = live_key_ref();
+        for tink in TINK_ENVELOPES {
+            let envelope = match KmsAeadEnvelope::<_, TestBackend>::with_options(
+                AwsKmsProvider::new(&key_ref).await?,
+                KmsAeadEnvelopeOptions::new().with_algorithm(tink.algorithm),
+            ) {
+                Err(KmsAeadError::UnsupportedAlgorithm(_)) => {
+                    println!("{}: not on this backend", tink.algorithm);
+                    continue;
+                }
+                envelope => envelope?,
+            };
+            let value = CipherTextWithEncryptedKey::from(hex::decode(tink.value).unwrap());
+
+            let decrypted = envelope.decrypt_value(tink.aad.as_bytes(), &value).await?;
+
+            assert_eq!(
+                decrypted,
+                SecretValue::from(tink.plain_text),
+                "{:?}",
+                tink.algorithm
+            );
+        }
+        Ok(())
+    }
+
+    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
+    // default ChaCha20-Poly1305 and the AWS key that the live tests configure. That key stays
+    // enabled while these exist.
+    #[cfg(feature = "legacy-formats")]
+    const ENVELOPE_FROM_0_28_1: &str = "00000000000000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f9016d64cc226f7525698a42aa79440d72eb0000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c0197410ab39e7f2e03fcb949020110803b199d4e5e7f622192544e6afd92c61bf191d969c8e2bd79558786d3adf0453ebe0883967e7031d5c67d4dbebddd4f05aeca971b7636dbde5946860e8b8069a47514d7c98af6d41f881e50d921ed7eb7568617f632b87134c3d01dc25b292fb39badbe";
+    #[cfg(feature = "legacy-formats")]
+    const ENVELOPE_FROM_0_29: &str = "010000b801020200789693b39039bcbc820ade874e0d635e726f1ce1ac65f509186e2dfaabdaaf32f901328f5ffd046ddc430b18ba1d85738d440000007e307c06092a864886f70d010706a06f306d020100306806092a864886f70d010701301e060960864801650304012e3011040c2fb61160bcd48c2e564c02d5020110803b5d02b9463971cf911780d692666861a56101335c3d3d047dad9187a4dd15295189e5489017cb4c745c93064abfe217335d46e0cd8f6da27c8997e5ec392560da00e258e81877a60cc0e2a1d06cedfaef2b10d45bb80fda1cb2b81a5f038b24e8c607";
+
+    #[tokio::test]
+    #[cfg(feature = "legacy-formats")]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    #[expect(deprecated, reason = "tests the deprecated upgrade")]
+    async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
+        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
+            AwsKmsProvider::new(&live_key_ref()).await?,
+            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+        )?;
+        for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
+            let stored = CipherTextWithEncryptedKey::from(hex::decode(stored).unwrap());
+
+            let decrypted = encryption.decrypt_value(b"test-aad", &stored).await?;
+            let upgraded = encryption.upgrade_legacy_value(&stored).await?;
+
+            assert_eq!(decrypted, SecretValue::from("test-secret"));
+            let upgraded = upgraded.expect("a legacy value is upgraded");
+            assert_eq!(upgraded.value()[0], 0x00);
+            assert_eq!(
+                encryption.decrypt_value(b"test-aad", &upgraded).await?,
+                SecretValue::from("test-secret")
+            );
+            assert!(encryption.upgrade_legacy_value(&upgraded).await?.is_none());
         }
         Ok(())
     }
@@ -603,12 +587,12 @@ mod tests {
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 32]));
         let wrapped_under_other = AwsKmsProvider::new(&other)
             .await?
-            .encrypt_data_encryption_key(&dek, None)
+            .encrypt_data_encryption_key(&dek)
             .await?;
 
         let result = AwsKmsProvider::new(&configured)
             .await?
-            .decrypt_data_encryption_key(&wrapped_under_other, None)
+            .decrypt_data_encryption_key(&wrapped_under_other)
             .await;
 
         assert!(
@@ -617,40 +601,6 @@ mod tests {
             "{:?}",
             result.err()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[cfg_attr(not(feature = "ci-aws"), ignore)]
-    async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
-        let key_ref = AwsKmsKeyRef::new(
-            std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
-            std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
-        );
-        let provider = AwsKmsProvider::new(&key_ref).await?;
-        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
-        let dek = DataEncryptionKey::from(SecretValue::new(DATA_KEY.to_vec()));
-        let wrapped = provider
-            .encrypt_data_encryption_key(&dek, Some(&binding))
-            .await?;
-
-        let unwrapped = provider
-            .decrypt_data_encryption_key(&wrapped, Some(&binding))
-            .await?;
-        let result = provider
-            .decrypt_data_encryption_key(
-                &wrapped,
-                Some(&DekBinding::try_from("tenant-42/2".to_string())?),
-            )
-            .await;
-
-        assert!(
-            matches!(&result, Err(KmsAeadError::EncryptionError(e))
-                if e.public.code == "InvalidCiphertextException"),
-            "{:?}",
-            result.err()
-        );
-        assert_eq!(unwrapped, dek);
         Ok(())
     }
 }

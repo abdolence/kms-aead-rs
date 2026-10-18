@@ -2,7 +2,9 @@
 //!
 //! A value is sealed under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
 //! wrapped by the KEK. [`KmsAeadEnvelope`] does both and stores the wrapped DEK with the cipher
-//! text. [`AeadCipher`] seals with a DEK the caller holds, without a KMS.
+//! text, in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads the
+//! values with the same KMS key and algorithm. [`AeadCipher`] seals with a DEK the caller holds,
+//! without a KMS. [`formats`] has every byte layout.
 //!
 //! # Providers
 //!
@@ -22,12 +24,10 @@
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
 //!
-//! A wrap and an unwrap take an optional [`DekBinding`], which the KMS authenticates with the
-//! wrapped key: GCP as additional authenticated data, AWS as an encryption context, Vault Transit
-//! as associated data and the local KMS in its AAD. The Azure provider has no such input and
-//! refuses a binding. [`KmsAeadEnvelope`] wraps and unwraps unbound, so a DEK wrapped with a
-//! binding fails at the KMS through its `*_with_encrypted_dek` calls. A bound DEK goes to the
-//! provider and to [`cache::DekCache`] directly.
+//! A wrapped DEK carries no context that the KMS authenticates: the KMS unwraps it for any
+//! principal allowed to decrypt with the KEK. Whoever can write where wrapped DEKs are stored can
+//! copy or relabel one, so write access to the stored keys is kept apart from decrypt rights, and
+//! each isolation boundary, such as a tenant or an environment, has a KEK of its own.
 //!
 //! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
 //! wrapped under an alias that later moves to another key fails to unwrap with
@@ -36,16 +36,16 @@
 //!
 //! # Backends
 //!
-//! The AEAD runs on a crypto library that a feature compiles in and an [`AeadBackend`] value
-//! selects at runtime, passed to [`AeadCipher::new`] and to the [`KmsAeadEnvelope`]
-//! constructors. A build may enable any number of them, and there is no default one.
+//! The AEAD runs on a crypto library that a feature compiles in, named by a type that implements
+//! [`AeadBackend`]: the `B` of [`AeadCipher<B>`] and [`KmsAeadEnvelope<P, B>`]. A build may
+//! enable any number of them, and there is no default one.
 //!
-//! | Feature | Variant | Algorithms |
+//! | Feature | Type | Algorithms |
 //! |---|---|---|
-//! | `ring` | `AeadBackend::Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
-//! | `aws-lc` | `AeadBackend::AwsLc` | every [`AeadAlgorithm`] |
-//! | `aws-lc-fips` | `AeadBackend::AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
-//! | `rustcrypto` | `AeadBackend::RustCrypto` | every [`AeadAlgorithm`] |
+//! | `ring` | `Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
+//! | `aws-lc` | `AwsLc` | every [`AeadAlgorithm`] |
+//! | `aws-lc-fips` | `AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
+//! | `rustcrypto` | `RustCrypto` | every [`AeadAlgorithm`] |
 //!
 //! `aws-lc-fips` builds only the FIPS module, and does not need `aws-lc`. A build with both
 //! compiles both C libraries, and aws-lc-rs runs on the FIPS module. The `aws-lc-rs` feature
@@ -55,7 +55,7 @@
 //!
 //! A build without a backend feature compiles, and
 //! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or wraps
-//! can be constructed: [`AeadBackend`] has no variant.
+//! can be constructed: no type implements [`AeadBackend`].
 //!
 //! # Store-less mode and the DEK cache
 //!
@@ -71,12 +71,27 @@
 //! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
 //! plaintext DEK in request and response buffers that kms-aead cannot zeroize.
 //!
+//! # Typed fields
+//!
+//! [`KmsAeadEnvelope::encrypt_field`] encrypts a value of a [`Plaintext`] type, such as an
+//! application newtype, into an [`Encrypted<T, Envelope>`](Encrypted), the bytes to store, and
+//! [`KmsAeadEnvelope::decrypt_field`] reads it back as a `T`. Stored bytes become an `Encrypted`
+//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its
+//! [`Format`](formats::Format). The `serde` feature reads and writes it, and the `postgres` and
+//! `sqlx` features store it in a PostgreSQL `BYTEA` column.
+//!
 //! # Other features
 //!
-//! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`].
-//! - `legacy-formats`: reads the layouts written up to 0.28.1. Deprecated.
-//! - `serde`: `Serialize` and `Deserialize` for [`errors::KmsAeadErrorPublicGenericDetails`] and
-//!   for `SecretValue`.
+//! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`];
+//! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated;
+//! - `serde`: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
+//!   [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`;
+//! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON;
+//! - `postgres`: `ToSql` and `FromSql` of postgres-types for [`Encrypted`], as `BYTEA`, and
+//!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres;
+//! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
+//!   PostgreSQL, as `BYTEA` and `BYTEA[]`. It depends on sqlx-core and sqlx-postgres only, with
+//!   no runtime and no TLS stack.
 //!
 //! # Examples
 //!
@@ -86,14 +101,15 @@
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::{AeadBackend, KmsAeadEnvelope};
+//! use kms_aead::{KmsAeadEnvelope, Ring};
 //! use secret_vault_value::SecretValue;
 //!
 //! let kms_ref = AwsKmsKeyRef::new(
 //!     "123456789012".into(),
 //!     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".into(),
 //! );
-//! let encryption = KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?, AeadBackend::Ring)?;
+//! let provider = AwsKmsProvider::new(&kms_ref).await?;
+//! let encryption = KmsAeadEnvelope::<AwsKmsProvider, Ring>::new(provider)?;
 //!
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
@@ -111,10 +127,10 @@
 //! ```rust
 //! # #[cfg(feature = "ring")]
 //! # fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, CipherText, ValueStruct};
+//! use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, Ring, ValueStruct};
 //! use secret_vault_value::SecretValue;
 //!
-//! let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
+//! let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 //! let key = cipher.generate_key()?;
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";
@@ -217,7 +233,13 @@ mod algorithm;
 pub use algorithm::*;
 
 mod backend;
-pub use backend::AeadBackend;
+#[cfg(feature = "aws-lc-rs")]
+pub use backend::AwsLc;
+#[cfg(feature = "ring")]
+pub use backend::Ring;
+#[cfg(feature = "rustcrypto")]
+pub use backend::RustCrypto;
+pub use backend::{generate_random_bytes, AeadBackend};
 
 mod aead_cipher;
 pub use aead_cipher::*;
@@ -227,10 +249,19 @@ pub mod cache;
 mod deterministic;
 pub use deterministic::*;
 
+mod encrypted;
+pub use encrypted::Encrypted;
+
 pub mod errors;
+
+pub mod formats;
+pub use formats::envelope::CipherTextWithEncryptedKey;
 
 mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;
+
+mod plaintext;
+pub use plaintext::*;
 
 mod spans;
 
@@ -238,7 +269,8 @@ mod types;
 pub use types::*;
 
 /// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
-/// [`CipherTextWithEncryptedKey`] and [`DeterministicCipherText`].
+/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`], [`DeterministicCipherText`]
+/// and [`Encrypted`].
 pub use rvstruct::ValueStruct;
 
 pub mod providers;
@@ -253,6 +285,9 @@ pub mod providers;
     feature = "deterministic",
     feature = "legacy-formats",
     feature = "serde",
+    feature = "serde-json",
+    feature = "postgres",
+    feature = "sqlx",
     feature = "gcp-kms-encryption",
     feature = "aws-kms-encryption",
     feature = "azure-kms-encryption",

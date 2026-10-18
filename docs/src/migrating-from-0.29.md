@@ -1,10 +1,11 @@
 # Migrating from 0.29
 
-0.30 replaces the ring-only API with crypto backends chosen at runtime, adds store-less DEK reuse,
-the DEK cache, deterministic encryption and the local KMS, and makes ring optional. Stored values
-need no migration: every algorithm writes the same bytes on every backend, and envelope layout v1
-is unchanged. Values written by 0.28.1 and earlier need the `legacy-formats` feature, see
-[Old values](#old-values).
+0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse,
+the DEK cache, deterministic encryption and the local KMS, and makes ring optional. It writes
+Tink's KMS envelope format for every provider, so values written by 0.29 and earlier read only
+with the deprecated `legacy-formats` feature, which also rewrites them in the new format, see
+[Old values](#old-values). The default algorithm of the envelope is AES-256-GCM, see
+[Default algorithm](#default-algorithm).
 
 ## Features
 
@@ -21,27 +22,31 @@ ring is no longer turned on by the provider features. A 0.29 build that relied o
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
 no second crypto library to a cloud provider build, see [Choosing a backend](./getting-started.md#choosing-a-backend).
 
-The crate declares `rust-version = "1.91"`.
+The crate declares `rust-version = "1.99"`.
 
 ## Names
 
 | 0.29 | 0.30 |
 |---|---|
-| `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P>` |
-| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::new(provider, AeadBackend::Ring)?`, not `async` |
-| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::with_options(provider, AeadBackend::Ring, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
-| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::with_options(provider, backend, options)` |
+| `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P, Ring>`, with the backend as a type parameter |
+| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<P, Ring>::new(provider)?`, not `async`, on AES-256-GCM rather than ChaCha20-Poly1305, see [Default algorithm](#default-algorithm) |
+| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::<P, Ring>::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
+| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<P, Ring>::with_options(provider, options)` |
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
 | `KmsAeadRingEncryptionProvider` | `KmsAeadEncryptionProvider`, see [Your own provider](#your-own-provider) |
-| module `kms_aead::ring_encryption` | removed; `AeadCipher` at the crate root |
-| `RingAeadEncryption::new()` | `AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)` |
-| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)` |
+| module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>` at the crate root |
+| `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)` |
+| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)` |
 | `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG, and the random nonce was the only option |
 | `RingAeadEncryptionOptions`, `RingAeadEncryptionNonceKind` | removed |
 | `RingAeadEncryption.algo` | `AeadCipher::algorithm()` |
 | `RingAeadEncryption::generate_data_encryption_key()` | `AeadCipher::generate_key()` |
 | `kms_aead::kms_envelope_encryption::…` | the same names at the crate root |
-| `CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek)` | `CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?` |
+| `CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek)` | `CipherTextWithEncryptedKey::join(&cipher_text, &encrypted_dek)?`, in Tink's KMS envelope format |
+| `EncryptedDataEncryptionKey::new(wrapped, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one |
+| `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
+| `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
+| `encrypted_dek.key_version()` | removed; the `key_version` field of the KMS spans |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
@@ -69,8 +74,8 @@ generic `&Aad`, and the calls that make no KMS call are not `async`:
 | `KmsAeadEnvelopeEncryption::<Aad>::generate_new_dek(&envelope)` | `envelope.generate_new_dek()` |
 | `use kms_aead::AeadEncryption;` `cipher.encrypt_value(&aad, &value, &key).await?` | `cipher.encrypt_value(aad, &value, &key)?` |
 
-`value()` and `into_value()` of `CipherText`, `CipherTextWithEncryptedKey` and
-`DeterministicCipherText` come from `ValueStruct`, which the crate re-exports: `use
+`value()` and `into_value()` of `CipherText`, `CipherTextWithEncryptedKey`,
+`EncryptedDataEncryptionKey` and `DeterministicCipherText` come from `ValueStruct`, which the crate re-exports: `use
 kms_aead::ValueStruct`. `DataEncryptionKey` no longer implements `ValueStruct`, and has its own
 `value()`.
 
@@ -81,11 +86,14 @@ An application's own implementation of the provider trait:
 - implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`;
 - adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other` and a key name that identifies the
   key;
-- takes `binding: Option<&DekBinding>` in `encrypt_data_encryption_key` and
-  `decrypt_data_encryption_key`, and fails on `Some` when its KMS cannot bind;
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
-  the key, and is implemented only for a KMS generator.
+  the key, and is implemented only for a KMS generator;
+- returns `EncryptedDataEncryptionKey::new(bytes)`. A KMS that needs the key version to unwrap
+  gets it from those bytes, as the Azure provider's do.
+
+The plaintext the provider wraps is the DEK serialized as a Tink key, see
+[Formats](./formats.md#serialized-deks). The library never inspects the provider's own bytes.
 
 ## Errors
 
@@ -109,6 +117,8 @@ Error codes that changed:
 | `DECRYPT_KEY` | `ENCRYPT_KEY` | the GCP wrap, when its request cannot be built |
 | `DECRYPT_KEY` | `RANDOM_GENERATOR` | the GCP KMS generator, when its request cannot be built |
 | `SYSTEM_TIME_ERROR` | removed | |
+| `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | removed | stored wrapped DEKs are the provider's bytes |
+| `AZURE_KEY_VERSION_MISSING` | `AZURE_WRAPPED_KEY_FORMAT` | the Azure unwrap of bytes outside its layout; the old code stays for a 0.29 value without a key version, with `legacy-formats` |
 
 The other 0.29 codes keep their spelling. The new codes are listed in
 [Error handling](./errors.md#codes).
@@ -123,15 +133,52 @@ A deployment that relied on unwrapping under a second key configures a provider 
 An alias name such as `alias/orders` becomes an alias ARN, where 0.29 built a key ARN of it.
 Configure the key ARN rather than an alias, see [AWS KMS](./providers/aws.md#key-arn-and-aliases).
 
+## Default algorithm
+
+The default algorithm of `KmsAeadEnvelope` is AES-256-GCM, which every Tink implementation reads
+in a KMS envelope. The default of 0.29 was ChaCha20-Poly1305.
+
+A value does not record its algorithm. Values sealed under the default of 0.29 open only with
+ChaCha20-Poly1305 configured, and an envelope on the new default fails them with `DECRYPT`. A 0.29
+envelope that named no algorithm becomes:
+
+```rust,no_run
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions, Ring};
+
+# async fn example(key_ref: GcpKmsKeyRef) -> kms_aead::KmsAeadResult<()> {
+// 0.29: KmsAeadRingEnvelopeEncryption::new(provider).await?
+let envelope = KmsAeadEnvelope::<GcpKmsProvider, Ring>::with_options(
+    GcpKmsProvider::new(&key_ref).await?,
+    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+)?;
+# let _ = envelope;
+# Ok(())
+# }
+```
+
+Configure it on every envelope that reads those values, on the one that upgrades them, see
+[Old values](#old-values), and on every envelope that writes new values beside them: a reader
+cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0.29 values.
+
 ## Old values
 
-0.29 read every layout written since 0.8.0. 0.30 reads the length-prefixed envelope and the bare
-encrypted key, the layouts of 0.28.1 and earlier, only with the deprecated `legacy-formats`
-feature, and fails with `LEGACY_FORMAT` without it. To keep reading such values:
+0.30 writes Tink's KMS envelope, and wraps every DEK as a serialized Tink key. 0.29 wrote envelope
+layout v1 and the encrypted key layout `[0xFF][0x01]…`, and 0.28.1 and earlier a length-prefixed
+envelope, all with the raw DEK wrapped. 0.30 reads them only with the deprecated `legacy-formats`
+feature, and fails with `LEGACY_FORMAT` without it, see [Formats](./formats.md#values-written-by-029-and-earlier).
 
-1. enable `legacy-formats`;
-2. rewrite the stored values with the upgrade functions, see
+The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
+[Default algorithm](#default-algorithm).
+
+To move stored values to the new format:
+
+1. upgrade every process that reads the values to 0.30 with `legacy-formats`. 0.29 and earlier
+   cannot read Tink's format, so no process writes it before every reader has the upgrade;
+2. rewrite the stored values with `upgrade_legacy_value` and `upgrade_legacy_encrypted_key` of
+   `KmsAeadEnvelope`, one or two KMS calls per value, see
    [Upgrading stored values](./formats.md#upgrading-stored-values);
 3. turn the feature off.
 
-Values written by 0.29 read without the feature.
+`CipherTextWithEncryptedKey::separate` reads Tink's format only, with or without the feature, so
+code that separated stored 0.29 values runs after the sweep.

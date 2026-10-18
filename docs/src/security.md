@@ -18,13 +18,18 @@ It does not protect values from:
 
 The AAD protects a value from being moved: a value copied into another row or column, with an AAD
 that names its place, fails to open there. The AAD itself is not encrypted, and neither is the
-header of envelope layout v1, which holds the key version and the wrapped DEK's length. The header
-is not authenticated, so a field in it is only ever an address or an audit value, never a choice of
-algorithm or mode.
+length of the wrapped DEK at the start of Tink's KMS envelope, which is not authenticated either.
 
-A `DekBinding` protects a wrapped DEK the same way at the KMS: a DEK wrapped for one tenant or
-record does not unwrap for another, see [Binding a wrapped key](./providers.md#binding-a-wrapped-key).
-On AWS the binding is logged by CloudTrail in plain text, so it holds nothing secret.
+A wrapped DEK carries no context that the KMS authenticates. Whoever can write where wrapped
+DEKs are stored, such as a database table or a keyring store, can copy a wrapped DEK to another
+record or relabel it, and the KMS unwraps it for any principal allowed to decrypt with that KEK.
+The controls for this are in the deployment:
+
+- write access to the stored keys is kept apart from the right to decrypt with the KEK;
+- each isolation boundary, such as a tenant or an environment, has a KEK of its own, so a DEK
+  copied across it fails to unwrap;
+- the KMS audit log of decrypt calls, turned on where the KMS leaves it off by default, shows
+  which principal unwrapped which key.
 
 The local KMS has no IAM, no audit log and no HSM, see its [limits](./providers/local.md#limits).
 
@@ -48,9 +53,9 @@ Deterministic encryption with AES-SIV takes no random nonce.
 
 ## Key lifetime and zeroization
 
-`DataEncryptionKey`, `DeterministicDataEncryptionKey`, `LocalKek` and the Vault token are zeroized
-on drop and shown as `***` by `Debug`. The DEK cache zeroizes a key when its entry leaves the cache
-and no `with_key` closure holds it.
+`DataEncryptionKey`, `LocalKek` and the Vault token are zeroized on drop and shown as `***` by
+`Debug`. The DEK cache zeroizes a key when its entry leaves the cache and no `with_key` closure
+holds it.
 
 Some copies are out of the library's reach:
 

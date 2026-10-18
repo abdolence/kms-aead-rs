@@ -1,8 +1,8 @@
-//! The AEAD backends: the public [`AeadBackend`] a caller chooses at runtime and, behind it, one
-//! crate-private [`AeadBackendOps`] implementation per crypto library, so that no type of a
+//! The AEAD backends: one public zero-sized type per crypto library, each implementing the sealed
+//! [`AeadBackend`], and the crate-private [`AeadBackendOps`] they run on, so that no type of a
 //! crypto library reaches the public API.
 
-use std::fmt::{Display, Formatter};
+use std::fmt::Debug;
 
 use secret_vault_value::SecretValue;
 
@@ -11,12 +11,18 @@ use crate::{AeadAlgorithm, KmsAeadResult};
 
 #[cfg(feature = "ring")]
 mod ring;
+#[cfg(feature = "ring")]
+pub use self::ring::Ring;
 
 #[cfg(feature = "aws-lc-rs")]
 mod aws_lc;
+#[cfg(feature = "aws-lc-rs")]
+pub use aws_lc::AwsLc;
 
 #[cfg(feature = "rustcrypto")]
 mod rust_crypto;
+#[cfg(feature = "rustcrypto")]
+pub use rust_crypto::RustCrypto;
 
 #[cfg(all(
     test,
@@ -24,100 +30,108 @@ mod rust_crypto;
 ))]
 mod contract;
 
-/// The crypto library that runs the [`AeadAlgorithm`]s. The features `ring`, `aws-lc` and
-/// `rustcrypto` each add one variant, and a build may enable any number of them.
+/// The crypto library that runs the [`AeadAlgorithm`]s: [`Ring`], [`AwsLc`] or [`RustCrypto`],
+/// each added by its feature. A build may enable any number of them, and the backend is the `B`
+/// of [`AeadCipher<B>`](crate::AeadCipher), [`DeterministicCipher<B>`](crate::DeterministicCipher),
+/// [`KmsAeadEnvelope<P, B>`](crate::KmsAeadEnvelope) and
+/// [`LocalKmsProvider<B>`](crate::providers::LocalKmsProvider).
+///
+/// Sealed: only the backend types of this crate implement it. It has no methods, only its
+/// [`NAME`](Self::NAME), so code generic over the backend names this trait and nothing else:
+///
+/// ```rust
+/// use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+/// use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadResult};
+/// use secret_vault_value::SecretValue;
+///
+/// struct Orders<B> {
+///     envelope: KmsAeadEnvelope<LocalKmsProvider<B>, B>,
+/// }
+///
+/// impl<B: AeadBackend> Orders<B> {
+///     fn new() -> KmsAeadResult<Self> {
+///         let kek = LocalKekId::try_from("orders".to_string())?;
+///         let provider = LocalKmsProvider::ephemeral(kek)?;
+///         Ok(Self {
+///             envelope: KmsAeadEnvelope::new(provider)?,
+///         })
+///     }
+///
+///     async fn round_trip(&self, card: &SecretValue) -> KmsAeadResult<SecretValue> {
+///         let sealed = self.envelope.encrypt_value(b"orders/1042", card).await?;
+///         self.envelope.decrypt_value(b"orders/1042", &sealed).await
+///     }
+/// }
+///
+/// # #[cfg(feature = "ring")]
+/// # async fn example() -> KmsAeadResult<()> {
+/// let orders = Orders::<kms_aead::Ring>::new()?;
+/// let card = SecretValue::from("4111 1111 1111 1111");
+/// assert_eq!(orders.round_trip(&card).await?, card);
+/// # Ok(())
+/// # }
+/// ```
 ///
 /// There is no default backend: with Cargo's feature unification, a default chosen by features
 /// would change for every crate in a build when one crate enables another backend. A value
 /// sealed by one backend opens with any other that implements its algorithm.
 ///
-/// Without a backend feature the enum has no variant, so nothing that takes one can be built:
-/// [`AeadCipher`](crate::AeadCipher), [`KmsAeadEnvelope`](crate::KmsAeadEnvelope) and
-/// [`LocalKmsProvider`](crate::providers::LocalKmsProvider) compile but cannot be constructed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum AeadBackend {
-    /// The [ring](https://crates.io/crates/ring) library, with the `ring` feature:
-    /// ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. It does not
-    /// zeroize its expanded key schedules, so they stay in freed memory after each call.
-    #[cfg(feature = "ring")]
-    Ring,
-    /// The [aws-lc-rs](https://crates.io/crates/aws-lc-rs) library, with the `aws-lc` or the
-    /// `aws-lc-fips` feature: every [`AeadAlgorithm`].
+/// A build without a backend feature has no type that implements it, so nothing that seals or
+/// wraps can be constructed.
+pub trait AeadBackend: private::Sealed + Copy + Debug + Send + Sync + 'static {
+    /// The backend's name in spans and logs, the value of the `/kms_aead/backend` span field:
+    /// `ring`, `aws-lc` or `rustcrypto`. `aws-lc-fips` runs the `aws-lc` backend.
     ///
-    /// With `aws-lc-fips` it runs on the AWS-LC FIPS module, and so does every other user of
-    /// aws-lc-rs in the build, even when `aws-lc` is enabled too. AES-256-GCM is the algorithm
-    /// for FIPS deployments.
+    /// ```rust
+    /// use kms_aead::AeadBackend;
     ///
-    /// aws-lc-rs copies the key into an AEAD context that AWS-LC allocates with its own
-    /// allocator, which overwrites every allocation with zeros before freeing it
-    /// (`OPENSSL_free`). The expanded key schedule therefore does not stay in freed memory after
-    /// a call, as long as the application leaves AWS-LC's allocator in place: a replacement
-    /// installed through `CRYPTO_set_mem_functions` or the `OPENSSL_memory_*` hooks decides on
-    /// its own whether freed memory is cleared. The record keys AES-256-GCM-SIV derives from the
-    /// key and the nonce for each call live on the stack, and AWS-LC does not clear them.
-    #[cfg(feature = "aws-lc-rs")]
-    AwsLc,
-    /// The pure-Rust [RustCrypto](https://github.com/RustCrypto/AEADs) crates, with the
-    /// `rustcrypto` feature: every [`AeadAlgorithm`], with `getrandom` as the CSPRNG. Needs no C
-    /// compiler. The feature turns on the crates' `zeroize` features, so their key objects, and
-    /// the Poly1305 and POLYVAL keys each call derives, are zeroized when dropped.
-    #[cfg(feature = "rustcrypto")]
-    RustCrypto,
+    /// # #[cfg(feature = "ring")]
+    /// assert_eq!(kms_aead::Ring::NAME, "ring");
+    /// # #[cfg(feature = "aws-lc-rs")]
+    /// assert_eq!(kms_aead::AwsLc::NAME, "aws-lc");
+    /// # #[cfg(feature = "rustcrypto")]
+    /// assert_eq!(kms_aead::RustCrypto::NAME, "rustcrypto");
+    /// ```
+    const NAME: &'static str;
 }
 
-impl AeadBackend {
-    /// `len` random bytes from the CSPRNG the backend draws its keys and nonces from: ring's
-    /// `SystemRandom`, AWS-LC's `RAND_bytes`, which is the FIPS module's DRBG with
-    /// `aws-lc-fips`, or `getrandom` for RustCrypto.
-    ///
-    /// # Errors
-    ///
-    /// `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub fn generate_random_bytes(self, len: usize) -> KmsAeadResult<SecretValue> {
-        let ops: &dyn AeadBackendOps = self.into();
-        let mut random = SecretValue::new(vec![0; len]);
-        ops.fill_random(random.ref_sensitive_value_mut())
-            .map_err(|_| {
-                KmsAeadEncryptionError::create(
-                    "RANDOM_GENERATOR",
-                    "Unable to generate random bytes",
-                )
-            })?;
-        Ok(random)
-    }
+mod private {
+    /// Seals [`AeadBackend`](super::AeadBackend). Its supertrait is how the crate reaches a
+    /// backend's operations through a `B: AeadBackend` bound, and being crate-private, it keeps
+    /// them out of reach of every other crate, which a public supertrait would not.
+    #[expect(
+        private_bounds,
+        reason = "a crate-private supertrait is what keeps the backend operations uncallable \
+                  outside the crate"
+    )]
+    pub trait Sealed: super::AeadBackendOps {}
 }
 
-/// `ring`, `aws-lc`, `rustcrypto`: the values of the `/kms_aead/backend` span field.
-impl Display for AeadBackend {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let ops: &dyn AeadBackendOps = (*self).into();
-        f.write_str(ops.name())
-    }
-}
-
-/// The one place that maps a backend to its implementation.
-impl From<AeadBackend> for &'static dyn AeadBackendOps {
-    fn from(backend: AeadBackend) -> Self {
-        match backend {
-            #[cfg(feature = "ring")]
-            AeadBackend::Ring => &ring::RingOps,
-            #[cfg(feature = "aws-lc-rs")]
-            AeadBackend::AwsLc => &aws_lc::AwsLcOps,
-            #[cfg(feature = "rustcrypto")]
-            AeadBackend::RustCrypto => &rust_crypto::RustCryptoOps,
-        }
-    }
+/// `len` random bytes from the CSPRNG backend `B` draws its keys and nonces from: ring's
+/// `SystemRandom`, AWS-LC's `RAND_bytes`, which is the FIPS module's DRBG with `aws-lc-fips`, or
+/// `getrandom` for RustCrypto.
+///
+/// # Errors
+///
+/// `RANDOM_GENERATOR` when the CSPRNG fails.
+pub fn generate_random_bytes<B: AeadBackend>(len: usize) -> KmsAeadResult<SecretValue> {
+    let mut random = SecretValue::new(vec![0; len]);
+    B::fill_random(random.ref_sensitive_value_mut()).map_err(|_| {
+        KmsAeadEncryptionError::create("RANDOM_GENERATOR", "Unable to generate random bytes")
+    })?;
+    Ok(random)
 }
 
 pub(crate) type Nonce = [u8; AeadAlgorithm::NONCE_LEN];
 pub(crate) type Tag = [u8; AeadAlgorithm::TAG_LEN];
 
 /// Crypto libraries report no detail on failure, and none is lost here.
-// Only the backends construct it, and a build without a backend feature has none.
 #[cfg_attr(
     not(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")),
-    allow(dead_code)
+    expect(
+        dead_code,
+        reason = "only the backends construct it, and a build without a backend feature has none"
+    )
 )]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Failure {
@@ -131,17 +145,13 @@ pub(crate) enum Failure {
 /// The operations of one backend. `AeadCipher` checks the key length and the support of the
 /// algorithm before it calls a backend, so an implementation may rely on both.
 pub(crate) trait AeadBackendOps {
-    /// `ring`, `aws-lc` or `rustcrypto`: the value of the `backend` span field.
-    fn name(&self) -> &'static str;
-
-    fn supports(&self, algorithm: AeadAlgorithm) -> bool;
+    fn supports(algorithm: AeadAlgorithm) -> bool;
 
     /// Fills `out` from the backend's system CSPRNG.
-    fn fill_random(&self, out: &mut [u8]) -> Result<(), Failure>;
+    fn fill_random(out: &mut [u8]) -> Result<(), Failure>;
 
     /// Seals `in_out` in place and returns the tag.
     fn seal_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,
@@ -152,7 +162,6 @@ pub(crate) trait AeadBackendOps {
     /// Opens `[ciphertext][tag]` in place and returns the length of the plaintext, which starts
     /// at the beginning of `in_out`. `in_out` holds at least a tag.
     fn open_in_place(
-        &self,
         algorithm: AeadAlgorithm,
         key: &[u8],
         nonce: &Nonce,

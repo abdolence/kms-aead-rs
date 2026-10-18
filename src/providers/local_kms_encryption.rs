@@ -10,15 +10,12 @@ use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
+use crate::formats::local_kms::LocalWrappedKey;
 use crate::spans::{self, kms};
 use crate::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, DekBinding,
+    generate_random_bytes, AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey,
     EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
-    KmsKeyVersion,
 };
-
-/// The first byte of a wrapped key: the version of its layout.
-const WRAPPED_KEY_LAYOUT: u8 = 0x01;
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
 /// `.`.
@@ -63,7 +60,7 @@ impl Display for LocalKekId {
 /// The version of a local key encryption key. The highest version a [`LocalKmsProvider`] holds
 /// wraps new keys; every version it holds unwraps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct LocalKekVersion(NonZeroU32);
+pub struct LocalKekVersion(pub(crate) NonZeroU32);
 
 impl From<NonZeroU32> for LocalKekVersion {
     fn from(version: NonZeroU32) -> Self {
@@ -71,7 +68,7 @@ impl From<NonZeroU32> for LocalKekVersion {
     }
 }
 
-/// The version in decimal, as [`EncryptedDataEncryptionKey::key_version`] records it.
+/// The version in decimal, as the `key_version` span field records it.
 impl Display for LocalKekVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -221,8 +218,8 @@ impl std::fmt::Debug for LocalKek {
 }
 
 /// Wraps data encryption keys with a key encryption key (KEK) the process holds, with
-/// AES-256-GCM on the backend it is built with: for development and tests without a cloud KMS,
-/// and for single-host installs where the operator protects the KEK.
+/// AES-256-GCM on the backend `B`: for development and tests without a cloud KMS, and for
+/// single-host installs where the operator protects the KEK.
 ///
 /// kms-aead builds one only when the application calls one of its constructors; no provider
 /// falls back to it. Each constructor logs one `INFO` event naming the KEK id, its versions and
@@ -231,18 +228,15 @@ impl std::fmt::Debug for LocalKek {
 /// # Wrapped keys
 ///
 /// The highest version wraps, and every version the provider holds unwraps, so a new KEK
-/// version can be added while the keys wrapped under the older ones stay readable. The
-/// [`EncryptedDataEncryptionKey`] records the version in decimal as its key version. The
-/// wrapped key is
+/// version can be added while the keys wrapped under the older ones stay readable. The wrapped
+/// key, the bytes of the [`EncryptedDataEncryptionKey`], is
 ///
 /// ```text
 /// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
 /// ```
 ///
-/// with the header up to the version, followed by the bytes of the [`DekBinding`] when the wrap
-/// names one, as the associated data, so neither the id, the version nor the binding can be
-/// changed: a key opens only with the binding it was wrapped with, or with none when it was
-/// wrapped with none. An unwrap refuses a key wrapped under another KEK id before it opens it.
+/// with the header up to the version as the associated data, so neither the id nor the version
+/// can be changed. An unwrap refuses a key wrapped under another KEK id before it opens it.
 ///
 /// # Limits
 ///
@@ -263,22 +257,22 @@ impl std::fmt::Debug for LocalKek {
 /// when it was wrapped under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION` when the provider does
 /// not hold its version, and `DECRYPT` when it is not authentic under that version.
 #[derive(Debug)]
-pub struct LocalKmsProvider {
+pub struct LocalKmsProvider<B> {
     /// Its key is the KEK id, which every wrapped key records.
     kek: KekRef,
     keks: BTreeMap<LocalKekVersion, DataEncryptionKey>,
-    cipher: AeadCipher,
+    cipher: AeadCipher<B>,
 }
 
-impl LocalKmsProvider {
-    /// A provider for the KEK `id` with the versions in `keks`, wrapping on `backend`. The
+impl<B: AeadBackend> LocalKmsProvider<B> {
+    /// A provider for the KEK `id` with the versions in `keks`, wrapping on the backend `B`. The
     /// highest version wraps; every version listed unwraps.
     ///
     /// # Errors
     ///
     /// `LOCAL_KEK_VERSIONS` when `keks` is empty or lists a version twice.
-    pub fn new(id: LocalKekId, keks: Vec<LocalKek>, backend: AeadBackend) -> KmsAeadResult<Self> {
-        let cipher = AeadCipher::new(backend, AeadAlgorithm::Aes256Gcm)?;
+    pub fn new(id: LocalKekId, keks: Vec<LocalKek>) -> KmsAeadResult<Self> {
+        let cipher = AeadCipher::new(AeadAlgorithm::Aes256Gcm)?;
         let mut sources = Vec::with_capacity(keks.len());
         let mut by_version = BTreeMap::new();
         for kek in keks {
@@ -315,85 +309,25 @@ impl LocalKmsProvider {
         })
     }
 
-    /// A provider with one random version-1 KEK from the CSPRNG of `backend`, which lives as
-    /// long as the provider: the keys it wraps cannot be unwrapped once the process exits. For
+    /// A provider with one random version-1 KEK from the CSPRNG of the backend `B`, which lives
+    /// as long as the provider: the keys it wraps cannot be unwrapped once the process exits. For
     /// tests.
     ///
     /// # Errors
     ///
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
-    pub fn ephemeral(id: LocalKekId, backend: AeadBackend) -> KmsAeadResult<Self> {
-        let material = AeadCipher::new(backend, AeadAlgorithm::Aes256Gcm)?
-            .generate_key()?
-            .into_value();
+    pub fn ephemeral(id: LocalKekId) -> KmsAeadResult<Self> {
         let kek = LocalKek {
             version: LocalKekVersion(NonZeroU32::MIN),
-            material,
+            material: generate_random_bytes::<B>(AeadAlgorithm::Aes256Gcm.key_len())?,
             source: "ephemeral",
         };
-        Self::new(id, vec![kek], backend)
-    }
-
-    /// `[0x01][i][KEK id][KEK version]`: the start of a wrapped key and its associated data.
-    fn wrapped_key_header(&self, version: LocalKekVersion) -> KmsAeadResult<Vec<u8>> {
-        let id = self.kek.key().as_bytes();
-        let id_len = u8::try_from(id.len()).map_err(|_| {
-            KmsAeadSystemError::create(
-                "INVALID_LOCAL_KEK_ID",
-                "A local KEK id is longer than 255 bytes",
-            )
-        })?;
-        let mut header = Vec::with_capacity(2 + id.len() + 4);
-        header.push(WRAPPED_KEY_LAYOUT);
-        header.push(id_len);
-        header.extend_from_slice(id);
-        header.extend_from_slice(&version.0.get().to_be_bytes());
-        Ok(header)
-    }
-
-    /// The header of a wrapped key followed by the bytes of `binding`, if any.
-    fn associated_data(header: &[u8], binding: Option<&DekBinding>) -> Vec<u8> {
-        [header, binding.map_or("", DekBinding::as_str).as_bytes()].concat()
-    }
-
-    /// Splits `[0x01][i][KEK id][KEK version]` off a wrapped key and checks the id, before
-    /// anything is opened. Returns the header, which starts the associated data, the version
-    /// and the sealed key.
-    fn read_header<'w>(
-        &self,
-        wrapped: &'w [u8],
-    ) -> KmsAeadResult<(&'w [u8], LocalKekVersion, &'w [u8])> {
-        let malformed = || {
-            KmsAeadEncryptionError::create(
-                "LOCAL_WRAPPED_KEY_FORMAT",
-                "The wrapped key is not in the layout of the local KMS",
-            )
-        };
-        let [WRAPPED_KEY_LAYOUT, id_len, rest @ ..] = wrapped else {
-            return Err(malformed());
-        };
-        let (id, rest) = rest
-            .split_at_checked(usize::from(*id_len))
-            .ok_or_else(malformed)?;
-        if id != self.kek.key().as_bytes() {
-            return Err(KmsAeadEncryptionError::create(
-                "LOCAL_KEK_ID_MISMATCH",
-                &format!(
-                    "The key was wrapped under another local KEK than {}",
-                    self.kek.key()
-                ),
-            ));
-        }
-        let (version, sealed) = rest.split_first_chunk::<4>().ok_or_else(malformed)?;
-        let version = NonZeroU32::new(u32::from_be_bytes(*version))
-            .map(LocalKekVersion)
-            .ok_or_else(malformed)?;
-        Ok((&wrapped[..wrapped.len() - sealed.len()], version, sealed))
+        Self::new(id, vec![kek])
     }
 }
 
 #[async_trait]
-impl KmsAeadEncryptionProvider for LocalKmsProvider {
+impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
     fn kek(&self) -> &KekRef {
         &self.kek
     }
@@ -401,7 +335,6 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
             let (&version, kek) = self.keks.last_key_value().ok_or_else(|| {
@@ -410,18 +343,15 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
                     &format!("The local KEK {} has no version", self.kek.key()),
                 )
             })?;
-            let mut wrapped = self.wrapped_key_header(version)?;
-            let associated_data = Self::associated_data(&wrapped, binding);
+            kms::record_key_version(&version.to_string());
+            let mut wrapped = LocalWrappedKey::header(self.kek.key(), version)?;
             let sealed = kms::timed(async {
                 self.cipher
-                    .encrypt_value(&associated_data, encryption_key.value(), kek)
+                    .encrypt_value(&wrapped, encryption_key.value(), kek)
             })
             .await?;
             wrapped.extend_from_slice(sealed.value());
-            let key_version = KmsKeyVersion::try_from(version.to_string())?;
-            let encrypted_key = EncryptedDataEncryptionKey::new(wrapped, Some(key_version));
-            kms::record_wrap(&encrypted_key);
-            Ok(encrypted_key)
+            Ok(EncryptedDataEncryptionKey::new(wrapped))
         })
         .await
     }
@@ -429,22 +359,34 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
-        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
-        spans::in_span(span, async {
-            let (header, version, sealed) = self.read_header(encrypted_key.wrapped())?;
+        spans::in_span(kms::unwrap_span(&self.kek), async {
+            let wrapped = LocalWrappedKey::split(encrypted_key.value()).ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "LOCAL_WRAPPED_KEY_FORMAT",
+                    "The wrapped key is not in the layout of the local KMS",
+                )
+            })?;
+            if wrapped.kek_id != self.kek.key().as_bytes() {
+                return Err(KmsAeadEncryptionError::create(
+                    "LOCAL_KEK_ID_MISMATCH",
+                    &format!(
+                        "The key was wrapped under another local KEK than {}",
+                        self.kek.key()
+                    ),
+                ));
+            }
+            let version = wrapped.kek_version;
+            kms::record_key_version(&version.to_string());
             let kek = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let sealed = CipherText::from(sealed.to_vec());
-            let associated_data = Self::associated_data(header, binding);
-            let key =
-                kms::timed(async { self.cipher.decrypt_value(&associated_data, &sealed, kek) })
-                    .await?;
+            let sealed = CipherText::from(wrapped.sealed.to_vec());
+            let key = kms::timed(async { self.cipher.decrypt_value(wrapped.header, &sealed, kek) })
+                .await?;
             Ok(DataEncryptionKey::from(key))
         })
         .await
@@ -455,7 +397,7 @@ impl KmsAeadEncryptionProvider for LocalKmsProvider {
 #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
 mod tests {
     use super::*;
-    use crate::test_provider::{renderings, TEST_BACKEND};
+    use crate::test_provider::{renderings, TestBackend};
 
     const ORDERS: &str = "orders";
     const KEK_MATERIAL: [u8; 32] = [0x42; 32];
@@ -467,76 +409,37 @@ mod tests {
 
     #[tokio::test]
     async fn a_wrapped_key_unwraps_to_the_same_key() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::MIN),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
-            TEST_BACKEND,
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = provider.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(wrapped.key_version().map(KmsKeyVersion::as_str), Some("1"));
-        assert_eq!(
-            provider.decrypt_data_encryption_key(&wrapped, None).await?,
-            dek
-        );
+        assert_eq!(provider.decrypt_data_encryption_key(&wrapped).await?, dek);
         assert_eq!(*provider.kek(), KekRef::new(KekProvider::Local, ORDERS));
         Ok(())
     }
 
     #[tokio::test]
-    async fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
+    async fn the_header_is_the_associated_data() -> KmsAeadResult<()> {
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::MIN),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
-            TEST_BACKEND,
-        )?;
-        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
-
-        let wrapped = provider
-            .encrypt_data_encryption_key(&dek, Some(&binding))
-            .await?;
-
-        let (header, sealed) = wrapped.wrapped().split_at(2 + ORDERS.len() + 4);
-        let opened = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?.decrypt_value(
-            &[header, binding.as_str().as_bytes()].concat(),
-            &CipherText::from(sealed.to_vec()),
-            &DataEncryptionKey::from(SecretValue::new(KEK_MATERIAL.to_vec())),
-        )?;
-        assert_eq!(DataEncryptionKey::from(opened), dek);
-        assert_eq!(
-            provider
-                .decrypt_data_encryption_key(&wrapped, Some(&binding))
-                .await?,
-            dek
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn an_unbound_wrap_builds_the_0_29_request() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
-            LocalKekId::try_from(ORDERS.to_string())?,
-            vec![LocalKek::from_secret(
-                LocalKekVersion::from(NonZeroU32::MIN),
-                SecretValue::new(KEK_MATERIAL.to_vec()),
-            )?],
-            TEST_BACKEND,
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = provider.encrypt_data_encryption_key(&dek).await?;
 
-        let (header, sealed) = wrapped.wrapped().split_at(2 + ORDERS.len() + 4);
-        let opened = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::Aes256Gcm)?.decrypt_value(
+        let (header, sealed) = wrapped.value().split_at(2 + ORDERS.len() + 4);
+        let opened = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?.decrypt_value(
             header,
             &CipherText::from(sealed.to_vec()),
             &DataEncryptionKey::from(SecretValue::new(KEK_MATERIAL.to_vec())),
@@ -546,107 +449,63 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_edek_unwraps_only_with_its_binding() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
-            LocalKekId::try_from(ORDERS.to_string())?,
-            vec![LocalKek::from_secret(
-                LocalKekVersion::from(NonZeroU32::MIN),
-                SecretValue::new(KEK_MATERIAL.to_vec()),
-            )?],
-            TEST_BACKEND,
-        )?;
-        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let first = DekBinding::try_from("tenant-42/1".to_string())?;
-        let second = DekBinding::try_from("tenant-42/2".to_string())?;
-        let bound = provider
-            .encrypt_data_encryption_key(&dek, Some(&first))
-            .await?;
-        let unbound = provider.encrypt_data_encryption_key(&dek, None).await?;
-
-        for (wrapped, binding) in [
-            (&bound, Some(&second)),
-            (&bound, None),
-            (&unbound, Some(&first)),
-        ] {
-            let result = provider.decrypt_data_encryption_key(wrapped, binding).await;
-            assert!(
-                matches!(&result, Err(e) if e.code() == "DECRYPT"),
-                "{binding:?}: {result:?}"
-            );
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn the_highest_version_wraps_and_every_version_unwraps() -> KmsAeadResult<()> {
         let [v1, v2, v3] = [1, 2, 3].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let old = LocalKmsProvider::new(
+        let old = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![LocalKek::from_secret(
                 v1,
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
-            TEST_BACKEND,
         )?;
-        let wrapped_by_old = old.encrypt_data_encryption_key(&dek, None).await?;
-        let rotated = LocalKmsProvider::new(
+        let wrapped_by_old = old.encrypt_data_encryption_key(&dek).await?;
+        let rotated = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
                 LocalKek::from_secret(v3, SecretValue::new(vec![0x43; 32]))?,
                 LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
                 LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
             ],
-            TEST_BACKEND,
         )?;
 
-        let wrapped_by_new = rotated.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped_by_new = rotated.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(
-            wrapped_by_new.key_version().map(KmsKeyVersion::as_str),
-            Some("3")
-        );
+        assert_eq!(&wrapped_by_new.value()[8..12], [0, 0, 0, 3]);
         for wrapped in [wrapped_by_old, wrapped_by_new] {
-            assert_eq!(
-                rotated.decrypt_data_encryption_key(&wrapped, None).await?,
-                dek
-            );
+            assert_eq!(rotated.decrypt_data_encryption_key(&wrapped).await?, dek);
         }
         Ok(())
     }
 
     #[tokio::test]
     async fn the_golden_wrapped_key_unwraps() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from("golden".to_string())?,
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
-            TEST_BACKEND,
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
         assert_eq!(
             provider
-                .decrypt_data_encryption_key(
-                    &EncryptedDataEncryptionKey::new(golden.clone(), None),
-                    None
-                )
+                .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(golden.clone()))
                 .await?,
             dek
         );
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
-        assert_eq!(&wrapped.wrapped()[..12], &golden[..12]);
-        assert_eq!(wrapped.wrapped().len(), 12 + 12 + 32 + 16);
+        let wrapped = provider.encrypt_data_encryption_key(&dek).await?;
+        assert_eq!(&wrapped.value()[..12], &golden[..12]);
+        assert_eq!(wrapped.value().len(), 12 + 12 + 32 + 16);
         Ok(())
     }
 
     #[tokio::test]
     async fn a_flipped_header_byte_fails_to_unwrap() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from("golden".to_string())?,
             [7, 6]
                 .map(|version| {
@@ -657,7 +516,6 @@ mod tests {
                 })
                 .into_iter()
                 .collect::<KmsAeadResult<_>>()?,
-            TEST_BACKEND,
         )?;
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
@@ -665,10 +523,10 @@ mod tests {
             for flip in [0x01, 0x80] {
                 let mut wrapped = golden.clone();
                 wrapped[index] ^= flip;
-                let wrapped = EncryptedDataEncryptionKey::new(wrapped, None);
+                let wrapped = EncryptedDataEncryptionKey::new(wrapped);
                 assert!(
                     provider
-                        .decrypt_data_encryption_key(&wrapped, None)
+                        .decrypt_data_encryption_key(&wrapped)
                         .await
                         .is_err(),
                     "byte {index} flipped by {flip:#04x}"
@@ -681,19 +539,18 @@ mod tests {
     #[tokio::test]
     async fn a_key_wrapped_under_another_kek_id_is_refused() -> KmsAeadResult<()> {
         let [orders, invoices] = [ORDERS, "invoices"].map(|id| {
-            LocalKmsProvider::new(
+            LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(id.to_string())?,
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::MIN),
                     SecretValue::new(KEK_MATERIAL.to_vec()),
                 )?],
-                TEST_BACKEND,
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let wrapped = orders?.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = orders?.encrypt_data_encryption_key(&dek).await?;
 
-        let result = invoices?.decrypt_data_encryption_key(&wrapped, None).await;
+        let result = invoices?.decrypt_data_encryption_key(&wrapped).await;
 
         assert!(
             matches!(&result, Err(e) if e.code() == "LOCAL_KEK_ID_MISMATCH"),
@@ -705,19 +562,18 @@ mod tests {
     #[tokio::test]
     async fn an_edek_wrapped_under_another_key_fails_to_unwrap() -> KmsAeadResult<()> {
         let [original, impostor] = [KEK_MATERIAL, [0x43; 32]].map(|material| {
-            LocalKmsProvider::new(
+            LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(ORDERS.to_string())?,
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::MIN),
                     SecretValue::new(material.to_vec()),
                 )?],
-                TEST_BACKEND,
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let wrapped = impostor?.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = impostor?.encrypt_data_encryption_key(&dek).await?;
 
-        let result = original?.decrypt_data_encryption_key(&wrapped, None).await;
+        let result = original?.decrypt_data_encryption_key(&wrapped).await;
 
         assert!(
             matches!(&result, Err(e) if e.code() == "DECRYPT"),
@@ -729,19 +585,18 @@ mod tests {
     #[tokio::test]
     async fn a_version_the_provider_does_not_hold_is_refused() -> KmsAeadResult<()> {
         let [rotated, old] = [2, 1].map(|version| {
-            LocalKmsProvider::new(
+            LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(ORDERS.to_string())?,
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::new(version).unwrap()),
                     SecretValue::new(KEK_MATERIAL.to_vec()),
                 )?],
-                TEST_BACKEND,
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let wrapped = rotated?.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = rotated?.encrypt_data_encryption_key(&dek).await?;
 
-        let result = old?.decrypt_data_encryption_key(&wrapped, None).await;
+        let result = old?.decrypt_data_encryption_key(&wrapped).await;
 
         assert!(
             matches!(&result, Err(e) if e.code() == "LOCAL_KEK_UNKNOWN_VERSION"),
@@ -752,19 +607,18 @@ mod tests {
 
     #[tokio::test]
     async fn a_truncated_wrapped_key_is_refused() -> KmsAeadResult<()> {
-        let provider = LocalKmsProvider::new(
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from("golden".to_string())?,
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
-            TEST_BACKEND,
         )?;
         let golden = hex::decode(GOLDEN_WRAPPED_KEY).unwrap();
 
         for len in [0, 1, 2, 8, 11] {
-            let wrapped = EncryptedDataEncryptionKey::new(golden[..len].to_vec(), None);
-            let result = provider.decrypt_data_encryption_key(&wrapped, None).await;
+            let wrapped = EncryptedDataEncryptionKey::new(golden[..len].to_vec());
+            let result = provider.decrypt_data_encryption_key(&wrapped).await;
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_WRAPPED_KEY_FORMAT"),
                 "{len} bytes: {result:?}"
@@ -788,18 +642,17 @@ mod tests {
             matches!(&unset, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
             "{unset:?}"
         );
-        let no_version = LocalKmsProvider::new(orders.clone(), Vec::new(), TEST_BACKEND);
+        let no_version = LocalKmsProvider::<TestBackend>::new(orders.clone(), Vec::new());
         assert!(
             matches!(&no_version, Err(e) if e.code() == "LOCAL_KEK_VERSIONS"),
             "{no_version:?}"
         );
-        let twice = LocalKmsProvider::new(
+        let twice = LocalKmsProvider::<TestBackend>::new(
             orders,
             vec![
                 LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
                 LocalKek::from_secret(v1, SecretValue::new(vec![0x43; 32]))?,
             ],
-            TEST_BACKEND,
         );
         assert!(
             matches!(&twice, Err(e) if e.code() == "LOCAL_KEK_VERSIONS"),
@@ -830,25 +683,21 @@ mod tests {
     #[tokio::test]
     async fn an_ephemeral_provider_round_trips() -> KmsAeadResult<()> {
         let provider =
-            LocalKmsProvider::ephemeral(LocalKekId::try_from("tests".to_string())?, TEST_BACKEND)?;
+            LocalKmsProvider::<TestBackend>::ephemeral(LocalKekId::try_from("tests".to_string())?)?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let wrapped = provider.encrypt_data_encryption_key(&dek, None).await?;
+        let wrapped = provider.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(
-            provider.decrypt_data_encryption_key(&wrapped, None).await?,
-            dek
-        );
+        assert_eq!(provider.decrypt_data_encryption_key(&wrapped).await?, dek);
         Ok(())
     }
 
     #[test]
     fn debug_prints_no_key_material() -> KmsAeadResult<()> {
         let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
-        let provider = LocalKmsProvider::new(
+        let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x5A; 32]))?],
-            TEST_BACKEND,
         )?;
         let kek = LocalKek::from_secret(v2, SecretValue::new(vec![0x5A; 32]))?;
 
@@ -897,27 +746,23 @@ mod tests {
             let dir = TestDir::new("round-trip");
             let path = dir.file("kek", KEK_BASE64);
             let v1 = LocalKekVersion::from(NonZeroU32::MIN);
-            let from_file = LocalKmsProvider::new(
+            let from_file = LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(ORDERS.to_string())?,
                 vec![LocalKek::from_file(v1, &path)?],
-                TEST_BACKEND,
             )?;
-            let from_secret = LocalKmsProvider::new(
+            let from_secret = LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(ORDERS.to_string())?,
                 vec![LocalKek::from_secret(
                     v1,
                     SecretValue::new(KEK_MATERIAL.to_vec()),
                 )?],
-                TEST_BACKEND,
             )?;
             let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-            let wrapped = from_file.encrypt_data_encryption_key(&dek, None).await?;
+            let wrapped = from_file.encrypt_data_encryption_key(&dek).await?;
 
             assert_eq!(
-                from_secret
-                    .decrypt_data_encryption_key(&wrapped, None)
-                    .await?,
+                from_secret.decrypt_data_encryption_key(&wrapped).await?,
                 dek
             );
             Ok(())

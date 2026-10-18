@@ -54,28 +54,37 @@ Other features:
 
 - `deterministic`: deterministic encryption with AES-SIV, see
   [Deterministic encryption](./deterministic.md);
-- `legacy-formats`: reads the layouts written by 0.28.1 and earlier. Deprecated, see
+- `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated, see
   [Formats](./formats.md);
-- `serde`: `Serialize` and `Deserialize` for `KmsAeadErrorPublicGenericDetails` and for
-  `SecretValue`.
+- `serde`: `Serialize` and `Deserialize` for `Encrypted`, as bytes, for
+  `KmsAeadErrorPublicGenericDetails` and for `SecretValue`;
+- `serde-json`: `Json`, a typed field's plaintext of any serde type, stored as its JSON;
+- `postgres`: `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for
+  tokio-postgres;
+- `sqlx`: sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS
+  stack.
+
+See [Typed fields](./envelope-encryption.md#typed-fields).
 
 ## Choosing a backend
 
 The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is the backend that adds
 no second crypto library to a provider build. `ring` and `rustcrypto` work with every provider
-too, and a build may enable several backends at once and pick one per envelope at runtime:
+too, and a build may enable several backends at once. Each feature adds a type, `Ring`, `AwsLc` or
+`RustCrypto`, and every type that seals or wraps takes one as its backend type parameter:
 
 ```rust
 # fn example() -> kms_aead::KmsAeadResult<()> {
-use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
+use kms_aead::{AeadAlgorithm, AeadCipher, AwsLc};
 
-let cipher = AeadCipher::new(AeadBackend::AwsLc, AeadAlgorithm::Aes256Gcm)?;
+let cipher = AeadCipher::<AwsLc>::new(AeadAlgorithm::Aes256Gcm)?;
 # let _ = cipher;
 # Ok(())
 # }
 ```
 
-There is no default backend, so every constructor that seals or wraps takes an `AeadBackend`.
+There is no default backend. Code generic over the backend bounds it with `B: AeadBackend` and
+nothing else, see [Crypto backends](./crypto-backends.md#code-generic-over-the-backend).
 
 ## Feature rules
 
@@ -94,7 +103,7 @@ The `aws-lc-rs` feature that `aws-lc` and `aws-lc-fips` enable is not a backend 
 alone, the aws-lc-rs build fails. Use `aws-lc` or `aws-lc-fips`.
 
 A build without any backend feature compiles, and `LocalKmsProvider` is in it, but nothing that
-seals or wraps can be constructed, since `AeadBackend` has no variant.
+seals or wraps can be constructed, since no type implements `AeadBackend`.
 
 ## First example
 
@@ -103,16 +112,13 @@ ephemeral KEK lives as long as the process:
 
 ```rust
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{AeadBackend, KmsAeadEnvelope};
+use kms_aead::{KmsAeadEnvelope, Ring};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
-let provider = LocalKmsProvider::ephemeral(
-    LocalKekId::try_from("example".to_string())?,
-    AeadBackend::Ring,
-)?;
-let envelope = KmsAeadEnvelope::new(provider, AeadBackend::Ring)?;
+let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let secret = SecretValue::from("4111 1111 1111 1111");
@@ -130,5 +136,4 @@ the code stays the same.
 
 ## MSRV
 
-The minimum supported Rust version is 1.91, for every feature, on dependencies resolved for it.
-The backends alone build from 1.89.
+The minimum supported Rust version is 1.99, for every feature.
