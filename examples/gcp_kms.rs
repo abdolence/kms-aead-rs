@@ -1,3 +1,4 @@
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 
@@ -17,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let google_kms_key_ring = config_env_var("KMS_KEY_RING")?;
     let google_kms_key = config_env_var("KMS_KEY")?;
 
-    let kms_ref = kms_aead::providers::GcpKmsKeyRef::new(
+    let kms_ref = GcpKmsKeyRef::new(
         google_project_id,
         google_project_location,
         google_kms_key_ring,
@@ -25,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     );
 
     let encryption =
-        KmsAeadEnvelope::<_, Ring>::new(kms_aead::providers::GcpKmsProvider::new(&kms_ref).await?)?;
+        KmsAeadEnvelope::<GcpKmsProvider, Ring>::new(GcpKmsProvider::new(&kms_ref).await?)?;
 
     let secret_value = SecretValue::from("test-secret");
     let test_aad = b"test-aad";

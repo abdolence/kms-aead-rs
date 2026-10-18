@@ -41,7 +41,7 @@ let subscriber = tracing_subscriber::fmt()
 tracing::subscriber::set_global_default(subscriber)?;
 
 let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope.encrypt_value(aad, &SecretValue::from("secret")).await?;

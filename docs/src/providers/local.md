@@ -47,7 +47,7 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tests".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let encrypted = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))

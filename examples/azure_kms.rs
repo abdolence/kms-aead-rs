@@ -19,8 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // use `azure_identity::ManagedIdentityCredential` in Azure deployments
     let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
-    let encryption =
-        KmsAeadEnvelope::<_, AwsLc>::new(AzureKmsProvider::new(&kms_ref, credential)?)?;
+    let encryption = KmsAeadEnvelope::<AzureKmsProvider, AwsLc>::new(AzureKmsProvider::new(
+        &kms_ref, credential,
+    )?)?;
 
     let secret_value = SecretValue::from("test-secret");
     let test_aad = b"test-aad";

@@ -52,7 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         "my-key-ring".to_string(),
         "my-key".to_string(),
     );
-    let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
+    let provider = GcpKmsProvider::new(&kms_ref).await?;
+    let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");

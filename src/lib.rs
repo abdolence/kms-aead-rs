@@ -93,7 +93,8 @@
 //!     "123456789012".into(),
 //!     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".into(),
 //! );
-//! let encryption = KmsAeadEnvelope::<_, Ring>::new(AwsKmsProvider::new(&kms_ref).await?)?;
+//! let provider = AwsKmsProvider::new(&kms_ref).await?;
+//! let encryption = KmsAeadEnvelope::<AwsKmsProvider, Ring>::new(provider)?;
 //!
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
 //! let aad = b"orders/1042";

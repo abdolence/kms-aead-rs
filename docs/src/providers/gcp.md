@@ -19,10 +19,11 @@ let kms_ref = GcpKmsKeyRef::new(
     "my-key".to_string(),
 );
 
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
+let provider = GcpKmsProvider::new(&kms_ref).await?;
+let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 
 // Or with DEKs from the Cloud KMS generator at the HSM protection level
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(
+let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(
     GcpKmsProvider::with_options(
         &kms_ref,
         GcpKmsProviderOptions::new().with_use_kms_random_gen(true),

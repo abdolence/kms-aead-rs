@@ -24,7 +24,8 @@ let kms_ref = AzureKmsKeyRef::new(
 // use `azure_identity::ManagedIdentityCredential` in Azure deployments
 let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(AzureKmsProvider::new(&kms_ref, credential)?)?;
+let provider = AzureKmsProvider::new(&kms_ref, credential)?;
+let envelope = KmsAeadEnvelope::<AzureKmsProvider, AwsLc>::new(provider)?;
 
 let cipher_text = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))

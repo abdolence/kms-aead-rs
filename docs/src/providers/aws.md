@@ -16,10 +16,11 @@ let kms_ref = AwsKmsKeyRef::new(
     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".to_string(),
 );
 
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(AwsKmsProvider::new(&kms_ref).await?)?;
+let provider = AwsKmsProvider::new(&kms_ref).await?;
+let envelope = KmsAeadEnvelope::<AwsKmsProvider, AwsLc>::new(provider)?;
 
 // Or with DEKs from AWS KMS GenerateRandom
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(
+let envelope = KmsAeadEnvelope::<AwsKmsProvider, AwsLc>::new(
     AwsKmsProvider::with_options(
         &kms_ref,
         AwsKmsProviderOptions::new().with_use_kms_random_gen(true),

@@ -35,7 +35,7 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let encrypted = envelope.encrypt_value(b"aad", &SecretValue::from("secret")).await?;
 
 let (cipher_text, encrypted_dek) = encrypted.separate()?;
@@ -248,7 +248,7 @@ where
 # let mut legacy = u64::try_from(wrapped.value().len()).unwrap().to_be_bytes().to_vec();
 # legacy.extend_from_slice(wrapped.value());
 # legacy.extend_from_slice(cipher_text.value());
-# let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 #     provider,
 #     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
 # )?;

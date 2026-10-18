@@ -15,7 +15,8 @@ use secret_vault_value::SecretValue;
 // VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE and VAULT_CACERT are read by the provider
 let key_ref = HcVaultTransitKeyRef::new("orders".to_string());
 
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(HcVaultTransitProvider::new(&key_ref)?)?;
+let provider = HcVaultTransitProvider::new(&key_ref)?;
+let envelope = KmsAeadEnvelope::<HcVaultTransitProvider, AwsLc>::new(provider)?;
 
 let cipher_text = envelope
     .encrypt_value(b"orders/1042", &SecretValue::from("secret"))

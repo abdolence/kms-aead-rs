@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let kms_ref = kms_aead::providers::AwsKmsKeyRef::new(aws_account_id, aws_key_id);
 
-    let encryption = KmsAeadEnvelope::<_, Ring>::new(
+    let encryption = KmsAeadEnvelope::<AwsKmsProvider, Ring>::new(
         AwsKmsProvider::with_options(
             &kms_ref,
             AwsKmsProviderOptions::new().with_use_kms_random_gen(true),

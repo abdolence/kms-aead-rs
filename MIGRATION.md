@@ -13,7 +13,7 @@ In short:
 - `vault-transit-kms-encryption*` features are `hashicorp-vault-transit-kms-encryption*`, and the
   `VaultTransit*` types are `HcVaultTransit*`;
 - `KmsAeadRingEnvelopeEncryption::new(provider).await?` is
-  `KmsAeadEnvelope::<_, Ring>::new(provider)?`, and `RingAeadEncryption` is `AeadCipher<Ring>`.
+  `KmsAeadEnvelope::<P, Ring>::new(provider)?`, and `RingAeadEncryption` is `AeadCipher<Ring>`.
   The backend is a type parameter: `Ring`, `AwsLc` or `RustCrypto`;
 - the `AeadEncryption` and `KmsAeadEnvelopeEncryption` traits are inherent methods taking
   `aad: &[u8]`;

@@ -76,7 +76,7 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key wrapped, to store

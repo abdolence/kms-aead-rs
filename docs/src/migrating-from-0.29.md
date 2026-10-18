@@ -29,9 +29,9 @@ The crate declares `rust-version = "1.99"`.
 | 0.29 | 0.30 |
 |---|---|
 | `KmsAeadRingEnvelopeEncryption<P>` | `KmsAeadEnvelope<P, Ring>`, with the backend as a type parameter |
-| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<_, Ring>::new(provider)?`, not `async`, on AES-256-GCM rather than ChaCha20-Poly1305, see [Default algorithm](#default-algorithm) |
-| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
-| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<_, Ring>::with_options(provider, options)` |
+| `KmsAeadRingEnvelopeEncryption::new(provider).await?` | `KmsAeadEnvelope::<P, Ring>::new(provider)?`, not `async`, on AES-256-GCM rather than ChaCha20-Poly1305, see [Default algorithm](#default-algorithm) |
+| `KmsAeadRingEnvelopeEncryption::with_algorithm(provider, &ring::aead::AES_256_GCM)` | `KmsAeadEnvelope::<P, Ring>::with_options(provider, KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes256Gcm))` |
+| `with_options`, `with_algorithm_options` | `KmsAeadEnvelope::<P, Ring>::with_options(provider, options)` |
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
 | `KmsAeadRingEncryptionProvider` | `KmsAeadEncryptionProvider`, see [Your own provider](#your-own-provider) |
 | module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>` at the crate root |

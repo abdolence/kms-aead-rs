@@ -16,7 +16,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE and VAULT_CACERT are read by the provider
     let key_ref = HcVaultTransitKeyRef::new(config_env_var("VAULT_TRANSIT_KEY")?);
 
-    let encryption = KmsAeadEnvelope::<_, Ring>::new(HcVaultTransitProvider::new(&key_ref)?)?;
+    let encryption = KmsAeadEnvelope::<HcVaultTransitProvider, Ring>::new(
+        HcVaultTransitProvider::new(&key_ref)?,
+    )?;
 
     let secret_value = SecretValue::from("test-secret");
     let test_aad = b"test-aad";

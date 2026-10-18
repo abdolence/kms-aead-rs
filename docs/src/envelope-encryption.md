@@ -13,11 +13,11 @@ use secret_vault_value::SecretValue;
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 // AES-256-GCM by default
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // Or another algorithm
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
 )?;
@@ -47,7 +47,7 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 let aad = b"orders/1042";
 let encrypted = envelope
@@ -97,7 +97,7 @@ use secret_vault_value::SecretValue;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // One KMS call: a new DEK and the same DEK wrapped
 let (dek, encrypted_dek) = envelope.generate_new_dek().await?;
@@ -142,7 +142,7 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, Ring, ValueStruct};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-# let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
 let stored: Vec<u8> = encrypted_dek.value().clone();

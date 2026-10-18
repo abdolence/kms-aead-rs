@@ -88,7 +88,7 @@ async fn encrypt<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAead
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
-    let envelope = KmsAeadEnvelope::<_, AwsLc>::with_options(
+    let envelope = KmsAeadEnvelope::<P, AwsLc>::with_options(
         provider,
         KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
     )?;
@@ -119,7 +119,7 @@ async fn decrypt<P>(
 where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
-    KmsAeadEnvelope::<_, AwsLc>::with_options(
+    KmsAeadEnvelope::<P, AwsLc>::with_options(
         provider,
         KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
     )?

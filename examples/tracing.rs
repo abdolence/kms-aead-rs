@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // An ephemeral KEK lives as long as the process, so nothing it wraps outlives this run.
     let provider =
         LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-    let envelope = KmsAeadEnvelope::<_, Ring>::new(provider)?;
+    let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
     let aad = b"orders/1042";
     let secret = SecretValue::from("4111 1111 1111 1111");

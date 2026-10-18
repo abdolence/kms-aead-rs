@@ -28,7 +28,7 @@ let cache = DekCache::new(
         .with_max_entries(NonZeroUsize::new(10_000).expect("not zero")),
 )?;
 
-let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
     KmsAeadEnvelopeOptions::new().with_dek_cache(cache.clone()),
 )?;
@@ -81,7 +81,7 @@ use kms_aead::KmsAeadEncryptionProvider;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-# let envelope = KmsAeadEnvelope::<_, Ring>::with_options(provider,
+# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
 let (_dek, encrypted_dek) = envelope.generate_new_dek().await?;
 
@@ -145,7 +145,7 @@ use std::time::Duration;
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<_, Ring>::with_options(
+let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
     KmsAeadEnvelopeOptions::new().with_dek_reuse(
         DekReusePolicy::new()

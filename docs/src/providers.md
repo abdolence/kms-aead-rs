@@ -24,7 +24,8 @@ let kms_ref = GcpKmsKeyRef::new(
     "my-key-ring".to_string(),
     "my-key".to_string(),
 );
-let envelope = KmsAeadEnvelope::<_, AwsLc>::new(GcpKmsProvider::new(&kms_ref).await?)?;
+let provider = GcpKmsProvider::new(&kms_ref).await?;
+let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 # let _ = envelope;
 # Ok(())
 # }
