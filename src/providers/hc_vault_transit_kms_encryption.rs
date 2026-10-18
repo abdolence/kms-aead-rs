@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
 use hyper::header::{HeaderName, HeaderValue, CONTENT_TYPE};
@@ -16,38 +17,37 @@ use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use rsb_derive::Builder;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::CertificateDer;
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
 use crate::errors::*;
-use crate::ring_encryption::RingAeadEncryption;
+use crate::spans::{self, kms};
 use crate::*;
 
 const VAULT_TOKEN_HEADER: &str = "x-vault-token";
 const VAULT_NAMESPACE_HEADER: &str = "x-vault-namespace";
 /// Vault Agent and Vault Proxy refuse requests without it when `require_request_header` is set.
 const VAULT_REQUEST_HEADER: &str = "x-vault-request";
-/// A Transit response carries one wrapped or unwrapped data key, so a response this large is not
+/// A Transit response carries one encrypted or decrypted data key, so a response this large is not
 /// one and is not buffered.
-const MAX_RESPONSE_SIZE: usize = 1024 * 1024;
+const MAX_VAULT_RESPONSE_LEN: usize = 1024 * 1024;
 /// The longest Vault error text quoted into an error. A misbehaving proxy may echo the request
 /// or other data into `errors`, so only a short prefix of the first one is kept.
 const MAX_VAULT_ERROR_CHARS: usize = 256;
 
-/// Characters a path segment keeps as they are: the RFC 3986 unreserved set.
-const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+/// The characters percent-encoded in a path segment: every one outside the RFC 3986 unreserved set.
+const PATH_SEGMENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
 
-/// A Vault token: non-empty visible ASCII, zeroized on drop, shown as `***` by `Debug`.
+/// A Vault token: non-empty visible ASCII, zeroised on drop, shown as `***` by `Debug`.
 #[derive(Debug, Clone)]
-pub struct VaultTransitToken(SecretValue);
+pub struct HcVaultTransitToken(SecretValue);
 
-impl TryFrom<SecretValue> for VaultTransitToken {
+impl TryFrom<SecretValue> for HcVaultTransitToken {
     type Error = KmsAeadError;
 
     fn try_from(token: SecretValue) -> Result<Self, Self::Error> {
@@ -63,8 +63,8 @@ impl TryFrom<SecretValue> for VaultTransitToken {
     }
 }
 
-impl VaultTransitToken {
-    /// The HTTP stack copies the value into buffers this crate cannot zeroize. Marking it
+impl HcVaultTransitToken {
+    /// The HTTP stack copies the value into buffers this crate cannot zeroise. Marking it
     /// sensitive keeps it out of the `Debug` output of the request headers.
     fn header_value(&self) -> KmsAeadResult<HeaderValue> {
         let mut value = HeaderValue::from_bytes(self.0.ref_sensitive_value()).map_err(|_| {
@@ -78,25 +78,34 @@ impl VaultTransitToken {
     }
 }
 
-/// A key of the Vault Transit secrets engine.
+/// A key of the HashiCorp Vault Transit secrets engine.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
-pub struct VaultTransitKeyRef {
+pub struct HcVaultTransitKeyRef {
+    /// The name of the Transit key.
     pub key_name: String,
 
-    /// Mount path of the Transit secrets engine.
-    #[default = "\"transit\".into()"]
+    /// Mount path of the Transit secrets engine, [`DEFAULT_MOUNT`](Self::DEFAULT_MOUNT) by
+    /// default.
+    #[default = "Self::DEFAULT_MOUNT.into()"]
     pub mount: String,
 }
 
-/// Options for [`VaultTransitProvider`].
+impl HcVaultTransitKeyRef {
+    /// The default [`mount`](Self::mount): `transit`, the path Vault mounts the engine at when
+    /// none is given.
+    pub const DEFAULT_MOUNT: &'static str = "transit";
+}
+
+/// Options for [`HcVaultTransitProvider`].
 #[derive(Debug, Clone, Builder)]
-pub struct VaultTransitProviderOptions {
+#[non_exhaustive]
+pub struct HcVaultTransitProviderOptions {
     /// Address of the Vault server, such as `https://vault.example.com:8200`.
     pub address: String,
 
     /// Token sent with every request. Without one the requests carry no token, which is what a
     /// Vault Agent or Vault Proxy with `use_auto_auth_token` expects.
-    pub token: Option<VaultTransitToken>,
+    pub token: Option<HcVaultTransitToken>,
 
     /// Vault Enterprise namespace the mount belongs to.
     pub namespace: Option<String>,
@@ -108,14 +117,25 @@ pub struct VaultTransitProviderOptions {
     pub ca_certificate: Option<PathBuf>,
 
     /// Time limit for one request, from opening the connection to receiving the last byte of the
-    /// response.
-    #[default = "Duration::from_secs(60)"]
+    /// response: [`DEFAULT_TIMEOUT`](Self::DEFAULT_TIMEOUT) by default.
+    #[default = "Self::DEFAULT_TIMEOUT"]
     pub timeout: Duration,
 }
 
-impl VaultTransitProviderOptions {
+impl HcVaultTransitProviderOptions {
+    /// The default [`timeout`](Self::timeout): 60 seconds.
+    pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+
     /// Options from the variables the Vault CLI reads: `VAULT_ADDR` (required), `VAULT_TOKEN`,
-    /// `VAULT_NAMESPACE` and `VAULT_CACERT`. An empty variable counts as unset.
+    /// `VAULT_NAMESPACE`, `VAULT_CACERT` and `VAULT_CLIENT_TIMEOUT`. An empty variable counts as
+    /// unset. `VAULT_CLIENT_TIMEOUT` sets [`timeout`](Self::timeout) in the formats the Vault CLI
+    /// reads: whole seconds (`30`), whole days (`2d`) or a Go duration (`30s`, `1h30m`, `1.5s`).
+    ///
+    /// # Errors
+    ///
+    /// `VAULT_INVALID_OPTIONS` when `VAULT_ADDR` is unset, a variable is not valid Unicode, the
+    /// token is not visible ASCII, or `VAULT_CLIENT_TIMEOUT` is not a positive duration in one of
+    /// those formats.
     pub fn from_env() -> KmsAeadResult<Self> {
         let address = env_var("VAULT_ADDR")?.ok_or_else(|| {
             KmsAeadSystemError::create(
@@ -124,44 +144,66 @@ impl VaultTransitProviderOptions {
             )
         })?;
         let token = env_var("VAULT_TOKEN")?
-            .map(|token| VaultTransitToken::try_from(SecretValue::from(token)))
+            .map(|token| HcVaultTransitToken::try_from(SecretValue::from(token)))
             .transpose()?;
+
+        let timeout = env_var("VAULT_CLIENT_TIMEOUT")?
+            .map(|timeout| vault_timeout(&timeout))
+            .transpose()?
+            .unwrap_or(Self::DEFAULT_TIMEOUT);
 
         Ok(Self::new(address)
             .opt_token(token)
             .opt_namespace(env_var("VAULT_NAMESPACE")?)
-            .opt_ca_certificate(env_var("VAULT_CACERT")?.map(PathBuf::from)))
+            .opt_ca_certificate(env_var("VAULT_CACERT")?.map(PathBuf::from))
+            .with_timeout(timeout))
     }
 }
 
-/// Wraps and unwraps data encryption keys with a key of the Vault Transit secrets engine.
+/// Encrypts and decrypts data encryption keys with a key of the HashiCorp Vault Transit secrets
+/// engine. It needs one TLS root store feature and one crypto provider feature.
+///
+/// A response with an error status is `VAULT_STATUS_<status>`: a
+/// [`NetworkError`](crate::errors::KmsAeadError::NetworkError) for a server error or a rate
+/// limit, an [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) otherwise.
+/// `VAULT_HTTP` and `VAULT_TIMEOUT` are network errors for a request that got no complete
+/// response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` encryption
+/// errors for a response or an encrypted key that cannot be read.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
-/// the key version, so it still decrypts after the key is rotated. That version is also recorded
-/// as the [`KmsKeyVersion`], for audit only: decrypt sends the ciphertext and never the recorded
-/// version.
+/// the key version, so it still decrypts after the key is rotated.
 #[derive(Clone)]
-pub struct VaultTransitProvider {
+pub struct HcVaultTransitProvider {
     http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
     encrypt_uri: Uri,
     decrypt_uri: Uri,
-    token: Option<VaultTransitToken>,
+    token: Option<HcVaultTransitToken>,
     namespace: Option<HeaderValue>,
     timeout: Duration,
+    kek: KekRef,
 }
 
-impl VaultTransitProvider {
-    /// A provider with the options from [`VaultTransitProviderOptions::from_env`].
-    pub fn new(key_ref: &VaultTransitKeyRef) -> KmsAeadResult<Self> {
-        Self::with_options(key_ref, VaultTransitProviderOptions::from_env()?)
+impl HcVaultTransitProvider {
+    /// A provider with the options from [`HcVaultTransitProviderOptions::from_env`].
+    ///
+    /// # Errors
+    ///
+    /// As [`HcVaultTransitProviderOptions::from_env`] and [`with_options`](Self::with_options).
+    pub fn new(key_ref: &HcVaultTransitKeyRef) -> KmsAeadResult<Self> {
+        Self::with_options(key_ref, HcVaultTransitProviderOptions::from_env()?)
     }
 
-    /// Fails on an invalid address, mount, key name, namespace or timeout, an unreadable CA
-    /// certificate file, or no CA certificate to trust at all. It sends no request, so a wrong
-    /// token or an unreachable server fail the first encryption.
+    /// A provider for the key at `key_ref` with `options`. It sends no request, so a wrong token
+    /// or an unreachable server fail the first encryption.
+    ///
+    /// # Errors
+    ///
+    /// `VAULT_INVALID_OPTIONS` on an invalid address, mount, key name, namespace or timeout, an
+    /// unreadable CA certificate file, or no CA certificate to trust at all, and `VAULT_TLS` when
+    /// the TLS configuration cannot be built.
     pub fn with_options(
-        key_ref: &VaultTransitKeyRef,
-        options: VaultTransitProviderOptions,
+        key_ref: &HcVaultTransitKeyRef,
+        options: HcVaultTransitProviderOptions,
     ) -> KmsAeadResult<Self> {
         if options.timeout.is_zero() {
             return Err(KmsAeadSystemError::create(
@@ -208,12 +250,6 @@ impl VaultTransitProvider {
             .enable_http1()
             .build();
 
-        debug!(
-            mount = %key_ref.mount,
-            key_name = %key_ref.key_name,
-            "Initialising Vault Transit envelope encryption"
-        );
-
         Ok(Self {
             http_client: Client::builder(TokioExecutor::new()).build(connector),
             encrypt_uri: key_endpoint("encrypt")?,
@@ -221,7 +257,33 @@ impl VaultTransitProvider {
             token: options.token,
             namespace,
             timeout: options.timeout,
+            kek: Self::kek_ref(&address, options.namespace.as_deref(), key_ref),
         })
+    }
+
+    /// `<address>/<namespace>/<mount>/keys/<name>`, without the namespace segment when none is
+    /// set. The address and the namespace are part of it because the same mount and key name
+    /// exist on every Vault server and in every Enterprise namespace, and a cache keyed by the
+    /// KEK must never serve one tenant's data key to another.
+    fn kek_ref(address: &Uri, namespace: Option<&str>, key_ref: &HcVaultTransitKeyRef) -> KekRef {
+        let address = address.to_string();
+        let namespace = namespace
+            .map(|namespace| namespace.trim_matches('/'))
+            .filter(|namespace| !namespace.is_empty());
+        let mount = key_ref.mount.trim_matches('/');
+        let key = match namespace {
+            Some(namespace) => format!(
+                "{}/{namespace}/{mount}/keys/{}",
+                address.trim_end_matches('/'),
+                key_ref.key_name
+            ),
+            None => format!(
+                "{}/{mount}/keys/{}",
+                address.trim_end_matches('/'),
+                key_ref.key_name
+            ),
+        };
+        KekRef::new(KekProvider::HcVaultTransit, key)
     }
 
     async fn post(&self, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
@@ -249,17 +311,23 @@ impl VaultTransitProvider {
 
         trace!(%uri, "Sending Vault Transit request");
         let exchange = async {
-            let response = self.http_client.request(request).await?;
+            let response = self
+                .http_client
+                .request(request)
+                .await
+                .map_err(KmsAeadError::from_vault_http_error)?;
             let status = response.status();
-            // The body buffer belongs to the HTTP stack and is freed without being zeroized.
-            let body = Limited::new(response.into_body(), MAX_RESPONSE_SIZE)
+            // The body buffer belongs to the HTTP stack and is freed without being zeroised.
+            let body = Limited::new(response.into_body(), MAX_VAULT_RESPONSE_LEN)
                 .collect()
                 .await
                 .map_err(|e| {
                     if e.is::<LengthLimitError>() {
                         KmsAeadEncryptionError::create(
                             "VAULT_RESPONSE_TOO_LARGE",
-                            &format!("The Vault response is larger than {MAX_RESPONSE_SIZE} bytes"),
+                            &format!(
+                                "The Vault response is larger than {MAX_VAULT_RESPONSE_LEN} bytes"
+                            ),
                         )
                     } else {
                         KmsAeadError::NetworkError(KmsAeadNetworkError::with_error_chain(
@@ -303,58 +371,67 @@ impl VaultTransitProvider {
 }
 
 #[async_trait]
-impl KmsAeadRingEncryptionProvider for VaultTransitProvider {
+impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
+    fn kek(&self) -> &KekRef {
+        &self.kek
+    }
+
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        let plaintext = encryption_key.value().as_sensitive_base64_str();
-        // The request buffer belongs to the HTTP stack and is freed without being zeroized.
-        let request = serde_json::to_vec(&EncryptRequest {
-            plaintext: &plaintext,
-        })
-        .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
-
-        let body = self.post(&self.encrypt_uri, request).await?;
-        let response: TransitResponse<EncryptData> = parse_response(&body)?;
-        let ciphertext = response.data.ciphertext;
-        let key_version = transit_key_version(&ciphertext);
-        Ok(EncryptedDataEncryptionKey::new(
-            ciphertext.into_bytes(),
-            key_version,
-        ))
-    }
-
-    async fn decrypt_data_encryption_key(
-        &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        let ciphertext = std::str::from_utf8(encrypted_key.wrapped()).map_err(|_| {
-            KmsAeadEncryptionError::create(
-                "VAULT_CIPHERTEXT",
-                "The encrypted data encryption key is not a Vault Transit ciphertext",
-            )
-        })?;
-        let request = serde_json::to_vec(&DecryptRequest { ciphertext })
+        spans::in_span(kms::encrypt_span(&self.kek), async {
+            let plaintext = dek.value().as_sensitive_base64_str();
+            // The request buffer belongs to the HTTP stack and is freed without being zeroised.
+            let request = serde_json::to_vec(&EncryptRequest {
+                plaintext: &plaintext,
+            })
             .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
-        let body = self.post(&self.decrypt_uri, request).await?;
-        let response: TransitResponse<DecryptData> = parse_response(&body)?;
-        // The decode error is dropped because it names a byte of the key and its offset.
-        let plaintext = SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
-            KmsAeadEncryptionError::create(
-                "VAULT_RESPONSE",
-                "The Vault Transit plaintext is not valid base64",
-            )
-        })?;
-        Ok(DataEncryptionKey(plaintext))
+            let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
+            let response: TransitResponse<EncryptData> = parse_response(&body)?;
+            let ciphertext = response.data.ciphertext;
+            match transit_key_version(&ciphertext) {
+                Some(key_version) => kms::record_key_version(key_version),
+                None => warn!("No key version in the Vault Transit ciphertext"),
+            }
+            Ok(EncryptedDataEncryptionKey::new(ciphertext.into_bytes()))
+        })
+        .await
     }
 
-    async fn generate_encryption_key(
+    /// The request URL names the configured key, so that Vault refuses a ciphertext of another
+    /// key.
+    async fn decrypt_data_encryption_key(
         &self,
-        aead_encryption: &RingAeadEncryption,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        aead_encryption.generate_data_encryption_key()
+        spans::in_span(kms::decrypt_span(&self.kek), async {
+            let ciphertext = std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
+                KmsAeadEncryptionError::create(
+                    "VAULT_CIPHERTEXT",
+                    "The encrypted data encryption key is not a Vault Transit ciphertext",
+                )
+            })?;
+            if let Some(key_version) = transit_key_version(ciphertext) {
+                kms::record_key_version(key_version);
+            }
+            let request = serde_json::to_vec(&DecryptRequest { ciphertext })
+                .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
+
+            let body = kms::timed(self.post(&self.decrypt_uri, request)).await?;
+            let response: TransitResponse<DecryptData> = parse_response(&body)?;
+            // The decode error is dropped because it names a byte of the key and its offset.
+            let plaintext =
+                SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
+                    KmsAeadEncryptionError::create(
+                        "VAULT_RESPONSE",
+                        "The Vault Transit plaintext is not valid base64",
+                    )
+                })?;
+            Ok(DataEncryptionKey::from(plaintext))
+        })
+        .await
     }
 }
 
@@ -404,7 +481,7 @@ impl VaultErrorResponse {
     }
 }
 
-/// serde_json quotes the offending value in its messages, and in a decrypt response that value
+/// serde_json quotes the offending value in its messages, and in a decryption response that value
 /// can be the data key itself, so only the category and position are kept.
 fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     serde_json::from_slice(body).map_err(|e| {
@@ -420,20 +497,11 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     })
 }
 
-/// The `N` of the `vault:vN:` prefix of a Transit ciphertext. It is recorded for audit only:
-/// Vault reads the version from its own ciphertext at decrypt.
-fn transit_key_version(ciphertext: &str) -> Option<KmsKeyVersion> {
-    match ciphertext
-        .strip_prefix("vault:v")
-        .and_then(|rest| rest.split_once(':'))
-        .map(|(version, _)| KmsKeyVersion::try_from(version.to_string()))
-    {
-        Some(Ok(version)) => Some(version),
-        _ => {
-            warn!("No key version in the Vault Transit ciphertext");
-            None
-        }
-    }
+/// The `N` of the `vault:vN:` prefix of a Transit ciphertext, for the span only: Vault reads
+/// the version from its own ciphertext at decrypt.
+fn transit_key_version(ciphertext: &str) -> Option<&str> {
+    let (version, _) = ciphertext.strip_prefix("vault:v")?.split_once(':')?;
+    (!version.is_empty() && version.bytes().all(|byte| byte.is_ascii_digit())).then_some(version)
 }
 
 /// Whether requests to `address` carry the token and the data keys in plain text off this host:
@@ -460,6 +528,33 @@ fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
             &format!("{name} is not valid Unicode"),
         )),
     }
+}
+
+/// A `VAULT_CLIENT_TIMEOUT` value in the formats the Vault CLI reads: whole seconds (`30`), whole
+/// days (`2d`) or a Go duration (`30s`, `1h30m`, `1.5s`). Zero and negative values are refused:
+/// to the Vault CLI zero means no time limit, which this provider does not offer.
+fn vault_timeout(text: &str) -> KmsAeadResult<Duration> {
+    let timeout = if let Ok(seconds) = text.parse::<u64>() {
+        Some(Duration::from_secs(seconds))
+    } else if let Some(days) = text.strip_suffix('d') {
+        days.parse::<u64>()
+            .ok()
+            .and_then(|days| days.checked_mul(24 * 60 * 60))
+            .map(Duration::from_secs)
+    } else {
+        GoDuration::try_from(text)
+            .ok()
+            .and_then(|timeout| u64::try_from(timeout.nanoseconds()).ok())
+            .map(Duration::from_nanos)
+    };
+    timeout.filter(|timeout| !timeout.is_zero()).ok_or_else(|| {
+        KmsAeadSystemError::create(
+            "VAULT_INVALID_OPTIONS",
+            &format!(
+                "VAULT_CLIENT_TIMEOUT `{text}` is not a positive number of seconds or a duration such as `30s`"
+            ),
+        )
+    })
 }
 
 /// A Vault address: an `http` or `https` URI with a host and no query. Its text without the
@@ -489,7 +584,7 @@ fn encoded_vault_path(field: &str, path: &str) -> KmsAeadResult<String> {
                 "VAULT_INVALID_OPTIONS",
                 &format!("`{path}` is not a valid Vault {field}: its segments must not be empty, `.` or `..`"),
             )),
-            segment => Ok(utf8_percent_encode(segment, PATH_SEGMENT).to_string()),
+            segment => Ok(utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string()),
         })
         .collect::<KmsAeadResult<Vec<_>>>()
         .map(|segments| segments.join("/"))
@@ -501,9 +596,9 @@ fn encoded_vault_path(field: &str, path: &str) -> KmsAeadResult<String> {
 fn tls_config(ca_certificate: Option<&Path>) -> KmsAeadResult<rustls::ClientConfig> {
     let roots = trusted_roots(selected_root_store(), ca_certificate)?;
 
-    #[cfg(feature = "vault-transit-kms-encryption-tls-aws-lc-rs")]
+    #[cfg(feature = "hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs")]
     let provider = rustls::crypto::aws_lc_rs::default_provider();
-    #[cfg(feature = "vault-transit-kms-encryption-tls-ring")]
+    #[cfg(feature = "hashicorp-vault-transit-kms-encryption-tls-ring")]
     let provider = rustls::crypto::ring::default_provider();
 
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
@@ -516,7 +611,7 @@ fn tls_config(ca_certificate: Option<&Path>) -> KmsAeadResult<rustls::ClientConf
 
 fn selected_root_store() -> rustls::RootCertStore {
     let mut roots = rustls::RootCertStore::empty();
-    #[cfg(feature = "vault-transit-kms-encryption-tls-roots")]
+    #[cfg(feature = "hashicorp-vault-transit-kms-encryption-tls-roots")]
     {
         let system_certificates = rustls_native_certs::load_native_certs();
         for error in &system_certificates.errors {
@@ -524,7 +619,7 @@ fn selected_root_store() -> rustls::RootCertStore {
         }
         roots.add_parsable_certificates(system_certificates.certs);
     }
-    #[cfg(feature = "vault-transit-kms-encryption-tls-webpki")]
+    #[cfg(feature = "hashicorp-vault-transit-kms-encryption-tls-webpki")]
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     roots
 }
@@ -572,56 +667,31 @@ fn trusted_roots(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use crate::formats::Envelope;
+    use crate::test_http::answer_with;
+    use crate::test_provider::TestBackend;
     use tokio::net::TcpListener;
 
     const TOKEN: &str = "hvs.token-marker-value";
     const DATA_KEY: &str = "data-key-marker-value-of-32bytes";
     const TEST_KEY: &str = "orders";
+    const ENCRYPTED_DEK: &str = "vault:v1:encrypted-dek";
 
     /// Ends a test whose request would otherwise hang, so a missing timeout fails the test.
     const TEST_GUARD: Duration = Duration::from_secs(5);
 
-    fn local_provider(listener: &TcpListener) -> VaultTransitProvider {
+    fn local_provider(listener: &TcpListener) -> HcVaultTransitProvider {
         let address = format!("http://{}", listener.local_addr().unwrap());
-        let token = VaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
-        let options = VaultTransitProviderOptions::new(address)
+        let token = HcVaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
+        let options = HcVaultTransitProviderOptions::new(address)
             .with_token(token)
             .with_timeout(Duration::from_millis(200));
-        VaultTransitProvider::with_options(&VaultTransitKeyRef::new(TEST_KEY.into()), options)
+        HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(TEST_KEY.into()), options)
             .unwrap()
     }
 
-    /// Answers every request on `listener` with `status` and `body`.
-    fn answer_with(listener: TcpListener, status: StatusCode, body: String) {
-        tokio::spawn(async move {
-            loop {
-                let (mut connection, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let mut buffer = [0u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    let read = connection.read(&mut buffer).await.unwrap();
-                    request.extend_from_slice(&buffer[..read]);
-                }
-                let response = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                connection.write_all(response.as_bytes()).await.unwrap();
-            }
-        });
-    }
-
     fn data_key() -> DataEncryptionKey {
-        DataEncryptionKey(SecretValue::from(DATA_KEY))
-    }
-
-    fn error_code(error: &KmsAeadError) -> &str {
-        match error {
-            KmsAeadError::SystemError(error) => &error.public.code,
-            KmsAeadError::NetworkError(error) => &error.public.code,
-            KmsAeadError::EncryptionError(error) => &error.public.code,
-        }
+        DataEncryptionKey::from(SecretValue::from(DATA_KEY))
     }
 
     fn assert_no_secrets(error: &KmsAeadError) {
@@ -631,6 +701,138 @@ mod tests {
             assert!(!text.contains(DATA_KEY), "{text}");
             assert!(!text.contains(data_key_base64.as_str()), "{text}");
         }
+    }
+
+    #[tokio::test]
+    async fn decrypt_names_the_configured_kek() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let provider = local_provider(&listener);
+        let data_key_base64 = data_key().value().as_sensitive_base64_str();
+        let requests = answer_with(
+            listener,
+            200,
+            format!(
+                r#"{{"data":{{"plaintext":"{}"}}}}"#,
+                data_key_base64.as_str()
+            ),
+        );
+
+        provider
+            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
+                b"vault:v1:encrypted-dek".into(),
+            ))
+            .await
+            .unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .head
+                .starts_with(&format!("POST /v1/transit/decrypt/{TEST_KEY} ")),
+            "{}",
+            requests[0].head
+        );
+        assert_eq!(
+            provider.kek().key(),
+            format!("http://{address}/transit/keys/{TEST_KEY}")
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypt_sends_only_the_key_and_decrypt_only_the_ciphertext() -> KmsAeadResult<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        let data_key_base64 = data_key().value().as_sensitive_base64_str();
+        let requests = answer_with(
+            listener,
+            200,
+            format!(
+                r#"{{"data":{{"ciphertext":"{ENCRYPTED_DEK}","plaintext":"{}"}}}}"#,
+                data_key_base64.as_str()
+            ),
+        );
+
+        let encrypted_dek = provider.encrypt_data_encryption_key(&data_key()).await?;
+        provider.decrypt_data_encryption_key(&encrypted_dek).await?;
+
+        let bodies: Vec<serde_json::Value> = requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert_eq!(
+            bodies,
+            [
+                serde_json::json!({ "plaintext": data_key_base64.as_str() }),
+                serde_json::json!({ "ciphertext": ENCRYPTED_DEK }),
+            ]
+        );
+        Ok(())
+    }
+
+    fn kek_of(address: &str, namespace: Option<&str>) -> KekRef {
+        let options = HcVaultTransitProviderOptions::new(address.into())
+            .opt_namespace(namespace.map(str::to_string));
+        HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(TEST_KEY.into()), options)
+            .unwrap()
+            .kek()
+            .clone()
+    }
+
+    #[test]
+    fn kek_names_the_address_the_namespace_and_the_key() {
+        assert_eq!(
+            kek_of("https://vault.example.com:8200/", Some("/tenant-a/")),
+            KekRef::new(
+                KekProvider::HcVaultTransit,
+                format!("https://vault.example.com:8200/tenant-a/transit/keys/{TEST_KEY}")
+            )
+        );
+        assert_eq!(
+            kek_of("https://vault.example.com:8200", None).key(),
+            format!("https://vault.example.com:8200/transit/keys/{TEST_KEY}")
+        );
+    }
+
+    #[test]
+    fn keks_differ_across_namespaces_and_addresses() {
+        let address = "https://vault.example.com:8200";
+        assert_ne!(
+            kek_of(address, Some("tenant-a")),
+            kek_of(address, Some("tenant-b"))
+        );
+        assert_ne!(kek_of(address, None), kek_of(address, Some("tenant-a")));
+        assert_ne!(
+            kek_of(address, None),
+            kek_of("https://vault.example.org:8200", None)
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_server_is_a_network_error() {
+        // A port that was just freed refuses the connection.
+        let address = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let options = HcVaultTransitProviderOptions::new(format!("http://{address}"))
+            .with_timeout(Duration::from_secs(2));
+        let provider = HcVaultTransitProvider::with_options(
+            &HcVaultTransitKeyRef::new(TEST_KEY.into()),
+            options,
+        )
+        .unwrap();
+
+        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+            panic!("a refused connection is not an encrypted key");
+        };
+
+        assert!(matches!(error, KmsAeadError::NetworkError(_)), "{error:?}");
+        assert_eq!(error.code(), "VAULT_HTTP");
     }
 
     #[tokio::test]
@@ -651,7 +853,7 @@ mod tests {
             panic!("an unanswered request is not an encrypted key");
         };
         assert!(matches!(error, KmsAeadError::NetworkError(_)));
-        assert_eq!(error_code(&error), "VAULT_TIMEOUT");
+        assert_eq!(error.code(), "VAULT_TIMEOUT");
     }
 
     #[tokio::test]
@@ -662,7 +864,7 @@ mod tests {
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
         answer_with(
             listener,
-            StatusCode::FORBIDDEN,
+            403,
             format!("denied {TOKEN} {DATA_KEY} {}", data_key_base64.as_str()),
         );
 
@@ -671,15 +873,48 @@ mod tests {
         };
 
         assert!(matches!(error, KmsAeadError::EncryptionError(_)));
-        assert_eq!(error_code(&error), "VAULT_STATUS_403");
+        assert_eq!(error.code(), "VAULT_STATUS_403");
         assert_no_secrets(&error);
     }
 
     #[test]
     fn token_is_not_shown_by_debug() {
-        let token = VaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
+        let token = HcVaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
 
         assert!(!format!("{token:?}").contains(TOKEN));
+    }
+
+    #[test]
+    fn client_timeout_reads_the_vault_cli_formats() -> KmsAeadResult<()> {
+        for (text, expected) in [
+            ("30", Duration::from_secs(30)),
+            ("+30", Duration::from_secs(30)),
+            ("2d", Duration::from_secs(2 * 24 * 60 * 60)),
+            ("30s", Duration::from_secs(30)),
+            ("1h30m", Duration::from_secs(90 * 60)),
+            ("1.5s", Duration::from_millis(1500)),
+            (".5m", Duration::from_secs(30)),
+            ("250ms", Duration::from_millis(250)),
+            ("10us", Duration::from_micros(10)),
+            ("10µs", Duration::from_micros(10)),
+            ("100ns", Duration::from_nanos(100)),
+        ] {
+            assert_eq!(vault_timeout(text)?, expected, "{text}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn client_timeout_that_is_not_a_positive_duration_is_refused() {
+        for text in [
+            "0", "0s", "-5", "-5s", "5x", "s", "1.2.3s", "1h30", "30 s", "1.5d", "abc",
+        ] {
+            let Err(error) = vault_timeout(text) else {
+                panic!("`{text}` is not a positive Vault client timeout");
+            };
+            assert!(matches!(error, KmsAeadError::SystemError(_)), "{text}");
+            assert_eq!(error.code(), "VAULT_INVALID_OPTIONS", "{text}");
+        }
     }
 
     #[test]
@@ -689,23 +924,18 @@ mod tests {
         };
 
         assert!(matches!(error, KmsAeadError::SystemError(_)));
-        assert_eq!(error_code(&error), "VAULT_INVALID_OPTIONS");
+        assert_eq!(error.code(), "VAULT_INVALID_OPTIONS");
     }
 
     #[tokio::test]
     async fn unparseable_decrypt_response_is_not_quoted_in_error() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let provider = local_provider(&listener);
-        answer_with(
-            listener,
-            StatusCode::OK,
-            format!(r#"{{"data":"{DATA_KEY}"}}"#),
-        );
+        answer_with(listener, 200, format!(r#"{{"data":"{DATA_KEY}"}}"#));
 
         let Err(error) = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
-                None,
+                b"vault:v1:encrypted-dek".into(),
             ))
             .await
         else {
@@ -724,23 +954,20 @@ mod tests {
         // boundary.
         let echoed = format!("{}{DATA_KEY}", "é".repeat(MAX_VAULT_ERROR_CHARS));
         let body = serde_json::json!({ "errors": [echoed, DATA_KEY] }).to_string();
-        answer_with(listener, StatusCode::BAD_REQUEST, body);
+        answer_with(listener, 400, body);
 
         let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
             panic!("a 400 is not an encrypted key");
         };
 
-        assert_eq!(error_code(&error), "VAULT_STATUS_400");
+        assert_eq!(error.code(), "VAULT_STATUS_400");
         assert_no_secrets(&error);
         assert!(format!("{error}").chars().count() < 2 * MAX_VAULT_ERROR_CHARS);
     }
 
     #[test]
     fn key_version_is_read_from_the_transit_ciphertext() {
-        assert_eq!(
-            transit_key_version("vault:v3:AbCd+/ef=="),
-            Some(KmsKeyVersion::try_from("3".to_string()).unwrap())
-        );
+        assert_eq!(transit_key_version("vault:v3:AbCd+/ef=="), Some("3"));
         for malformed in [
             "vault:3:AbCd",
             "vault:v:AbCd",
@@ -774,10 +1001,10 @@ mod tests {
 
     /// Runs against the Vault server in `VAULT_ADDR`, with a Transit key named `VAULT_TRANSIT_KEY`
     /// that `VAULT_TOKEN` may encrypt with, decrypt with and rotate.
-    fn live_provider() -> VaultTransitProvider {
+    fn live_provider() -> HcVaultTransitProvider {
         let key_name =
             std::env::var("VAULT_TRANSIT_KEY").expect("VAULT_TRANSIT_KEY must name a Transit key");
-        VaultTransitProvider::new(&VaultTransitKeyRef::new(key_name)).unwrap()
+        HcVaultTransitProvider::new(&HcVaultTransitKeyRef::new(key_name)).unwrap()
     }
 
     #[tokio::test]
@@ -792,26 +1019,28 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadRingEnvelopeEncryption::new(provider.clone())
-            .await
-            .unwrap();
+        let encryption = KmsAeadEnvelope::<_, TestBackend>::new(provider.clone()).unwrap();
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
-        let key_version = |cipher_text: &CipherTextWithEncryptedKey| {
+        let key_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
-            encrypted_dek.key_version().map(KmsKeyVersion::to_string)
+            let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
+            transit_key_version(&ciphertext).map(str::to_string)
         };
 
-        let before_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let before_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
-        let after_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
         assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
         assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
-                encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
+                encryption
+                    .decrypt(aad.as_bytes(), &cipher_text)
+                    .await
+                    .unwrap(),
                 secret
             );
         }
@@ -821,12 +1050,12 @@ mod tests {
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn invalid_token_is_rejected() {
         let key_name = std::env::var("VAULT_TRANSIT_KEY").unwrap();
-        let token = VaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
-        let options = VaultTransitProviderOptions::from_env()
+        let token = HcVaultTransitToken::try_from(SecretValue::from(TOKEN)).unwrap();
+        let options = HcVaultTransitProviderOptions::from_env()
             .unwrap()
             .with_token(token);
         let provider =
-            VaultTransitProvider::with_options(&VaultTransitKeyRef::new(key_name), options)
+            HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(key_name), options)
                 .unwrap();
 
         let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {

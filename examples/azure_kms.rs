@@ -1,5 +1,7 @@
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::Envelope;
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider};
-use kms_aead::*;
+use kms_aead::{Encrypted, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
 
 pub fn config_env_var(name: &str) -> Result<String, String> {
@@ -19,22 +21,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // use `azure_identity::ManagedIdentityCredential` in Azure deployments
     let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
-    let encryption: KmsAeadRingEnvelopeEncryption<AzureKmsProvider> =
-        KmsAeadRingEnvelopeEncryption::new(AzureKmsProvider::new(&kms_ref, credential)?).await?;
+    let envelope = KmsAeadEnvelope::<AzureKmsProvider, AwsLc>::new(AzureKmsProvider::new(
+        &kms_ref, credential,
+    )?)?;
 
     let secret_value = SecretValue::from("test-secret");
-    let test_aad = "test-aad".to_string();
+    let test_aad = b"test-aad";
 
-    let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
+    let cipher_text: Encrypted<SecretValue, Envelope> =
+        envelope.encrypt(test_aad, &secret_value).await?;
 
-    println!("Encrypted to {:?}", cipher_text.to_hex_string());
+    println!("Encrypted to {}", cipher_text.to_hex_string());
 
-    let secret_value = encryption.decrypt_value(&test_aad, &cipher_text).await?;
+    let decrypted: SecretValue = envelope.decrypt(test_aad, &cipher_text).await?;
+    assert_eq!(decrypted, secret_value);
 
-    println!(
-        "We have our secret back: {}",
-        secret_value.sensitive_value_to_str().unwrap() == "test-secret"
-    );
+    println!("Decrypted to the original value");
 
     Ok(())
 }

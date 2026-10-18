@@ -1,0 +1,21 @@
+[book]
+authors = ["Abdulla Abdurakhmanov"]
+language = "en"
+src = "src"
+title = "KMS envelope encryption for Rust"
+description = "Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto"
+
+[rust]
+edition = "2021"
+
+[build]
+build-dir = "output"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+git-repository-url = "https://github.com/abdolence/kms-aead-rs"
+cname = "kms-aead-rust.abdolence.dev"
+
+[output.html.playground]
+runnable = false

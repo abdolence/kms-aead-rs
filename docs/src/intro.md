@@ -1,0 +1,80 @@
+# KMS envelope encryption for Rust
+
+Library provides envelope encryption with a key encryption key held by a KMS, and AEAD
+encryption without a KMS:
+
+- KMS providers for:
+    - Google Cloud KMS;
+    - AWS KMS;
+    - Azure Key Vault and Managed HSM;
+    - HashiCorp Vault Transit;
+    - A local KMS with a key the application holds, for development, tests and single-host
+      installs;
+- AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
+- Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
+  and the library reads Tink's, see [Formats](./formats.md);
+- Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
+  crates. A value sealed by one backend opens with any other;
+- Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
+  keys;
+- Deterministic encryption with AES-SIV, for values that are looked up by equality;
+- Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
+- Optional KMS-side random generators for GCP and AWS;
+- Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
+  in them;
+- No unsafe code.
+
+To start using the library, see [Getting started](./getting-started.md).
+
+## Envelope encryption
+
+A value is sealed with an AEAD algorithm under a data encryption key (DEK). The DEK is then
+encrypted by a key encryption key (KEK) that never leaves the KMS, and the encrypted DEK is stored
+next to the cipher text. KMS documentation, and Azure Key Vault's `wrapKey` and `unwrapKey`
+operations, call this wrapping the DEK. To read the value, the KMS decrypts the DEK, and the DEK
+opens the value locally.
+
+So the KMS sees only DEKs, never the data, and a KMS call is needed only to encrypt or decrypt a
+DEK. Access to the data is controlled by access to the KEK: revoke the KMS permission, or
+destroy the key, and the stored values cannot be opened.
+
+The additional authenticated data (AAD) is authenticated but not encrypted: a value opens only
+with the AAD it was sealed with. Use it to tie a value to where it is stored, such as a table
+and a row id, so that a value copied to another row fails to open.
+
+## Choosing a mode
+
+The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
+stored value holds:
+
+- **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, encrypted
+  with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
+  more KMS call, unless the envelope has a DEK cache. Use it when values are written rarely,
+  such as secrets and configuration, or when one DEK per value is a requirement. See
+  [Envelope encryption](./envelope-encryption.md);
+- **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK seals many
+  values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
+  still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
+  the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
+  [DEK caching and reuse](./dek-caching.md);
+- **One fixed key**, `encrypt` of `AeadCipher` or `DeterministicCipher` with one key that
+  the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink's wire
+  format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
+  it for a column that BigQuery reads, with no key rotation. See
+  [One fixed key](./envelope-encryption.md#one-fixed-key);
+- **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the encrypted DEK
+  versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
+  record is the place for central rotation and retirement of keys, and for values that BigQuery
+  and Tink read across rotations. See [kms-aead-keyring](https://crates.io/crates/kms-aead-keyring).
+
+Both envelope modes seal a value of a Rust type, such as an application newtype, into an
+`Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
+it as bytes, so a column of secrets needs no store of its own. See
+[Typed fields](./envelope-encryption.md#typed-fields).
+
+`AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
+holds.
+
+## Licence
+
+Apache Software License (ASL)

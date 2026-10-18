@@ -3,54 +3,157 @@ on:
   push:
   pull_request:
     types: [opened]
+  # A new advisory against dependencies that did not change is caught by the weekly run, which runs
+  # the cargo deny job only.
+  schedule:
+    - cron: '5 4 * * 6'
 jobs:
-  # One row per Vault Transit TLS root store and crypto provider pair, and one per TLS stack
-  # the Azure provider builds with. gcloud-sdk's TLS features select reqwest's TLS stack too:
-  # `gcp-kms-encryption` turns on native-tls and `gcloud-sdk/tls-webpki-roots` turns on rustls
-  # with aws-lc-rs, so each Azure row picks the GCP features that leave the Azure choice in
-  # effect.
+  # The provider rows: two Vault Transit rows that between them build each TLS root store and each
+  # crypto provider, the two choices being independent, and one row per TLS stack the Azure
+  # provider builds with. gcloud-sdk's TLS features select reqwest's TLS stack
+  # too: `gcp-kms-encryption` turns on native-tls and `gcloud-sdk/tls-webpki-roots` turns on
+  # rustls with aws-lc-rs, so each Azure row picks the GCP features that leave the Azure choice in
+  # effect. The provider builds already compile aws-lc-rs for TLS, so they run on the aws-lc
+  # backend and must not pull in ring; the ring Vault row is the exception its name states, and
+  # the Azure no-provider row runs on rustcrypto, so that a provider build without ring or aws-lc
+  # as its AEAD backend is covered. aws-sdk-kms still brings aws-lc-rs into that row.
+  #
+  # The backend rows build ring and rustcrypto alone, and aws-lc alone in the FIPS row, so that
+  # one backend never hides a missing feature gate in another. deterministic builds beside ring,
+  # never only beside the RustCrypto AEAD crates, so it cannot lean on their dependencies. The
+  # all-backends row runs the cross-backend contract tests and the legacy-format readers. `absent` lists the crates a row's normal dependency
+  # tree must not contain.
   build:
     name: ${{ matrix.name }}
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - name: no-vault
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption
-          - name: vault-roots-aws-lc-rs
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-aws-lc-rs
-          - name: vault-webpki-aws-lc-rs
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-aws-lc-rs
-          - name: vault-roots-ring
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-roots,vault-transit-kms-encryption-tls-ring
-          - name: vault-webpki-ring
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,vault-transit-kms-encryption-tls-webpki,vault-transit-kms-encryption-tls-ring
-          - name: azure-native-tls
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-native-tls
-          - name: azure-rustls-aws-lc-rs
-            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-tls-aws-lc-rs
-          - name: azure-rustls-no-provider
-            features: aws-kms-encryption,serde,ring-aead-encryption,azure-kms-encryption-tls-no-provider
+          - name: gcp, aws on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc
+            absent: ring
+          - name: vault roots, aws-lc-rs TLS on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
+            absent: ring
+          - name: vault webpki, ring TLS on ring, legacy formats
+            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
+          - name: azure native-tls on aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-native-tls
+            absent: ring
+          - name: azure rustls aws-lc-rs on aws-lc
+            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-tls-aws-lc-rs
+            absent: ring
+          - name: azure rustls no-provider on rustcrypto
+            features: aws-kms-encryption,serde,rustcrypto,azure-kms-encryption-tls-no-provider
+            absent: ring
+          - name: backend ring, deterministic
+            features: ring,deterministic
+            absent: aws-lc-rs
+          - name: backend rustcrypto
+            features: rustcrypto
+            absent: ring aws-lc-rs
+          - name: all backends, legacy formats
+            features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
+          - name: 'fields: serde-json, postgres, sqlx on ring'
+            features: ring,serde,serde-json,postgres,sqlx
+            absent: rustls native-tls
+          - name: backend aws-lc FIPS
+            features: aws-lc-fips
+            absent: ring aws-lc-sys
+            fips: true
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          profile: minimal
-          toolchain: stable
           components: rustfmt, clippy
+      # The FIPS module builds from source with CMake and Go.
+      - if: matrix.fips
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
       - name: Run checks
         env:
           FEATURES: ${{ matrix.features }}
+          ABSENT: ${{ matrix.absent }}
         run: |
           cargo fmt -- --check
           if cargo tree -e normal --features "$FEATURES" -d --depth 0 | grep -q '^reqwest '; then
             echo "Two reqwest versions: the Azure TLS features would configure the one azure_core does not use"
             exit 1
           fi
+          for crate in $ABSENT; do
+            if cargo tree -e normal --features "$FEATURES" --prefix none -f '{p}' | grep -q "^$crate v"; then
+              echo "$crate is in the dependency tree of $FEATURES"
+              exit 1
+            fi
+          done
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
+  # A provider build that names no AEAD backend must fail with the crate's own message.
+  backend-guard:
+    name: provider without a backend is refused
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          if output=$(cargo check --features aws-kms-encryption 2>&1); then
+            echo "cargo check --features aws-kms-encryption built without a backend"
+            exit 1
+          fi
+          grep -F 'kms-aead needs a crypto backend for its KMS providers' <<< "$output" || { echo "$output"; exit 1; }
+  # The docs.rs feature set with rustdoc warnings denied: docs.rs itself publishes a broken
+  # intra-doc link or a missing doc without complaint. The minimal sets catch a link to an item
+  # that a feature gates, which crates re-exporting kms-aead items show as a dead link.
+  docs:
+    name: cargo doc
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - name: cargo doc with minimal feature sets
+        run: |
+          cargo doc --no-deps
+          cargo doc --no-deps --features ring
+  # The book's code compiles as doctests only with the docs.rs feature set, which no build row has.
+  book:
+    name: book
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: '0.5.4'
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cd docs && mdbook build
+  # `rust-version` in Cargo.toml: the docs.rs feature set builds on it.
+  msrv:
+    name: rust-version
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
   vault-live:
     name: vault-live
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     services:
       vault:
@@ -67,10 +170,7 @@ jobs:
       VAULT_TRANSIT_KEY: orders
     steps:
       - uses: actions/checkout@v7
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
+      - uses: dtolnay/rust-toolchain@stable
       - run: |
           for attempt in $(seq 1 30); do
             curl -sf "$VAULT_ADDR/v1/sys/health" > /dev/null && break
@@ -78,4 +178,48 @@ jobs:
           done
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
-      - run: cargo test --features vault-transit-kms-encryption --lib -- --ignored vault_transit
+      - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
+  # The PostgreSQL integrations of `Encrypted` through tokio-postgres and sqlx.
+  postgres-live:
+    name: postgres-live
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --features ring,postgres,sqlx --test postgres_fields -- --ignored
+  # The Azure provider against the Lowkey Vault Key Vault emulator, which needs no Azure account.
+  azure-emulator:
+    name: azure-emulator
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    services:
+      lowkey-vault:
+        image: nagyesta/lowkey-vault:7.3.112
+        ports:
+          - 8443:8443
+    env:
+      AZURE_KEY_VAULT_EMULATOR_URL: https://localhost:8443
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: |
+          for attempt in $(seq 1 60); do
+            curl -skf "$AZURE_KEY_VAULT_EMULATOR_URL/ping" > /dev/null && break
+            sleep 1
+          done
+      - run: cargo test --features azure-kms-encryption,aws-lc --test azure_kms_emulator -- --ignored

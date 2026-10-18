@@ -10,54 +10,83 @@ use azure_security_keyvault_keys::models::{
 };
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use std::sync::Arc;
-use tracing::*;
 
-use crate::ring_encryption::RingAeadEncryption;
-use rvstruct::ValueStruct;
+use super::KmsKeyVersion;
+use crate::formats::azure::AzureWrappedKey;
+use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
 
-/// A Key Vault or Managed HSM key that wraps data encryption keys.
+/// A Key Vault or Managed HSM key that encrypts data encryption keys.
 ///
-/// Without `key_version` the latest version wraps new keys. Each encrypted key records the
-/// version that wrapped it, and unwrapping uses that recorded version, so keys wrapped before a
-/// rotation still unwrap afterwards.
+/// Without `key_version` the latest version encrypts new keys. Each encrypted key carries the
+/// version that encrypted it, and decrypting uses that version, so keys encrypted before a rotation
+/// still decrypt afterwards.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct AzureKmsKeyRef {
     /// Vault URL, such as `https://my-vault.vault.azure.net`.
     pub vault_url: String,
+    /// The key name: `0-9`, `a-z`, `A-Z` and `-`.
     pub key_name: String,
+    /// The version that encrypts new keys. Without one, the latest version encrypts them.
     pub key_version: Option<KmsKeyVersion>,
 }
 
+/// Options for [`AzureKmsProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct AzureKmsProviderOptions {
     /// Wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys, `A256Kw` for
     /// Managed HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and
     /// unknown algorithms are rejected. Encrypted keys do not record the algorithm, so it stays
-    /// fixed for the life of the key.
-    #[default = "EncryptionAlgorithm::RsaOaep256"]
+    /// fixed for the life of the key. [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default.
+    #[default = "Self::DEFAULT_ALGORITHM"]
     pub algorithm: EncryptionAlgorithm,
 
     /// Client settings passed to the Azure SDK, such as a custom HTTP transport or retry policy.
     pub client_options: Option<KeyClientOptions>,
 }
 
-/// Wraps and unwraps data encryption keys with an Azure Key Vault key.
+impl AzureKmsProviderOptions {
+    /// The default [`algorithm`](Self::algorithm): `RsaOaep256`, RSA-OAEP with SHA-256, for an
+    /// RSA key.
+    pub const DEFAULT_ALGORITHM: EncryptionAlgorithm = EncryptionAlgorithm::RsaOaep256;
+}
+
+/// Encrypts and decrypts data encryption keys with an Azure Key Vault key.
 ///
-/// Unwrapping needs the key version recorded in [`EncryptedDataEncryptionKey::key_version`].
-/// Store an encrypted key with [`EncryptedDataEncryptionKey::to_bytes`] or
-/// [`EncryptedDataEncryptionKey::to_hex_string`] and read it back with `TryFrom<&[u8]>` or
-/// [`EncryptedDataEncryptionKey::try_from_hex_string`], which keep the version Azure needs to
-/// unwrap after a rotation.
+/// A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
+/// `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
+/// [`NetworkError`](crate::errors::KmsAeadError::NetworkError), any other status an
+/// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError).
+///
+/// Key Vault decrypts only with the key version that encrypted, and no Tink client exists for
+/// Azure, so the provider's [`EncryptedDataEncryptionKey`] is kms-aead's own layout, the key
+/// version before Key Vault's encrypted DEK:
+///
+/// ```text
+/// [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault encrypted DEK]
+/// ```
+///
+/// A decryption of other bytes fails with `AZURE_ENCRYPTED_DEK_FORMAT` before any request.
+///
+/// For the same reason, the plaintext Key Vault encrypts is the raw data encryption key of 16, 32
+/// or 64 bytes, not the key as Tink serialises it, so every wrap algorithm takes it: AES key wrap
+/// takes only multiples of 8 bytes.
 pub struct AzureKmsProvider {
     client: KeyClient,
     azure_key_ref: AzureKmsKeyRef,
     options: AzureKmsProviderOptions,
+    kek: KekRef,
 }
 
 impl AzureKmsProvider {
     /// Uses the key at `kms_key_ref` with any Azure credential, for example one from
-    /// `azure_identity`. No request is made until the first key is wrapped or unwrapped.
+    /// `azure_identity`, and the default options. No request is made until the first key is
+    /// encrypted or decrypted.
+    ///
+    /// # Errors
+    ///
+    /// As [`with_options`](Self::with_options).
     pub fn new(
         kms_key_ref: &AzureKmsKeyRef,
         credential: Arc<dyn TokenCredential>,
@@ -65,9 +94,14 @@ impl AzureKmsProvider {
         Self::with_options(kms_key_ref, AzureKmsProviderOptions::new(), credential)
     }
 
-    /// Fails with a system error when the vault URL is not an HTTP(S) URL, when the key name
-    /// holds characters Key Vault does not allow in it, or when the algorithm is `Rsa1_5` or
-    /// unknown.
+    /// As [`new`](Self::new), with `options`.
+    ///
+    /// # Errors
+    ///
+    /// A [`SystemError`](crate::errors::KmsAeadError::SystemError): `AZURE_KEY_NAME` when the key
+    /// name holds characters Key Vault does not allow in it, `AZURE_WRAP_ALGORITHM` when the
+    /// algorithm is `Rsa1_5` or unknown, and `AZURE_VAULT_URL` when the vault URL is not an
+    /// HTTP(S) URL.
     pub fn with_options(
         kms_key_ref: &AzureKmsKeyRef,
         options: AzureKmsProviderOptions,
@@ -98,11 +132,6 @@ impl AzureKmsProvider {
             ));
         }
 
-        debug!(
-            "Initialising Azure Key Vault envelope encryption for {}/keys/{}",
-            kms_key_ref.vault_url, kms_key_ref.key_name
-        );
-
         let client = KeyClient::new(
             &kms_key_ref.vault_url,
             credential,
@@ -122,6 +151,14 @@ impl AzureKmsProvider {
             client,
             azure_key_ref: kms_key_ref.clone(),
             options,
+            kek: KekRef::new(
+                KekProvider::Azure,
+                format!(
+                    "{}/keys/{}",
+                    kms_key_ref.vault_url.trim_end_matches('/'),
+                    kms_key_ref.key_name
+                ),
+            ),
         })
     }
 
@@ -129,11 +166,12 @@ impl AzureKmsProvider {
         &self,
         value: Vec<u8>,
     ) -> KmsAeadResult<RequestContent<KeyOperationParameters>> {
-        Ok(RequestContent::try_from(KeyOperationParameters {
+        RequestContent::try_from(KeyOperationParameters {
             algorithm: Some(self.options.algorithm.clone()),
             value: Some(value),
             ..Default::default()
-        })?)
+        })
+        .map_err(KmsAeadError::from_azure_error)
     }
 }
 
@@ -142,84 +180,91 @@ fn is_key_vault_name(name: &str) -> bool {
 }
 
 #[async_trait]
-impl KmsAeadRingEncryptionProvider for AzureKmsProvider {
+impl KmsAeadEncryptionProvider for AzureKmsProvider {
+    fn kek(&self) -> &KekRef {
+        &self.kek
+    }
+
     async fn encrypt_data_encryption_key(
         &self,
-        encryption_key: &DataEncryptionKey,
+        dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        let parameters =
-            self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
-        let wrapped = self
-            .client
-            .wrap_key(
-                &self.azure_key_ref.key_name,
-                parameters,
-                Some(KeyClientWrapKeyOptions {
-                    key_version: self
-                        .azure_key_ref
-                        .key_version
-                        .as_ref()
-                        .map(KmsKeyVersion::to_string),
-                    ..Default::default()
-                }),
+        spans::in_span(kms::encrypt_span(&self.kek), async {
+            let parameters = self.key_operation(dek.value().ref_sensitive_value().clone())?;
+            let wrapped = kms::timed(
+                self.client.wrap_key(
+                    &self.azure_key_ref.key_name,
+                    parameters,
+                    Some(KeyClientWrapKeyOptions {
+                        key_version: self
+                            .azure_key_ref
+                            .key_version
+                            .as_ref()
+                            .map(KmsKeyVersion::to_string),
+                        ..Default::default()
+                    }),
+                ),
             )
-            .await?
-            .into_model()?;
+            .await
+            .and_then(|response| response.into_model())
+            .map_err(KmsAeadError::from_azure_error)?;
 
-        let key_version = wrapped.resource_id()?.version.ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "AZURE_KEY_VERSION",
-                "Azure Key Vault returned a wrapped key without the key version",
-            )
-        })?;
-        let wrapped_bytes = wrapped.result.ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "AZURE_WRAPPED_KEY",
-                "Azure Key Vault returned no wrapped key",
-            )
-        })?;
-        Ok(EncryptedDataEncryptionKey::new(
-            wrapped_bytes,
-            Some(KmsKeyVersion::try_from(key_version)?),
-        ))
+            let key_version = wrapped
+                .resource_id()
+                .map_err(KmsAeadError::from_azure_error)?
+                .version
+                .ok_or_else(|| {
+                    KmsAeadEncryptionError::create(
+                        "AZURE_KEY_VERSION",
+                        "Azure Key Vault returned an encrypted DEK without the key version",
+                    )
+                })?;
+            let encrypted_bytes = wrapped.result.ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "AZURE_WRAPPED_KEY",
+                    "Azure Key Vault returned no encrypted DEK",
+                )
+            })?;
+            let wrapped_key = AzureWrappedKey {
+                key_version: KmsKeyVersion::try_from(key_version)?,
+                wrapped: &encrypted_bytes,
+            };
+            kms::record_key_version(wrapped_key.key_version.as_str());
+            wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
+        })
+        .await
     }
 
+    /// Decrypts with the configured key name and the key version the encrypted key carries, so
+    /// that Key Vault refuses a key encrypted under another key and accepts one encrypted under an
+    /// earlier version of this one.
     async fn decrypt_data_encryption_key(
         &self,
-        encrypted_key: &EncryptedDataEncryptionKey,
+        encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
-        let key_version = encrypted_key.key_version().ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "AZURE_KEY_VERSION_MISSING",
-                "The encrypted data encryption key records no Azure Key Vault key version",
-            )
-        })?;
+        spans::in_span(kms::decrypt_span(&self.kek), async {
+            let wrapped_key = AzureWrappedKey::try_from(encrypted_dek.value().as_slice())?;
+            kms::record_key_version(wrapped_key.key_version.as_str());
 
-        let parameters = self.key_operation(encrypted_key.wrapped().to_vec())?;
-        let unwrapped = self
-            .client
-            .unwrap_key(
+            let parameters = self.key_operation(wrapped_key.wrapped.to_vec())?;
+            let unwrapped = kms::timed(self.client.unwrap_key(
                 &self.azure_key_ref.key_name,
-                key_version.as_str(),
+                wrapped_key.key_version.as_str(),
                 parameters,
                 None,
-            )
-            .await?
-            .into_model()?;
+            ))
+            .await
+            .and_then(|response| response.into_model())
+            .map_err(KmsAeadError::from_azure_error)?;
 
-        let key = unwrapped.result.ok_or_else(|| {
-            KmsAeadEncryptionError::create(
-                "AZURE_UNWRAPPED_KEY",
-                "Azure Key Vault returned no unwrapped key",
-            )
-        })?;
-        Ok(DataEncryptionKey::from(SecretValue::new(key)))
-    }
-
-    async fn generate_encryption_key(
-        &self,
-        aead_encryption: &RingAeadEncryption,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        aead_encryption.generate_data_encryption_key()
+            let key = unwrapped.result.ok_or_else(|| {
+                KmsAeadEncryptionError::create(
+                    "AZURE_UNWRAPPED_KEY",
+                    "Azure Key Vault returned no decrypted key",
+                )
+            })?;
+            Ok(DataEncryptionKey::from(SecretValue::new(key)))
+        })
+        .await
     }
 }
