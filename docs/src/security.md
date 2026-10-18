@@ -94,12 +94,12 @@ A [keyring](./keyring.md) record decides which versions are read and which one s
 and nothing signs it: its integrity rests on the keyring store's access control. So a deployment
 splits two principals:
 
-- **Serving principal**: KMS decrypt on the KEK and read access to the keyring store. `encrypt`
-  and `decrypt` make no KMS wrap call, so it needs nothing more;
+- **Serving principal**: KMS decrypt on the KEK and read access to the keyring store. `encrypt`,
+  `decrypt` and `beacon` make no KMS wrap call, so it needs nothing more;
 - **Administrative principal**: KMS encrypt and decrypt on the KEK, and the only principal with
-  write access to the keyring store. `create`, `rotate`, `change_algorithm`, `mark_compromised`,
-  `retire`, `reinstate`, `destroy`, `rewrap` and `export_bigquery_keyset` run under it, in a
-  job, never in a request handler.
+  write access to the keyring store. `create`, `rotate`, `promote`, `change_algorithm`,
+  `mark_compromised`, `retire`, `reinstate`, `destroy`, `rewrap` and `export_bigquery_keyset` run
+  under it, in a job, never in a request handler.
 
 | KMS | Serving | Administration |
 |---|---|---|
@@ -110,47 +110,58 @@ splits two principals:
 
 The permissions of each store are in [Keyring stores](./keyring/stores.md).
 
-With that split, a writer of the record who can also wrap DEKs is the administrative principal
-itself. A writer of the record without KMS rights cannot add a DEK of its own, since every unwrap
-names the configured KEK and the KMS refuses a DEK wrapped under another key. On a keyring that
-[binds its keys](./keyring/key-binding.md) it cannot copy an existing wrapped DEK into a new
-version either. What it can still do is rewrite states, and a running process refuses every
-record that moves a version backwards, with an `ERROR`, see
-[Record cache](./keyring/record-cache.md#when-the-store-fails-or-misbehaves).
+A writer of the keyring store can copy or relabel a wrapped DEK, between versions of one keyring
+or between keyrings under the same KEK: the KMS unwraps a wrapped DEK for any principal allowed to
+decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
+compromised or destroyed version's DEK back into use under a new key id, or point one tenant's
+version at another tenant's DEK. A writer without KMS rights cannot add a DEK of its own, since
+every unwrap names the configured KEK and the KMS refuses a DEK wrapped under another key. The
+controls for this are the deployment's, as in the [threat model](#threat-model):
+
+- write access to the keyring store for the administrative principal only, and read-only access
+  for the serving principals;
+- one KEK per isolation boundary, such as a tenant or an environment, so a DEK copied across it
+  fails to unwrap;
+- backups of the record, or versioning in the store, to compare with and restore from;
+- the KMS audit log of encrypt calls, which shows whether the administrative job wrapped a
+  version's DEK.
+
+A running process also refuses every record that moves a version backwards, with an `ERROR`, see
+[Record cache](./keyring/record-cache.md#when-the-store-fails-or-misbehaves). That catches a
+rewritten state, such as a cleared compromised flag, and not a copied DEK filed under a new
+version.
 
 ## Keyring limits
 
 - **The administrative principal is trusted.** KMS encrypt plus store write re-activates any
-  version, bound or not. The KMS audit log is the detection;
+  version. The KMS audit log is the detection;
 - **a new process has no baseline.** A store writer can clear a compromised flag, re-activate a
   version or restore a destroyed one for the processes that start after the write. Running
   processes refuse such a record and log an `ERROR`; new ones take it. The record is not signed in
   this release;
-- **Azure Key Vault binds nothing.** A keyring on Azure runs with `bind_keys(false)`, and its
-  record's integrity is the store's access control alone. With an RSA key the wrap is a public-key
+- **an RSA key on Azure Key Vault wraps for anyone.** With an RSA key the wrap is a public-key
   operation, so whoever holds the public key wraps a DEK of their own into the record. Use an AES
-  key;
-- **with `bind_keys(false)`, a destroyed version can come back through the envelope path.** A
-  wrapped DEK kept from a version that has since been destroyed still opens values through
-  `decrypt_envelope_value`, because the KMS unwraps it unbound and the record no longer lists it.
-  Key binding, or a KEK rotation with `rewrap` and the destruction of the previous KEK version,
-  closes it;
+  key, from Managed HSM;
+- **`decrypt_envelope_value` knows no key version.** It unwraps the wrapped DEK an envelope value
+  carries, so a wrapped DEK kept from a version, compromised or destroyed since, still opens values
+  through it. Keep it in the read path for the migration only;
 - **a destroyed version's DEK lives as long as the KEK version that wrapped it.** A backup of the
-  record holds bound bytes the KMS still opens under their own id, see
+  record holds wrapped DEKs the KMS still opens, see
   [Crypto-shredding](./operations.md#crypto-shredding);
-- **equal keyring ids under one KEK get equal bindings.** A staging keyring `tenant-42` and a
-  production one under a shared KEK can exchange wrapped DEKs. Use one KEK per environment;
-- **an exported BigQuery keyset is wrapped unbound**, since BigQuery unwraps it with no
-  associated data. It holds the versions' keys, so treat it as a copy of the record's readable
-  versions, and export again after every rotation and every `mark_compromised`;
-- **envelope values stay unbound.** Store-less and per-call envelope values carry no binding,
-  keyring or not;
+- **an exported BigQuery keyset holds the versions' keys**, wrapped with no associated data, since
+  BigQuery unwraps it with none. Treat it as a copy of the record's readable versions, and export
+  again after every rotation and every `mark_compromised`;
 - **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are
   decided per record before a sweep re-seals them, see
   [The trust of re-sealed values](./operations.md#the-trust-of-re-sealed-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
-  [Deterministic fields](./keyring/deterministic.md#what-they-leak).
+  [Deterministic fields](./keyring/deterministic.md#what-they-leak);
+- **beacons leak likely equality and frequency**, as far as their bits tell values apart, see
+  [Beacons](./keyring/beacons.md#what-a-beacon-leaks);
+- **a promotion has no guard.** A process that has not seen a promoted version reloads its record
+  when it meets a value under it, and fails the read when it cannot reach the store, so the wait
+  before `promote` is the operator's, see [Staged rotation](./keyring/lifecycle.md#staged-rotation).
 
 ## OSS
 

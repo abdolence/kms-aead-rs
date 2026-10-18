@@ -21,8 +21,8 @@ mod fields {}
 #[doc = include_str!("../../docs/src/keyring/deterministic.md")]
 mod deterministic {}
 
-#[doc = include_str!("../../docs/src/keyring/key-binding.md")]
-mod key_binding {}
+#[doc = include_str!("../../docs/src/keyring/beacons.md")]
+mod beacons {}
 
 #[doc = include_str!("../../docs/src/keyring/bigquery.md")]
 mod bigquery {}

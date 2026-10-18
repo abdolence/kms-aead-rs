@@ -27,7 +27,7 @@
   - [Record cache](./keyring/record-cache.md)
   - [Encrypted fields and AAD](./keyring/fields.md)
   - [Deterministic fields](./keyring/deterministic.md)
-  - [Wrap-time key binding](./keyring/key-binding.md)
+  - [Beacons](./keyring/beacons.md)
   - [BigQuery and Tink interop](./keyring/bigquery.md)
 - [Operations](./operations.md)
 
