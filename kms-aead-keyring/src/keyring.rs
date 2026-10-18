@@ -685,6 +685,8 @@ where
     ///
     /// # Errors
     ///
+    /// [`KeyringError::EnvelopeKeyOfKeyVersion`], before any KMS call, when the value carries the
+    /// wrapped key of a version of the keyring's record, in any purpose or state;
     /// [`KeyringError::Kms`] with the errors of `CipherTextWithEncryptedKey::separate` when the
     /// value is not in a layout this build reads, `UNSUPPORTED_ALGORITHM` when the backend does
     /// not implement `algorithm`, the provider's error when the key does not unwrap, and code
@@ -697,6 +699,20 @@ where
     ) -> KeyringResult<SecretValue> {
         spans::in_span(spans::decrypt_envelope(self.id()), async {
             let (cipher_text, dek) = value.separate()?;
+            // The wrapped bytes alone, since the key version in an envelope header is not
+            // authenticated. Wrapped keys are not secret, so the comparison need not be
+            // constant-time.
+            let record = self.cache.current().await;
+            if let Some(version) = record.versions().iter().find(|version| {
+                version
+                    .wrapped_dek()
+                    .is_some_and(|wrapped| wrapped.wrapped() == dek.wrapped())
+            }) {
+                return Err(KeyringError::EnvelopeKeyOfKeyVersion(KeyVersionError {
+                    keyring: self.id().clone(),
+                    key_id: version.key_id(),
+                }));
+            }
             let cipher = AeadCipher::new(self.backend, algorithm)?;
             let (opened, outcome) = self
                 .dek_cache()

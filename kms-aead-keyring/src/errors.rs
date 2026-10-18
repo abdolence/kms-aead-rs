@@ -58,6 +58,12 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
+    /// An envelope value given to
+    /// [`decrypt_envelope_value`](crate::Keyring::decrypt_envelope_value) carries the wrapped key
+    /// of one of the keyring's versions. A version's key never opens through the envelope path,
+    /// which knows no key version, since that would get past the compromised-read policy: a
+    /// holder of a compromised version's leaked key could forge an envelope value around it.
+    EnvelopeKeyOfKeyVersion(KeyVersionError),
     /// A value whose key id belongs to the other purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
@@ -90,6 +96,7 @@ impl KeyringError {
             KeyringError::KeyVersionRetired(_) => "KeyVersionRetired",
             KeyringError::KeyVersionDestroyed(_) => "KeyVersionDestroyed",
             KeyringError::KeyVersionCompromised(_) => "KeyVersionCompromised",
+            KeyringError::EnvelopeKeyOfKeyVersion(_) => "EnvelopeKeyOfKeyVersion",
             KeyringError::KeyPurposeMismatch(_) => "KeyPurposeMismatch",
             KeyringError::InvalidTransition(_) => "InvalidTransition",
             KeyringError::ValueLayout(_) => "ValueLayout",
@@ -236,6 +243,11 @@ impl Display for KeyringError {
                 error.key_id,
                 error.keyring,
                 error.compromise.at()
+            ),
+            KeyringError::EnvelopeKeyOfKeyVersion(error) => write!(
+                f,
+                "The envelope value carries the wrapped key of the key version {} of the keyring {}",
+                error.key_id, error.keyring
             ),
             KeyringError::KeyPurposeMismatch(error) => write!(
                 f,
@@ -580,8 +592,8 @@ pub struct PurposeError {
     pub purpose: Purpose,
 }
 
-/// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`] and
-/// [`KeyringError::KeyVersionDestroyed`].
+/// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
+/// [`KeyringError::KeyVersionDestroyed`] and [`KeyringError::EnvelopeKeyOfKeyVersion`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyVersionError {

@@ -442,6 +442,66 @@ mod tests {
             Ok(())
         }
 
+        #[tokio::test]
+        async fn an_envelope_value_around_a_key_version_key_is_refused() -> TestResult {
+            use kms_aead::{
+                AeadCipher, CipherTextWithEncryptedKey, EncryptedDataEncryptionKey,
+                KmsAeadEncryptionProvider, KmsKeyVersion,
+            };
+
+            let provider = TestProvider::new("tenant-42-kek")?;
+            let keyring = Keyring::create(
+                MemoryKeyringStore::new(),
+                provider.clone(),
+                TEST_BACKEND,
+                TENANT,
+                KeyringPolicy::new(),
+                KeyringOptions::new()
+                    .with_watch(false)
+                    .with_bind_keys(false),
+            )
+            .await?;
+            let compromised = KeyId::try_from(1)?;
+            keyring.mark_compromised(compromised, None).await?;
+            let record = keyring.record();
+            let wrapped = record
+                .version(compromised)
+                .and_then(crate::KeyVersion::wrapped_dek)
+                .ok_or("version 1 holds no key")?;
+            let leaked = provider.decrypt_data_encryption_key(wrapped, None).await?;
+            let forged = AeadCipher::new(TEST_BACKEND, AeadAlgorithm::ChaCha20Poly1305)?
+                .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE), &leaked)?;
+            let relabelled = EncryptedDataEncryptionKey::new(
+                wrapped.wrapped().to_vec(),
+                Some(KmsKeyVersion::try_from("7".to_string())?),
+            );
+
+            for dek in [wrapped, &relabelled] {
+                let value = CipherTextWithEncryptedKey::join(&forged, dek)?;
+                let result = keyring
+                    .decrypt_envelope_value(ENVELOPE_AAD, &value, AeadAlgorithm::ChaCha20Poly1305)
+                    .await;
+                assert!(matches!(
+                    &result,
+                    Err(KeyringError::EnvelopeKeyOfKeyVersion(error)) if error.key_id == compromised
+                ));
+            }
+
+            let envelope = KmsAeadEnvelope::with_options(
+                provider,
+                TEST_BACKEND,
+                KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
+            )?;
+            let genuine = envelope
+                .encrypt_value(ENVELOPE_AAD, &SecretValue::from(ALICE))
+                .await?;
+            let opened = keyring
+                .decrypt_envelope_value(ENVELOPE_AAD, &genuine, AeadAlgorithm::ChaCha20Poly1305)
+                .await?;
+            assert_eq!(opened.as_sensitive_str(), ALICE);
+            Ok(())
+        }
+
         /// `[length: u64 BE][wrapped key][cipher text]`, as kms-aead 0.28.1 wrote it.
         #[cfg(feature = "legacy-formats")]
         #[tokio::test]
