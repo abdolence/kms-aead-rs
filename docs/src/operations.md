@@ -170,7 +170,8 @@ In a real data store the re-seal is a transaction per record or per batch:
 - Firestore: a transaction per document, which reads the document, re-seals every field and writes
   it with the marker. A concurrent application write wins, and the candidate is `Skipped`;
 - PostgreSQL: `SELECT … WHERE seal_randomized < $1 ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED` in a
-  transaction per batch, then the `UPDATE` and the commit.
+  transaction per batch, then the `UPDATE` and the commit. `$1` is the new version's
+  `KeyId::as_u32()`, bound as a `BIGINT`.
 
 Once a sweep reports `failed == 0` and the query returns nothing, `retire` the old version. Keep it
 retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
@@ -254,6 +255,30 @@ hold values the leaked DEK opens. Treat them as exposed and revoke the secrets i
 
 Harmless by itself, since unwrapping needs the KMS. If the attacker may also gain `Decrypt` on the
 KEK, follow the IAM over-grant steps.
+
+Every wrapped DEK is bound at the KMS to `<keyring id>/<key id>`, so a writer of the store who
+copies one into a new version, of this keyring or another, gets a version the KMS refuses to
+unwrap. That holds on every provider that binds: GCP, AWS, Vault Transit and the local KMS. It
+does not hold on Azure Key Vault, nor on any keyring opened with `bind_keys(false)`, where the
+record's integrity rests on the store's access control alone; see
+[Keyring limits](./security.md#keyring-limits).
+
+### A version the administrative job did not create
+
+This case starts from the `ERROR` event of a refused record that moves backwards, whose `rule`
+names the version, or from a version in the record that the administrative job's log does not
+show. Either means that something other than the job wrote the record: a restore, which
+[the previous case](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the
+store.
+
+1. If the version is active, `rotate` its purpose, so that nothing new is sealed under it;
+2. `retire` and then `destroy` the version, after a sweep if values were sealed under it;
+3. check the KMS audit log for the `Encrypt` call that wrapped its DEK. None means its wrapped
+   DEK was copied from another version, which every process on a binding provider refused to
+   unwrap; one from a principal other than the administrative job is an IAM over-grant, see
+   above;
+4. audit who can write the keyring store: the serving principal has no write, and only the
+   administrative job should.
 
 ### The keyring record was deleted or corrupted
 
