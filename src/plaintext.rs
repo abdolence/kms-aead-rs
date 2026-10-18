@@ -8,7 +8,7 @@ use crate::KmsAeadResult;
 /// The encodings of the types here are fixed, so that other readers of the same values decode
 /// them, such as BigQuery's `AEAD.DECRYPT_STRING` on a keyring value: UTF-8 for `String`, the
 /// bytes themselves for `Vec<u8>` and [`SecretValue`], `true` and `false` for `bool`, and decimal
-/// ASCII for the integers, which SQL reads with `CAST`. With the `serde-json` feature, [`Json`]
+/// ASCII for the integers, which SQL reads with `CAST`. With the `serde-json` feature, `Json`
 /// stores any serde type as compact JSON.
 ///
 /// An application type implements it by mapping to and from one of these, such as a newtype

@@ -251,15 +251,20 @@ impl TinkKeyset {
     /// `tink.read_keyset_handle` in Python. A KEK without a Tink key URI wraps it as well, but no
     /// Tink KMS client reads it.
     ///
+    /// It takes the keyset so that its keys are zeroized before the KMS call, leaving the
+    /// serialized keyset as their one copy while the call is in flight.
+    ///
     /// # Errors
     ///
     /// The provider's errors.
-    pub async fn to_encrypted_bytes<P>(&self, provider: &P) -> KmsAeadResult<Vec<u8>>
+    pub async fn into_encrypted_bytes<P>(self, provider: &P) -> KmsAeadResult<Vec<u8>>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {
+        let serialized = DataEncryptionKey::from(self.to_bytes());
+        drop(self);
         let encrypted_keyset = provider
-            .encrypt_data_encryption_key(&DataEncryptionKey::from(self.to_bytes()))
+            .encrypt_data_encryption_key(&serialized)
             .await?
             .into_value();
         Ok(EncryptedKeyset { encrypted_keyset }.encode_to_vec())
@@ -582,7 +587,7 @@ mod tests {
         let keyset = tinkey_aes_gcm_keyset()?;
 
         let encrypted = keyset
-            .to_encrypted_bytes(&crate::test_provider::TestKmsProvider::Working)
+            .into_encrypted_bytes(&crate::test_provider::TestKmsProvider::Working)
             .await?;
 
         assert_eq!(

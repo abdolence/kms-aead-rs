@@ -279,7 +279,7 @@ mod types;
 pub use types::*;
 
 /// The trait whose `value()` and `into_value()` read the bytes of [`CipherText`],
-/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`], [`DeterministicCipherText`]
+/// [`CipherTextWithEncryptedKey`], [`EncryptedDataEncryptionKey`], `DeterministicCipherText`
 /// and [`Encrypted`].
 pub use rvstruct::ValueStruct;
 
