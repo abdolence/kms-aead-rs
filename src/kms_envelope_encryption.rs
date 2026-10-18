@@ -441,7 +441,12 @@ where
 
 #[cfg(all(
     test,
-    any(feature = "ring", feature = "aws-lc", feature = "rustcrypto")
+    any(
+        feature = "ring",
+        feature = "aws-lc",
+        feature = "aws-lc-fips",
+        feature = "rustcrypto"
+    )
 ))]
 mod tests {
     use super::*;

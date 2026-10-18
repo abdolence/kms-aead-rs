@@ -86,9 +86,10 @@ serde = ["dep:serde", "secret-vault-value/serde"]
 # AEAD backends: any number of them in one build.
 ring = ["dep:ring"]
 aws-lc = ["dep:aws-lc-rs", "aws-lc-rs/aws-lc-sys"]
-# Moves every aws-lc-rs user in the build, the rustls aws-lc-rs provider included, to the FIPS
-# module. Needs CMake and Go to build.
-aws-lc-fips = ["aws-lc", "aws-lc-rs/fips"]
+# The AwsLc backend on the FIPS module, without the non-FIPS aws-lc-sys. Moves every aws-lc-rs
+# user in the build, the rustls aws-lc-rs provider included, to the FIPS module. Needs CMake and
+# Go to build. With `aws-lc` as well, both C libraries are built and aws-lc-rs runs on the FIPS one.
+aws-lc-fips = ["dep:aws-lc-rs", "aws-lc-rs/fips"]
 rustcrypto = [
     "dep:aes-gcm",
     "dep:aes-gcm-siv",
