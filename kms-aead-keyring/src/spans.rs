@@ -293,7 +293,7 @@ pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId) {
 pub(crate) fn revalidation_failed(keyring: &KeyringId, error: &KeyringError) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { ERROR_CODE } = error.event_code(),
+        { ERROR_CODE } = error.code(),
         "The keyring record could not be revalidated; the cached record stays in use"
     );
 }
@@ -325,7 +325,7 @@ pub(crate) fn compromised_without_rotation(
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
         { KEY_ID } = %key_id,
-        { ERROR_CODE } = error.event_code(),
+        { ERROR_CODE } = error.code(),
         "Flagged the active key version compromised without a new one, since the new key could \
          not be wrapped: nothing encrypts until rotate succeeds"
     );
@@ -377,7 +377,7 @@ pub(crate) fn watch_reconnected(keyring: &KeyringId) {
 pub(crate) fn watch_failed(keyring: &KeyringId, error: &KeyringError) {
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
-        { ERROR_CODE } = error.event_code(),
+        { ERROR_CODE } = error.code(),
         "The keyring store's change listener did not start: the record TTL alone bounds how late \
          this process sees a change"
     );
@@ -445,7 +445,7 @@ pub(crate) fn sweep_failed(keyring: &KeyringId, record: &str, error: &KeyringErr
     tracing::warn!(
         { KEYRING } = keyring.as_str(),
         { RECORD } = record,
-        { ERROR_CODE } = error.event_code(),
+        { ERROR_CODE } = error.code(),
         "The sweep could not re-seal a record"
     );
 }

@@ -20,8 +20,8 @@ use crate::{
 /// The result of every fallible operation of the crate.
 pub type KeyringResult<T> = Result<T, KeyringError>;
 
-/// Every error of the crate. Match on the variant and its fields: the `Display` text is for
-/// people and may change in any release.
+/// Every error of the crate. Match on the variant and its fields, or on [`code`](Self::code):
+/// the `Display` text is for people and may change in any release.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum KeyringError {
@@ -86,41 +86,34 @@ pub enum KeyringError {
 }
 
 impl KeyringError {
-    /// The variant name, the value of the `error_code` span field.
-    pub(crate) fn code(&self) -> &'static str {
-        match self {
-            KeyringError::Kms(_) => "Kms",
-            KeyringError::Store(_) => "Store",
-            KeyringError::InvalidIdentifier(_) => "InvalidIdentifier",
-            KeyringError::RecordMissing(_) => "RecordMissing",
-            KeyringError::RecordExists(_) => "RecordExists",
-            KeyringError::RecordInvalid(_) => "RecordInvalid",
-            KeyringError::RecordRegressed(_) => "RecordRegressed",
-            KeyringError::RecordConflict(_) => "RecordConflict",
-            KeyringError::KekMismatch(_) => "KekMismatch",
-            KeyringError::NoActiveVersion(_) => "NoActiveVersion",
-            KeyringError::NoAlgorithm(_) => "NoAlgorithm",
-            KeyringError::KeyVersionUnknown(_) => "KeyVersionUnknown",
-            KeyringError::KeyVersionRetired(_) => "KeyVersionRetired",
-            KeyringError::KeyVersionDestroyed(_) => "KeyVersionDestroyed",
-            KeyringError::KeyVersionCompromised(_) => "KeyVersionCompromised",
-            KeyringError::EnvelopeKeyOfKeyVersion(_) => "EnvelopeKeyOfKeyVersion",
-            KeyringError::KeyPurposeMismatch(_) => "KeyPurposeMismatch",
-            KeyringError::InvalidTransition(_) => "InvalidTransition",
-            KeyringError::ValueLayout(_) => "ValueLayout",
-            KeyringError::Plaintext(_) => "Plaintext",
-            KeyringError::DeterministicDisabled => "DeterministicDisabled",
-            KeyringError::Interop(_) => "Interop",
-            KeyringError::ExportAlgorithmUnsupported(_) => "ExportAlgorithmUnsupported",
-        }
-    }
-
-    /// The code an event reports: kms-aead's code for a KMS error, which names what the KMS
-    /// refused, and the variant name otherwise.
-    pub(crate) fn event_code(&self) -> &str {
+    /// The code to match on and the `error_code` span field: kms-aead's own code for
+    /// [`Kms`](KeyringError::Kms), such as `DECRYPT` or a KMS's code, and the variant's name in
+    /// upper snake case otherwise, such as `KEY_VERSION_COMPROMISED`.
+    pub fn code(&self) -> &str {
         match self {
             KeyringError::Kms(error) => error.code(),
-            other => other.code(),
+            KeyringError::Store(_) => "STORE",
+            KeyringError::InvalidIdentifier(_) => "INVALID_IDENTIFIER",
+            KeyringError::RecordMissing(_) => "RECORD_MISSING",
+            KeyringError::RecordExists(_) => "RECORD_EXISTS",
+            KeyringError::RecordInvalid(_) => "RECORD_INVALID",
+            KeyringError::RecordRegressed(_) => "RECORD_REGRESSED",
+            KeyringError::RecordConflict(_) => "RECORD_CONFLICT",
+            KeyringError::KekMismatch(_) => "KEK_MISMATCH",
+            KeyringError::NoActiveVersion(_) => "NO_ACTIVE_VERSION",
+            KeyringError::NoAlgorithm(_) => "NO_ALGORITHM",
+            KeyringError::KeyVersionUnknown(_) => "KEY_VERSION_UNKNOWN",
+            KeyringError::KeyVersionRetired(_) => "KEY_VERSION_RETIRED",
+            KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
+            KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
+            KeyringError::EnvelopeKeyOfKeyVersion(_) => "ENVELOPE_KEY_OF_KEY_VERSION",
+            KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
+            KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
+            KeyringError::ValueLayout(_) => "VALUE_LAYOUT",
+            KeyringError::Plaintext(_) => "PLAINTEXT",
+            KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
+            KeyringError::Interop(_) => "INTEROP",
+            KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
         }
     }
 
@@ -723,4 +716,20 @@ pub struct PlaintextError {
     pub type_name: &'static str,
     /// Why the bytes do not convert.
     pub reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use kms_aead::errors::KmsAeadEncryptionError;
+
+    use super::*;
+    use crate::testing::TENANT;
+
+    #[test]
+    fn a_kms_error_keeps_the_kms_aead_code() {
+        let decrypt = KeyringError::from(KmsAeadEncryptionError::create("DECRYPT", "refused"));
+
+        assert_eq!(decrypt.code(), "DECRYPT");
+        assert_eq!(KeyringError::RecordMissing(TENANT).code(), "RECORD_MISSING");
+    }
 }

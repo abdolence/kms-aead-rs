@@ -203,7 +203,7 @@ filter beside `kms_aead=debug`.
 | `cas_retries` | the compare-and-swap conflicts before the write landed |
 | `versions` | the versions `rewrap` wrapped again, or an export put in the keyset |
 | `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` | the counts of the `SweepReport` |
-| `error_code` | the variant name of the `KeyringError` returned, such as `KeyVersionCompromised` |
+| `error_code` | `KeyringError::code()` of the error returned: kms-aead's code for a KMS or AEAD error, such as `DECRYPT`, and the variant's name in upper snake case otherwise, such as `KEY_VERSION_COMPROMISED` |
 
 ### Keyring events
 
