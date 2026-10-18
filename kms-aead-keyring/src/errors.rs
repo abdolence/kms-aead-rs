@@ -173,6 +173,18 @@ impl KeyringError {
 
     /// A failure of the store `store` that no client error caused, such as a response without
     /// the metadata the store needs.
+    #[cfg_attr(
+        not(any(
+            feature = "firestore",
+            feature = "postgres",
+            feature = "gcs",
+            feature = "s3"
+        )),
+        expect(
+            dead_code,
+            reason = "only the stores fail with it, and none is in the build"
+        )
+    )]
     pub(crate) fn store(store: StoreKind, operation: StoreOperation, message: &str) -> Self {
         KeyringError::Store(KeyringStoreError::new(
             store,
@@ -184,6 +196,18 @@ impl KeyringError {
     /// A failure of the store `store` that the client error `root_cause` caused. The message is
     /// the error followed by each of its sources, since some clients name only the kind of
     /// failure in their own `Display`.
+    #[cfg_attr(
+        not(any(
+            feature = "firestore",
+            feature = "postgres",
+            feature = "gcs",
+            feature = "s3"
+        )),
+        expect(
+            dead_code,
+            reason = "only the stores fail with it, and none is in the build"
+        )
+    )]
     pub(crate) fn store_caused_by(
         store: StoreKind,
         operation: StoreOperation,
@@ -312,8 +336,8 @@ impl Display for KeyringError {
                 error.key_id.as_u32(), error.keyring
             ),
             KeyringError::UnknownKeyVersionState => f.write_str(
-                "Not the name of a key version state: the names are active, decrypt_only, \
-                 retired and destroyed",
+                "Not the name of a key version state: the names are pending, active, \
+                 decrypt_only, retired and destroyed",
             ),
         }
     }
