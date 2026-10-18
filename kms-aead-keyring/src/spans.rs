@@ -44,7 +44,7 @@ const FAILED: &str = "/kms_aead_keyring/failed";
 const RECORD: &str = "/kms_aead_keyring/record";
 
 /// The `dek_cache` value of a call that unwraps through the provider although the keyring has a
-/// cache: `rewrap`, and a compromised version read by `decrypt_with_status`.
+/// cache: `rewrap`, a keyset export, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: impl Display) -> Span {
@@ -85,6 +85,19 @@ pub(crate) fn load(keyring: &KeyringId, store: StoreKind, reason: &'static str) 
         { CHANGED } = field::Empty,
         { REVISION } = field::Empty,
         { RESPONSE_TIME } = field::Empty,
+        { ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring export`, for a BigQuery keyset of `purpose`.
+#[cfg(feature = "bigquery-export")]
+pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
+    debug_span!(
+        "Keyring export",
+        { KEYRING } = keyring.as_str(),
+        { PURPOSE } = %purpose,
+        { VERSIONS } = field::Empty,
+        { DEK_CACHE } = DEK_CACHE_BYPASSED,
         { ERROR_CODE } = field::Empty,
     )
 }

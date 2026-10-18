@@ -26,7 +26,9 @@
 //!
 //! A field that BigQuery also decrypts is declared with
 //! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal
-//! it under an algorithm or a KEK that BigQuery cannot read.
+//! it under an algorithm or a KEK that BigQuery cannot read. With the `bigquery-export` feature,
+//! `Keyring::export_bigquery_keyset` exports the keyset that BigQuery's `KEYS.KEYSET_CHAIN` reads
+//! such fields with.
 //!
 //! # Deterministic fields
 //!
@@ -97,6 +99,7 @@
 //! | `postgres-tls-rustls`, `postgres-tls-rustls-ring`, `postgres-tls-native` | `postgres`, with sqlx's `tls-rustls-aws-lc-rs`, `tls-rustls-ring` or `tls-native-tls` |
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
+//! | `bigquery-export` | `Keyring::export_bigquery_keyset`, on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
 //!
 //! # Example
 //!

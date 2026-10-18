@@ -258,3 +258,34 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+  # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
+  # only, as keyring-gcs does. The keyring lives in the memory store, and the queries read
+  # literals, so the job creates no table.
+  keyring-bigquery:
+    name: keyring-bigquery
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      FEATURES: ring,deterministic,serde,bigquery-export
+      GCP_PROJECT: latestbit
+      GCP_PROJECT_ID: 288860578009
+      PROJECT_ID: latestbit
+      PROJECT_LOCATION: europe-north1
+      KMS_KEY_RING: test-key-ring
+      KMS_KEY: test-key
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: 'projects/${{ env.GCP_PROJECT_ID }}/locations/global/workloadIdentityPools/lb-github-identity-pool/providers/lb-github-identity-pool-provider'
+          service_account: 'lb-github-service-account@${{ env.GCP_PROJECT }}.iam.gserviceaccount.com'
+          create_credentials_file: true
+          access_token_lifetime: '240s'
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
