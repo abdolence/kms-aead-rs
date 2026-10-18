@@ -21,6 +21,15 @@ pub enum AeadAlgorithm {
 }
 
 impl AeadAlgorithm {
+    /// Every algorithm. [`DekCache::with_key`](crate::DekCache::with_key) refuses a key whose
+    /// length fits none of these, so a variant left out here has its keys refused.
+    pub(crate) const ALL: [AeadAlgorithm; 4] = [
+        AeadAlgorithm::ChaCha20Poly1305,
+        AeadAlgorithm::Aes128Gcm,
+        AeadAlgorithm::Aes256Gcm,
+        AeadAlgorithm::Aes256GcmSiv,
+    ];
+
     /// Every algorithm writes this tag after the cipher text.
     pub(crate) const TAG_LEN: usize = 16;
 
@@ -81,12 +90,7 @@ mod tests {
 
     #[test]
     fn every_name_parses_back_and_another_name_is_refused() -> KmsAeadResult<()> {
-        for algorithm in [
-            AeadAlgorithm::ChaCha20Poly1305,
-            AeadAlgorithm::Aes128Gcm,
-            AeadAlgorithm::Aes256Gcm,
-            AeadAlgorithm::Aes256GcmSiv,
-        ] {
+        for algorithm in AeadAlgorithm::ALL {
             assert_eq!(algorithm.to_string().parse::<AeadAlgorithm>()?, algorithm);
         }
         let unknown = "aes-512-gcm".parse::<AeadAlgorithm>();
