@@ -2,7 +2,7 @@
 //! the backend those tests run on, and the waits the concurrency tests share.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -113,6 +113,7 @@ pub(crate) struct CountingKmsProvider {
     kek: KekRef,
     wraps: AtomicUsize,
     unwraps: AtomicUsize,
+    unwrap_bindings: Mutex<Vec<Option<DekBinding>>>,
     gate: watch::Sender<bool>,
 }
 
@@ -124,6 +125,7 @@ impl CountingKmsProvider {
             kek: KekRef::new(KekProvider::Other("test".to_string()), kek),
             wraps: AtomicUsize::new(0),
             unwraps: AtomicUsize::new(0),
+            unwrap_bindings: Mutex::new(Vec::new()),
             gate: watch::Sender::new(true),
         }
     }
@@ -142,6 +144,11 @@ impl CountingKmsProvider {
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     pub(crate) fn wraps(&self) -> usize {
         self.wraps.load(Ordering::SeqCst)
+    }
+
+    /// The binding of every unwrap, in order.
+    pub(crate) fn unwrap_bindings(&self) -> Vec<Option<DekBinding>> {
+        self.unwrap_bindings.lock().unwrap().clone()
     }
 
     pub(crate) fn unwraps(&self) -> usize {
@@ -177,6 +184,7 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
         binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         self.unwraps.fetch_add(1, Ordering::SeqCst);
+        self.unwrap_bindings.lock().unwrap().push(binding.cloned());
         self.pass_gate().await;
         self.inner
             .decrypt_data_encryption_key(encrypted_key, binding)
