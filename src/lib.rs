@@ -79,8 +79,8 @@
 //! `sqlx` features store it in a PostgreSQL `BYTEA` column.
 //!
 //! [`AeadCipher::encrypt_field`] and `DeterministicCipher::encrypt_field` seal a field under a key
-//! the caller holds, in Tink's layout of a key named by a [`TinkKeyId`](formats::TinkKeyId), so
-//! that Tink and BigQuery read it with a keyset of that key.
+//! the caller holds, in Tink's layout of a key named by a [`KeyId`], so that Tink and BigQuery
+//! read it with a keyset of that key.
 //!
 //! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
 //! the column: a truncated HMAC-SHA256 of the value under a beacon key, which
@@ -266,6 +266,9 @@ pub mod errors;
 
 pub mod formats;
 pub use formats::envelope::CipherTextWithEncryptedKey;
+
+mod key_id;
+pub use key_id::KeyId;
 
 mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;

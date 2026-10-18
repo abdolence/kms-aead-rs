@@ -13,7 +13,7 @@ value Tink encrypts opens with `decrypt_value`.
 | Wrapped DEK | `EncryptedDataEncryptionKey` | the provider's bytes, see [Wrapped DEKs](#wrapped-deks) | kms-aead, Tink for GCP and AWS keys | 0.30.0 and later |
 | Serialised DEK | the plaintext of a wrapped DEK, but Azure's | Tink's key message, see [Serialised DEKs](#serialised-deks) | kms-aead, Tink | 0.30.0 and later |
 | Deterministic value | `DeterministicCipherText` | `[synthetic IV: 16][ciphertext]` | kms-aead; Tink and BigQuery after a TINK prefix | 0.30.0 and later |
-| TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `TinkKeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
+| TINK-prefixed value | `Encrypted<T, Randomized>`, `Encrypted<T, Deterministic>`, named by a `KeyId` | `[0x01][key id: u32 BE][value]` | kms-aead, Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink keyset | `TinkKeyset` | `google.crypto.tink.Keyset` | Tink, BigQuery | 0.30.0 and later, and kms-aead-keyring through it |
 | Tink encrypted keyset | `TinkKeyset::into_encrypted_bytes` | `google.crypto.tink.EncryptedKeyset`, `[0x12][w: varint][wrapped keyset: w]` | Tink with a GCP, AWS or Vault Transit key | 0.30.0 and later, and kms-aead-keyring through it |
 | Envelope layout v1 | `CipherTextWithEncryptedKey` | `[0x01][k: u8][key version: k][w: u16 BE][wrapped DEK: w][cipher text]` | kms-aead with `legacy-formats` | 0.29 |
@@ -138,12 +138,13 @@ keyset unwraps under the same KEK too, and this is what keeps it out of the DEK 
 
 ## Tink keysets and the TINK prefix
 
-`kms_aead::formats` has the two Tink items of the TINK-prefixed values:
+Two items describe the TINK-prefixed values:
 
-- `TinkKeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`, the
-  start of every `Randomized` and `Deterministic` value. Tink and BigQuery pick the key of a
-  keyset by it. It is not authenticated;
-- `TinkKeyset`: a serialised `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
+- `kms_aead::KeyId`: the key id of Tink's output prefix of type TINK, `[0x01][key id: u32 BE]`,
+  the start of every `Randomized` and `Deterministic` value and of every beacon. It picks the key
+  that opens the value, and Tink and BigQuery pick the key of a keyset by it. It is not
+  authenticated;
+- `kms_aead::formats::TinkKeyset`: a serialised `google.crypto.tink.Keyset` of enabled, symmetric, TINK-prefixed
   keys, the bytes `tinkey` writes for the same keys. Wrapped by a Cloud KMS key, it is the keyset
   of BigQuery's `KEYS.KEYSET_CHAIN`: an application writes it for its one key, see
   [One fixed key](./envelope-encryption.md#one-fixed-key), and a keyring exports it for its

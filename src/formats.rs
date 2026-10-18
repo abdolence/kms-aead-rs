@@ -17,8 +17,8 @@
 //!
 //! The public items here are the [`Format`] of an [`Encrypted`](crate::Encrypted) value,
 //! [`Envelope`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the last two
-//! are sealed under: [`TinkKeyId`], the key id their prefix names, [`TinkKeyType`], and
-//! [`TinkKeyset`], the keyset Tink and BigQuery read them with.
+//! are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery read them
+//! with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::{
@@ -35,7 +35,7 @@ mod tink;
 pub(crate) use tink::{
     serialize_tink_key, split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN,
 };
-pub use tink::{TinkKeyId, TinkKeyType, TinkKeyset};
+pub use tink::{TinkKeyType, TinkKeyset};
 
 pub(crate) mod local_kms;
 

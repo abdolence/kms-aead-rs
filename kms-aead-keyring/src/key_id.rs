@@ -3,7 +3,7 @@
 
 use std::fmt::{Display, Formatter};
 
-use kms_aead::formats::{Deterministic, Randomized, TinkKeyId};
+use kms_aead::formats::{Deterministic, Randomized};
 use kms_aead::{Beacon, Encrypted};
 use serde::{Deserialize, Serialize};
 
@@ -98,7 +98,7 @@ impl KeyId {
     ///
     /// [`KeyringError::ReservedKeyId`] when the id is reserved, and
     /// [`KeyringError::KeyPurposeMismatch`] when it is of another purpose.
-    fn of_purpose(key_id: TinkKeyId, purpose: Purpose) -> KeyringResult<Self> {
+    fn of_purpose(key_id: kms_aead::KeyId, purpose: Purpose) -> KeyringResult<Self> {
         let key_id = Self::try_from(key_id)?;
         if key_id.purpose() != purpose {
             return Err(KeyringError::KeyPurposeMismatch(KeyPurposeMismatchError {
@@ -176,19 +176,19 @@ impl TryFrom<u32> for KeyId {
 ///
 /// [`KeyringError::ReservedKeyId`] for an id whose ordinal is zero, or that sets both purpose
 /// bits: no version has it.
-impl TryFrom<TinkKeyId> for KeyId {
+impl TryFrom<kms_aead::KeyId> for KeyId {
     type Error = KeyringError;
 
-    fn try_from(key_id: TinkKeyId) -> KeyringResult<Self> {
+    fn try_from(key_id: kms_aead::KeyId) -> KeyringResult<Self> {
         Self::try_from(key_id.as_u32()).map_err(|_| KeyringError::ReservedKeyId)
     }
 }
 
 /// The id kms-aead writes into the prefix of the version's values and beacons, and into a
 /// keyset.
-impl From<KeyId> for TinkKeyId {
+impl From<KeyId> for kms_aead::KeyId {
     fn from(key_id: KeyId) -> Self {
-        TinkKeyId::new(key_id.0)
+        kms_aead::KeyId::new(key_id.0)
     }
 }
 

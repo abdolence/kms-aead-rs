@@ -6,8 +6,8 @@ use rvstruct::ValueStruct;
 use subtle::ConstantTimeEq;
 
 use crate::errors::KmsAeadError;
-use crate::formats::{Deterministic, Format, Randomized, TinkKeyId};
-use crate::KmsAeadResult;
+use crate::formats::{Deterministic, Format, Randomized};
+use crate::{KeyId, KmsAeadResult};
 
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -42,7 +42,7 @@ mod sqlx;
 /// through `TryFrom<Vec<u8>>` too.
 pub struct Encrypted<T, F: Format> {
     bytes: Vec<u8>,
-    key_id: F::KeyId,
+    key_id: F::FramedKeyId,
     plaintext: PhantomData<fn() -> (T, F)>,
 }
 
@@ -104,7 +104,7 @@ impl<T, F: Format> Debug for Encrypted<T, F> {
 impl<T> Encrypted<T, Randomized> {
     /// The id of the key this value was sealed under, which its prefix names: the key to open it
     /// with.
-    pub fn key_id(&self) -> TinkKeyId {
+    pub fn key_id(&self) -> KeyId {
         self.key_id
     }
 }
@@ -112,7 +112,7 @@ impl<T> Encrypted<T, Randomized> {
 impl<T> Encrypted<T, Deterministic> {
     /// The id of the key this value was sealed under, which its prefix names: the key to open it
     /// with.
-    pub fn key_id(&self) -> TinkKeyId {
+    pub fn key_id(&self) -> KeyId {
         self.key_id
     }
 }

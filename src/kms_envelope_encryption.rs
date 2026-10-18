@@ -11,11 +11,12 @@ use tracing::Span;
 
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadSystemError};
-use crate::formats::{Envelope, TinkKeyId};
+use crate::formats::Envelope;
 use crate::{
     spans, AeadAlgorithm, AeadBackend, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
     CipherText, CipherTextWithEncryptedKey, DataEncryptionKey, Encrypted,
-    EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, ValueStruct,
+    EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    ValueStruct,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -456,7 +457,7 @@ where
     /// Tink key, and the errors of [`BeaconMac::compute`].
     pub async fn beacon<T: Plaintext>(
         &self,
-        key_id: TinkKeyId,
+        key_id: KeyId,
         wrapped_key: &EncryptedDataEncryptionKey,
         context: &[u8],
         bits: BeaconBits,
@@ -1329,7 +1330,7 @@ mod tests {
         )?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (key, wrapped) = mac.generate_wrapped_key(encryption.provider()).await?;
-        let key_id = TinkKeyId::new(7);
+        let key_id = KeyId::new(7);
         let email = "alice@example.com".to_string();
 
         let beacon = encryption
