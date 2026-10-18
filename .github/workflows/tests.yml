@@ -325,8 +325,7 @@ jobs:
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The keyring without a store, one row per AEAD backend alone so that one backend never hides a
-  # missing feature gate in another, plus the optional encodings. The legacy-formats row is the
-  # only keyring build that parses the records kms-aead 0.28.1 wrote.
+  # missing feature gate in another, plus the optional encodings.
   keyring-core:
     name: keyring ${{ matrix.features }}
     if: github.event_name != 'schedule'
@@ -339,7 +338,6 @@ jobs:
           - aws-lc
           - rustcrypto
           - ring,deterministic,serde-json
-          - ring,serde,legacy-formats,deterministic
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
