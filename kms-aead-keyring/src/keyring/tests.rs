@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use kms_aead::cache::DekCacheOutcome;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey, DekBinding};
+use kms_aead::{AeadAlgorithm, AeadCipher, CipherText, DataEncryptionKey, DekBinding, KekRef};
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
@@ -14,7 +14,7 @@ use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::{KeyringStore, MemoryKeyringStore};
 use crate::testing::{email_of, TestProvider, TestResult, TestStore, TENANT, TEST_BACKEND};
-use crate::Transition;
+use crate::{EntityId, EntityKind, FieldName, FieldSpec, Transition};
 
 /// A keyring created on a counting store, beside the memory store it writes to.
 struct Fixture {
@@ -475,7 +475,11 @@ async fn a_key_unwrapped_under_a_superseded_record_is_evicted() -> TestResult {
     let key_id = KeyId::try_from(1)?;
     fixture
         .keyring
-        .with_cached_key(&held, key_id, dek, |_| ())
+        .with_cached_key(&held, key_id, dek, async |cache, binding| {
+            cache
+                .with_key(&fixture.provider, dek, binding, |_| ())
+                .await
+        })
         .await?;
     let binding = TENANT.dek_binding(key_id)?;
     let ((), outcome) = fixture
@@ -1221,5 +1225,96 @@ async fn an_unbound_keyring_runs_on_a_provider_without_bindings() -> TestResult 
 
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &new).await?, ALICE);
+    Ok(())
+}
+
+const BIGQUERY_EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+)
+.with_interop(Interop::BigQuery);
+
+/// A keyring on `provider` with the algorithms BigQuery reads, and a deterministic version too
+/// where the build can create one.
+async fn bigquery_keyring(
+    provider: TestProvider,
+) -> KeyringResult<Keyring<MemoryKeyringStore, TestProvider>> {
+    let policy = KeyringPolicy::new();
+    #[cfg(feature = "deterministic")]
+    let policy = policy.with_deterministic_algorithm(DeterministicAlgorithm::Aes256Siv);
+    Keyring::create(
+        MemoryKeyringStore::new(),
+        provider,
+        TEST_BACKEND,
+        TENANT,
+        policy,
+        KeyringOptions::new().with_watch(false),
+    )
+    .await
+}
+
+/// The test KMS, reporting a Cloud KMS key as its KEK.
+fn cloud_kms_provider() -> KeyringResult<TestProvider> {
+    Ok(TestProvider::new("tenant-42-kek")?.reporting(KekRef::new(
+        KekProvider::Gcp,
+        "projects/p/locations/europe-north1/keyRings/r/cryptoKeys/tenant-42",
+    )))
+}
+
+#[tokio::test]
+async fn interop_bigquery_seals_under_its_algorithms_and_a_cloud_kms_kek() -> TestResult {
+    let keyring = bigquery_keyring(cloud_kms_provider()?).await?;
+    let aad = BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?);
+    let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
+    #[cfg(feature = "deterministic")]
+    {
+        let aad = BIGQUERY_EMAIL.deterministic_aad();
+        let value = keyring
+            .encrypt_deterministic(&aad, &ALICE.to_string())
+            .await?;
+        assert_eq!(keyring.decrypt_deterministic(&aad, &value).await?, ALICE);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn interop_bigquery_refuses_a_non_gcm_version() -> TestResult {
+    let keyring = bigquery_keyring(cloud_kms_provider()?).await?;
+    let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
+    keyring.change_algorithm(chacha).await?;
+
+    assert!(matches!(
+        keyring
+            .encrypt(&BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?), &ALICE.to_string())
+            .await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Algorithm(chacha)
+    ));
+    keyring
+        .encrypt(&email_of("42")?, &ALICE.to_string())
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn interop_bigquery_refuses_a_non_gcp_kek() -> TestResult {
+    let keyring = bigquery_keyring(TestProvider::new("tenant-42-kek")?).await?;
+
+    assert!(matches!(
+        keyring
+            .encrypt(&BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?), &ALICE.to_string())
+            .await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Kek(KekProvider::Local)
+    ));
+    #[cfg(feature = "deterministic")]
+    assert!(matches!(
+        keyring
+            .encrypt_deterministic(&BIGQUERY_EMAIL.deterministic_aad(), &ALICE.to_string())
+            .await,
+        Err(KeyringError::Interop(error))
+            if error.requirement == InteropRequirement::Kek(KekProvider::Local)
+    ));
     Ok(())
 }

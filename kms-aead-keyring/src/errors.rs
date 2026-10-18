@@ -9,11 +9,13 @@ use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
 use kms_aead::errors::KmsAeadError;
-use kms_aead::KekRef;
+use kms_aead::{KekProvider, KekRef};
 use rsb_derive::Builder;
 
 use crate::store::{StoreKind, StoreOperation};
-use crate::{Compromise, KeyId, KeyVersionState, KeyringId, Purpose, Transition};
+use crate::{
+    Compromise, Interop, KeyAlgorithm, KeyId, KeyVersionState, KeyringId, Purpose, Transition,
+};
 
 /// The result of every fallible operation of the crate.
 pub type KeyringResult<T> = Result<T, KeyringError>;
@@ -69,6 +71,8 @@ pub enum KeyringError {
     Plaintext(PlaintextError),
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
+    /// A field's [`Interop`] requirement that sealing would break, checked before sealing.
+    Interop(InteropError),
 }
 
 impl KeyringError {
@@ -95,6 +99,7 @@ impl KeyringError {
             KeyringError::ValueLayout(_) => "ValueLayout",
             KeyringError::Plaintext(_) => "Plaintext",
             KeyringError::DeterministicDisabled => "DeterministicDisabled",
+            KeyringError::Interop(_) => "Interop",
         }
     }
 
@@ -256,6 +261,11 @@ impl Display for KeyringError {
             KeyringError::DeterministicDisabled => {
                 f.write_str("Creating a deterministic key version needs the deterministic feature")
             }
+            KeyringError::Interop(error) => write!(
+                f,
+                "A field of the keyring {} that {:?} reads cannot be sealed: {}",
+                error.keyring, error.interop, error.requirement
+            ),
         }
     }
 }
@@ -648,6 +658,41 @@ impl Display for ValueLayoutError {
                 write!(f, "it is shorter than an empty {purpose} value")
             }
             ValueLayoutError::ReservedKeyId => f.write_str("its key id is 0 or 2147483648"),
+        }
+    }
+}
+
+/// See [`KeyringError::Interop`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InteropError {
+    /// The keyring.
+    pub keyring: KeyringId,
+    /// The field's requirement.
+    pub interop: Interop,
+    /// The first part of it that sealing would break.
+    pub requirement: InteropRequirement,
+}
+
+/// What a field's [`Interop`] needs and sealing would not give it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InteropRequirement {
+    /// The active version of the purpose uses an algorithm the reader does not implement.
+    Algorithm(KeyAlgorithm),
+    /// The KEK is in a KMS the reader does not unwrap with.
+    Kek(KekProvider),
+}
+
+impl Display for InteropRequirement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InteropRequirement::Algorithm(algorithm) => {
+                write!(f, "the reader does not implement {algorithm}")
+            }
+            InteropRequirement::Kek(provider) => {
+                write!(f, "the reader does not unwrap keys with {provider}")
+            }
         }
     }
 }

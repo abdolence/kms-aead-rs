@@ -24,6 +24,26 @@
 //! in its own row and field, and moves between data stores without being encrypted again.
 //! [`FieldAad::custom`] takes any bytes instead.
 //!
+//! A field that BigQuery also decrypts is declared with
+//! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal
+//! it under an algorithm or a KEK that BigQuery cannot read.
+//!
+//! # Deterministic fields
+//!
+//! A deterministic column leaks which rows hold equal values and how often each value occurs,
+//! to anyone who reads it, and a leaked key lets its holder test guesses against the whole
+//! column offline. Deterministic encryption fits fields that are queried and have high entropy,
+//! such as emails and external ids, and never low-cardinality fields such as a status or a
+//! country.
+//!
+//! With the `deterministic` feature, `Keyring::encrypt_deterministic` seals a value under the
+//! active AES-SIV version, so that equal plaintexts give equal [`Encrypted<T,
+//! Deterministic>`](Deterministic) values, and `Keyring::equality_probes` seals a plaintext
+//! under every version that still decrypts, for the `IN` list of an equality query across a
+//! rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id,
+//! so a value opens in any row of its kind and field, and a deterministic field never decides
+//! identity or authorization on its own.
+//!
 //! # Lifecycle
 //!
 //! A version is `Active`, `DecryptOnly`, `Retired` or `Destroyed`, and any state past `Active`

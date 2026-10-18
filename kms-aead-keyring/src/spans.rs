@@ -11,7 +11,6 @@ use std::fmt::Display;
 use std::future::Future;
 
 use kms_aead::cache::DekCacheOutcome;
-use kms_aead::AeadBackend;
 use tracing::{debug_span, field, Instrument, Span};
 
 use crate::errors::{KeyringResult, RegressionRule};
@@ -41,7 +40,7 @@ const ERROR_CODE: &str = "/kms_aead_keyring/error_code";
 /// cache: `rewrap`, and a compromised version read by `decrypt_with_status`.
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
-pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: AeadBackend) -> Span {
+pub(crate) fn encrypt(keyring: &KeyringId, purpose: Purpose, backend: impl Display) -> Span {
     debug_span!(
         "Keyring encrypt",
         { KEYRING } = keyring.as_str(),

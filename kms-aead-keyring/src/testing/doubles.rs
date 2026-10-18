@@ -45,6 +45,7 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
 #[derive(Clone)]
 pub(crate) struct TestProvider {
     kms: Arc<LocalKmsProvider>,
+    kek: KekRef,
     pub(crate) calls: Arc<ProviderCalls>,
 }
 
@@ -71,20 +72,25 @@ impl ProviderCalls {
 impl TestProvider {
     /// A provider for a random local KEK named `kek`.
     pub(crate) fn new(kek: &str) -> KmsAeadResult<Self> {
+        let kms =
+            LocalKmsProvider::ephemeral(LocalKekId::try_from(kek.to_string())?, TEST_BACKEND)?;
         Ok(Self {
-            kms: Arc::new(LocalKmsProvider::ephemeral(
-                LocalKekId::try_from(kek.to_string())?,
-                TEST_BACKEND,
-            )?),
+            kek: kms.kek().clone(),
+            kms: Arc::new(kms),
             calls: Arc::default(),
         })
+    }
+
+    /// The same local KMS, reporting `kek` as its KEK, such as a Cloud KMS key.
+    pub(crate) fn reporting(self, kek: KekRef) -> Self {
+        Self { kek, ..self }
     }
 }
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for TestProvider {
     fn kek(&self) -> &KekRef {
-        self.kms.kek()
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(

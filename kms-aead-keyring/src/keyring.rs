@@ -6,25 +6,28 @@ use std::time::Duration;
 use jiff::Timestamp;
 use kms_aead::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use kms_aead::{
-    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DataEncryptionKey, DekBinding,
-    DeterministicAlgorithm, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    AeadAlgorithm, AeadBackend, AeadCipher, CipherText, DekBinding, DeterministicAlgorithm,
+    EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 use rsb_derive::Builder;
 use secret_vault_value::SecretValue;
 use tokio::task::AbortHandle;
 
 use crate::errors::{
-    KekMismatchError, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
-    RecordInvalidReason,
+    InteropError, InteropRequirement, KekMismatchError, KeyVersionCompromisedError,
+    KeyVersionError, KeyringError, KeyringResult, RecordInvalidReason,
 };
 use crate::record::{withdrawn_deks, NewVersion, RecordEdit};
 use crate::record_cache::RecordCache;
 use crate::spans;
 use crate::store::{KeyringStore, Stored, Swap};
 use crate::{
-    Algorithms, Compromise, Encrypted, FieldAad, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState,
-    KeyringId, KeyringRecord, Plaintext, Purpose,
+    Algorithms, Compromise, Encrypted, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion,
+    KeyVersionState, KeyringId, KeyringRecord, Plaintext, Purpose,
 };
+
+#[cfg(feature = "deterministic")]
+mod deterministic;
 
 /// Field encryption under the key versions of one keyring, whose record lives in a
 /// [`KeyringStore`] and is cached in the process.
@@ -182,9 +185,10 @@ where
     /// # Errors
     ///
     /// [`KeyringError::NoActiveVersion`] when the keyring has none, which follows a
-    /// `mark_compromised` whose new key could not be wrapped; [`KeyringError::Plaintext`] when
-    /// the value does not encode; and the provider's error when the version's key is not in the
-    /// [`DekCache`] and cannot be unwrapped.
+    /// `mark_compromised` whose new key could not be wrapped; [`KeyringError::Interop`] when
+    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::Plaintext`]
+    /// when the value does not encode; and the provider's error when the version's key is not in
+    /// the [`DekCache`] and cannot be unwrapped.
     pub async fn encrypt<T: Plaintext>(
         &self,
         aad: &FieldAad,
@@ -197,11 +201,16 @@ where
                 .active_dek(Purpose::Randomized)
                 .ok_or_else(|| KeyringError::no_active_version(self.id(), Purpose::Randomized))?;
             spans::record_sealing_version(version);
+            self.check_interop(aad.interop, version)?;
             let cipher = self.cipher(version)?;
             let plaintext = value.to_plaintext()?;
             let sealed = self
-                .with_cached_key(&record, version.key_id(), dek, |key| {
-                    cipher.encrypt_value(&aad.bytes, &plaintext, key)
+                .with_cached_key(&record, version.key_id(), dek, async |cache, binding| {
+                    cache
+                        .with_key(&self.provider, dek, binding, |key| {
+                            cipher.encrypt_value(&aad.bytes, &plaintext, key)
+                        })
+                        .await
                 })
                 .await??;
             Ok(Encrypted::new(version.key_id(), &sealed.0))
@@ -233,22 +242,7 @@ where
             let (record, reload) = self.cache.find(value.key_id()).await;
             spans::record_reload(reload);
             let (version, dek, compromise) = self.readable(&record, value.key_id())?;
-            if let Some(compromise) = compromise {
-                match self.compromised_reads {
-                    CompromisedReadPolicy::Block => {
-                        return Err(KeyringError::KeyVersionCompromised(
-                            KeyVersionCompromisedError {
-                                keyring: self.id().clone(),
-                                key_id: version.key_id(),
-                                compromise: compromise.clone(),
-                            },
-                        ));
-                    }
-                    CompromisedReadPolicy::Allow => {
-                        spans::compromised_read_allowed(self.id(), version.key_id())
-                    }
-                }
-            }
+            self.apply_read_policy(version, compromise)?;
             T::from_plaintext(self.open_cached(&record, version, dek, aad, value).await?)
         })
         .await
@@ -550,6 +544,56 @@ where
         Ok((version, dek, compromise))
     }
 
+    /// Fails with `KeyVersionCompromised` for a compromised version under
+    /// [`CompromisedReadPolicy::Block`], and logs the read under `Allow`.
+    fn apply_read_policy(
+        &self,
+        version: &KeyVersion,
+        compromise: Option<&Compromise>,
+    ) -> KeyringResult<()> {
+        match (compromise, self.compromised_reads) {
+            (None, _) => Ok(()),
+            (Some(compromise), CompromisedReadPolicy::Block) => Err(
+                KeyringError::KeyVersionCompromised(KeyVersionCompromisedError {
+                    keyring: self.id().clone(),
+                    key_id: version.key_id(),
+                    compromise: compromise.clone(),
+                }),
+            ),
+            (Some(_), CompromisedReadPolicy::Allow) => {
+                spans::compromised_read_allowed(self.id(), version.key_id());
+                Ok(())
+            }
+        }
+    }
+
+    /// Fails with the first requirement of `interop` that sealing under `version` breaks. The
+    /// AAD requirement holds by construction: an AAD that SQL cannot rebuild carries
+    /// [`Interop::None`].
+    fn check_interop(&self, interop: Interop, version: &KeyVersion) -> KeyringResult<()> {
+        let unmet = match interop {
+            Interop::None => None,
+            Interop::BigQuery => {
+                let kek = self.provider.kek().provider();
+                match version.algorithm() {
+                    KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm)
+                    | KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => {
+                        (*kek != KekProvider::Gcp).then(|| InteropRequirement::Kek(kek.clone()))
+                    }
+                    algorithm => Some(InteropRequirement::Algorithm(algorithm)),
+                }
+            }
+        };
+        match unmet {
+            None => Ok(()),
+            Some(requirement) => Err(KeyringError::Interop(InteropError {
+                keyring: self.id().clone(),
+                interop,
+                requirement,
+            })),
+        }
+    }
+
     fn cipher(&self, version: &KeyVersion) -> KeyringResult<AeadCipher> {
         match version.algorithm() {
             KeyAlgorithm::Randomized(algorithm) => Ok(AeadCipher::new(self.backend, algorithm)?),
@@ -573,13 +617,17 @@ where
         let cipher = self.cipher(version)?;
         let body = CipherText(value.body().to_vec());
         Ok(self
-            .with_cached_key(record, version.key_id(), dek, |key| {
-                cipher.decrypt_value(&aad.bytes, &body, key)
+            .with_cached_key(record, version.key_id(), dek, async |cache, binding| {
+                cache
+                    .with_key(&self.provider, dek, binding, |key| {
+                        cipher.decrypt_value(&aad.bytes, &body, key)
+                    })
+                    .await
             })
             .await??)
     }
 
-    /// Runs `use_key` with the key `dek` wraps, through the [`DekCache`] and under the binding of
+    /// Runs `use_cache`, a call of the [`DekCache`] with the key `dek` wraps, with the binding of
     /// `key_id`, and records where the key came from on the current span. `record` is the record
     /// `dek` was read from, as the wrapped key of `key_id`.
     ///
@@ -592,13 +640,13 @@ where
         record: &KeyringRecord,
         key_id: KeyId,
         dek: &EncryptedDataEncryptionKey,
-        use_key: impl FnOnce(&DataEncryptionKey) -> T,
+        use_cache: impl AsyncFnOnce(
+            &DekCache,
+            Option<&DekBinding>,
+        ) -> KmsAeadResult<(T, DekCacheOutcome)>,
     ) -> KeyringResult<T> {
         let binding = self.cache.binding(key_id)?;
-        let (result, outcome) = self
-            .dek_cache()
-            .with_key(&self.provider, dek, binding.as_ref(), use_key)
-            .await?;
+        let (result, outcome) = use_cache(self.dek_cache(), binding.as_ref()).await?;
         spans::record_dek_cache(outcome);
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();

@@ -165,17 +165,44 @@ impl Display for FieldName {
     }
 }
 
-/// An encrypted field of one kind of entity: the source of the default AAD of its values.
+/// Which reader other than this crate decrypts a field's values, and so what
+/// [`Keyring`](crate::Keyring) checks before it seals one. A value that was written always
+/// decrypts: only sealing checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Interop {
+    /// No other reader: any algorithm, any AAD and any KEK.
+    None,
+    /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
+    /// and AES-SIV only and unwraps with Cloud KMS only: sealing needs an AES-256-GCM version
+    /// for a randomized value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
+    /// The AAD is the default one, which SQL rebuilds.
+    BigQuery,
+}
+
+/// An encrypted field of one kind of entity: the source of the default AAD of its values, and
+/// of the interop requirement that AAD carries.
 #[derive(Debug, Clone)]
 pub struct FieldSpec {
     kind: EntityKind,
     field: FieldName,
+    interop: Interop,
 }
 
 impl FieldSpec {
-    /// The field `field` of the entities of `kind`.
+    /// The field `field` of the entities of `kind`, with [`Interop::None`].
     pub const fn new(kind: EntityKind, field: FieldName) -> Self {
-        Self { kind, field }
+        Self {
+            kind,
+            field,
+            interop: Interop::None,
+        }
+    }
+
+    /// The same field, read by `interop` as well.
+    pub const fn with_interop(mut self, interop: Interop) -> Self {
+        self.interop = interop;
+        self
     }
 
     /// The AAD of the field's value in the entity `id`: `<kind>/<id>/<field>` as UTF-8, for
@@ -185,6 +212,7 @@ impl FieldSpec {
             bytes: [&*self.kind.0, id.0.as_str(), &*self.field.0]
                 .join("/")
                 .into_bytes(),
+            interop: self.interop,
         }
     }
 
@@ -193,6 +221,7 @@ impl FieldSpec {
     pub fn deterministic_aad(&self) -> DeterministicAad {
         DeterministicAad {
             bytes: [&*self.kind.0, &*self.field.0].join("/").into_bytes(),
+            interop: self.interop,
         }
     }
 }
@@ -204,13 +233,17 @@ impl FieldSpec {
 /// id.
 pub struct FieldAad {
     pub(crate) bytes: Vec<u8>,
+    pub(crate) interop: Interop,
 }
 
 impl FieldAad {
     /// Any bytes, with no structure: as free as the AAD of kms-aead's `AeadCipher`. SQL cannot
-    /// rebuild it, so BigQuery cannot decrypt the field.
+    /// rebuild it, so it carries [`Interop::None`] and a field BigQuery reads cannot use it.
     pub fn custom(bytes: Vec<u8>) -> Self {
-        Self { bytes }
+        Self {
+            bytes,
+            interop: Interop::None,
+        }
     }
 
     /// Appends `/` and `context`, any bytes; a value sealed with a context opens only with the
@@ -243,7 +276,12 @@ impl Debug for FieldAad {
 ///
 /// `Debug` shows nothing of the bytes.
 pub struct DeterministicAad {
-    bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
+    #[cfg_attr(
+        not(feature = "deterministic"),
+        expect(dead_code, reason = "only the deterministic calls seal")
+    )]
+    pub(crate) interop: Interop,
 }
 
 impl DeterministicAad {
