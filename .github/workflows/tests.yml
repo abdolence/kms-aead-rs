@@ -103,6 +103,18 @@ jobs:
             exit 1
           fi
           grep -F 'kms-aead needs a crypto backend for its KMS providers' <<< "$output" || { echo "$output"; exit 1; }
+  # The docs.rs feature set with rustdoc warnings denied: docs.rs itself publishes a broken
+  # intra-doc link or a missing doc without complaint.
+  docs:
+    name: cargo doc
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+        env:
+          RUSTDOCFLAGS: -D warnings
   deny:
     name: cargo deny
     runs-on: ubuntu-latest

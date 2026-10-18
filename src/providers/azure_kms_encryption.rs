@@ -14,8 +14,7 @@ use std::sync::Arc;
 use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
 
-/// A Key Vault or Managed HSM key that wraps data encryption keys. Available with the
-/// `azure-kms-encryption-base` feature.
+/// A Key Vault or Managed HSM key that wraps data encryption keys.
 ///
 /// Without `key_version` the latest version wraps new keys. Each encrypted key records the
 /// version that wrapped it, and unwrapping uses that recorded version, so keys wrapped before a
@@ -32,6 +31,7 @@ pub struct AzureKmsKeyRef {
 
 /// Options for [`AzureKmsProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct AzureKmsProviderOptions {
     /// Wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys, `A256Kw` for
     /// Managed HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and
@@ -44,13 +44,15 @@ pub struct AzureKmsProviderOptions {
     pub client_options: Option<KeyClientOptions>,
 }
 
-/// Wraps and unwraps data encryption keys with an Azure Key Vault key. Available with the
-/// `azure-kms-encryption-base` feature.
+/// Wraps and unwraps data encryption keys with an Azure Key Vault key.
 ///
 /// A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
 /// `AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
 /// [`NetworkError`](crate::errors::KmsAeadError::NetworkError), any other status an
 /// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError).
+///
+/// A wrap or unwrap with a [`DekBinding`] fails with `AZURE_BINDING_UNSUPPORTED` before any
+/// request, since wrapKey has no associated data to bind it with.
 ///
 /// Unwrapping needs the key version recorded in [`EncryptedDataEncryptionKey::key_version`].
 /// Store an encrypted key with [`EncryptedDataEncryptionKey::to_bytes`] or
@@ -147,6 +149,18 @@ impl AzureKmsProvider {
         })
     }
 
+    /// Key Vault's wrapKey takes no associated data, so a bound call fails rather than wrap or
+    /// unwrap unbound.
+    fn refuse_binding(binding: Option<&DekBinding>) -> KmsAeadResult<()> {
+        match binding {
+            Some(_) => Err(KmsAeadEncryptionError::create(
+                "AZURE_BINDING_UNSUPPORTED",
+                "Azure Key Vault cannot bind a wrapped key: wrapKey takes no associated data",
+            )),
+            None => Ok(()),
+        }
+    }
+
     fn key_operation(
         &self,
         value: Vec<u8>,
@@ -166,14 +180,16 @@ fn is_key_vault_name(name: &str) -> bool {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for AzureKmsProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        Self::refuse_binding(binding)?;
         spans::in_span(kms::wrap_span(&self.kek), async {
             let parameters =
                 self.key_operation(encryption_key.value().ref_sensitive_value().clone())?;
@@ -227,7 +243,9 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
+        Self::refuse_binding(binding)?;
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
             let key_version = encrypted_key.key_version().ok_or_else(|| {

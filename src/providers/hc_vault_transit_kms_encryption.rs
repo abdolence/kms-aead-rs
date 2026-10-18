@@ -90,6 +90,7 @@ pub struct HcVaultTransitKeyRef {
 
 /// Options for [`HcVaultTransitProvider`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitProviderOptions {
     /// Address of the Vault server, such as `https://vault.example.com:8200`.
     pub address: String,
@@ -140,8 +141,7 @@ impl HcVaultTransitProviderOptions {
 }
 
 /// Wraps and unwraps data encryption keys with a key of the HashiCorp Vault Transit secrets
-/// engine. Available with the `hashicorp-vault-transit-kms-encryption-base` feature and one TLS
-/// root store and one crypto provider feature.
+/// engine. It needs one TLS root store feature and one crypto provider feature.
 ///
 /// A response with an error status is `VAULT_STATUS_<status>`: a
 /// [`NetworkError`](crate::errors::KmsAeadError::NetworkError) for a server error or a rate
@@ -149,6 +149,10 @@ impl HcVaultTransitProviderOptions {
 /// `VAULT_HTTP` and `VAULT_TIMEOUT` are network errors for a request that got no complete
 /// response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` encryption
 /// errors for a response or an encrypted key that cannot be read.
+///
+/// A [`DekBinding`] is sent as Transit `associated_data`, which needs Vault 1.13 or later and an
+/// AEAD key type such as `aes256-gcm96`. A bound wrap or unwrap fails with
+/// `VAULT_BINDING_IGNORED`, an encryption error, when Vault reports that it ignored the field.
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
 /// the key version, so it still decrypts after the key is rotated. That version is also recorded
@@ -352,24 +356,28 @@ impl HcVaultTransitProvider {
 
 #[async_trait]
 impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
-    fn kek(&self) -> KekRef {
-        self.kek.clone()
+    fn kek(&self) -> &KekRef {
+        &self.kek
     }
 
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::wrap_span(&self.kek), async {
             let plaintext = encryption_key.value().as_sensitive_base64_str();
+            let associated_data = binding.map(associated_data);
             // The request buffer belongs to the HTTP stack and is freed without being zeroized.
             let request = serde_json::to_vec(&EncryptRequest {
                 plaintext: &plaintext,
+                associated_data: associated_data.as_deref(),
             })
             .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
             let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
             let response: TransitResponse<EncryptData> = parse_response(&body)?;
+            response.check_binding(binding)?;
             let ciphertext = response.data.ciphertext;
             let key_version = transit_key_version(&ciphertext);
             let encrypted_key =
@@ -385,6 +393,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey> {
         let span = kms::unwrap_span(&self.kek, encrypted_key.key_version());
         spans::in_span(span, async {
@@ -394,11 +403,16 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
                     "The encrypted data encryption key is not a Vault Transit ciphertext",
                 )
             })?;
-            let request = serde_json::to_vec(&DecryptRequest { ciphertext })
-                .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
+            let associated_data = binding.map(associated_data);
+            let request = serde_json::to_vec(&DecryptRequest {
+                ciphertext,
+                associated_data: associated_data.as_deref(),
+            })
+            .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
             let body = kms::timed(self.post(&self.decrypt_uri, request)).await?;
             let response: TransitResponse<DecryptData> = parse_response(&body)?;
+            response.check_binding(binding)?;
             // The decode error is dropped because it names a byte of the key and its offset.
             let plaintext =
                 SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
@@ -413,19 +427,55 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     }
 }
 
+/// The Transit `associated_data` of `binding`: its bytes in base64.
+fn associated_data(binding: &DekBinding) -> String {
+    SecretValue::from(binding.as_str())
+        .as_sensitive_base64_str()
+        .to_string()
+}
+
+/// Without a binding the body has no `associated_data` key, so that an unbound wrap or unwrap
+/// works on a Vault that does not know the field.
 #[derive(Serialize)]
 struct EncryptRequest<'a> {
     plaintext: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    associated_data: Option<&'a str>,
 }
 
 #[derive(Serialize)]
 struct DecryptRequest<'a> {
     ciphertext: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    associated_data: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
 struct TransitResponse<D> {
     data: D,
+    #[serde(default)]
+    warnings: Option<Vec<String>>,
+}
+
+impl<D> TransitResponse<D> {
+    /// A Vault that does not know `associated_data` ignores it and names it in a warning. The
+    /// call then fails, so that a bound wrap or unwrap never succeeds unbound.
+    fn check_binding(&self, binding: Option<&DekBinding>) -> KmsAeadResult<()> {
+        let ignored = binding.is_some()
+            && self
+                .warnings
+                .iter()
+                .flatten()
+                .any(|warning| warning.contains("associated_data"));
+        if ignored {
+            Err(KmsAeadEncryptionError::create(
+                "VAULT_BINDING_IGNORED",
+                "Vault ignored the associated data of a bound key, which needs Vault 1.13 or later and an AEAD Transit key type",
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -634,6 +684,7 @@ mod tests {
     const TOKEN: &str = "hvs.token-marker-value";
     const DATA_KEY: &str = "data-key-marker-value-of-32bytes";
     const TEST_KEY: &str = "orders";
+    const WRAPPED_KEY: &str = "vault:v1:wrapped";
 
     /// Ends a test whose request would otherwise hang, so a missing timeout fails the test.
     const TEST_GUARD: Duration = Duration::from_secs(5);
@@ -667,7 +718,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let provider = local_provider(&listener);
         let data_key_base64 = data_key().value().as_sensitive_base64_str();
-        let heads = answer_with(
+        let requests = answer_with(
             listener,
             200,
             format!(
@@ -677,24 +728,120 @@ mod tests {
         );
 
         provider
-            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(b"vault:v1:wrapped".into(), None),
                 None,
-            ))
+            )
             .await
             .unwrap();
 
-        let heads = heads.lock().unwrap();
-        assert_eq!(heads.len(), 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
         assert!(
-            heads[0].starts_with(&format!("POST /v1/transit/decrypt/{TEST_KEY} ")),
+            requests[0]
+                .head
+                .starts_with(&format!("POST /v1/transit/decrypt/{TEST_KEY} ")),
             "{}",
-            heads[0]
+            requests[0].head
         );
         assert_eq!(
             provider.kek().key(),
             format!("http://{address}/transit/keys/{TEST_KEY}")
         );
+    }
+
+    /// A body that answers both a Transit encrypt and a Transit decrypt.
+    fn success_body(extra_fields: &str) -> String {
+        format!(
+            r#"{{"data":{{"ciphertext":"{WRAPPED_KEY}","plaintext":"{}"}}{extra_fields}}}"#,
+            data_key().value().as_sensitive_base64_str().as_str()
+        )
+    }
+
+    /// The JSON bodies of a wrap and an unwrap with `binding`.
+    async fn wrap_and_unwrap_bodies(
+        binding: Option<&DekBinding>,
+    ) -> KmsAeadResult<Vec<serde_json::Value>> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        let requests = answer_with(listener, 200, success_body(""));
+
+        let wrapped = provider
+            .encrypt_data_encryption_key(&data_key(), binding)
+            .await?;
+        provider
+            .decrypt_data_encryption_key(&wrapped, binding)
+            .await?;
+
+        let requests = requests.lock().unwrap();
+        Ok(requests
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect())
+    }
+
+    #[tokio::test]
+    async fn wrap_and_unwrap_carry_the_binding() -> KmsAeadResult<()> {
+        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
+
+        let bodies = wrap_and_unwrap_bodies(Some(&binding)).await?;
+
+        assert_eq!(bodies.len(), 2);
+        for body in bodies {
+            assert_eq!(body["associated_data"], "dGVuYW50LTQyLzM=", "{body}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unbound_wrap_builds_the_0_29_request() -> KmsAeadResult<()> {
+        let bodies = wrap_and_unwrap_bodies(None).await?;
+
+        assert_eq!(
+            bodies,
+            [
+                serde_json::json!({
+                    "plaintext": data_key().value().as_sensitive_base64_str().as_str()
+                }),
+                serde_json::json!({ "ciphertext": WRAPPED_KEY }),
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_ignored_associated_data_warning_fails_the_call() -> KmsAeadResult<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        answer_with(
+            listener,
+            200,
+            success_body(
+                r#","warnings":["Endpoint ignored these unrecognized parameters: [associated_data]"]"#,
+            ),
+        );
+        let binding = DekBinding::try_from("tenant-42/3".to_string())?;
+
+        let wrapped = provider
+            .encrypt_data_encryption_key(&data_key(), Some(&binding))
+            .await;
+        let unwrapped = provider
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(WRAPPED_KEY.into(), None),
+                Some(&binding),
+            )
+            .await;
+
+        assert!(
+            matches!(&wrapped, Err(e) if e.code() == "VAULT_BINDING_IGNORED"),
+            "{wrapped:?}"
+        );
+        assert!(
+            matches!(&unwrapped, Err(e) if e.code() == "VAULT_BINDING_IGNORED"),
+            "{:?}",
+            unwrapped.err()
+        );
+        Ok(())
     }
 
     fn kek_of(address: &str, namespace: Option<&str>) -> KekRef {
@@ -703,6 +850,7 @@ mod tests {
         HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(TEST_KEY.into()), options)
             .unwrap()
             .kek()
+            .clone()
     }
 
     #[test]
@@ -750,7 +898,10 @@ mod tests {
         )
         .unwrap();
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a refused connection is not an encrypted key");
         };
 
@@ -767,7 +918,7 @@ mod tests {
 
         let result = tokio::time::timeout(
             TEST_GUARD,
-            provider.encrypt_data_encryption_key(&data_key()),
+            provider.encrypt_data_encryption_key(&data_key(), None),
         )
         .await
         .expect("the request must end before the test guard");
@@ -791,7 +942,10 @@ mod tests {
             format!("denied {TOKEN} {DATA_KEY} {}", data_key_base64.as_str()),
         );
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a 403 is not an encrypted key");
         };
 
@@ -824,10 +978,10 @@ mod tests {
         answer_with(listener, 200, format!(r#"{{"data":"{DATA_KEY}"}}"#));
 
         let Err(error) = provider
-            .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
-                b"vault:v1:wrapped".into(),
+            .decrypt_data_encryption_key(
+                &EncryptedDataEncryptionKey::new(b"vault:v1:wrapped".into(), None),
                 None,
-            ))
+            )
             .await
         else {
             panic!("a string is not a Transit decrypt response");
@@ -847,7 +1001,10 @@ mod tests {
         let body = serde_json::json!({ "errors": [echoed, DATA_KEY] }).to_string();
         answer_with(listener, 400, body);
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("a 400 is not an encrypted key");
         };
 
@@ -913,9 +1070,7 @@ mod tests {
                 + "/rotate",
         )
         .unwrap();
-        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND)
-            .await
-            .unwrap();
+        let encryption = KmsAeadEnvelope::new(provider.clone(), TEST_BACKEND).unwrap();
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
@@ -924,18 +1079,59 @@ mod tests {
             encrypted_dek.key_version().map(KmsKeyVersion::to_string)
         };
 
-        let before_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let before_rotation = encryption
+            .encrypt_value(aad.as_bytes(), &secret)
+            .await
+            .unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
-        let after_rotation = encryption.encrypt_value(&aad, &secret).await.unwrap();
+        let after_rotation = encryption
+            .encrypt_value(aad.as_bytes(), &secret)
+            .await
+            .unwrap();
 
         assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
         assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
-                encryption.decrypt_value(&aad, &cipher_text).await.unwrap(),
+                encryption
+                    .decrypt_value(aad.as_bytes(), &cipher_text)
+                    .await
+                    .unwrap(),
                 secret
             );
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "needs a Vault server with the Transit secrets engine"]
+    async fn live_unwrap_with_another_binding_fails() -> KmsAeadResult<()> {
+        let provider = live_provider();
+        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
+        let wrapped = provider
+            .encrypt_data_encryption_key(&data_key(), Some(&binding))
+            .await?;
+
+        let unwrapped = provider
+            .decrypt_data_encryption_key(&wrapped, Some(&binding))
+            .await?;
+        let result = provider
+            .decrypt_data_encryption_key(
+                &wrapped,
+                Some(&DekBinding::try_from("tenant-42/2".to_string())?),
+            )
+            .await;
+
+        println!(
+            "Vault refused another binding with {:?}",
+            result.as_ref().err().map(KmsAeadError::code)
+        );
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(e)) if e.public.code == "VAULT_STATUS_400"),
+            "{:?}",
+            result.err()
+        );
+        assert_eq!(unwrapped.value(), data_key().value());
+        Ok(())
     }
 
     #[tokio::test]
@@ -950,7 +1146,10 @@ mod tests {
             HcVaultTransitProvider::with_options(&HcVaultTransitKeyRef::new(key_name), options)
                 .unwrap();
 
-        let Err(error) = provider.encrypt_data_encryption_key(&data_key()).await else {
+        let Err(error) = provider
+            .encrypt_data_encryption_key(&data_key(), None)
+            .await
+        else {
             panic!("an invalid token must not encrypt");
         };
 

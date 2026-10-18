@@ -22,6 +22,16 @@
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
 //!
+//! A wrap and an unwrap take an optional [`DekBinding`], which the KMS authenticates with the
+//! wrapped key: GCP as additional authenticated data, AWS as an encryption context, Vault Transit
+//! as associated data and the local KMS in its AAD. The Azure provider has no such input and
+//! refuses a binding. [`KmsAeadEnvelope`] wraps unbound.
+//!
+//! An AWS KMS unwrap names the configured key. Configure the key ARN rather than an alias: a key
+//! wrapped under an alias that later moves to another key fails to unwrap with
+//! `IncorrectKeyException`. Outside the `aws` partition, such as in GovCloud or China, give the
+//! full ARN, since a key id or an alias name becomes an `arn:aws:` ARN.
+//!
 //! # Backends
 //!
 //! The AEAD runs on a crypto library that a feature compiles in and an [`AeadBackend`] value
@@ -41,15 +51,20 @@
 //!
 //! A value sealed by one backend opens with any other that implements its algorithm.
 //!
+//! A build without a backend feature compiles, and
+//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or wraps
+//! can be constructed: [`AeadBackend`] has no variant.
+//!
 //! # Store-less mode and the DEK cache
 //!
 //! A [`KmsAeadEnvelope`] built with a [`DekReusePolicy`] encrypts many values under one DEK and
-//! renews it by age or by count, so that a write calls the KMS only to renew it, and to unwrap it
-//! again once per cache TTL. Its DEK, and the DEKs of the values it reads, live in a
+//! renews it by age, by count, or once it has left the cache, so that a write calls the KMS only
+//! to renew it. Its DEK, and the DEKs of the values it reads, live in a
 //! [`cache::DekCache`], which serves each plaintext DEK for a TTL and zeroizes it as it leaves the
 //! cache: at the cache's next call after the TTL, or at
 //! [`purge_expired`](cache::DekCache::purge_expired). The per-call envelope, the default, keeps
-//! no DEK past the call.
+//! no DEK past the call. The KMS SDKs and HTTP clients the providers use keep copies of each
+//! plaintext DEK in request and response buffers that kms-aead cannot zeroize.
 //!
 //! # Other features
 //!
@@ -66,18 +81,20 @@
 //! # #[cfg(all(feature = "aws-kms-encryption", feature = "ring"))]
 //! # async fn example() -> kms_aead::KmsAeadResult<()> {
 //! use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider};
-//! use kms_aead::{AeadBackend, KmsAeadEnvelope, KmsAeadEnvelopeEncryption};
+//! use kms_aead::{AeadBackend, KmsAeadEnvelope};
 //! use secret_vault_value::SecretValue;
 //!
-//! let kms_ref = AwsKmsKeyRef::new("123456789012".into(), "alias/orders".into());
-//! let encryption =
-//!     KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?, AeadBackend::Ring).await?;
+//! let kms_ref = AwsKmsKeyRef::new(
+//!     "123456789012".into(),
+//!     "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".into(),
+//! );
+//! let encryption = KmsAeadEnvelope::new(AwsKmsProvider::new(&kms_ref).await?, AeadBackend::Ring)?;
 //!
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
-//! let aad = "orders/1042".to_string();
+//! let aad = b"orders/1042";
 //!
-//! let cipher_text = encryption.encrypt_value(&aad, &secret_value).await?;
-//! let decrypted = encryption.decrypt_value(&aad, &cipher_text).await?;
+//! let cipher_text = encryption.encrypt_value(aad, &secret_value).await?;
+//! let decrypted = encryption.decrypt_value(aad, &cipher_text).await?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
@@ -88,24 +105,24 @@
 //!
 //! ```rust
 //! # #[cfg(feature = "ring")]
-//! # async fn example() -> kms_aead::KmsAeadResult<()> {
-//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher, AeadEncryption};
+//! # fn example() -> kms_aead::KmsAeadResult<()> {
+//! use kms_aead::{AeadAlgorithm, AeadBackend, AeadCipher};
 //! use secret_vault_value::SecretValue;
 //!
 //! let cipher = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::Aes256Gcm)?;
-//! let key = cipher.generate_data_encryption_key()?;
+//! let key = cipher.generate_key()?;
 //! let secret_value = SecretValue::from("4111 1111 1111 1111");
-//! let aad = "orders/1042";
+//! let aad = b"orders/1042";
 //!
-//! let cipher_text = cipher.encrypt_value(&aad, &secret_value, &key).await?;
-//! let decrypted = cipher.decrypt_value(&aad, &cipher_text, &key).await?;
+//! let cipher_text = cipher.encrypt_value(aad, &secret_value, &key)?;
+//! let decrypted = cipher.decrypt_value(aad, &cipher_text, &key)?;
 //!
 //! assert_eq!(decrypted, secret_value);
 //! # Ok(())
 //! # }
 //! ```
 
-#![allow(unused_parens, clippy::new_without_default)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -142,8 +159,6 @@ compile_error!(
 compile_error!(
     "You cannot enable both \"hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs\" (enabled by \"hashicorp-vault-transit-kms-encryption\") and \"hashicorp-vault-transit-kms-encryption-tls-ring\" at the same time"
 );
-
-extern crate core;
 
 #[cfg(all(
     any(
@@ -221,11 +236,9 @@ pub mod providers;
 #[cfg(test)]
 mod test_provider;
 
-#[cfg(all(
-    test,
-    any(
-        feature = "aws-kms-encryption",
-        feature = "hashicorp-vault-transit-kms-encryption-base"
-    )
+#[cfg(test)]
+#[cfg(any(
+    feature = "aws-kms-encryption",
+    feature = "hashicorp-vault-transit-kms-encryption-base"
 ))]
 mod test_http;

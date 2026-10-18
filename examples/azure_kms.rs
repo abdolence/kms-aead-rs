@@ -21,22 +21,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let encryption = KmsAeadEnvelope::new(
         AzureKmsProvider::new(&kms_ref, credential)?,
-        AeadBackend::Ring,
-    )
-    .await?;
+        AeadBackend::AwsLc,
+    )?;
 
     let secret_value = SecretValue::from("test-secret");
-    let test_aad = "test-aad".to_string();
+    let test_aad = b"test-aad";
 
-    let cipher_text = encryption.encrypt_value(&test_aad, &secret_value).await?;
+    let cipher_text = encryption.encrypt_value(test_aad, &secret_value).await?;
 
     println!("Encrypted to {:?}", cipher_text.to_hex_string());
 
-    let secret_value = encryption.decrypt_value(&test_aad, &cipher_text).await?;
+    let secret_value = encryption.decrypt_value(test_aad, &cipher_text).await?;
 
     println!(
         "We have our secret back: {}",
-        secret_value.sensitive_value_to_str().unwrap() == "test-secret"
+        secret_value == SecretValue::from("test-secret")
     );
 
     Ok(())

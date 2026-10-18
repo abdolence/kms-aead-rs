@@ -52,7 +52,7 @@ pub(crate) mod kms {
     pub(crate) fn wrap_span(kek: &KekRef) -> Span {
         debug_span!(
             "KMS wrap",
-            { PROVIDER } = kek.provider().name(),
+            { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
             { RESPONSE_TIME } = field::Empty,
@@ -65,7 +65,7 @@ pub(crate) mod kms {
     pub(crate) fn unwrap_span(kek: &KekRef, key_version: Option<&KmsKeyVersion>) -> Span {
         let span = debug_span!(
             "KMS unwrap",
-            { PROVIDER } = kek.provider().name(),
+            { PROVIDER } = %kek.provider(),
             { KEY } = kek.key(),
             { KEY_VERSION } = field::Empty,
             { RESPONSE_TIME } = field::Empty,
@@ -87,7 +87,7 @@ pub(crate) mod kms {
     ) -> Span {
         let span = debug_span!(
             "KMS random",
-            { PROVIDER } = provider.name(),
+            { PROVIDER } = %provider,
             { KEY } = field::Empty,
             { LEN } = len,
             { RESPONSE_TIME } = field::Empty,
@@ -244,6 +244,18 @@ pub(crate) fn upgrade<T>(
         Err(error) => {
             span.record(ERROR_CODE, error.code());
         }
+    }
+    result
+}
+
+/// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.
+pub(crate) fn in_scope<T>(
+    span: Span,
+    operation: impl FnOnce() -> KmsAeadResult<T>,
+) -> KmsAeadResult<T> {
+    let result = span.in_scope(operation);
+    if let Err(error) = &result {
+        span.record(ERROR_CODE, error.code());
     }
     result
 }

@@ -27,6 +27,10 @@ mod contract;
 /// There is no default backend: with Cargo's feature unification, a default chosen by features
 /// would change for every crate in a build when one crate enables another backend. A value
 /// sealed by one backend opens with any other that implements its algorithm.
+///
+/// Without a backend feature the enum has no variant, so nothing that takes one can be built:
+/// [`AeadCipher`](crate::AeadCipher), [`KmsAeadEnvelope`](crate::KmsAeadEnvelope) and
+/// [`LocalKmsProvider`](crate::providers::LocalKmsProvider) compile but cannot be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AeadBackend {

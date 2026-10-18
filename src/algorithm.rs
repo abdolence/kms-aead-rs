@@ -1,4 +1,7 @@
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
+
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 
 /// A randomized AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a 12-byte random
 /// nonce from the backend's CSPRNG and a 16-byte tag, and do not depend on which backend sealed
@@ -33,11 +36,6 @@ impl AeadAlgorithm {
             | AeadAlgorithm::Aes256GcmSiv => 32,
         }
     }
-
-    /// The length of the nonce at the start of every value, in bytes.
-    pub fn nonce_len(self) -> usize {
-        Self::NONCE_LEN
-    }
 }
 
 /// `chacha20-poly1305`, `aes-128-gcm`, `aes-256-gcm`, `aes-256-gcm-siv`: the values of the
@@ -50,5 +48,52 @@ impl Display for AeadAlgorithm {
             AeadAlgorithm::Aes256Gcm => "aes-256-gcm",
             AeadAlgorithm::Aes256GcmSiv => "aes-256-gcm-siv",
         })
+    }
+}
+
+/// Reads what `Display` writes.
+///
+/// # Errors
+///
+/// `UNKNOWN_ALGORITHM` for any other name.
+impl FromStr for AeadAlgorithm {
+    type Err = KmsAeadError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "chacha20-poly1305" => Ok(AeadAlgorithm::ChaCha20Poly1305),
+            "aes-128-gcm" => Ok(AeadAlgorithm::Aes128Gcm),
+            "aes-256-gcm" => Ok(AeadAlgorithm::Aes256Gcm),
+            "aes-256-gcm-siv" => Ok(AeadAlgorithm::Aes256GcmSiv),
+            _ => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ALGORITHM",
+                "Not the name of an AEAD algorithm: the names are chacha20-poly1305, aes-128-gcm, \
+                 aes-256-gcm and aes-256-gcm-siv",
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::KmsAeadResult;
+
+    #[test]
+    fn every_name_parses_back_and_another_name_is_refused() -> KmsAeadResult<()> {
+        for algorithm in [
+            AeadAlgorithm::ChaCha20Poly1305,
+            AeadAlgorithm::Aes128Gcm,
+            AeadAlgorithm::Aes256Gcm,
+            AeadAlgorithm::Aes256GcmSiv,
+        ] {
+            assert_eq!(algorithm.to_string().parse::<AeadAlgorithm>()?, algorithm);
+        }
+        let unknown = "aes-512-gcm".parse::<AeadAlgorithm>();
+        assert!(
+            matches!(&unknown, Err(e) if e.code() == "UNKNOWN_ALGORITHM"),
+            "{unknown:?}"
+        );
+        Ok(())
     }
 }

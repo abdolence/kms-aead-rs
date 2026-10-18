@@ -1,131 +1,12 @@
-use crate::errors::KmsAeadEncryptionError;
-use crate::*;
-use async_trait::*;
-use secret_vault_value::SecretValue;
+use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 
-/// Authenticated encryption with associated data (AEAD) under a data encryption key the caller
-/// holds, implemented by [`AeadCipher`].
-///
-/// `aad` is authenticated but not encrypted: a value opens only with the AAD it was sealed with.
-#[async_trait]
-pub trait AeadEncryption<Aad> {
-    /// Seals `plain_text` with `encryption_key` and a fresh random nonce, so that sealing the same
-    /// input twice gives different cipher texts.
-    ///
-    /// # Errors
-    ///
-    /// [`AeadCipher`] fails with `INVALID_KEY_LENGTH` when the key does not have the length of
-    /// its algorithm, `ENCRYPTION` when the random nonce cannot be generated, and `ENCRYPT_KEY`
-    /// or `ENCRYPT` when the backend refuses the key or fails to seal.
-    async fn encrypt_value(
-        &self,
-        aad: &Aad,
-        plain_text: &SecretValue,
-        encryption_key: &DataEncryptionKey,
-    ) -> KmsAeadResult<CipherText>;
+use async_trait::async_trait;
+use secret_vault_value::SecretValue;
 
-    /// Opens a cipher text sealed by [`encrypt_value`](Self::encrypt_value) with the same key
-    /// and AAD.
-    ///
-    /// # Errors
-    ///
-    /// [`AeadCipher`] fails with `INVALID_KEY_LENGTH` when the key does not have the length of
-    /// its algorithm, `INVALID_CIPHERTEXT` when the value is shorter than a nonce and a tag,
-    /// `DECRYPT_KEY` when the backend refuses the key, and `DECRYPT` when the value is not
-    /// authentic under the key, the nonce and the AAD.
-    async fn decrypt_value(
-        &self,
-        aad: &Aad,
-        cipher_text: &CipherText,
-        encryption_key: &DataEncryptionKey,
-    ) -> KmsAeadResult<SecretValue>;
-}
-
-/// Envelope encryption: AEAD under a data encryption key (DEK), with the DEK wrapped by a key
-/// encryption key (KEK) that a KMS holds. Implemented by [`KmsAeadEnvelope`].
-///
-/// Every method returns the errors of [`AeadEncryption`] for the AEAD step and the errors of the
-/// [`KmsAeadEncryptionProvider`] for the KMS step, with the codes the KMS provider reports.
-#[async_trait]
-pub trait KmsAeadEnvelopeEncryption<Aad> {
-    /// Encrypts `plain_text` under a new DEK, or under the reused DEK of a store-less
-    /// [`KmsAeadEnvelope`], and returns it with the wrapped DEK in one
-    /// [`CipherTextWithEncryptedKey`]. A new DEK costs one KMS call to wrap it, and one more for
-    /// the key material when the provider uses the KMS generator. A reused DEK costs one KMS
-    /// unwrap per TTL of the envelope's [`DekCache`](crate::cache::DekCache).
-    ///
-    /// # Errors
-    ///
-    /// Besides the AEAD and KMS errors, `INVALID_KEY_LENGTH` when the KMS generator returns key
-    /// material of the wrong length, and `INVALID_CIPHER_TEXT_FORMAT` when the wrapped key is
-    /// longer than 65,535 bytes.
-    async fn encrypt_value(
-        &self,
-        aad: &Aad,
-        plain_text: &SecretValue,
-    ) -> KmsAeadResult<CipherTextWithEncryptedKey>;
-
-    /// Unwraps the DEK stored in `cipher_text`, through the envelope's
-    /// [`DekCache`](crate::cache::DekCache), and opens the value with it.
-    ///
-    /// # Errors
-    ///
-    /// Besides the AEAD and KMS errors, `UNKNOWN_CIPHER_TEXT_LAYOUT`,
-    /// `INVALID_CIPHER_TEXT_FORMAT` or `INVALID_KEY_VERSION` when `cipher_text` cannot be read
-    /// (see [`CipherTextWithEncryptedKey::separate`]).
-    async fn decrypt_value(
-        &self,
-        aad: &Aad,
-        cipher_text: &CipherTextWithEncryptedKey,
-    ) -> KmsAeadResult<SecretValue>;
-
-    /// Encrypts `plain_text` under a plaintext DEK the caller holds, such as one from
-    /// [`generate_new_dek`](Self::generate_new_dek), without calling the KMS.
-    async fn encrypt_value_with_dek(
-        &self,
-        aad: &Aad,
-        plain_text: &SecretValue,
-        dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<CipherText>;
-
-    /// Unwraps `dek`, through the envelope's [`DekCache`](crate::cache::DekCache), and encrypts
-    /// `plain_text` under it. The caller stores the wrapped DEK beside the returned cipher text.
-    async fn encrypt_value_with_encrypted_dek(
-        &self,
-        aad: &Aad,
-        plain_text: &SecretValue,
-        dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<CipherText>;
-
-    /// Opens `cipher_text` with a plaintext DEK the caller holds, without calling the KMS.
-    async fn decrypt_value_with_dek(
-        &self,
-        aad: &Aad,
-        cipher_text: &CipherText,
-        data_encryption_key: &DataEncryptionKey,
-    ) -> KmsAeadResult<SecretValue>;
-
-    /// Unwraps `encrypted_data_encryption_key`, through the envelope's
-    /// [`DekCache`](crate::cache::DekCache), and opens `cipher_text` with it.
-    async fn decrypt_value_with_encrypted_dek(
-        &self,
-        aad: &Aad,
-        cipher_text: &CipherText,
-        encrypted_data_encryption_key: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<SecretValue>;
-
-    /// Generates a new DEK, from the KMS generator when the provider uses one and from the
-    /// backend's CSPRNG otherwise, and wraps it with the KMS.
-    ///
-    /// # Errors
-    ///
-    /// Besides the KMS errors, `INVALID_KEY_LENGTH` when the KMS generator returns key material
-    /// of the wrong length, and `ENCRYPTION` when the backend's CSPRNG fails.
-    async fn generate_new_dek(
-        &self,
-    ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>;
-}
+use crate::errors::KmsAeadEncryptionError;
+use crate::{DataEncryptionKey, DekBinding, EncryptedDataEncryptionKey, KmsAeadResult};
 
 /// Wraps and unwraps data encryption keys with a key encryption key (KEK) held by a KMS.
 ///
@@ -133,7 +14,9 @@ pub trait KmsAeadEnvelopeEncryption<Aad> {
 /// provider, such as a cache. A wrapper returns the inner provider's [`kek`](Self::kek).
 ///
 /// An implementation's errors carry no key material in any form, plaintext or wrapped, in
-/// `Display` or `Debug`.
+/// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
+/// HTTP client, which keeps copies of it in request and response buffers that kms-aead cannot
+/// zeroize.
 #[async_trait]
 pub trait KmsAeadEncryptionProvider {
     /// The KEK this provider wraps with and names to the KMS on every unwrap, so that a key
@@ -141,10 +24,12 @@ pub trait KmsAeadEncryptionProvider {
     ///
     /// Two providers return equal values only when they address the same key of the same KMS:
     /// a cache of unwrapped keys may be keyed by it.
-    fn kek(&self) -> KekRef;
+    fn kek(&self) -> &KekRef;
 
     /// Wraps `encryption_key` with the KEK, recording the KEK version that wrapped it when the
-    /// KMS reports one.
+    /// KMS reports one. With `Some(binding)`, the KMS authenticates the binding with the wrapped
+    /// key, and only an unwrap that names the same binding opens it. A provider whose KMS
+    /// cannot bind fails with `Some` and never wraps unbound in its place. `None` wraps unbound.
     ///
     /// # Errors
     ///
@@ -153,10 +38,12 @@ pub trait KmsAeadEncryptionProvider {
     async fn encrypt_data_encryption_key(
         &self,
         encryption_key: &DataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
 
-    /// Unwraps `encrypted_key` with the KEK. The request names the configured KEK, so a key
-    /// wrapped under another KEK is refused by the KMS.
+    /// Unwraps `encrypted_key` with the KEK, naming the configured KEK and `binding` to the
+    /// KMS, which refuses a key wrapped under another KEK or another binding, or wrapped
+    /// unbound when `binding` is `Some`.
     ///
     /// # Errors
     ///
@@ -164,6 +51,7 @@ pub trait KmsAeadEncryptionProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_key: &EncryptedDataEncryptionKey,
+        binding: Option<&DekBinding>,
     ) -> KmsAeadResult<DataEncryptionKey>;
 
     /// `len` random bytes from the KMS's own generator, for a provider configured to use it.
@@ -174,27 +62,6 @@ pub trait KmsAeadEncryptionProvider {
         let _ = len;
         Ok(None)
     }
-}
-
-/// Sealing and opening for the crate's own callers. It is crate-private so that these operations
-/// stay off the public API of [`AeadCipher`] and can change in any release.
-pub(crate) trait Cipher {
-    /// Seals `plain_text` under `key`, authenticating `aad`.
-    fn seal(
-        &self,
-        aad: &[u8],
-        plain_text: &SecretValue,
-        key: &DataEncryptionKey,
-    ) -> KmsAeadResult<CipherText>;
-
-    /// Opens a value [`seal`](Self::seal) sealed under `key` and `aad`, into a buffer the
-    /// returned `SecretValue` owns, so that no other copy of the plaintext exists.
-    fn open(
-        &self,
-        aad: &[u8],
-        cipher_text: &CipherText,
-        key: &DataEncryptionKey,
-    ) -> KmsAeadResult<SecretValue>;
 }
 
 /// `len` bytes from the KMS generator of `provider`, or `None` when it does not use one. The
@@ -256,7 +123,7 @@ impl KekRef {
 /// `<provider>:<key>`.
 impl Display for KekRef {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.provider.name(), self.key)
+        write!(f, "{}:{}", self.provider, self.key)
     }
 }
 
@@ -278,16 +145,53 @@ pub enum KekProvider {
     Other(String),
 }
 
-impl KekProvider {
-    /// The value of the `provider` span field.
-    pub(crate) fn name(&self) -> &str {
-        match self {
+/// `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of [`KekProvider::Other`]: the
+/// values of the `/kms_aead/provider` span field.
+impl Display for KekProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             KekProvider::Gcp => "gcp",
             KekProvider::Aws => "aws",
             KekProvider::Azure => "azure",
             KekProvider::HcVaultTransit => "hc_vault_transit",
             KekProvider::Local => "local",
             KekProvider::Other(name) => name,
+        })
+    }
+}
+
+/// Reads what `Display` writes: a built-in name is its variant, and any other name is
+/// [`KekProvider::Other`].
+impl FromStr for KekProvider {
+    type Err = Infallible;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        Ok(match name {
+            "gcp" => KekProvider::Gcp,
+            "aws" => KekProvider::Aws,
+            "azure" => KekProvider::Azure,
+            "hc_vault_transit" => KekProvider::HcVaultTransit,
+            "local" => KekProvider::Local,
+            other => KekProvider::Other(other.to_string()),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_name_parses_back_and_another_name_is_other() {
+        for provider in [
+            KekProvider::Gcp,
+            KekProvider::Aws,
+            KekProvider::Azure,
+            KekProvider::HcVaultTransit,
+            KekProvider::Local,
+            KekProvider::Other("orders-hsm".to_string()),
+        ] {
+            assert_eq!(provider.to_string().parse(), Ok(provider));
         }
     }
 }
