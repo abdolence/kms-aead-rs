@@ -500,13 +500,17 @@ mod tests {
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         );
         let provider = GcpKmsProvider::new(&key_ref).await?;
+        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
         let wrapped = provider
             .encrypt_data_encryption_key(
                 &DataEncryptionKey::from(SecretValue::from(KEY_MARKER)),
-                Some(&DekBinding::try_from("tenant-42/1".to_string())?),
+                Some(&binding),
             )
             .await?;
 
+        let unwrapped = provider
+            .decrypt_data_encryption_key(&wrapped, Some(&binding))
+            .await?;
         let result = provider
             .decrypt_data_encryption_key(
                 &wrapped,
@@ -523,6 +527,7 @@ mod tests {
             "{:?}",
             result.err()
         );
+        assert_eq!(unwrapped.value(), &SecretValue::from(KEY_MARKER));
         Ok(())
     }
 }

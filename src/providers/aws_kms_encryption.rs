@@ -612,13 +612,14 @@ mod tests {
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         );
         let provider = AwsKmsProvider::new(&key_ref).await?;
+        let binding = DekBinding::try_from("tenant-42/1".to_string())?;
         let wrapped = provider
-            .encrypt_data_encryption_key(
-                &data_key(),
-                Some(&DekBinding::try_from("tenant-42/1".to_string())?),
-            )
+            .encrypt_data_encryption_key(&data_key(), Some(&binding))
             .await?;
 
+        let unwrapped = provider
+            .decrypt_data_encryption_key(&wrapped, Some(&binding))
+            .await?;
         let result = provider
             .decrypt_data_encryption_key(
                 &wrapped,
@@ -636,6 +637,7 @@ mod tests {
             "{:?}",
             result.err()
         );
+        assert_eq!(unwrapped.value(), data_key().value());
         Ok(())
     }
 }
