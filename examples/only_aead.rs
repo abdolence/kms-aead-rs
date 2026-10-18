@@ -1,13 +1,7 @@
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("kms_aead=debug")
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
-
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let encryption = AeadCipher::new(AeadBackend::Ring, AeadAlgorithm::ChaCha20Poly1305)?;
     let key = encryption.generate_key()?;
 
