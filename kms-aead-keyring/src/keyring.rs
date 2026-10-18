@@ -35,8 +35,8 @@ mod beacon;
 mod deterministic;
 
 mod export;
-use export::KeysetEncoding;
-pub use export::{KeysetSelection, WrappedKeyset};
+use export::Encoding;
+pub use export::{BigQuery, KeysetEncoding, KeysetSelection, Tink, WrappedKeyset};
 
 /// Field encryption under the key versions of one keyring, whose record lives in the store `S`
 /// and is cached in the process, with keys wrapped by the provider `P` and AEAD on the backend
@@ -600,8 +600,8 @@ where
     fn check_interop(&self, interop: Interop, version: &KeyVersion) -> KeyringResult<()> {
         let encoding = match interop {
             Interop::None => return Ok(()),
-            Interop::BigQuery => KeysetEncoding::BigQuery,
-            Interop::Tink => KeysetEncoding::Tink,
+            Interop::BigQuery => Encoding::BigQuery,
+            Interop::Tink => Encoding::Tink,
         };
         let kek = self.provider.kek();
         if encoding.key_type(version.algorithm()).is_none() {

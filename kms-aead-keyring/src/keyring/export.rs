@@ -2,6 +2,7 @@
 //! BigQuery's `KEYS.KEYSET_CHAIN` or for Tink's own keyset readers.
 
 use std::fmt::{Debug, Formatter, Write};
+use std::marker::PhantomData;
 
 use kms_aead::cache::DekCache;
 use kms_aead::formats::{TinkKeyType, TinkKeyset};
@@ -40,25 +41,69 @@ impl KeysetSelection {
     }
 }
 
-/// How the bytes of a [`WrappedKeyset`] wrap the keyset, which decides its reader.
+/// The encoding of a [`WrappedKeyset`], which decides the reader of its bytes: [`BigQuery`] or
+/// [`Tink`].
+///
+/// Sealed: only the encodings of this crate implement it. It has no methods, so code generic over
+/// the encoding names this trait and nothing else.
+pub trait KeysetEncoding: private::Sealed {}
+
+mod private {
+    /// Seals [`KeysetEncoding`](super::KeysetEncoding). Its crate-private supertrait carries the
+    /// encoding's rules, which no other crate can read or implement.
+    #[expect(
+        private_bounds,
+        reason = "a crate-private supertrait is what keeps the encoding's rules unreadable \
+                  outside the crate"
+    )]
+    pub trait Sealed: super::EncodingRules {}
+}
+
+/// The rules of a [`KeysetEncoding`].
+pub(crate) trait EncodingRules {
+    /// The rules as a value, which the check of a field's [`Interop`] shares.
+    const ENCODING: Encoding;
+}
+
+/// The keyset of `export_bigquery_keyset`: the KMS ciphertext of the serialized `Keyset`, with no
+/// associated data, which is the `first_level_keyset` of BigQuery's `KEYS.KEYSET_CHAIN`.
+/// BigQuery unwraps it with Cloud KMS only and reads its AES-256-GCM and AES-SIV keys only.
+pub enum BigQuery {}
+
+/// The keyset of [`export_tink_keyset`](Keyring::export_tink_keyset): Tink's `EncryptedKeyset`
+/// message around the KMS ciphertext of the serialized `Keyset`, which Tink's keyset readers take
+/// with the KMS client of the KEK's Tink key URI. Its keys are the ones every Tink language reads
+/// in a keyset: AES-GCM, AES-GCM-SIV and AES-SIV.
+pub enum Tink {}
+
+impl KeysetEncoding for BigQuery {}
+impl private::Sealed for BigQuery {}
+impl EncodingRules for BigQuery {
+    const ENCODING: Encoding = Encoding::BigQuery;
+}
+
+impl KeysetEncoding for Tink {}
+impl private::Sealed for Tink {}
+impl EncodingRules for Tink {
+    const ENCODING: Encoding = Encoding::Tink;
+}
+
+/// A [`KeysetEncoding`] as a value: the rules of the reader of a keyset, which also decide what a
+/// field whose values that reader opens may be sealed under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeysetEncoding {
-    /// The KMS ciphertext of the serialized `Keyset`, with no associated data: the
-    /// `first_level_keyset` of BigQuery's `KEYS.KEYSET_CHAIN`, which unwraps with Cloud KMS only
-    /// and reads AES-256-GCM and AES-SIV keys only.
+pub(crate) enum Encoding {
+    /// The rules of [`BigQuery`].
     BigQuery,
-    /// Tink's `EncryptedKeyset` message around that ciphertext, which Tink's keyset readers take
-    /// with the KMS client of the KEK's Tink key URI. Its keys are the ones every Tink language
-    /// reads in a keyset: AES-GCM, AES-GCM-SIV and AES-SIV.
+    /// The rules of [`Tink`].
     Tink,
 }
 
-impl KeysetEncoding {
+impl Encoding {
     /// The reader of a field whose values this encoding's keyset reads.
     fn interop(self) -> Interop {
         match self {
-            KeysetEncoding::BigQuery => Interop::BigQuery,
-            KeysetEncoding::Tink => Interop::Tink,
+            Encoding::BigQuery => Interop::BigQuery,
+            Encoding::Tink => Interop::Tink,
         }
     }
 
@@ -69,7 +114,7 @@ impl KeysetEncoding {
             KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm) => Some(TinkKeyType::AesGcm),
             KeyAlgorithm::Randomized(
                 algorithm @ (AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256GcmSiv),
-            ) if self == KeysetEncoding::Tink => Some(algorithm.into()),
+            ) if self == Encoding::Tink => Some(algorithm.into()),
             KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv) => {
                 Some(TinkKeyType::AesSiv)
             }
@@ -83,14 +128,14 @@ impl KeysetEncoding {
     pub(crate) fn key_uri(self, kek: &KekRef) -> Option<String> {
         let key_uri = kek.tink_key_uri();
         match self {
-            KeysetEncoding::BigQuery => key_uri.filter(|_| *kek.provider() == KekProvider::Gcp),
-            KeysetEncoding::Tink => key_uri,
+            Encoding::BigQuery => key_uri.filter(|_| *kek.provider() == KekProvider::Gcp),
+            Encoding::Tink => key_uri,
         }
     }
 }
 
 /// A Tink keyset of a keyring's versions, wrapped by the keyring's KEK with no additional
-/// authenticated data, in the encoding of the export that made it.
+/// authenticated data, in the encoding `E` of the export that made it.
 ///
 /// The bytes are a KMS ciphertext. They open nothing without the KMS key's decrypt right, which a
 /// principal that reads with them needs anyway. A keyset is a copy of the record at the time of
@@ -98,15 +143,14 @@ impl KeysetEncoding {
 /// until it is exported again.
 ///
 /// `Debug` shows the key URI, the encoding and the key ids, never the wrapped keyset.
-#[derive(Clone)]
-pub struct WrappedKeyset {
+pub struct WrappedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
-    encoding: KeysetEncoding,
     key_uri: String,
     key_ids: Vec<KeyId>,
+    encoding: PhantomData<E>,
 }
 
-impl WrappedKeyset {
+impl<E: KeysetEncoding> WrappedKeyset<E> {
     /// The wrapped keyset, as a `BYTES` column, a query parameter or a file holds it.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
@@ -117,24 +161,6 @@ impl WrappedKeyset {
         &self.key_ids
     }
 
-    /// The keyset of `export_bigquery_keyset` as a GoogleSQL bytes literal, `b'\x0a\x24…'`, for
-    /// the second argument of `KEYS.KEYSET_CHAIN`, which takes a literal or a query parameter.
-    /// `None` for the keyset of [`export_tink_keyset`](Keyring::export_tink_keyset), which
-    /// `KEYS.KEYSET_CHAIN` does not read.
-    pub fn to_sql_literal(&self) -> Option<String> {
-        if self.encoding != KeysetEncoding::BigQuery {
-            return None;
-        }
-        let mut literal = String::with_capacity(3 + 4 * self.bytes.len());
-        literal.push_str("b'");
-        for byte in &self.bytes {
-            // Writing to a `String` cannot fail.
-            let _ = write!(literal, "\\x{byte:02x}");
-        }
-        literal.push('\'');
-        Some(literal)
-    }
-
     /// Tink's key URI of the KMS key that wraps the keyset, such as
     /// `gcp-kms://projects/…/cryptoKeys/…` or `aws-kms://arn:aws:kms:…`: the first argument of
     /// `KEYS.KEYSET_CHAIN`, and the URI of the KMS client a Tink keyset reader takes.
@@ -143,10 +169,36 @@ impl WrappedKeyset {
     }
 }
 
-impl Debug for WrappedKeyset {
+impl WrappedKeyset<BigQuery> {
+    /// The keyset as a GoogleSQL bytes literal, `b'\x0a\x24…'`, for the second argument of
+    /// `KEYS.KEYSET_CHAIN`, which takes a literal or a query parameter.
+    pub fn to_sql_literal(&self) -> String {
+        let mut literal = String::with_capacity(3 + 4 * self.bytes.len());
+        literal.push_str("b'");
+        for byte in &self.bytes {
+            // Writing to a `String` cannot fail.
+            let _ = write!(literal, "\\x{byte:02x}");
+        }
+        literal.push('\'');
+        literal
+    }
+}
+
+impl<E: KeysetEncoding> Clone for WrappedKeyset<E> {
+    fn clone(&self) -> Self {
+        WrappedKeyset {
+            bytes: self.bytes.clone(),
+            key_uri: self.key_uri.clone(),
+            key_ids: self.key_ids.clone(),
+            encoding: PhantomData,
+        }
+    }
+}
+
+impl<E: KeysetEncoding> Debug for WrappedKeyset<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WrappedKeyset")
-            .field("encoding", &self.encoding)
+            .field("encoding", &E::ENCODING)
             .field("key_uri", &self.key_uri)
             .field("key_ids", &self.key_ids)
             .finish_non_exhaustive()
@@ -186,9 +238,8 @@ impl<S: KeyringStore, B: AeadBackend> Keyring<S, GcpKmsProvider, B> {
     pub async fn export_bigquery_keyset(
         &self,
         selection: KeysetSelection,
-    ) -> KeyringResult<WrappedKeyset> {
-        self.export_keyset(selection, KeysetEncoding::BigQuery)
-            .await
+    ) -> KeyringResult<WrappedKeyset<BigQuery>> {
+        self.export_keyset(selection).await
     }
 }
 
@@ -218,18 +269,18 @@ where
     pub async fn export_tink_keyset(
         &self,
         selection: KeysetSelection,
-    ) -> KeyringResult<WrappedKeyset> {
-        self.export_keyset(selection, KeysetEncoding::Tink).await
+    ) -> KeyringResult<WrappedKeyset<Tink>> {
+        self.export_keyset(selection).await
     }
 
     /// The body of both exports, on any provider so that the unit tests run the BigQuery one on
     /// a local KMS that reports a Cloud KMS key.
-    async fn export_keyset(
+    async fn export_keyset<E: KeysetEncoding>(
         &self,
         selection: KeysetSelection,
-        encoding: KeysetEncoding,
-    ) -> KeyringResult<WrappedKeyset> {
+    ) -> KeyringResult<WrappedKeyset<E>> {
         spans::in_span(spans::export(self.id(), selection.purpose()), async {
+            let encoding = E::ENCODING;
             let kek = self.provider.kek();
             let key_uri = encoding.key_uri(kek).ok_or_else(|| {
                 KeyringError::interop(
@@ -254,7 +305,7 @@ where
                 added?;
             }
             let bytes = match encoding {
-                KeysetEncoding::BigQuery => {
+                Encoding::BigQuery => {
                     let plaintext = DataEncryptionKey::from(keyset.to_bytes());
                     // Zeroizes the keys inside the keyset before the KMS round trip, so that the
                     // serialized keyset is the one copy left while it is wrapped.
@@ -264,14 +315,14 @@ where
                         .await?
                         .into_value()
                 }
-                KeysetEncoding::Tink => keyset.to_encrypted_bytes(&self.provider).await?,
+                Encoding::Tink => keyset.into_encrypted_bytes(&self.provider).await?,
             };
             spans::record_versions(versions.len());
             Ok(WrappedKeyset {
                 bytes,
-                encoding,
                 key_uri,
                 key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
+                encoding: PhantomData,
             })
         })
         .await
@@ -283,7 +334,7 @@ where
         &self,
         record: &'r KeyringRecord,
         selection: KeysetSelection,
-        encoding: KeysetEncoding,
+        encoding: Encoding,
     ) -> KeyringResult<(KeyId, Vec<ExportedVersion<'r>>)> {
         let (primary, versions): (KeyId, Vec<_>) = match selection {
             KeysetSelection::Readable(purpose) => {
@@ -403,16 +454,10 @@ mod tests {
         let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
 
         let readable = keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await;
         let first = keyring
-            .export_keyset(
-                KeysetSelection::Single(KeyId::try_from(1)?),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyId::try_from(1)?))
             .await?;
 
         assert!(matches!(
@@ -436,10 +481,7 @@ mod tests {
         keyring.mark_compromised(KeyId::try_from(2)?, None).await?;
 
         let wrapped = keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
@@ -461,11 +503,11 @@ mod tests {
     #[test]
     fn debug_leaves_out_the_wrapped_keyset() -> TestResult {
         let marker = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
-        let keyset = WrappedKeyset {
+        let keyset = WrappedKeyset::<Tink> {
             bytes: marker.to_vec(),
-            encoding: KeysetEncoding::Tink,
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
             key_ids: vec![KeyId::try_from(1)?],
+            encoding: PhantomData,
         };
 
         let debug = format!("{keyset:?}");
@@ -489,10 +531,7 @@ mod tests {
         administrator.mark_compromised(leaked, None).await?;
 
         let wrapped = exporter
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
@@ -515,19 +554,13 @@ mod tests {
         let unwraps = provider.calls.unwraps.load(Ordering::SeqCst);
 
         keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         keyring
             .encrypt(&aad, &"alice@example.com".to_string())
             .await?;
         keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
 
         // One unwrap per export, and one for the encrypt, which found the cache empty.
@@ -539,10 +572,7 @@ mod tests {
     async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
         let (keyring, provider) = keyring(TestProvider::cloud_kms()?, KeyringPolicy::new()).await?;
         let wrapped = keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let value = CipherTextWithEncryptedKey::join(
             &CipherText(vec![0; 32]),
@@ -571,10 +601,7 @@ mod tests {
         let staged = keyring.rotate(Purpose::Randomized).await?;
 
         let wrapped = keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Randomized),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         let keyset = provider
             .decrypt_data_encryption_key(&EncryptedDataEncryptionKey::new(
@@ -588,7 +615,7 @@ mod tests {
         );
         assert!(matches!(
             keyring
-                .export_keyset(KeysetSelection::Single(staged), KeysetEncoding::BigQuery)
+                .export_keyset::<BigQuery>(KeysetSelection::Single(staged))
                 .await,
             Err(KeyringError::KeyVersionPending(KeyVersionError { key_id, .. })) if key_id == staged
         ));
@@ -601,10 +628,7 @@ mod tests {
         let (keyring, _) = keyring(TestProvider::cloud_kms()?, policy).await?;
 
         let exported = keyring
-            .export_keyset(
-                KeysetSelection::Readable(Purpose::Beacon),
-                KeysetEncoding::BigQuery,
-            )
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Beacon))
             .await;
 
         assert!(matches!(
@@ -625,7 +649,7 @@ mod tests {
         keyring.destroy(first).await?;
 
         let result = keyring
-            .export_keyset(KeysetSelection::Single(first), KeysetEncoding::BigQuery)
+            .export_keyset::<BigQuery>(KeysetSelection::Single(first))
             .await;
 
         assert!(matches!(
@@ -685,22 +709,18 @@ mod tests {
         ];
 
         for (selection, expected) in cases {
-            for encoding in [KeysetEncoding::BigQuery, KeysetEncoding::Tink] {
-                let exported = keyring.export_keyset(selection, encoding).await;
-                assert_eq!(
-                    exported
-                        .as_ref()
-                        .map(|keyset| keyset.key_ids().to_vec())
-                        .map_err(KeyringError::code),
-                    expected,
-                    "{selection:?} {encoding:?}"
-                );
-                if let Ok(keyset) = exported {
-                    assert_eq!(
-                        keyset.to_sql_literal().is_some(),
-                        encoding == KeysetEncoding::BigQuery
-                    );
-                }
+            let bigquery = keyring.export_keyset::<BigQuery>(selection).await;
+            let tink = keyring.export_keyset::<Tink>(selection).await;
+            for key_ids in [
+                bigquery
+                    .as_ref()
+                    .map(|keyset| keyset.key_ids().to_vec())
+                    .map_err(KeyringError::code),
+                tink.as_ref()
+                    .map(|keyset| keyset.key_ids().to_vec())
+                    .map_err(KeyringError::code),
+            ] {
+                assert_eq!(key_ids, expected, "{selection:?}");
             }
         }
         Ok(())

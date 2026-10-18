@@ -139,7 +139,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+    BigQuery, Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
 };
 
 # #[tokio::main]
@@ -158,12 +158,10 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset = keyring
+let keyset: WrappedKeyset<BigQuery> = keyring
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-let literal: String = keyset
-    .to_sql_literal()
-    .ok_or("not a BigQuery keyset")?;
+let literal: String = keyset.to_sql_literal();
 let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
 # let _ = chain;
 # Ok(())
@@ -186,11 +184,12 @@ Beacon versions are never exported: a selection of the beacon purpose fails with
 `ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
 [Beacons](./beacons.md#bigquery).
 
-The `WrappedKeyset` it returns:
+The `WrappedKeyset<BigQuery>` it returns:
 
 - `as_bytes()`: the wrapped keyset, as a `BYTES` column or query parameter holds it;
-- `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`, and `None`
-  for the keyset of `export_tink_keyset`, which `KEYS.KEYSET_CHAIN` does not read;
+- `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`. Only a
+  `WrappedKeyset<BigQuery>` has it: `export_tink_keyset` returns a `WrappedKeyset<Tink>`, which
+  `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`;
 - `key_ids()`: the versions inside, in ascending order.
@@ -282,7 +281,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::Ring;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, WrappedKeyset,
+    Keyring, KeyringId, KeyringOptions, KeysetSelection, Purpose, Tink, WrappedKeyset,
 };
 
 # #[tokio::main]
@@ -301,7 +300,7 @@ let keyring = Keyring::<MemoryKeyringStore, GcpKmsProvider, Ring>::open(
 )
 .await?;
 
-let keyset: WrappedKeyset = keyring
+let keyset: WrappedKeyset<Tink> = keyring
     .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
 std::fs::write("tenant-42.keyset", keyset.as_bytes())?;
@@ -334,5 +333,4 @@ def decrypt_email(value: bytes, user_id: str) -> str:
 
 The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of [Fields Tink reads](#fields-tink-reads): a selected ChaCha20-Poly1305 or
-beacon version fails with `ExportAlgorithmUnsupported`, before any KMS call. `to_sql_literal()`
-is `None`.
+beacon version fails with `ExportAlgorithmUnsupported`, before any KMS call.
