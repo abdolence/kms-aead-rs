@@ -31,7 +31,7 @@ pub enum KeyringError {
     KmsAead(KmsAeadError),
     /// The keyring store failed.
     Store(KeyringStoreError),
-    /// A keyring id, key id or AAD part that breaks the rule of its type.
+    /// A keyring id, AAD part or store name that breaks the rule of its type.
     InvalidIdentifier(InvalidIdentifierError),
     /// The store holds no record for the keyring, when a keyring is opened or a record is
     /// read before an administrative write.
@@ -365,8 +365,6 @@ pub struct InvalidIdentifierError {
 pub enum Identifier {
     /// [`KeyringId`].
     KeyringId,
-    /// [`KeyId`].
-    KeyId,
     /// [`EntityKind`](crate::EntityKind).
     EntityKind,
     /// [`EntityId`](crate::EntityId).
@@ -385,7 +383,6 @@ impl Display for Identifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Identifier::KeyringId => "keyring id",
-            Identifier::KeyId => "key id",
             Identifier::EntityKind => "entity kind",
             Identifier::EntityId => "entity id",
             Identifier::FieldName => "field name",
@@ -404,8 +401,7 @@ pub enum IdentifierRule {
     Length,
     /// A character the type does not allow.
     Character,
-    /// A value the type reserves: `.`, `..` or `__…__` for a keyring id, an ordinal of zero for
-    /// a key id.
+    /// A value the type reserves: `.`, `..` or `__…__` for a keyring id.
     Reserved,
 }
 

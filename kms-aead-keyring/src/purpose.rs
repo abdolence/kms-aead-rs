@@ -121,7 +121,7 @@ pub(crate) mod optional_key_id {
     use serde::de::Error;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    use crate::errors::{Identifier, IdentifierRule, KeyringError};
+    use crate::errors::KeyringError;
 
     pub(crate) fn serialize<S: Serializer>(
         key_id: &Option<KeyId>,
@@ -137,10 +137,7 @@ pub(crate) mod optional_key_id {
             .map(KeyId::new)
             .map(|key_id| {
                 if super::is_reserved(key_id) {
-                    return Err(D::Error::custom(KeyringError::invalid_identifier(
-                        Identifier::KeyId,
-                        IdentifierRule::Reserved,
-                    )));
+                    return Err(D::Error::custom(KeyringError::ReservedKeyId));
                 }
                 Ok(key_id)
             })
