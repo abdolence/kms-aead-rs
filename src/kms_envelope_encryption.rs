@@ -428,8 +428,7 @@ where
     pub async fn generate_new_dek(
         &self,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-        let span =
-            spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend());
+        let span = spans::generate_dek("randomized", self.cipher.algorithm(), self.cipher.backend);
         spans::in_span(span, self.new_dek()).await
     }
 
@@ -475,7 +474,7 @@ where
         spans::aead_encrypt(
             mode,
             self.cipher.algorithm(),
-            self.cipher.backend(),
+            self.cipher.backend,
             &self.dek_cache,
         )
     }
@@ -484,7 +483,7 @@ where
         spans::aead_decrypt(
             mode,
             self.cipher.algorithm(),
-            self.cipher.backend(),
+            self.cipher.backend,
             &self.dek_cache,
             format,
         )

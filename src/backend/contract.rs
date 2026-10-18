@@ -106,9 +106,7 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
                 assert_eq!(
                     opener.decrypt_value(AAD, &cipher_text, &key)?,
                     plain_text,
-                    "{algorithm} sealed by {} and opened by {}",
-                    sealer.backend(),
-                    opener.backend()
+                    "{algorithm} sealed by {sealer:?} and opened by {opener:?}"
                 );
             }
         }

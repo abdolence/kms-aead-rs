@@ -17,7 +17,9 @@ use crate::{
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
 #[derive(Debug, Clone)]
 pub struct AeadCipher {
-    backend: AeadBackend,
+    /// Read as a field, never through a method: in a build without a backend feature the type
+    /// has no value, and a call returning one makes the code after it unreachable.
+    pub(crate) backend: AeadBackend,
     algorithm: AeadAlgorithm,
 }
 
@@ -36,11 +38,6 @@ impl AeadCipher {
         } else {
             Err(KmsAeadUnsupportedAlgorithmError::create(algorithm, backend))
         }
-    }
-
-    /// The backend this cipher seals and opens on.
-    pub fn backend(&self) -> AeadBackend {
-        self.backend
     }
 
     /// The algorithm this cipher seals and opens with.
