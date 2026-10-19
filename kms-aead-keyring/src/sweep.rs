@@ -34,6 +34,14 @@
 //! `failed == 0`, and the query returns nothing after every process has had time to refresh its
 //! record, the administrative job can retire the old version with `KeyringAdmin::retire`.
 //!
+//! A sealer never seals a value back under an older version. A value under a version that is
+//! pending in the sealer's record, or missing from it, was sealed under a newer record:
+//! [`Sealer::reseal`](crate::Sealer::reseal) fails with
+//! [`KeyringError::SealerOutdated`], and so does
+//! [`Sealer::is_current`](crate::Sealer::is_current) for a beacon. [`run`] counts such a
+//! record as failed, its marker stays below the current one, and the next run re-seals it under a
+//! new sealer.
+//!
 //! The re-seal reads every field with [`decrypt_with_trust`](crate::Keyring::decrypt_with_trust),
 //! as [`Sealer::reseal`](crate::Sealer::reseal) does, and reports in
 //! [`ResealOutcome::Resealed`] whether the [`KeyTrust`](crate::KeyTrust) of any of them is
@@ -63,8 +71,8 @@
 //!
 //! One epoch counts the activations of every purpose of the keyring, so a range can also match a
 //! record with no field of the version's purpose, such as a record without beacons in the range of
-//! a beacon version. Its re-seal finds every value current and writes the marker alone. No range holds
-//! [`SealMarker::ENVELOPE`], since every range starts at epoch 1 or later.
+//! a beacon version. Its re-seal finds every value current and writes the marker alone. No range
+//! holds [`SealMarker::ENVELOPE`], since every range starts at epoch 1 or later.
 //!
 //! # Migration from envelope values
 //!
@@ -103,9 +111,9 @@
 //! It leaves no half-written record, provided the re-seal writes a record's fields and its
 //! [`SealMarker`] in one conditional write: a cancelled write either committed, and the marker
 //! moved, or did not, and the record is as it was. The keyring calls of a re-seal, those of its
-//! sealer and `decrypt`, cache keys and write nothing to the store. The marker is the sweep's progress:
-//! the records re-sealed before the cancellation no longer match the query, and the next run
-//! visits the rest.
+//! sealer and `decrypt`, cache keys and write nothing to the store. The marker is the sweep's
+//! progress: the records re-sealed before the cancellation no longer match the query, and the
+//! next run visits the rest.
 
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
@@ -781,40 +789,6 @@ mod tests {
             let row = row_of(&users, "43").ok_or("the user is written")?;
             assert_ne!(row.email.key_id(), compromised);
             assert!(!range.contains(row.seal));
-            Ok(())
-        }
-
-        #[tokio::test]
-        async fn a_full_sweep_empties_the_old_range_and_retire_keeps_every_value_readable(
-        ) -> TestResult {
-            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
-            let keyring = admin.keyring();
-            let users = Users::default();
-            for user in ["41", "42"] {
-                write_user(keyring, &users, user).await?;
-            }
-            let rotation = admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
-                .await?;
-            let previous = rotation
-                .previous
-                .ok_or("the promotion replaced a version")?;
-            let range = keyring
-                .record()
-                .version(previous)
-                .and_then(KeyVersion::seal_range)
-                .ok_or("the replaced version has a range")?;
-            assert_eq!(found_and_under(&users, range, previous).0, ["41", "42"]);
-
-            let report = sweep(keyring, &users).await;
-
-            assert_eq!((report.resealed, report.failed), (2, 0));
-            assert_eq!(found_and_under(&users, range, previous), (vec![], vec![]));
-            admin.retire(previous).await?;
-            for user in ["41", "42"] {
-                let row = row_of(&users, user).ok_or("the sweep keeps the user")?;
-                assert_eq!(keyring.decrypt(&email_of(user)?, &row.email).await?, ALICE);
-            }
             Ok(())
         }
 

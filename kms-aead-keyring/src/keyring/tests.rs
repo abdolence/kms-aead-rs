@@ -15,7 +15,7 @@ use serde_json::Value;
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::KeyringStore;
-use crate::sweep::{SealMarker, SealRange};
+use crate::sweep::SealMarker;
 use crate::test_support::{
     email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
     TestStore, EMAIL, TENANT,
@@ -1209,30 +1209,99 @@ async fn a_sealer_seals_every_field_under_the_record_its_marker_names() -> TestR
 }
 
 #[tokio::test]
-async fn a_version_has_a_seal_range_once_it_was_active() -> TestResult {
+async fn a_sealer_older_than_a_value_refuses_to_reseal_it_under_its_own_versions() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
-    let (admin, keyring) = (&fixture.admin, &fixture.keyring);
-    let pending = admin.rotate(Purpose::Randomized).await?;
+    let admin = fixture.other_process().await?;
+    let aad = email_of("42")?;
+    let alice = ALICE.to_string();
+    let stale = fixture.keyring.sealer().await;
+    let compromised = stale
+        .record()
+        .active(Purpose::Randomized)
+        .map(KeyVersion::id)
+        .ok_or("a new keyring has an active randomised version")?;
+    let old = stale.encrypt(&aad, &alice).await?;
+    let replacement = admin
+        .mark_compromised(compromised, None)
+        .await?
+        .ok_or("the compromised active version is replaced")?
+        .current;
+    let newer = admin.keyring().sealer().await.encrypt(&aad, &alice).await?;
 
-    let record = keyring.record();
-    assert_eq!(
-        record.version(pending).map(KeyVersion::seal_range),
-        Some(None)
+    let refused = stale.reseal(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == replacement
+        ),
+        "a re-seal back under the compromised version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
     );
-    assert_eq!(
-        record
-            .version(KeyId::new(1))
-            .and_then(KeyVersion::seal_range),
-        Some(SealRange::new(SealMarker::of_epoch(1), None))
+    let sealer = fixture.keyring.sealer().await;
+    assert!(sealer.reseal(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal(&aad, &old)
+        .await?
+        .ok_or("a value under the compromised version is re-sealed")?;
+    assert_eq!(resealed.value.key_id(), replacement);
+    assert!(matches!(resealed.trust, KeyTrust::Compromised(_)));
+    Ok(())
+}
+
+#[cfg(feature = "deterministic")]
+#[tokio::test]
+async fn a_sealer_that_holds_a_values_version_as_pending_refuses_to_reseal_it() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let options = KeyringRegistryOptions::new().with_watch(false);
+    let admin = TestRegistry::new(memory.clone(), options.clone())?
+        .create(
+            provider.clone(),
+            TENANT,
+            KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+        )
+        .await?;
+    let aad = EMAIL.deterministic_aad();
+    let alice = ALICE.to_string();
+    let old = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt_deterministic(&aad, &alice)
+        .await?;
+    let pending = admin.rotate(Purpose::Deterministic).await?;
+    let keyring = TestRegistry::new(memory, options)?
+        .open(provider, TENANT)
+        .await?;
+    let stale = keyring.sealer().await;
+    admin.promote(pending).await?;
+    let newer = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt_deterministic(&aad, &alice)
+        .await?;
+
+    let refused = stale.reseal_deterministic(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == pending
+        ),
+        "a re-seal back under the previous version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
     );
-    admin.destroy(pending).await?;
-    assert_eq!(
-        keyring
-            .record()
-            .version(pending)
-            .map(KeyVersion::seal_range),
-        Some(None)
-    );
+    keyring.reload().await?;
+    let sealer = keyring.sealer().await;
+    assert!(sealer.reseal_deterministic(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal_deterministic(&aad, &old)
+        .await?
+        .ok_or("a value under the previous version is re-sealed")?;
+    assert_eq!(resealed.value, newer);
+    assert_eq!(resealed.trust, KeyTrust::Trusted);
     Ok(())
 }
 

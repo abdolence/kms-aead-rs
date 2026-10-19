@@ -74,10 +74,11 @@ where
 
     /// `value` sealed again with `aad` under the record's active deterministic version, with the
     /// trust of the version it was read under, or `None` when it is under that version already,
-    /// by the rule [`reseal`](Self::reseal) follows for randomised values: any other version is
-    /// re-sealed, and a key id the record lacks is read after one reload of the cached record.
-    /// Once no value is left under the old version, it is retired, and the equality queries of
-    /// [`Keyring::deterministic_probes`] drop its probe.
+    /// by the rule [`reseal`](Self::reseal) follows for randomised values: only a version older
+    /// than the sealer's is sealed again, and a version pending in the sealer's record or missing
+    /// from it fails with [`KeyringError::SealerOutdated`]. Once no value is left under the old
+    /// version, it is retired, and the equality queries of [`Keyring::deterministic_probes`] drop
+    /// its probe.
     ///
     /// # Errors
     ///
@@ -90,7 +91,7 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
-        if self.is_active(Purpose::Deterministic, key_id)? {
+        if self.is_current(key_id).await? {
             return Ok(None);
         }
         let decrypted = self

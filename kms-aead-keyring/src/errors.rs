@@ -64,6 +64,17 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
+    /// A value or beacon under a key version that the [`Sealer`](crate::Sealer)'s record holds
+    /// as pending, or lacks while the cached record, reloaded for it, has it: a process with a
+    /// newer record sealed it. A sealer never seals such a value again under its own versions,
+    /// which are older and may have been flagged compromised since.
+    ///
+    /// The write is safe to retry: it takes a new sealer from
+    /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. Once the cached record holds
+    /// the version as active or older, from the reload that returned this error, a watch signal
+    /// or the record TTL, the new sealer finds the value current or seals it under the active
+    /// version. A sweep counts the record as failed, and its next run visits it again.
+    SealerOutdated(KeyVersionError),
     /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
@@ -113,6 +124,7 @@ impl KeyringError {
             KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
             KeyringError::KeyVersionPending(_) => "KEY_VERSION_PENDING",
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
+            KeyringError::SealerOutdated(_) => "SEALER_OUTDATED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
@@ -146,6 +158,13 @@ impl KeyringError {
 
     pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyId) -> Self {
         KeyringError::KeyVersionUnknown(KeyVersionError {
+            keyring: keyring.clone(),
+            key_id,
+        })
+    }
+
+    pub(crate) fn sealer_outdated(keyring: &KeyringId, key_id: KeyId) -> Self {
+        KeyringError::SealerOutdated(KeyVersionError {
             keyring: keyring.clone(),
             key_id,
         })
@@ -311,6 +330,11 @@ impl Display for KeyringError {
                 error.key_id.as_u32(),
                 error.keyring,
                 error.compromise.at()
+            ),
+            KeyringError::SealerOutdated(error) => write!(
+                f,
+                "The key version {} of the keyring {} is newer than the sealer's record: take a new sealer",
+                error.key_id.as_u32(), error.keyring
             ),
             KeyringError::KeyPurposeMismatch(error) => write!(
                 f,
@@ -751,8 +775,8 @@ pub struct PurposeError {
 }
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
-/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`] and
-/// [`KeyringError::ExportAlgorithmUnsupported`].
+/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`],
+/// [`KeyringError::SealerOutdated`] and [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyVersionError {

@@ -219,19 +219,30 @@ in one table add the keyring's id to the query, as the sweep's query does, see
 ### Re-sealing a value
 
 `Sealer::reseal(aad, value)` returns `None` for a value under the active randomised version of the
-sealer's record, without decrypting it or calling the KMS, and otherwise reads it with
-`decrypt_with_trust` and seals it again under that version. Every other version is re-sealed, a decrypt-only version with a
-higher key id than the active one included, and a key id the cached record lacks reloads the record
-first, as `decrypt` does. The `Resealed` it returns holds the new `value` and the `trust` of
-the version the old value was read under, so the compromised-value decision stays with the caller,
-see [The trust of re-sealed values](#the-trust-of-re-sealed-values). `reseal_deterministic` does
-the same for deterministic values, under the `deterministic` feature.
+sealer's record, without decrypting it or calling the KMS. A value under an older version the
+sealer's record holds, a decrypt-only version with a higher key id than the active one included, is
+read with `decrypt_with_trust` and sealed again under the active version. The `Resealed` it returns
+holds the new `value` and the `trust` of the version the old value was read under, so the
+compromised-value decision stays with the caller, see
+[The trust of re-sealed values](#the-trust-of-re-sealed-values). `reseal_deterministic` does the
+same for deterministic values, under the `deterministic` feature.
 
-A beacon cannot be re-sealed: it is a MAC of the plaintext. A beacon whose `key_id()` is the active
-beacon version of the sealer's record, `sealer.record().active(Purpose::Beacon)`, stays as it is.
-Otherwise its field is read with `decrypt_with_trust`, and the plaintext gives both the value under
-the active version, through the sealer's `encrypt`, and the beacon under the active beacon version,
-through its `beacon(field, &plaintext)`.
+A sealer never seals a value back under an older version. A value under a version that is pending
+in the sealer's record, or missing from it, was sealed by a process with a newer record, and a
+sealer taken before a `mark_compromised` would otherwise move it back under the compromised
+version. The re-seal reloads the cached record, as `decrypt` does for a key id it lacks, and fails
+with `KeyringError::SealerOutdated`. The sealer keeps its own record, so that its marker still names
+every version the write seals under. The write is safe to retry: it takes a new sealer and runs
+again, and once the cached record holds the version, the new sealer finds the value current or
+seals it under its active version. A key id the reloaded record lacks too fails with
+`KeyVersionUnknown`.
+
+A beacon cannot be re-sealed: it is a MAC of the plaintext. `sealer.is_current(beacon.key_id())`
+applies the same rule to it: `true` under the active beacon version of the sealer's record, and the
+beacon stays as it is; `false` under an older one, and the field is read with `decrypt_with_trust`,
+whose plaintext gives both the value under the active version, through the sealer's `encrypt`, and
+the beacon under the active beacon version, through its `beacon(field, &plaintext)`; and
+`SealerOutdated` under a version newer than the sealer's record.
 
 When nothing needs a re-seal, the write still stores the sealer's marker, conditional on the record
 as the sweep read it, and the re-seal returns `ResealOutcome::Skipped`.
@@ -400,7 +411,9 @@ if let Some(previous) = rotation.previous {
 
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
 `failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
-`WARN` with the candidate's `Display` and the error's `Display`. A candidate is the application's
+`WARN` with the candidate's `Display` and the error's `Display`. A re-seal that fails with
+`SealerOutdated` is one of them: the record keeps its marker, and the next run re-seals it under a
+new sealer. A candidate is the application's
 own type, such as a record id, a struct of key columns or the record itself, and its `Display`
 names the record and nothing else. A record id is often an entity id, so read the sweep's log as
 an administrative log.
@@ -1148,8 +1161,9 @@ async fn reseal_phone(
 
 /// Re-seals the `pages` of the query, one sealer per page, and writes each through `merge`, which
 /// runs the `MERGE` with `@seal` bound to the marker it is given, the marker of the page's
-/// sealer, and returns its number of affected rows. `ClientError` is the error of the application's BigQuery client, which a
-/// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failed page.
+/// sealer, and returns its number of affected rows. `ClientError` is the error of the
+/// application's BigQuery client, which a `KeyringError` converts into, and its `Display` is the
+/// text the sweep logs for a failed page.
 async fn sweep_phones<Pages, Merge, Merged, ClientError>(
     keyring: &UsersKeyring,
     pages: Pages,

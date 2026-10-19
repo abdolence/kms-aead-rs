@@ -8,9 +8,10 @@ use kms_aead::formats::Randomized;
 use kms_aead::{Encrypted, KmsAeadEncryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult};
+use crate::purpose::unreserved;
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{FieldAad, KeyId, Keyring, KeyringRecord, Purpose, Resealed};
+use crate::{FieldAad, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose, Resealed};
 
 /// The sealing calls of one write of an application record, under the active versions of one
 /// keyring record, [`record`](Self::record), whose
@@ -100,13 +101,13 @@ where
     /// `value` sealed again with `aad` under the record's active randomised version, with the
     /// trust of the version it was read under, or `None` when it is under that version already.
     ///
-    /// Any other version is re-sealed, whatever its key id: a version that a rotation left behind,
-    /// a decrypt-only version above the active one, which `KeyringAdmin::promote` of an older
-    /// pending version leaves after `KeyringAdmin::mark_compromised`, and a version still pending
-    /// in the sealer's record, which a process with a fresher record promoted and sealed under. In
-    /// the last case the value goes back under the version the sealer's marker names, and the
-    /// record stays in the query of the next sweep. A key id the sealer's record lacks is read as
-    /// [`Keyring::decrypt`] reads it, after one reload of the cached record.
+    /// A value is sealed again only when its version is older than the sealer's, by the rule of
+    /// [`is_current`](Self::is_current): a version that a rotation left behind, a decrypt-only
+    /// version above the active one, which `KeyringAdmin::promote` of an older pending version
+    /// leaves after `KeyringAdmin::mark_compromised`, or a compromised one. A value under a
+    /// version that is pending in the sealer's record, or missing from it, was sealed under a
+    /// newer record, and is never sealed back under the sealer's versions:
+    /// [`KeyringError::SealerOutdated`] tells the write to take a new sealer and run again.
     ///
     /// The value is read with [`Keyring::decrypt_with_trust`], so a value under a compromised
     /// version is re-sealed too, and [`Resealed::trust`] says so: the caller decides whether to
@@ -120,18 +121,16 @@ where
     ///
     /// # Errors
     ///
-    /// [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`] for the value's
-    /// key id, before any store or KMS call; [`KeyringError::NoActiveVersion`] before any
-    /// decryption; and the errors of `decrypt_with_trust`, among them
-    /// [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks the key id too, and of
-    /// [`encrypt`](Self::encrypt).
+    /// [`KeyringError::KeyPurposeMismatch`] for a value whose key id is of another purpose, and
+    /// the errors of `is_current`, before any decryption; then the errors of
+    /// `decrypt_with_trust` and of [`encrypt`](Self::encrypt).
     pub async fn reseal<T: Plaintext>(
         &self,
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Option<Resealed<T, Randomized>>> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
-        if self.is_active(Purpose::Randomized, key_id)? {
+        if self.is_current(key_id).await? {
             return Ok(None);
         }
         let decrypted = self.keyring.decrypt_with_trust(aad, value).await?;
@@ -141,13 +140,46 @@ where
         }))
     }
 
-    /// Whether `key_id` is the active version of `purpose` in the record, or
-    /// [`KeyringError::NoActiveVersion`] when the purpose has none.
-    pub(super) fn is_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
+    /// Whether a value or beacon under `key_id` is current for this sealer: `true` when `key_id`
+    /// is the active version of its purpose in the sealer's record, and `false` when it is
+    /// another version the record holds past pending, so the value is sealed again, or the beacon
+    /// derived again, under the active version.
+    ///
+    /// A version that is pending in the record, or missing from it, was active in a newer record
+    /// than the sealer's, under which another process sealed. Sealing again under the sealer's
+    /// versions would move the value back to an older version, one possibly flagged compromised
+    /// since, so the call fails instead, after reloading the cached record as
+    /// [`Keyring::decrypt`] does for a key id it lacks. The sealer's own record stays as it is,
+    /// so that its marker keeps naming every version the write seals under.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::ReservedKeyId`] for a reserved `key_id` and
+    /// [`KeyringError::NoActiveVersion`] when the record has no active version of its purpose,
+    /// before any store call; [`KeyringError::SealerOutdated`] for a version pending in the
+    /// record or missing from it, when the reloaded cached record has it; and
+    /// [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks it too.
+    pub async fn is_current(&self, key_id: KeyId) -> KeyringResult<bool> {
+        let keyring = self.keyring;
+        let purpose = Purpose::of(unreserved(key_id)?);
         let active = self
             .record
             .active(purpose)
-            .ok_or_else(|| KeyringError::no_active_version(self.keyring.id(), purpose))?;
-        Ok(active.id() == key_id)
+            .ok_or_else(|| KeyringError::no_active_version(keyring.id(), purpose))?;
+        if active.id() == key_id {
+            return Ok(true);
+        }
+        if self
+            .record
+            .version(key_id)
+            .is_some_and(|version| version.state() != KeyVersionState::Pending)
+        {
+            return Ok(false);
+        }
+        let (cached, _) = keyring.cache.find(key_id).await;
+        Err(match cached.version(key_id) {
+            Some(_) => KeyringError::sealer_outdated(keyring.id(), key_id),
+            None => KeyringError::key_version_unknown(keyring.id(), key_id),
+        })
     }
 }
