@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c4e57fee.js";
+            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -2694,9 +2694,10 @@ let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring
 let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
-// A staged rotation keeps the previous version decrypting
+// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
+// so it promotes at once
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
 registry.shutdown().await?;
 <span class="boring">Ok(())
@@ -2837,7 +2838,8 @@ at once.</p>
 </thead>
 <tbody>
 <tr><td><code>rotate(purpose)</code></td><td>stages a pending version with the record’s algorithm for the purpose, and returns its key id</td></tr>
-<tr><td><code>promote(key_id)</code></td><td>makes the pending version active; the previous active one becomes <code>DecryptOnly</code>. Returns a <code>Rotation</code> with both ids</td></tr>
+<tr><td><code>promote(key_id)</code></td><td>makes the pending version active; the previous active one becomes <code>DecryptOnly</code>. Returns a <code>Rotation</code> with both ids. Refuses with <code>PromotionTooEarly</code> until <code>record_ttl</code> has passed since the version was staged</td></tr>
+<tr><td><code>promote_now(key_id)</code></td><td>as <code>promote</code>, without the wait</td></tr>
 <tr><td><code>change_algorithm(algorithm)</code></td><td>makes <code>algorithm</code> the one new versions of its purpose use, and stages a version of it as <code>rotate</code> does</td></tr>
 <tr><td><code>mark_compromised(key_id, note)</code></td><td>flags the version; for the active version also adds an active replacement in the same write</td></tr>
 <tr><td><code>retire(key_id)</code></td><td><code>DecryptOnly</code> to <code>Retired</code>, once a sweep found no value left under it</td></tr>
@@ -2876,8 +2878,17 @@ record, counted from <code>KeyVersion::staged_at()</code>. For a healthy process
 revalidations fail keeps its cached record for as long as they fail, and logs a <code>WARN</code> on each
 failure: “The keyring record could not be revalidated; the cached record stays in use”. A
 deployment whose instances can take hours to update or to reach the store waits as long. Alert on
-that <code>WARN</code>: an instance that logs it is one a promotion can leave behind. The library has no
-guard that holds a promotion back.</p>
+that <code>WARN</code>: an instance that logs it is one a promotion can leave behind.</p>
+<p><code>promote</code> holds the promotion back for the registry’s <code>record_ttl</code> from <code>staged_at()</code>: before
+that it fails with <code>PromotionTooEarly</code>, whose <code>remaining</code> is the time left, so the job can sleep
+that long and call it again. The guard covers healthy processes only. <code>promote_now</code> skips it, for a
+fleet known to have refreshed since the rotation, such as one restarted since, and for a
+compromise that cannot wait.</p>
+<p>The guard waits the <code>record_ttl</code> of the registry the <code>KeyringAdmin</code> was opened from. Nothing in the
+record carries the TTL the other processes run with, so the administrative job’s registry needs
+the longest <code>record_ttl</code> in the fleet. The guard also compares this host’s clock with the
+<code>staged_at()</code> the staging host’s clock wrote, and a skew between the two clocks shortens or
+lengthens the wait by as much.</p>
 <p>An instance that has not seen the version when it reads a value under it treats the key id as
 unknown and reloads its record once, at most once per <code>reload_min_interval</code>. When the store
 answers, the read succeeds after the reload; when it does not, the read fails with
@@ -2888,8 +2899,8 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRecord,
-    KeyringRegistry, KeyringRegistryOptions, Purpose, Rotation,
+    KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId,
+    KeyringRecord, KeyringRegistry, KeyringRegistryOptions, Purpose, Rotation,
 };
 
 <span class="boring">#[tokio::main]
@@ -2912,8 +2923,15 @@ let pending = record
     .ok_or("no pending version")?;
 assert_eq!(pending.state(), KeyVersionState::Pending);
 
-// Once the wait from `pending.staged_at()` is over, the job promotes it
-let rotation: Rotation = admin.promote(staged).await?;
+// Inside the record TTL from `pending.staged_at()`, `promote` refuses and says how long is left
+assert!(matches!(
+    admin.promote(staged).await,
+    Err(KeyringError::PromotionTooEarly(error))
+        if error.remaining &lt;= KeyringRegistryOptions::DEFAULT_RECORD_TTL
+));
+
+// The job waits that long and promotes it; `promote_now` stands in for the wait here
+let rotation: Rotation = admin.promote_now(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
 registry.shutdown().await?;
@@ -2929,7 +2947,9 @@ pending, to be promoted or destroyed as planned.</p>
 <p>The replacement needs a new DEK encrypted. When the KMS cannot encrypt it, in an outage or without
 the encrypt right, the flag is written alone, a <code>WARN</code> is logged, and the call returns <code>Ok(None)</code>:
 the purpose then has no active version, and <code>encrypt</code> fails with <code>NoActiveVersion</code> until a version
-is promoted. A compromised flag is never held back by the KMS.</p>
+is promoted. Once the KMS answers, <code>rotate</code> and <code>promote_now</code> restore one, or <code>promote_now</code> on the
+pending version if the purpose has one: <code>promote</code> would refuse with <code>PromotionTooEarly</code> for up to
+<code>record_ttl</code> from the staging. A compromised flag is never held back by the KMS.</p>
 <p><code>destroy</code> and <code>dangerously_destroy_all_versions</code> remove encrypted DEKs from this record only. A
 backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
 that encrypted them exists, see
@@ -3723,7 +3743,7 @@ let before: Encrypted&lt;Email, Deterministic&gt; =
     keyring.sealer().await.encrypt_deterministic(&amp;aad, &amp;alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 
 // One probe per version that still decrypts, newest first
 let probes: Vec&lt;Encrypted&lt;Email, Deterministic&gt;&gt; = keyring.deterministic_probes(&amp;aad, &amp;alice).await?;
@@ -4249,8 +4269,13 @@ the previous version until their record refreshes, and those values decrypt.</p>
 <li>wait the longest time any process may run without a successful refresh of its record, counted
 from <code>staged_at()</code>, and check that no process logged “The keyring record could not be
 revalidated” meanwhile;</li>
-<li><code>promote(key_id)</code>.</li>
+<li><code>promote(key_id)</code>. Until <code>record_ttl</code> has passed since <code>staged_at()</code> it fails with
+<code>PromotionTooEarly</code>, whose <code>remaining</code> is the time left. <code>promote_now(key_id)</code> skips that
+guard, for a fleet known to have refreshed since the rotation or a compromise that cannot wait.</li>
 </ol>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/rotate.rs"><code>rotate</code> example</a>
+runs the whole cycle, and a KEK re-encryption after it, on the memory store and the local KMS:
+<code>cargo run -p kms-aead-keyring --example rotate --features ring,admin</code>.</p>
 <p>How often:</p>
 <ul>
 <li>A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
@@ -4667,9 +4692,9 @@ for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
 }
 
 // The administrative job stages a version, and promotes it after the wait for every process to
-// see it
+// see it; `promote_now` stands in for the wait here
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-let rotation: Rotation = admin.promote(staged).await?;
+let rotation: Rotation = admin.promote_now(staged).await?;
 
 // The sweep, on the data-plane handle: every row whose marker is below the keyring's
 let current: SealMarker = keyring.record().seal_marker();
@@ -5535,9 +5560,10 @@ by a version that is active at once. The replacement skips the staged wait on pu
 under the leaked key stops at each process’s next refresh, and a process that has not seen the
 replacement yet reloads its record once, rate-limited, when it meets a value under it. When the
 KMS cannot encrypt a new DEK, the flag lands alone and <code>encrypt</code> fails with <code>NoActiveVersion</code>;
-once the KMS answers, <code>rotate</code> and <code>promote</code> at once, since nothing seals under the purpose
-meanwhile, or <code>promote</code> the pending version if the purpose has one. A pending version itself
-is never compromised: <code>destroy</code> it instead;</li>
+once the KMS answers, <code>rotate</code> and <code>promote_now</code> at once, since nothing seals under the purpose
+meanwhile, or <code>promote_now</code> the pending version if the purpose has one. <code>promote</code> would refuse
+with <code>PromotionTooEarly</code> for up to <code>record_ttl</code> from the staging. A pending version itself is
+never compromised: <code>destroy</code> it instead;</li>
 <li>every process stops using the key within the bound of the
 <a href="#how-late-a-change-is-seen">record cache</a>, and its DEK is evicted from
 the DEK cache. With the default <code>Block</code> policy values under the version stop decrypting
@@ -6676,9 +6702,11 @@ links a value’s history for whoever reads the query, see
 <a href="#what-they-leak">Deterministic fields</a>;</li>
 <li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
 <a href="#what-a-beacon-leaks">Beacons</a>;</li>
-<li><strong>a promotion has no guard.</strong> A process that has not seen a promoted version reloads its record
-when it meets a value under it, and fails the read when it cannot reach the store, so the wait
-before <code>promote</code> is the operator’s, see <a href="#staged-rotation">Staged rotation</a>.</li>
+<li><strong>a promotion’s guard covers healthy processes only.</strong> <code>promote</code> refuses until <code>record_ttl</code> has
+passed since the rotation, and <code>promote_now</code> skips that. A process whose revalidations fail
+keeps an older record for longer: when it meets a value under a version it has not seen, it
+reloads its record, and fails the read when it cannot reach the store. So the wait beyond the
+record TTL is the operator’s, see <a href="#staged-rotation">Staged rotation</a>.</li>
 </ul>
 <h2 id="oss"><a class="header" href="#oss">OSS</a></h2>
 <p>Open source code is created through voluntary collaboration of software developers. The original

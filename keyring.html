@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c4e57fee.js";
+            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -337,9 +337,10 @@ let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring
 let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
-// A staged rotation keeps the previous version decrypting
+// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
+// so it promotes at once
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
 registry.shutdown().await?;
 <span class="boring">Ok(())

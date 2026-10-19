@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c4e57fee.js";
+            window.path_to_searchindex_js = "../searchindex-1bfcec7f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -325,7 +325,7 @@ let before: Encrypted&lt;Email, Deterministic&gt; =
     keyring.sealer().await.encrypt_deterministic(&amp;aad, &amp;alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 
 // One probe per version that still decrypts, newest first
 let probes: Vec&lt;Encrypted&lt;Email, Deterministic&gt;&gt; = keyring.deterministic_probes(&amp;aad, &amp;alice).await?;

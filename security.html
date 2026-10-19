@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c4e57fee.js";
+            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -348,9 +348,11 @@ links a value’s history for whoever reads the query, see
 <a href="./keyring/deterministic.html#what-they-leak">Deterministic fields</a>;</li>
 <li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
 <a href="./keyring/beacons.html#what-a-beacon-leaks">Beacons</a>;</li>
-<li><strong>a promotion has no guard.</strong> A process that has not seen a promoted version reloads its record
-when it meets a value under it, and fails the read when it cannot reach the store, so the wait
-before <code>promote</code> is the operator’s, see <a href="./keyring/lifecycle.html#staged-rotation">Staged rotation</a>.</li>
+<li><strong>a promotion’s guard covers healthy processes only.</strong> <code>promote</code> refuses until <code>record_ttl</code> has
+passed since the rotation, and <code>promote_now</code> skips that. A process whose revalidations fail
+keeps an older record for longer: when it meets a value under a version it has not seen, it
+reloads its record, and fails the read when it cannot reach the store. So the wait beyond the
+record TTL is the operator’s, see <a href="./keyring/lifecycle.html#staged-rotation">Staged rotation</a>.</li>
 </ul>
 <h2 id="oss"><a class="header" href="#oss">OSS</a></h2>
 <p>Open source code is created through voluntary collaboration of software developers. The original
