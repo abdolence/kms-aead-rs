@@ -158,14 +158,14 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<KmsEncryptedDek> {
+    ) -> KmsAeadResult<DekEncryption> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_response = kms::timed(self.encrypt_request(dek).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
-                // AWS KMS keys have no versions: every earlier key material keeps decrypting.
-                Some(blob) => Ok(KmsEncryptedDek {
+                // The response names no key material, so the KEK version is unknown.
+                Some(blob) => Ok(DekEncryption {
                     encrypted_dek: EncryptedDataEncryptionKey::new(blob.into_inner()),
                     kek_version: None,
                 }),

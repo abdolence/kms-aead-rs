@@ -143,7 +143,7 @@ fn every_transition_of_the_lifecycle_is_accepted() -> TestResult {
                 );
             }
             assert_eq!(
-                version.kms_encrypted_dek().is_some(),
+                version.dek_encryption().is_some(),
                 expected_state != KeyVersionState::Destroyed
             );
             edit.finish()?;
@@ -194,7 +194,7 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
 fn new_version(algorithm: KeyAlgorithm) -> NewVersion {
     NewVersion {
         algorithm,
-        kms_encrypted_dek: KmsEncryptedDek {
+        dek_encryption: DekEncryption {
             encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
             kek_version: None,
         },

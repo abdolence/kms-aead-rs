@@ -51,8 +51,8 @@ The crate declares `rust-version = "1.99"`.
 | `EncryptedDataEncryptionKey::new(encrypted, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one |
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
-| `encrypted_dek.key_version()` | removed; the `kek_version` of the `KmsEncryptedDek` that an encryption returns, and the `key_version` field of the KMS spans |
-| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KmsKeyVersion`, the type of `AzureKmsKeyRef::key_version` |
+| `encrypted_dek.key_version()` | removed; the `kek_version` of the `DekEncryption` that an encryption returns, and the `key_version` field of the KMS spans |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::key_version` |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
@@ -99,7 +99,7 @@ An application's own implementation of the provider trait:
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator;
-- returns a `KmsEncryptedDek` from `encrypt_data_encryption_key`: the bytes as
+- returns a `DekEncryption` from `encrypt_data_encryption_key`: the bytes as
   `EncryptedDataEncryptionKey::new(bytes)`, and in `kek_version` the KEK version the KMS reported,
   or `None`. A KMS that needs the key version to decrypt gets it from those bytes, as the Azure
   provider's do.

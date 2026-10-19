@@ -9,15 +9,15 @@ use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
-use super::KmsKeyVersion;
+use super::KekVersion;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
-    AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek,
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, DekEncryption, EncryptedDataEncryptionKey,
+    KekProvider, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
@@ -368,7 +368,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<KmsEncryptedDek> {
+    ) -> KmsAeadResult<DekEncryption> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let version = self.encrypting_version;
             let material = self.keks.get(&version).ok_or_else(|| {
@@ -377,7 +377,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let kek_version = KmsKeyVersion::from(version);
+            let kek_version = KekVersion::from(version);
             kms::record_key_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
             let encrypted_dek = kms::timed(async {
@@ -389,7 +389,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 )
             })
             .await?;
-            Ok(KmsEncryptedDek {
+            Ok(DekEncryption {
                 encrypted_dek: EncryptedDataEncryptionKey::new(encrypted_dek),
                 kek_version: Some(kek_version),
             })
@@ -594,15 +594,18 @@ mod tests {
             ],
         )?;
 
-        let under_v2 = rotated.encrypt_data_encryption_key(&dek).await?;
+        let dek_encryption_under_v2 = rotated.encrypt_data_encryption_key(&dek).await?;
         let rolled_back = rotated.with_encrypting_version(v1)?;
-        let under_v1 = rolled_back.encrypt_data_encryption_key(&dek).await?;
+        let dek_encryption_under_v1 = rolled_back.encrypt_data_encryption_key(&dek).await?;
 
         assert_eq!(
-            [under_v2.kek_version, under_v1.kek_version],
             [
-                Some(KmsKeyVersion::try_from("2".to_string())?),
-                Some(KmsKeyVersion::try_from("1".to_string())?)
+                dek_encryption_under_v2.kek_version,
+                dek_encryption_under_v1.kek_version
+            ],
+            [
+                Some(KekVersion::try_from("2".to_string())?),
+                Some(KekVersion::try_from("1".to_string())?)
             ]
         );
         Ok(())

@@ -7,9 +7,7 @@ use azure_core::http::{
 use azure_security_keyvault_keys::models::EncryptionAlgorithm;
 use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{
-    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
-};
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion};
 use kms_aead::*;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -188,15 +186,15 @@ async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -
         azure_core::base64::encode_url_safe(&wrapped)
     );
 
-    let kms_encrypted_dek = provider_over(StatusCode::Ok, body)?
+    let dek_encryption = provider_over(StatusCode::Ok, body)?
         .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
     assert_eq!(
-        kms_encrypted_dek,
-        KmsEncryptedDek {
+        dek_encryption,
+        DekEncryption {
             encrypted_dek: self::encrypted_key(&wrapped),
-            kek_version: Some(KmsKeyVersion::try_from(KEY_VERSION.to_string())?),
+            kek_version: Some(KekVersion::try_from(KEY_VERSION.to_string())?),
         }
     );
     Ok(())

@@ -1,7 +1,7 @@
 use rsb_derive::*;
 
-use super::kms_key_version::read_key_version;
-use super::KmsKeyVersion;
+use super::kek_version::read_kek_version;
+use super::KekVersion;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::spans::{self, kms};
 use crate::*;
@@ -64,11 +64,17 @@ fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<toni
 /// The `N` of the `…/cryptoKeyVersions/N` name that Cloud KMS returns from encrypt for `key`: the
 /// version that encrypted, which can be the previous primary version while a change of primary
 /// propagates. Decrypt addresses the CryptoKey, and Cloud KMS finds the version in its ciphertext.
-fn crypto_key_version(key: &str, name: &str) -> Option<KmsKeyVersion> {
+fn crypto_key_version(key: &str, name: &str) -> KmsAeadResult<KekVersion> {
     let version = name
-        .strip_prefix(key)?
-        .strip_prefix("/cryptoKeyVersions/")?;
-    read_key_version(version.as_bytes()).ok()
+        .strip_prefix(key)
+        .and_then(|version_path| version_path.strip_prefix("/cryptoKeyVersions/"))
+        .ok_or_else(|| {
+            KmsAeadEncryptionError::create(
+                "INVALID_KEY_VERSION",
+                "The name is not a CryptoKeyVersion of the configured key",
+            )
+        })?;
+    read_kek_version(version.as_bytes())
 }
 
 /// Encrypts under the primary version of the CryptoKey `key`.
@@ -191,7 +197,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<KmsEncryptedDek> {
+    ) -> KmsAeadResult<DekEncryption> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_request = encrypt_request(self.kek.key(), dek)?;
 
@@ -202,12 +208,17 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
 
-            let kek_version = crypto_key_version(self.kek.key(), &name);
-            match &kek_version {
-                Some(kek_version) => kms::record_key_version(kek_version.as_str()),
-                None => warn!(name, "No key version in the GCP KMS encrypt response"),
-            }
-            Ok(KmsEncryptedDek {
+            let kek_version = match crypto_key_version(self.kek.key(), &name) {
+                Ok(kek_version) => {
+                    kms::record_key_version(kek_version.as_str());
+                    Some(kek_version)
+                }
+                Err(error) => {
+                    warn!(name, %error, "No key version in the GCP KMS encrypt response");
+                    None
+                }
+            };
+            Ok(DekEncryption {
                 encrypted_dek: EncryptedDataEncryptionKey::new(ciphertext),
                 kek_version,
             })
@@ -408,16 +419,14 @@ mod tests {
             crypto_key_version(
                 KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
-            ),
-            Some(KmsKeyVersion::try_from("18".to_string())?)
+            )?,
+            KekVersion::try_from("18".to_string())?
         );
-        assert_eq!(
-            crypto_key_version(
-                KEY_NAME,
-                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
-            ),
-            None
-        );
+        assert!(crypto_key_version(
+            KEY_NAME,
+            "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
+        )
+        .is_err());
         Ok(())
     }
 
@@ -457,11 +466,11 @@ mod tests {
     async fn live_encrypt_reports_the_crypto_key_version_that_encrypted() -> KmsAeadResult<()> {
         let provider = GcpKmsProvider::new(&live_key_ref()).await?;
 
-        let kms_encrypted_dek = provider
+        let dek_encryption = provider
             .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::from(KEY_MARKER)))
             .await?;
 
-        let kek_version = kms_encrypted_dek.kek_version;
+        let kek_version = dek_encryption.kek_version;
         assert!(
             kek_version.as_ref().is_some_and(|kek_version| kek_version
                 .as_str()

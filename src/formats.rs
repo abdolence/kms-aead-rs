@@ -25,8 +25,8 @@ use crate::errors::{
     KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
 };
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadResult, KmsEncryptedDek, ValueStruct,
+    DataEncryptionKey, DekEncryption, EncryptedDataEncryptionKey, KekProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
 };
 
 pub(crate) mod envelope;
@@ -64,7 +64,7 @@ pub(crate) async fn encrypt_dek<P>(
     dek: &DataEncryptionKey,
     key_type: TinkKeyType,
     provider: &P,
-) -> KmsAeadResult<KmsEncryptedDek>
+) -> KmsAeadResult<DekEncryption>
 where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
@@ -89,7 +89,7 @@ pub(crate) async fn generate_encrypted_dek<B, P>(
     key_type: TinkKeyType,
     key_len: usize,
     provider: &P,
-) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
+) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)>
 where
     B: AeadBackend,
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
@@ -107,8 +107,8 @@ where
         Some(material) => DataEncryptionKey::from(material),
         None => DataEncryptionKey::from(B::generate_random_bytes(key_len)?),
     };
-    let kms_encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
-    Ok((dek, kms_encrypted_dek))
+    let dek_encryption = encrypt_dek(&dek, key_type, provider).await?;
+    Ok((dek, dek_encryption))
 }
 
 /// The data encryption key that `encrypted_dek` holds, decrypted by `provider`, and the layout
@@ -166,7 +166,7 @@ where
 pub(crate) async fn reencrypt_encrypted_dek<P>(
     encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
-) -> KmsAeadResult<KmsEncryptedDek>
+) -> KmsAeadResult<DekEncryption>
 where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {

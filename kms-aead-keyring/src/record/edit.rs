@@ -3,7 +3,7 @@
 
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
-use kms_aead::{AeadCipher, BeaconMac, KekRef, KmsAeadEncryptionProvider, KmsEncryptedDek};
+use kms_aead::{AeadCipher, BeaconMac, DekEncryption, KekRef, KmsAeadEncryptionProvider};
 
 use super::{RetainedDek, VersionState};
 use crate::errors::{
@@ -22,7 +22,7 @@ use crate::{
 #[derive(Clone)]
 pub(crate) struct NewVersion {
     pub(crate) algorithm: KeyAlgorithm,
-    pub(crate) kms_encrypted_dek: KmsEncryptedDek,
+    pub(crate) dek_encryption: DekEncryption,
 }
 
 impl NewVersion {
@@ -35,7 +35,7 @@ impl NewVersion {
         P: KmsAeadEncryptionProvider + Sync,
         B: AeadBackend,
     {
-        let (_, kms_encrypted_dek) = match algorithm {
+        let (_, dek_encryption) = match algorithm {
             KeyAlgorithm::Randomized(algorithm) => {
                 AeadCipher::<B>::new(algorithm)?
                     .generate_encrypted_dek(provider)
@@ -57,7 +57,7 @@ impl NewVersion {
         };
         Ok(Self {
             algorithm,
-            kms_encrypted_dek,
+            dek_encryption,
         })
     }
 }
@@ -158,7 +158,7 @@ impl RetainedDek {
     /// time never change once set.
     fn flagged(&self, compromise: &Compromise) -> Option<Self> {
         self.compromised.is_none().then(|| Self {
-            kms_encrypted_dek: self.kms_encrypted_dek.clone(),
+            dek_encryption: self.dek_encryption.clone(),
             compromised: Some(compromise.clone()),
             seal_range: self.seal_range,
         })
@@ -268,8 +268,8 @@ impl RecordEdit {
         let previous = self.record.active(purpose).map(KeyVersion::id);
         let seal_start = self.activation_marker()?;
         self.change_state(key_id, Transition::Promote, now, |state| match state {
-            VersionState::Pending(kms_encrypted_dek) => Some(VersionState::Active {
-                kms_encrypted_dek: kms_encrypted_dek.clone(),
+            VersionState::Pending(dek_encryption) => Some(VersionState::Active {
+                dek_encryption: dek_encryption.clone(),
                 seal_start,
             }),
             _ => None,
@@ -277,10 +277,10 @@ impl RecordEdit {
         if let Some(previous) = previous {
             self.change_state(previous, Transition::Promote, now, |state| match state {
                 VersionState::Active {
-                    kms_encrypted_dek,
+                    dek_encryption,
                     seal_start,
                 } => Some(VersionState::DecryptOnly(RetainedDek {
-                    kms_encrypted_dek: kms_encrypted_dek.clone(),
+                    dek_encryption: dek_encryption.clone(),
                     compromised: None,
                     seal_range: SealRange::new(*seal_start, None),
                 })),
@@ -315,10 +315,10 @@ impl RecordEdit {
             |state| match state {
                 VersionState::Pending(_) => None,
                 VersionState::Active {
-                    kms_encrypted_dek,
+                    dek_encryption,
                     seal_start,
                 } => Some(VersionState::DecryptOnly(RetainedDek {
-                    kms_encrypted_dek: kms_encrypted_dek.clone(),
+                    dek_encryption: dek_encryption.clone(),
                     compromised: Some(compromise.clone()),
                     seal_range: SealRange::new(*seal_start, None),
                 })),
@@ -335,8 +335,8 @@ impl RecordEdit {
                 let seal_start = self.activation_marker()?;
                 let current = self.push(
                     new,
-                    |kms_encrypted_dek| VersionState::Active {
-                        kms_encrypted_dek,
+                    |dek_encryption| VersionState::Active {
+                        dek_encryption,
                         seal_start,
                     },
                     now,
@@ -395,22 +395,22 @@ impl RecordEdit {
         record.updated_at = now;
     }
 
-    /// Puts `kms_encrypted_dek`, the same key encrypted again, in place of `key_id`'s encrypted
+    /// Puts `dek_encryption`, the same key encrypted again, in place of `key_id`'s encrypted
     /// DEK and its KEK version, in whatever state the version is.
     pub(crate) fn replace_dek(
         &mut self,
         key_id: KeyId,
-        kms_encrypted_dek: KmsEncryptedDek,
+        dek_encryption: DekEncryption,
         now: Timestamp,
     ) -> KeyringResult<()> {
         match &mut self.version_mut(key_id)?.state {
-            VersionState::Pending(held)
+            VersionState::Pending(held_dek_encryption)
             | VersionState::Active {
-                kms_encrypted_dek: held,
+                dek_encryption: held_dek_encryption,
                 ..
-            } => *held = kms_encrypted_dek,
+            } => *held_dek_encryption = dek_encryption,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
-                kept.kms_encrypted_dek = kms_encrypted_dek
+                kept.dek_encryption = dek_encryption
             }
             VersionState::Destroyed { .. } => {
                 return Err(KeyringError::record_invalid(
@@ -438,7 +438,7 @@ impl RecordEdit {
     fn push(
         &mut self,
         new: NewVersion,
-        state: impl FnOnce(KmsEncryptedDek) -> VersionState,
+        state: impl FnOnce(DekEncryption) -> VersionState,
         now: Timestamp,
     ) -> KeyringResult<KeyId> {
         let key_id = self.record.next_key_id(new.algorithm.purpose())?;
@@ -448,7 +448,7 @@ impl RecordEdit {
             algorithm: new.algorithm,
             created_at: now,
             state_changed_at: now,
-            state: state(new.kms_encrypted_dek),
+            state: state(new.dek_encryption),
         });
         record.updated_at = now;
         Ok(key_id)

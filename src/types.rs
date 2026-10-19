@@ -6,7 +6,7 @@ use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
 use crate::errors::*;
-use crate::providers::KmsKeyVersion;
+use crate::providers::KekVersion;
 use crate::KmsAeadResult;
 
 /// A plaintext data encryption key, zeroised on drop and shown as `***` by `Debug`. Equality
@@ -120,21 +120,22 @@ impl Hash for EncryptedDataEncryptionKey {
     }
 }
 
-/// A data encryption key as the KMS encrypted it: the encrypted DEK, and the version of the KEK
-/// that encrypted it, as the KMS reported it.
+/// The result of encrypting a data encryption key with the KEK: the encrypted DEK, and the
+/// version of the KEK that encrypted it, as the KMS reported it.
 ///
 /// The KEK version tells, with no KMS call, whether a stored DEK is still under a KEK version
 /// about to be disabled: one that a re-encryption missed, or one that a KMS still propagating a
 /// rotation encrypted under the old version. Decryption never needs it, since an encrypted DEK
 /// names its version wherever the KMS needs one, and the values kms-aead seals never store it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KmsEncryptedDek {
+pub struct DekEncryption {
     /// The bytes to store and to decrypt.
     pub encrypted_dek: EncryptedDataEncryptionKey,
     /// The KEK version that encrypted `encrypted_dek`: the CryptoKeyVersion of Cloud KMS, the key
     /// version of Azure Key Vault and of Vault Transit, and the version of a local KEK. `None`
-    /// under AWS KMS, whose keys have no versions, and when the KMS reported none.
-    pub kek_version: Option<KmsKeyVersion>,
+    /// under AWS KMS, whose responses name no key material, and when the KMS reported none; under
+    /// a KMS with versions, `None` means the version is unknown.
+    pub kek_version: Option<KekVersion>,
 }
 
 #[cfg(test)]

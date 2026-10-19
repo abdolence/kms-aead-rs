@@ -17,8 +17,8 @@ const ENCRYPTED_DEK_BASE64: &str = "wP/uwP/u";
 const KEK_VERSION: &str = "4";
 
 /// A version as the stored form writes it, with an encrypted DEK and its KEK version unless it is
-/// destroyed, and a seal range that fits its state in a [`document`] at epoch 2: open from 2 while active, from 1
-/// to 2 once decrypt-only or retired, and none while pending or once destroyed.
+/// destroyed, and a seal range that fits its state in a [`document`] at epoch 2: open from 2 while
+/// active, from 1 to 2 once decrypt-only or retired, and none while pending or once destroyed.
 pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> {
     let algorithm = if key_id >> 31 == 1 {
         "aes-256-siv"
@@ -165,12 +165,18 @@ fn an_active_compromised_version_is_rejected() -> KeyringResult<()> {
 
 #[test]
 fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
-    let mut destroyed = version(1, "destroyed", false)?;
-    destroyed["encrypted_dek"] = json!(ENCRYPTED_DEK_BASE64);
-    assert_eq!(
-        refusal(&document(vec![destroyed, version(2, "active", false)?])),
-        Some(RecordInvalidReason::DestroyedWithMaterial(KeyId::new(1)))
-    );
+    for (field, value) in [
+        ("encrypted_dek", json!(ENCRYPTED_DEK_BASE64)),
+        ("kek_version", json!(KEK_VERSION)),
+    ] {
+        let mut destroyed = version(1, "destroyed", false)?;
+        destroyed[field] = value;
+        assert_eq!(
+            refusal(&document(vec![destroyed, version(2, "active", false)?])),
+            Some(RecordInvalidReason::DestroyedWithMaterial(KeyId::new(1))),
+            "{field}"
+        );
+    }
     Ok(())
 }
 
@@ -178,7 +184,6 @@ fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
 fn a_version_without_material_is_rejected() -> KeyringResult<()> {
     let mut retired = version(1, "retired", false)?;
     retired["encrypted_dek"] = Value::Null;
-    retired["kek_version"] = Value::Null;
     assert_eq!(
         refusal(&document(vec![retired, version(2, "active", false)?])),
         Some(RecordInvalidReason::MissingMaterial(KeyId::new(1)))
@@ -240,17 +245,13 @@ fn an_encrypted_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
 }
 
 #[test]
-fn a_kek_version_that_does_not_parse_or_names_no_encrypted_dek_is_rejected() -> KeyringResult<()> {
+fn a_kek_version_that_does_not_parse_is_rejected() -> KeyringResult<()> {
     let mut active = version(1, "active", false)?;
     active["kek_version"] = json!("4/5");
-    let mut destroyed = version(1, "destroyed", false)?;
-    destroyed["kek_version"] = json!(KEK_VERSION);
-    for version in [active, destroyed] {
-        assert_eq!(
-            refusal(&document(vec![version])),
-            Some(RecordInvalidReason::MalformedKekVersion(KeyId::new(1)))
-        );
-    }
+    assert_eq!(
+        refusal(&document(vec![active])),
+        Some(RecordInvalidReason::MalformedKekVersion(KeyId::new(1)))
+    );
     Ok(())
 }
 

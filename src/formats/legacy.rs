@@ -8,8 +8,8 @@ use super::{decrypt_dek, encrypt_dek, Envelope};
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
-use crate::providers::kms_key_version::read_key_version;
-use crate::providers::KmsKeyVersion;
+use crate::providers::kek_version::read_kek_version;
+use crate::providers::KekVersion;
 use crate::types::checked_key_bytes;
 use crate::{
     Encrypted, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, KmsAeadEnvelope,
@@ -26,7 +26,7 @@ struct LegacyEncryptedDek<'w> {
             reason = "only the Azure provider's bytes carry the key version"
         )
     )]
-    key_version: Option<KmsKeyVersion>,
+    key_version: Option<KekVersion>,
     encrypted_dek_bytes: &'w [u8],
 }
 
@@ -40,7 +40,7 @@ impl<'w> LegacyEncryptedDek<'w> {
     fn new(key_version: &[u8], encrypted_dek_bytes: &'w [u8]) -> KmsAeadResult<Self> {
         let key_version = match key_version {
             [] => None,
-            key_version => Some(read_key_version(key_version)?),
+            key_version => Some(read_kek_version(key_version)?),
         };
         Ok(Self {
             key_version,
@@ -301,7 +301,7 @@ where
         )?;
         encrypt_dek(&dek, algorithm.into(), &self.provider)
             .await
-            .map(|kms_encrypted_dek| Some(kms_encrypted_dek.encrypted_dek))
+            .map(|dek_encryption| Some(dek_encryption.encrypted_dek))
     }
 }
 

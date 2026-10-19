@@ -84,7 +84,7 @@ use kms_aead::backends::Ring;
 use kms_aead::formats::Deterministic;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
-    DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope, KmsEncryptedDek,
+    DekEncryption, DeterministicAlgorithm, DeterministicCipher, Encrypted, KeyId, KmsAeadEnvelope,
 };
 use secret_vault_value::SecretValue;
 
@@ -95,7 +95,7 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let algorithm = DeterministicAlgorithm::Aes256Siv;
 
 // A new key, and the same key encrypted, to store
-let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
+let (dek, DekEncryption { encrypted_dek, .. }) =
     envelope.generate_encrypted_deterministic_dek(algorithm).await?;
 
 // Later: decrypt the stored key

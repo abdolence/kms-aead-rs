@@ -11,8 +11,8 @@ use kms_aead::backends::AeadBackend;
 use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek,
+    AeadAlgorithm, DataEncryptionKey, DekEncryption, EncryptedDataEncryptionKey, KekProvider,
+    KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -77,8 +77,8 @@ impl TestProvider {
     /// A provider for a random local KEK named `kek`.
     pub(crate) fn new(kek: &str) -> KmsAeadResult<Self> {
         let id = LocalKekId::try_from(kek.to_string())?;
-        let first = LocalKekVersion::from(NonZeroU32::MIN);
-        let rotated = LocalKekVersion::from(NonZeroU32::MIN.saturating_add(1));
+        let [first, rotated] =
+            [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
         let key_len = AeadAlgorithm::Aes256Gcm.key_len();
         let first_material = TestBackend::generate_random_bytes(key_len)?;
         let rotated_material = TestBackend::generate_random_bytes(key_len)?;
@@ -121,7 +121,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<KmsEncryptedDek> {
+    ) -> KmsAeadResult<DekEncryption> {
         if self.calls.fail_encryptions.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
                 "UNAVAILABLE",

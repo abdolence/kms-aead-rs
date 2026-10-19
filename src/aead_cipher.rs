@@ -8,8 +8,8 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    AeadAlgorithm, DataEncryptionKey, Encrypted, KeyId, KmsAeadEncryptionProvider, KmsAeadResult,
-    KmsEncryptedDek, Plaintext,
+    AeadAlgorithm, DataEncryptionKey, DekEncryption, Encrypted, KeyId, KmsAeadEncryptionProvider,
+    KmsAeadResult, Plaintext,
 };
 
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
@@ -77,7 +77,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
-    ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
+    ) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {

@@ -21,8 +21,8 @@ use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
-use super::kms_key_version::read_key_version;
-use super::KmsKeyVersion;
+use super::kek_version::read_kek_version;
+use super::KekVersion;
 use crate::errors::*;
 use crate::spans::{self, kms};
 use crate::*;
@@ -381,7 +381,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<KmsEncryptedDek> {
+    ) -> KmsAeadResult<DekEncryption> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let plaintext = dek.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroised.
@@ -393,12 +393,17 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
             let response: TransitResponse<EncryptData> = parse_response(&body)?;
             let ciphertext = response.data.ciphertext;
-            let kek_version = transit_key_version(&ciphertext);
-            match &kek_version {
-                Some(kek_version) => kms::record_key_version(kek_version.as_str()),
-                None => warn!("No key version in the Vault Transit ciphertext"),
-            }
-            Ok(KmsEncryptedDek {
+            let kek_version = match transit_key_version(&ciphertext) {
+                Ok(kek_version) => {
+                    kms::record_key_version(kek_version.as_str());
+                    Some(kek_version)
+                }
+                Err(error) => {
+                    warn!(%error, "No key version in the Vault Transit ciphertext");
+                    None
+                }
+            };
+            Ok(DekEncryption {
                 encrypted_dek: EncryptedDataEncryptionKey::new(ciphertext.into_bytes()),
                 kek_version,
             })
@@ -419,7 +424,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
                     "The encrypted data encryption key is not a Vault Transit ciphertext",
                 )
             })?;
-            if let Some(key_version) = transit_key_version(ciphertext) {
+            if let Ok(key_version) = transit_key_version(ciphertext) {
                 kms::record_key_version(key_version.as_str());
             }
             let request = serde_json::to_vec(&DecryptRequest { ciphertext })
@@ -506,12 +511,19 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
 /// The `N` of the `vault:vN:` prefix of a Transit ciphertext: the key version that encrypted, as
 /// the `min_decryption_version` of the key counts it. Vault reads it from its own ciphertext at
 /// decrypt.
-fn transit_key_version(ciphertext: &str) -> Option<KmsKeyVersion> {
-    let (version, _) = ciphertext.strip_prefix("vault:v")?.split_once(':')?;
-    if !version.bytes().all(|byte| byte.is_ascii_digit()) {
-        return None;
-    }
-    read_key_version(version.as_bytes()).ok()
+fn transit_key_version(ciphertext: &str) -> KmsAeadResult<KekVersion> {
+    let version = ciphertext
+        .strip_prefix("vault:v")
+        .and_then(|versioned| versioned.split_once(':'))
+        .map(|(version, _)| version)
+        .filter(|version| version.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| {
+            KmsAeadEncryptionError::create(
+                "INVALID_KEY_VERSION",
+                "The ciphertext does not start with vault:vN:",
+            )
+        })?;
+    read_kek_version(version.as_bytes())
 }
 
 /// Whether requests to `address` carry the token and the data keys in plain text off this host:
@@ -1001,8 +1013,8 @@ mod tests {
     #[test]
     fn key_version_is_read_from_the_transit_ciphertext() -> KmsAeadResult<()> {
         assert_eq!(
-            transit_key_version("vault:v3:AbCd+/ef=="),
-            Some(KmsKeyVersion::try_from("3".to_string())?)
+            transit_key_version("vault:v3:AbCd+/ef==")?,
+            KekVersion::try_from("3".to_string())?
         );
         for malformed in [
             "vault:3:AbCd",
@@ -1011,7 +1023,7 @@ mod tests {
             "AbCd",
             "vault:v3-x:AbCd",
         ] {
-            assert_eq!(transit_key_version(malformed), None, "{malformed}");
+            assert!(transit_key_version(malformed).is_err(), "{malformed}");
         }
         Ok(())
     }
@@ -1063,15 +1075,15 @@ mod tests {
         let key_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
             let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
-            transit_key_version(&ciphertext).map(|key_version| key_version.to_string())
+            transit_key_version(&ciphertext).unwrap().to_string()
         };
 
         let before_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
         let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
-        assert_eq!(key_version(&before_rotation).as_deref(), Some("1"));
-        assert_eq!(key_version(&after_rotation).as_deref(), Some("2"));
+        assert_eq!(key_version(&before_rotation), "1");
+        assert_eq!(key_version(&after_rotation), "2");
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
                 encryption
@@ -1119,8 +1131,8 @@ mod tests {
         assert_eq!(
             [before_rotation.kek_version, after_rotation.kek_version],
             [
-                Some(KmsKeyVersion::try_from("1".to_string())?),
-                Some(KmsKeyVersion::try_from("2".to_string())?)
+                Some(KekVersion::try_from("1".to_string())?),
+                Some(KekVersion::try_from("2".to_string())?)
             ]
         );
         Ok(())

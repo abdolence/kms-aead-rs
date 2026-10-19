@@ -99,8 +99,8 @@ mod aes_siv_cipher {
     use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
     use crate::types::checked_key_bytes;
     use crate::{
-        spans, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, KmsEncryptedDek, Plaintext,
+        spans, DataEncryptionKey, DekEncryption, Encrypted, EncryptedDataEncryptionKey, KeyId,
+        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, Plaintext,
     };
 
     /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
@@ -159,7 +159,7 @@ mod aes_siv_cipher {
         pub async fn generate_encrypted_dek<P>(
             &self,
             provider: &P,
-        ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
+        ) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
@@ -306,7 +306,7 @@ mod aes_siv_cipher {
         pub async fn generate_encrypted_deterministic_dek(
             &self,
             algorithm: DeterministicAlgorithm,
-        ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)> {
+        ) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)> {
             let cipher = DeterministicCipher::<B>::new(algorithm)?;
             let span = spans::generate_encrypted_dek("deterministic", algorithm, B::NAME);
             spans::in_span(span, cipher.generate_encrypted_dek(&self.provider)).await
@@ -495,7 +495,7 @@ mod aes_siv_cipher {
                 let cipher = DeterministicCipher::<TestBackend>::new(algorithm)?;
                 let plain_text = SecretValue::from(PLAIN_TEXT);
 
-                let (dek, KmsEncryptedDek { encrypted_dek, .. }) = envelope
+                let (dek, DekEncryption { encrypted_dek, .. }) = envelope
                     .generate_encrypted_deterministic_dek(algorithm)
                     .await?;
                 let (other_dek, _) = envelope

@@ -7,8 +7,8 @@ use std::str::FromStr;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use jiff::Timestamp;
-use kms_aead::providers::KmsKeyVersion;
-use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef, KmsEncryptedDek, ValueStruct};
+use kms_aead::providers::KekVersion;
+use kms_aead::{DekEncryption, EncryptedDataEncryptionKey, KekProvider, KekRef, ValueStruct};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -102,10 +102,10 @@ impl From<&KeyringRecord> for StoredRecord {
                 }),
                 created_at: version.created_at,
                 state_changed_at: version.state_changed_at,
-                encrypted_dek: version.kms_encrypted_dek().map(|kms_encrypted_dek| {
-                    STANDARD.encode(kms_encrypted_dek.encrypted_dek.value())
-                }),
-                kek_version: version.kek_version().map(KmsKeyVersion::to_string),
+                encrypted_dek: version
+                    .dek_encryption()
+                    .map(|dek_encryption| STANDARD.encode(dek_encryption.encrypted_dek.value())),
+                kek_version: version.kek_version().map(KekVersion::to_string),
             })
             .collect();
         Self {
@@ -298,17 +298,24 @@ impl TryFrom<StoredVersion> for KeyVersion {
         let kek_version = stored
             .kek_version
             .map(|kek_version| {
-                KmsKeyVersion::try_from(kek_version)
+                KekVersion::try_from(kek_version)
                     .map_err(|_| RecordInvalidReason::MalformedKekVersion(key_id))
             })
             .transpose()?;
-        let kms_encrypted_dek = match (encrypted_dek, kek_version) {
-            (Some(encrypted_dek), kek_version) => Some(KmsEncryptedDek {
+        let kind: KeyVersionState = stored
+            .state
+            .parse()
+            .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
+        let dek_encryption = match (encrypted_dek, kek_version, kind) {
+            (Some(encrypted_dek), kek_version, _) => Some(DekEncryption {
                 encrypted_dek,
                 kek_version,
             }),
-            (None, None) => None,
-            (None, Some(_)) => return Err(RecordInvalidReason::MalformedKekVersion(key_id)),
+            (None, None, _) => None,
+            (None, Some(_), KeyVersionState::Destroyed) => {
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+            }
+            (None, Some(_), _) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
         };
         let compromised = stored
             .compromised
@@ -319,11 +326,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 epochs.end.map(SealMarker::of_epoch),
             )
         });
-        let kind: KeyVersionState = stored
-            .state
-            .parse()
-            .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
-        let state = match (kind, kms_encrypted_dek) {
+        let state = match (kind, dek_encryption) {
             (KeyVersionState::Destroyed, None) => VersionState::Destroyed {
                 compromised,
                 seal_range,
@@ -335,9 +338,9 @@ impl TryFrom<StoredVersion> for KeyVersion {
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedActive(key_id))
             }
-            (KeyVersionState::Active, Some(kms_encrypted_dek)) => match seal_range {
+            (KeyVersionState::Active, Some(dek_encryption)) => match seal_range {
                 Some(range) if range.end().is_none() => VersionState::Active {
-                    kms_encrypted_dek,
+                    dek_encryption,
                     seal_start: range.start(),
                 },
                 _ => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
@@ -345,20 +348,20 @@ impl TryFrom<StoredVersion> for KeyVersion {
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedPending(key_id))
             }
-            (KeyVersionState::Pending, Some(kms_encrypted_dek)) => match seal_range {
-                None => VersionState::Pending(kms_encrypted_dek),
+            (KeyVersionState::Pending, Some(dek_encryption)) => match seal_range {
+                None => VersionState::Pending(dek_encryption),
                 Some(_) => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
             },
-            (KeyVersionState::DecryptOnly, Some(kms_encrypted_dek)) => {
+            (KeyVersionState::DecryptOnly, Some(dek_encryption)) => {
                 VersionState::DecryptOnly(RetainedDek {
-                    kms_encrypted_dek,
+                    dek_encryption,
                     compromised,
                     seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
                 })
             }
-            (KeyVersionState::Retired, Some(kms_encrypted_dek)) => {
+            (KeyVersionState::Retired, Some(dek_encryption)) => {
                 VersionState::Retired(RetainedDek {
-                    kms_encrypted_dek,
+                    dek_encryption,
                     compromised,
                     seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
                 })

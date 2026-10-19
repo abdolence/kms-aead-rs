@@ -11,7 +11,7 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::TinkKeyType;
 use crate::types::checked_key_bytes;
 use crate::{
-    DataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek, Plaintext,
+    DataEncryptionKey, DekEncryption, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 #[cfg(feature = "postgres")]
@@ -249,7 +249,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
-    ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
+    ) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {

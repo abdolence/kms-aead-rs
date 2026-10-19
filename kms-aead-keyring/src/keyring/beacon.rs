@@ -189,7 +189,7 @@ mod tests {
         let record = keyring.record();
         let encrypted_dek = &record
             .version(first)
-            .and_then(KeyVersion::kms_encrypted_dek)
+            .and_then(KeyVersion::dek_encryption)
             .ok_or("the first beacon version holds no key")?
             .encrypted_dek;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);

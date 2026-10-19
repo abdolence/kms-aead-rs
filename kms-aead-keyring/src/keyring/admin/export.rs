@@ -362,7 +362,7 @@ mod tests {
             let key_id = KeyId::new(*key_id);
             let encrypted_dek = &record
                 .version(key_id)
-                .and_then(KeyVersion::kms_encrypted_dek)
+                .and_then(KeyVersion::dek_encryption)
                 .ok_or("the version holds no key")?
                 .encrypted_dek;
             let (added, _) = DekCache::disabled()

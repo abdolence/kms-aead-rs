@@ -6,10 +6,10 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 use jiff::Timestamp;
-use kms_aead::providers::KmsKeyVersion;
+use kms_aead::providers::KekVersion;
 use kms_aead::{
-    AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
-    KmsEncryptedDek,
+    AeadAlgorithm, BeaconAlgorithm, DekEncryption, DeterministicAlgorithm,
+    EncryptedDataEncryptionKey, KekRef,
 };
 use rsb_derive::Builder;
 
@@ -400,19 +400,18 @@ impl KeyVersion {
     /// The version of the KEK that encrypted this version's DEK, as the KMS reported it when the
     /// DEK was last encrypted, at the creation or by `reencrypt_deks`. `None` for a destroyed
     /// version, and when the KMS reported no version, as under AWS KMS.
-    pub fn kek_version(&self) -> Option<&KmsKeyVersion> {
-        self.kms_encrypted_dek()?.kek_version.as_ref()
+    pub fn kek_version(&self) -> Option<&KekVersion> {
+        self.dek_encryption()?.kek_version.as_ref()
     }
 
     /// The encrypted DEK, with its KEK version, of every version but a destroyed one.
-    pub(crate) fn kms_encrypted_dek(&self) -> Option<&KmsEncryptedDek> {
+    pub(crate) fn dek_encryption(&self) -> Option<&DekEncryption> {
         match &self.state {
-            VersionState::Pending(kms_encrypted_dek)
-            | VersionState::Active {
-                kms_encrypted_dek, ..
-            } => Some(kms_encrypted_dek),
+            VersionState::Pending(dek_encryption) | VersionState::Active { dek_encryption, .. } => {
+                Some(dek_encryption)
+            }
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
-                Some(&kept.kms_encrypted_dek)
+                Some(&kept.dek_encryption)
             }
             VersionState::Destroyed { .. } => None,
         }
@@ -424,12 +423,11 @@ impl KeyVersion {
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
         match &self.state {
-            VersionState::Pending(kms_encrypted_dek)
-            | VersionState::Active {
-                kms_encrypted_dek, ..
-            } => Some((&kms_encrypted_dek.encrypted_dek, None)),
+            VersionState::Pending(dek_encryption) | VersionState::Active { dek_encryption, .. } => {
+                Some((&dek_encryption.encrypted_dek, None))
+            }
             VersionState::DecryptOnly(kept) => Some((
-                &kept.kms_encrypted_dek.encrypted_dek,
+                &kept.dek_encryption.encrypted_dek,
                 kept.compromised.as_ref(),
             )),
             VersionState::Retired(_) | VersionState::Destroyed { .. } => None,
@@ -457,9 +455,9 @@ impl Debug for KeyVersion {
 /// open one are the only shapes there are.
 #[derive(Clone)]
 enum VersionState {
-    Pending(KmsEncryptedDek),
+    Pending(DekEncryption),
     Active {
-        kms_encrypted_dek: KmsEncryptedDek,
+        dek_encryption: DekEncryption,
         /// The marker of the epoch the version became active at.
         seal_start: SealMarker,
     },
@@ -498,7 +496,7 @@ impl VersionState {
 /// and the markers of the records sealed under it while it was active.
 #[derive(Clone)]
 struct RetainedDek {
-    kms_encrypted_dek: KmsEncryptedDek,
+    dek_encryption: DekEncryption,
     compromised: Option<Compromise>,
     seal_range: SealRange,
 }
@@ -596,10 +594,10 @@ impl KeyringRecord {
         self.versions
             .iter()
             .find_map(|version| match &version.state {
-                VersionState::Active {
-                    kms_encrypted_dek, ..
-                } if version.algorithm.purpose() == purpose => {
-                    Some((version, &kms_encrypted_dek.encrypted_dek))
+                VersionState::Active { dek_encryption, .. }
+                    if version.algorithm.purpose() == purpose =>
+                {
+                    Some((version, &dek_encryption.encrypted_dek))
                 }
                 _ => None,
             })
@@ -615,24 +613,21 @@ impl KeyringRecord {
         self.updated_at
     }
 
-    /// The KEK versions the encrypted DEKs of the record are under, each once, in the order of
+    /// The KEK versions the encrypted DEKs of this record are under, each once, in the order of
     /// the first version under it: every version but the destroyed ones, retired versions
     /// included, since `reinstate` makes them decrypt again. `None` stands for the DEKs whose KMS
-    /// reported no version, every one under AWS KMS.
+    /// reported no version: every one under AWS KMS, and under a KMS with versions, a version
+    /// that is unknown.
     ///
-    /// It makes no KMS call. Before a KEK version is disabled in the KMS, it lists that version
-    /// for every keyring whose `reencrypt_deks` has not run since the rotation, or ran while a KMS
-    /// that propagates a rotation, such as Cloud KMS, still encrypted under it. A cached record
-    /// can predate the last `reencrypt_deks`, so that check reads the record
-    /// [`Keyring::reload`](crate::Keyring::reload) returns.
-    pub fn kek_versions_in_use(&self) -> Vec<Option<&KmsKeyVersion>> {
+    /// It makes no KMS call. A KEK version may be disabled only once this lists the new version
+    /// alone: it still lists an old version while `reencrypt_deks` has not run since the
+    /// rotation, or ran while a KMS that propagates a rotation, such as Cloud KMS, still encrypted
+    /// under it. A cached record can predate the last `reencrypt_deks`, so that check reads the
+    /// record [`Keyring::reload`](crate::Keyring::reload) returns.
+    pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
         let mut kek_versions = Vec::new();
-        for kms_encrypted_dek in self
-            .versions
-            .iter()
-            .filter_map(KeyVersion::kms_encrypted_dek)
-        {
-            let kek_version = kms_encrypted_dek.kek_version.as_ref();
+        for dek_encryption in self.versions.iter().filter_map(KeyVersion::dek_encryption) {
+            let kek_version = dek_encryption.kek_version.as_ref();
             if !kek_versions.contains(&kek_version) {
                 kek_versions.push(kek_version);
             }
@@ -641,10 +636,10 @@ impl KeyringRecord {
     }
 
     /// The encrypted DEK, with its KEK version, of every version that holds one, by key id.
-    pub(crate) fn kms_encrypted_deks(&self) -> Vec<(KeyId, KmsEncryptedDek)> {
+    pub(crate) fn dek_encryptions(&self) -> Vec<(KeyId, DekEncryption)> {
         self.versions
             .iter()
-            .filter_map(|version| Some((version.key_id, version.kms_encrypted_dek()?.clone())))
+            .filter_map(|version| Some((version.key_id, version.dek_encryption()?.clone())))
             .collect()
     }
 }

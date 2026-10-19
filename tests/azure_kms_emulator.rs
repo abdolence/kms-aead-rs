@@ -14,9 +14,7 @@ use azure_security_keyvault_keys::models::{
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
-use kms_aead::providers::{
-    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KmsKeyVersion,
-};
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
@@ -67,7 +65,7 @@ impl Emulator {
 
     /// Creates a new RSA version of `key_name`, creating the key if it does not exist, and
     /// returns that version.
-    async fn create_rsa_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
+    async fn create_rsa_key_version(&self, key_name: &str) -> TestResult<KekVersion> {
         let parameters = CreateKeyParameters {
             kty: Some(KeyType::Rsa),
             key_size: Some(2048),
@@ -89,14 +87,14 @@ impl Emulator {
             .resource_id()?
             .version
             .ok_or("Lowkey Vault returned a key id without a version")?;
-        Ok(KmsKeyVersion::try_from(version)?)
+        Ok(KekVersion::try_from(version)?)
     }
 
     /// Lowkey Vault encrypts only with an explicit key version.
     async fn encryption(
         &self,
         key_name: &str,
-        key_version: KmsKeyVersion,
+        key_version: KekVersion,
     ) -> TestResult<KmsAeadEnvelope<AzureKmsProvider, Backend>> {
         let key_ref = AzureKmsKeyRef::new(self.vault_url.clone(), key_name.to_string())
             .with_key_version(key_version);
@@ -159,9 +157,9 @@ async fn encrypt_reports_the_key_version_that_encrypted() -> TestResult<()> {
     for key_version in [first_version, rotated_version] {
         let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
 
-        let (_, kms_encrypted_dek) = encryption.generate_encrypted_dek().await?;
+        let (_, dek_encryption) = encryption.generate_encrypted_dek().await?;
 
-        assert_eq!(kms_encrypted_dek.kek_version, Some(key_version));
+        assert_eq!(dek_encryption.kek_version, Some(key_version));
     }
     Ok(())
 }
@@ -243,7 +241,7 @@ async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResul
     let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
     let aad = b"test-aad";
 
-    let (dek, KmsEncryptedDek { encrypted_dek, .. }) = encryption.generate_encrypted_dek().await?;
+    let (dek, DekEncryption { encrypted_dek, .. }) = encryption.generate_encrypted_dek().await?;
     let bare = encryption.encrypt_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
     let decrypted: SecretValue = encryption
         .decrypt(aad, &Encrypted::join(&bare, &encrypted_dek)?)

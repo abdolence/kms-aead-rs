@@ -59,15 +59,17 @@ The record keeps the KEK version of each encrypted DEK, as the KMS reported it w
 DEK: `KeyVersion::kek_version`. `reencrypt_deks` returns one `DekReencryption` per version, with the
 KEK version its DEK was under and the one the KMS encrypted it with now, and `kek_versions_in_use`
 of the record lists every KEK version the record's DEKs are under. Before the old KEK version is
-disabled, the record that `Keyring::reload` returns must not list it, which needs no KMS call. Here
-with the local KMS, rotated from version 1 to version 2:
+disabled, the record that `Keyring::reload` returns must list the new version alone, which needs no
+KMS call. Once the old version is disabled, `reencrypt_deks` runs again: it decrypts every DEK
+through the KMS and fails on one the KMS no longer decrypts. Here with the local KMS, rotated from
+version 1 to version 2, where dropping version 1 from the provider stands for disabling it:
 
 ```rust
 use std::num::NonZeroU32;
 
 use kms_aead::backends::Ring;
 use kms_aead::providers::{
-    KmsKeyVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
+    KekVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
 };
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
@@ -95,7 +97,7 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
 
 // The administrative job after the rotation, with the new version encrypting
 let rotated = LocalKmsProvider::<Ring>::new(
-    kek_id,
+    kek_id.clone(),
     vec![
         LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
         LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
@@ -105,24 +107,37 @@ let admin = registry.admin(rotated, TENANT).await?;
 
 // One entry per version: the KEK version its DEK was under, and the one it is under now
 let moved: Vec<DekReencryption> = admin.reencrypt_deks().await?;
-let new_kek_version = KmsKeyVersion::from(v2);
+let new_kek_version = KekVersion::from(v2);
 assert!(moved
     .iter()
     .all(|reencryption| reencryption.kek_version.as_ref() == Some(&new_kek_version)));
 
-// The check before the old version is disabled
-let old_kek_version = KmsKeyVersion::from(v1);
+// The check before the old version is disabled: every DEK is under the new version
 let record = admin.keyring().reload().await?;
-assert!(!record.kek_versions_in_use().contains(&Some(&old_kek_version)));
+assert_eq!(record.kek_versions_in_use(), [Some(&new_kek_version)]);
+
+// The check once the old version is disabled: every DEK still decrypts
+let disabled = LocalKmsProvider::<Ring>::new(
+    kek_id,
+    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+)?;
+registry.admin(disabled, TENANT).await?.reencrypt_deks().await?;
 # Ok(())
 # }
 ```
 
 Under Cloud KMS, a `reencrypt_deks` that ran before the new primary version had propagated reports
 the old version as the one the DEK is under now, and the record keeps listing it: run
-`reencrypt_deks` again once the rotation has propagated. A `None` among the versions in use stands
-for the DEKs whose KMS reported no version, every one under AWS KMS, whose rotation keeps every key
-material decrypting. The whole procedure, with the application's own DEKs and keysets, is in
+`reencrypt_deks` again once the rotation has propagated. Under Vault Transit,
+`min_decryption_version` disables every version below it at once, which is why the check asks for
+the new version alone.
+
+A `None` among the versions in use stands for the DEKs whose KMS reported no version. Under a KMS
+with versions, `None` means the version is unknown, as with an application's own provider that
+returns none: the check before the disable fails on it, and only the check once the old version is
+disabled shows whether those DEKs still decrypt. Under AWS KMS every entry is `None`, see
+[AWS KMS](./providers/aws.md#key-versions-and-rotation) for key material that can be deleted. The
+whole procedure, with the application's own DEKs and keysets, is in
 [Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
 
 ## Sweeps

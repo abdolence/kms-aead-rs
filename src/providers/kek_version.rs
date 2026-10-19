@@ -12,9 +12,9 @@ use crate::KmsAeadResult;
 /// from the layouts of 0.29 and from keyring records, so it may only ever loosen: a stricter rule
 /// makes stored data unreadable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct KmsKeyVersion(String);
+pub struct KekVersion(String);
 
-impl KmsKeyVersion {
+impl KekVersion {
     /// The version as the KMS names it.
     pub fn as_str(&self) -> &str {
         &self.0
@@ -22,7 +22,7 @@ impl KmsKeyVersion {
 }
 
 /// The decimal digits of the version, which always fit the rule.
-impl From<LocalKekVersion> for KmsKeyVersion {
+impl From<LocalKekVersion> for KekVersion {
     fn from(version: LocalKekVersion) -> Self {
         Self(version.to_string())
     }
@@ -30,7 +30,7 @@ impl From<LocalKekVersion> for KmsKeyVersion {
 
 /// The key version of `bytes`, read from storage. The error reports the length and the class of
 /// the first rejected byte, never the bytes themselves, which end up in logs.
-pub(crate) fn read_key_version(bytes: &[u8]) -> KmsAeadResult<KmsKeyVersion> {
+pub(crate) fn read_kek_version(bytes: &[u8]) -> KmsAeadResult<KekVersion> {
     let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
         Some("is not 1 to 255 bytes long")
     } else {
@@ -50,23 +50,21 @@ pub(crate) fn read_key_version(bytes: &[u8]) -> KmsAeadResult<KmsKeyVersion> {
     match rejected {
         Some(reason) => Err(KmsAeadEncryptionError::create(
             "INVALID_KEY_VERSION",
-            &format!("KMS key version of {} bytes {reason}", bytes.len()),
+            &format!("KEK version of {} bytes {reason}", bytes.len()),
         )),
-        None => Ok(KmsKeyVersion(
-            bytes.iter().copied().map(char::from).collect(),
-        )),
+        None => Ok(KekVersion(bytes.iter().copied().map(char::from).collect())),
     }
 }
 
-impl TryFrom<String> for KmsKeyVersion {
+impl TryFrom<String> for KekVersion {
     type Error = KmsAeadError;
 
     fn try_from(value: String) -> KmsAeadResult<Self> {
-        read_key_version(value.as_bytes())
+        read_kek_version(value.as_bytes())
     }
 }
 
-impl Display for KmsKeyVersion {
+impl Display for KekVersion {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         f.write_str(&self.0)
     }
@@ -77,10 +75,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn kms_key_version_is_1_to_255_ascii_alphanumeric_characters() {
-        assert!(KmsKeyVersion::try_from("a".repeat(255)).is_ok());
+    fn kek_version_is_1_to_255_ascii_alphanumeric_characters() {
+        assert!(KekVersion::try_from("a".repeat(255)).is_ok());
         for invalid in [String::new(), "a".repeat(256), "1/2".into(), "v 1".into()] {
-            let result = KmsKeyVersion::try_from(invalid.clone());
+            let result = KekVersion::try_from(invalid.clone());
             assert!(
                 matches!(&result, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_VERSION"),
@@ -91,7 +89,7 @@ mod tests {
 
     #[test]
     fn a_key_version_error_echoes_no_stored_bytes() {
-        let error = KmsKeyVersion::try_from("marker/18".to_string()).unwrap_err();
+        let error = KekVersion::try_from("marker/18".to_string()).unwrap_err();
 
         assert!(
             !format!("{error} {error:?}").contains("marker"),
