@@ -6,7 +6,7 @@
 //! open stream, and removes it once the last watch is dropped. The listener's callback routes
 //! each event by its target id to the watches of that target's keyring.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -24,7 +24,7 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
-use tokio::time::{Instant, MissedTickBehavior};
+use tokio::time::Instant;
 
 use super::FirestoreKeyringStore;
 use crate::errors::{KeyringError, KeyringResult};
@@ -34,11 +34,6 @@ use crate::KeyringId;
 /// How long a watch waits for Firestore's first state of the document. The keyring awaits the
 /// watch when it opens, and the load just before it reached Firestore.
 const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How often the task asks firestore-rs whether it still listens to a target Firestore removed.
-/// firestore-rs decides only after the callback has returned, and adds a target it keeps back only
-/// after its retry delay, so the task asks until the target is back or gone.
-const REMOVAL_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The listener of a store and its clones. The first watch starts its task, and the store's
 /// shutdown stops it.
@@ -93,9 +88,6 @@ struct ListenerTask {
     /// One future per watch, which resolves with the watch's target once the watch is dropped or
     /// its route ends.
     releases: FuturesUnordered<BoxFuture<'static, FirestoreListenerTarget>>,
-    /// The targets Firestore removed whose routes wait for firestore-rs to add them back or to
-    /// stop listening to them.
-    unsettled: HashSet<FirestoreListenerTarget>,
 }
 
 /// The watched keyrings, by keyring and by target. The task adds routes, and removes released
@@ -224,10 +216,7 @@ impl ListenerTask {
             collection,
             next_target: 1,
             releases: FuturesUnordered::new(),
-            unsettled: HashSet::new(),
         };
-        let mut removal_checks = tokio::time::interval(REMOVAL_CHECK_INTERVAL);
-        removal_checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 biased;
@@ -236,10 +225,7 @@ impl ListenerTask {
                     None => break,
                 },
                 Some(target) = task.releases.next() => task.release(target).await,
-                Some(target) = removals.recv() => {
-                    task.unsettled.insert(target);
-                }
-                _ = removal_checks.tick(), if !task.unsettled.is_empty() => task.settle_removals(),
+                Some(target) = removals.recv() => task.settle_removal(&target),
             }
         }
         if let Ok(listener) = &mut task.listener {
@@ -281,9 +267,15 @@ impl ListenerTask {
             events,
             registered,
         } = request;
-        // A route firestore-rs stopped listening to is ended first, so that the watch does not
-        // join it.
-        self.settle_removals();
+        // The removal of the route's target can still be queued behind this request, so a route
+        // firestore-rs no longer listens to is ended here rather than joined.
+        let target = Routes::lock(&self.routes)
+            .keyrings
+            .get(&id)
+            .map(|route| route.target.clone());
+        if let Some(target) = target {
+            self.settle_removal(&target);
+        }
         let joined = Routes::lock(&self.routes).join(&id, &events);
         let route = match joined {
             Some(route) => Ok(route),
@@ -372,17 +364,23 @@ impl ListenerTask {
         }
     }
 
-    /// Ends the routes of the removed targets that firestore-rs no longer listens to, and forgets
-    /// those it has added back.
-    fn settle_removals(&mut self) {
-        let listener = self.listener.as_ref().ok();
+    /// Ends the route of `target` if Firestore removed the target and firestore-rs no longer
+    /// listens to it. firestore-rs unregisters a target it gives up on before its callback sees
+    /// the removal, so the answer is final once the route is marked removed; a target it keeps
+    /// stays removed until Firestore adds it back.
+    fn settle_removal(&self, target: &FirestoreListenerTarget) {
         let mut routes = Routes::lock(&self.routes);
-        self.unsettled.retain(|target| {
-            routes.settle(
-                target,
-                listener.is_some_and(|listener| listener.has_target(target)),
-            )
-        });
+        let removed = routes
+            .route_of(target)
+            .is_some_and(|route| route.state == TargetState::Removed);
+        if removed
+            && !self
+                .listener
+                .as_ref()
+                .is_ok_and(|listener| listener.has_target(target))
+        {
+            routes.end(target);
+        }
     }
 }
 
@@ -445,18 +443,6 @@ impl Routes {
         }
         self.end(target);
         false
-    }
-
-    /// Ends the route of the removed `target` unless firestore-rs still `listened` to it, and
-    /// returns whether the route still waits for firestore-rs to add the target back.
-    fn settle(&mut self, target: &FirestoreListenerTarget, listened: bool) -> bool {
-        let removed = self
-            .route_of(target)
-            .is_some_and(|route| route.state == TargetState::Removed);
-        if removed && !listened {
-            self.end(target);
-        }
-        removed && listened
     }
 
     /// The route of `target`, if it has one.
@@ -669,21 +655,45 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn a_target_firestore_rs_ended_ends_only_its_keyrings_watch() -> TestResult {
-        let mut routes = Routes::default();
-        let mut tenant_a = watched(&mut routes, "tenant-a", 1)?;
-        let mut tenant_b = watched(&mut routes, "tenant-b", 2)?;
-        for target in routes.route(target_change(
+    /// The listener runs on the emulator `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
+    /// application default credentials when it is unset, in the project `PROJECT_ID`.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the docs"]
+    async fn a_removed_target_firestore_rs_no_longer_has_ends_only_its_keyrings_watch_at_once(
+    ) -> TestResult {
+        let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
+        let routes = Arc::new(Mutex::new(Routes::default()));
+        let (report_removal, _removals) = mpsc::unbounded_channel();
+        let mut task = ListenerTask {
+            listener: ListenerTask::start(&db, Arc::downgrade(&routes), report_removal)
+                .await
+                .map_err(Arc::new),
+            routes,
+            collection: "kms_aead_rs_ci_keyrings".to_string(),
+            next_target: 3,
+            releases: FuturesUnordered::new(),
+        };
+        let (mut tenant_a, mut tenant_b) = {
+            let mut routes = Routes::lock(&task.routes);
+            (
+                watched(&mut routes, "tenant-a", 1)?,
+                watched(&mut routes, "tenant-b", 2)?,
+            )
+        };
+        let removed = Routes::lock(&task.routes).route(target_change(
             FirestoreListenerTargetChangeType::Remove,
             &[1],
             Some(Code::InvalidArgument),
-        )) {
-            routes.settle(&target, false);
+        ));
+        for target in &removed {
+            task.settle_removal(target);
         }
         assert_eq!(tenant_a.try_recv(), Ok(WatchEvent::Disconnected));
         assert_eq!(tenant_a.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(tenant_b.try_recv(), Err(TryRecvError::Empty));
+        if let Ok(listener) = &mut task.listener {
+            listener.shutdown().await?;
+        }
         Ok(())
     }
 
