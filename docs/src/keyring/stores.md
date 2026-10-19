@@ -42,8 +42,8 @@ signals a watch on every write.
 ## Firestore
 
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
-record's JSON. `with_collection` names another collection than
-`FirestoreKeyringStore::DEFAULT_COLLECTION`. A create fails when the document exists, and an
+record's JSON. `with_collection` takes another collection than
+`FirestoreKeyringStore::DEFAULT_COLLECTION`, as firestore-rs's `FirestoreCollectionId`. A create fails when the document exists, and an
 update carries the update time it read as its precondition.
 
 ```rust,no_run
@@ -77,7 +77,7 @@ registry.shutdown().await?;
 project, database and credentials it chooses. The version of the `firestore` crate is part of
 this crate's API under the `firestore` feature.
 
-Each keyring holds one listen stream, on its document. Firestore's point-in-time recovery
+Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore's point-in-time recovery
 restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
 `firestore` target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administration's reach.

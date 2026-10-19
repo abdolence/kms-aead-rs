@@ -218,7 +218,8 @@ jobs:
             sleep 1
           done
           curl -sf "http://$FIRESTORE_EMULATOR_HOST" > /dev/null
-      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
+      # `ci-firestore-live` compiles the live test, which runs by hand against Firestore.
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES,ci-firestore-live" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   keyring-postgres:
     name: keyring-postgres
