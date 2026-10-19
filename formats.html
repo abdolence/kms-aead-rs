@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-11125221.js";
+            window.path_to_searchindex_js = "searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -592,6 +592,11 @@ and return <code>None</code> when it already is in it, so a sweep writes only th
 serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
 one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
 The AEAD bytes stay as they are.</p>
+<p>An upgraded DEK is encrypted under the KEK’s current version, so the upgrade also does what
+<code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code> do for a value or a DEK already in Tink’s format, see
+<a href="./envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>.
+Those two refuse a layout of 0.29 or earlier with <code>LEGACY_FORMAT</code>, so a sweep after a KEK rotation
+upgrades a value in an old layout and re-encrypts the DEK of a value in Tink’s format.</p>
 <p>The envelope’s algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
 0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
 encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11125221.js";
+            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -193,8 +193,9 @@ encrypted DEK records it, and a decryption refuses a DEK encrypted under another
 the key of the <a href="../dek-caching.html">DEK cache</a>, so one id must name one set of KEK material: two
 providers with the same id and different keys share cache entries.</p>
 <p>A provider holds one or more <code>LocalKek</code> versions of 32 bytes each. The highest version encrypts new
-DEKs, and every version it holds decrypts. Each encrypted DEK records its version, so adding a new
-version keeps the DEKs encrypted under older ones readable.</p>
+DEKs unless <code>with_encrypting_version</code> names another, and every version it holds decrypts. Each
+encrypted DEK records its version, so adding a new version keeps the DEKs encrypted under older
+ones readable.</p>
 <p>A KEK comes from one of:</p>
 <ul>
 <li><code>LocalKek::from_secret</code>: bytes the application already holds, such as a key an operator
@@ -271,9 +272,49 @@ let provider = LocalKmsProvider::&lt;AwsLc&gt;::new(
 <span class="boring">let _ = provider;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>To rotate, add <code>kek-v2</code> the same way and list both versions. Version 2 encrypts new DEKs, and the
-DEKs encrypted under version 1 still decrypt. Version 1 can be dropped once nothing encrypted under
-it is left.</p>
+<p>To rotate, add <code>kek-v2</code> the same way and list both versions, as the next section describes.</p>
+<h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
+<p>Every version in the provider’s list decrypts, and the highest one encrypts unless
+<code>with_encrypting_version</code> names another. A process that does not list a version fails on a DEK
+under it with <code>LOCAL_KEK_UNKNOWN_VERSION</code>, so a rotation without downtime takes two deploys:</p>
+<ol>
+<li>list the new version in every process, with <code>with_encrypting_version</code> keeping the current one
+encrypting;</li>
+<li>once every process lists the new version, drop <code>with_encrypting_version</code>, or point it at the new
+version, so the new version encrypts.</li>
+</ol>
+<pre><code class="language-rust">use std::num::NonZeroU32;
+
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use secret_vault_value::SecretValue;
+
+<span class="boring">fn example(
+</span><span class="boring">    kek_v1: SecretValue,
+</span><span class="boring">    kek_v2: SecretValue,
+</span><span class="boring">) -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let v1 = LocalKekVersion::from(NonZeroU32::try_from(1)?);
+let v2 = LocalKekVersion::from(NonZeroU32::try_from(2)?);
+
+// The first deploy: version 2 decrypts, version 1 still encrypts
+let provider = LocalKmsProvider::&lt;Ring&gt;::new(
+    LocalKekId::try_from("orders".to_string())?,
+    vec![
+        LocalKek::from_secret(v1, kek_v1)?,
+        LocalKek::from_secret(v2, kek_v2)?,
+    ],
+)?
+.with_encrypting_version(v1)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A version that is not in the list fails <code>with_encrypting_version</code> with <code>LOCAL_KEK_VERSIONS</code>.</p>
+<p>Then sweep, see
+<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+and check with a provider that lists the new version alone, before the deploy that drops the old
+version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
+the old version from the list disables it, and listing it again restores it. Destroying it means
+destroying every copy of its material, backups included.</p>
 <h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
 <ul>
 <li>No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the

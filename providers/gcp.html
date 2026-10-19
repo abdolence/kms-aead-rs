@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11125221.js";
+            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -231,6 +231,28 @@ credentials.</p>
 <p>The principal needs <code>cloudkms.cryptoKeyVersions.useToEncrypt</code> and <code>useToDecrypt</code> on the key, as
 in the <code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code> role, and <code>cloudkms.locations.generateRandomBytes</code>
 on the location when the KMS generator is on.</p>
+<h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
+<p>A rotation adds a version to the CryptoKey and makes it the primary version, by hand or on the
+key’s rotation schedule. New DEKs are encrypted under the primary version from then on, and Cloud
+KMS decrypts every DEK with the version that encrypted it, for as long as that version is enabled.</p>
+<p>To retire the old version, disable it once the sweep has reached every value, see
+<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>:
+decryptions under it fail, and enabling it again restores them. Destroying it schedules its
+destruction, 30 days later by default, and until then the version can be restored.</p>
+<p>Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
+<a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>. Until a new
+primary version has propagated, <code>Encrypt</code> may still use the previous one, and a disabled version
+“typically remains usable for encrypting and decrypting data for up to 1 minute after it is
+disabled”, for several hours in exceptional cases. So:</p>
+<ul>
+<li>start the sweep only once the new primary version has propagated. The <code>key_version</code> field of the
+<code>KMS encrypt DEK</code> span names the version Cloud KMS encrypted with, see
+<a href="../observability.html">Observability</a>;</li>
+<li>run the check only once the disable has propagated, and run it again before destroying the
+version. A check inside that window passes on DEKs that are still under the old version.</li>
+</ul>
+<p>Enabling a version is strongly consistent: an enabled version is available at once, so enabling
+the old version again after a failed check takes effect immediately.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>The code of a failed KMS call is the gRPC status code. <code>Unavailable</code>, <code>DeadlineExceeded</code>,
 <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code> and <code>Cancelled</code> are a <code>NetworkError</code>, any

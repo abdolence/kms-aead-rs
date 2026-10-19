@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11125221.js";
+            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -232,6 +232,16 @@ values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 
 as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, <code>A256Kw</code> too,
 which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 <a href="../envelope-encryption.html#storing-encrypted-deks">Envelope encryption</a>.</p>
+<h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
+<p>A rotation adds a version to the key, by hand or by the key’s rotation policy. Without a key version
+in <code>AzureKmsKeyRef</code>, the latest version encrypts new DEKs; with one, that version does, so move it
+to the new version before a sweep. A sweep with a provider pinned to the old version re-encrypts
+under the old version.</p>
+<p>Once the sweep has reached every value, see
+<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
+Key Vault deletes a key with all its versions and never one version alone, so the old version stays
+disabled rather than destroyed.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
 <code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. A server error or a rate limit is a

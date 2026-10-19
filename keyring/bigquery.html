@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11125221.js";
+            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -372,6 +372,11 @@ version is pending already holds it, so the order of a rotation is: <code>rotate
 BigQuery from the first one. After <code>mark_compromised</code>, whose replacement is active at once, the
 replacement’s values do not read, and the compromised version stays in a keyset exported before
 it, until the keyset is exported again.</p>
+<p>A KEK rotation changes no key inside a keyset and leaves the keyset under the KEK version that
+encrypted it at the export, so <code>KEYS.KEYSET_CHAIN</code> fails once that version is disabled. Export
+every keyset again after <code>reencrypt_deks</code>, once the new primary version has propagated, and replace
+the old bytes in every query and column that holds them before the old version is disabled, see
+<a href="../envelope-encryption.html#encrypted-keysets">Encrypted keysets</a>.</p>
 <h3 id="queries"><a class="header" href="#queries">Queries</a></h3>
 <p>With <code>keyset</code> standing for the <code>KEYS.KEYSET_CHAIN(…)</code> expression of each export:</p>
 <pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
@@ -433,6 +438,9 @@ Java and Python have no Vault Transit client.</li>
 <p>An Azure Key Vault key, a local or an application’s own KEK, and an AWS key named without its
 ARN have no Tink client. The export fails on them with <code>KeyringError::Interop</code>, <code>Interop::Tink</code>
 and <code>InteropRequirement::Kek</code>, before any store or KMS call.</p>
+<p>After a KEK rotation, a Tink keyset is exported again and replaces the old one wherever a Tink
+reader opens it, as a BigQuery keyset does, see
+<a href="../envelope-encryption.html#encrypted-keysets">Encrypted keysets</a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;

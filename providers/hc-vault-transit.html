@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11125221.js";
+            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -253,6 +253,14 @@ network unencrypted.</p>
 <p>The encrypted DEK is the Transit ciphertext, such as <code>vault:v1:...</code>. It names the key version, so
 it still decrypts after the key is rotated. The KMS spans record that version as <code>key_version</code>.</p>
 <p>The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.</p>
+<p>A rotation is <code>&lt;mount&gt;/keys/&lt;key&gt;/rotate</code>, and the new version encrypts every DEK after it. Once
+the sweep has reached every value, see
+<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+disable the old versions by setting <code>min_decryption_version</code> in the key’s configuration to the new
+version: Vault then refuses to decrypt under older versions, with <code>VAULT_STATUS_400</code>, and lowering
+it again restores them. Once
+nothing needs them, the backups included, <code>min_available_version</code> and a trim of the key delete the
+older versions for good.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>: a <code>NetworkError</code> for a server error
 or a rate limit, an <code>EncryptionError</code> otherwise. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are network

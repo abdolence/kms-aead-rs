@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-11125221.js";
+            window.path_to_searchindex_js = "searchindex-c85788a6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -190,6 +190,7 @@ its version, and the error code.</p>
 <code>decrypt_with_encrypted_dek</code>;</li>
 <li><code>KMS AEAD generate DEK</code>: <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>;</li>
 <li><code>KMS AEAD decrypt DEK</code>: <code>decrypt_deterministic_dek</code>;</li>
+<li><code>KMS AEAD re-encrypt DEK</code>: <code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code>;</li>
 <li><code>KMS AEAD beacon</code>: the envelope’s <code>beacon</code>;</li>
 <li><code>KMS encrypt DEK</code>: each provider’s encryption of a DEK;</li>
 <li><code>KMS decrypt DEK</code>: each provider’s decryption of a DEK;</li>
@@ -285,6 +286,20 @@ left unrecorded, never recorded as <code>0</code> or an empty string.</p>
 </tbody>
 </table>
 </div>
+<h3 id="kms-aead-re-encrypt-dek"><a class="header" href="#kms-aead-re-encrypt-dek">KMS AEAD re-encrypt DEK</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dek_cache</code></td><td><code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>Its children are a <code>KMS decrypt DEK</code> under the version that encrypted the DEK and a <code>KMS encrypt DEK</code>
+under the current one.</p>
 <h3 id="kms-encrypt-dek-kms-decrypt-dek-and-kms-random"><a class="header" href="#kms-encrypt-dek-kms-decrypt-dek-and-kms-random">KMS encrypt DEK, KMS decrypt DEK and KMS random</a></h3>
 <div class="table-wrapper">
 <table>
