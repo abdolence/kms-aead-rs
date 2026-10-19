@@ -812,7 +812,9 @@ name, of the field name and of the value, plus 32 bytes, by Firestore's storage 
 of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.
 
 The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs)
-runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator.
+runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator. It re-seals
+a page of 500 documents through one sealer and writes it back in one batch, one precondition per
+document, instead of one write per document.
 
 #### PostgreSQL
 
@@ -1088,7 +1090,9 @@ PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row a
 10 million rows hold about 130 MB of markers and index.
 
 The [`sweep_postgres` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs)
-runs this sweep end to end, from the writes to the `retire`, on a local PostgreSQL.
+runs this sweep end to end, from the writes to the `retire`, on a local PostgreSQL. It re-seals a
+page of 1000 rows through one sealer and writes it back in one `UPDATE` over arrays of the ids, the
+new values and the values it read, instead of one statement per row.
 
 #### BigQuery
 

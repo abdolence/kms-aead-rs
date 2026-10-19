@@ -1,6 +1,7 @@
 //! A sweep on PostgreSQL: writes users through a `Sealer`, each with its seal marker, rotates and
 //! promotes the randomised version, re-seals every row whose marker is below the current one in
-//! pages ordered by `id`, with an `UPDATE` conditional on the bytes it read, and retires the
+//! pages ordered by `id`, each page through one sealer and written back in one `UPDATE`
+//! conditional on the bytes it read of each row, and retires the
 //! previous version once the query of its seal range finds no row. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#postgresql) in the book.
 //!
@@ -15,18 +16,19 @@
 //!
 //! The argument is the number of users, 100 by default.
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 use std::time::Instant;
 
-use futures_util::{stream, Stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealRange, SweepReport};
+use kms_aead_keyring::sweep::{ResealOutcome, SealMarker, SealRange, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
     KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
@@ -42,6 +44,8 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
+/// The rows of a page, re-sealed through one sealer and written back in one `UPDATE` of three
+/// arrays of this length, some 0.2 MB of parameters at the example's row size.
 const PAGE_SIZE: u16 = 1000;
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 const DEFAULT_USERS: i64 = 100;
@@ -56,36 +60,6 @@ impl Plaintext for Email {
 
     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
         String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-/// A row the query returned, or the error of reading its page, which the sweep counts as failed.
-enum Candidate {
-    Row {
-        id: i64,
-        email: Encrypted<Email, Randomized>,
-    },
-    Unread(tokio_postgres::Error),
-}
-
-/// The row id, and nothing of its columns.
-impl Display for Candidate {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Candidate::Row { id, .. } => write!(f, "users/{id}"),
-            Candidate::Unread(_) => f.write_str("a row or page of users that did not read"),
-        }
-    }
-}
-
-impl TryFrom<Row> for Candidate {
-    type Error = tokio_postgres::Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
-        Ok(Candidate::Row {
-            id: row.try_get("id")?,
-            email: row.try_get("email")?,
-        })
     }
 }
 
@@ -121,70 +95,119 @@ impl Display for SweepError {
     }
 }
 
-/// The rows whose marker is below `current`, a page at a time in the order of `id`.
-fn candidates(client: &Client, current: SealMarker) -> impl Stream<Item = Candidate> + '_ {
-    stream::unfold(Some(i64::MIN), move |after| async move {
-        let rows = client
-            .query(
-                "SELECT id, email FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
-                &[&current, &after?, &i64::from(PAGE_SIZE)],
-            )
-            .await;
-        let page = match rows {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|row| Candidate::try_from(row).unwrap_or_else(Candidate::Unread))
-                .collect::<Vec<Candidate>>(),
-            Err(error) => return Some((vec![Candidate::Unread(error)], None)),
-        };
-        let last = page.iter().rev().find_map(|candidate| match candidate {
-            Candidate::Row { id, .. } => Some(*id),
-            Candidate::Unread(_) => None,
-        });
-        let next = match last {
-            Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last),
-            _ => None,
-        };
-        (!page.is_empty()).then_some((page, next))
-    })
-    .flat_map(stream::iter)
+/// Counts one row's outcome in `report`, and prints a failure with the row and the code of the
+/// error.
+fn tally(report: &mut SweepReport, id: i64, outcome: Result<ResealOutcome, &SweepError>) {
+    report.scanned += 1;
+    match outcome {
+        Ok(ResealOutcome::Resealed { from_compromised }) => {
+            report.resealed += 1;
+            report.resealed_from_compromised += u64::from(from_compromised);
+        }
+        Ok(ResealOutcome::Skipped) => report.skipped += 1,
+        Err(error) => {
+            report.failed += 1;
+            eprintln!("the re-seal of users/{id} failed: {error}");
+        }
+    }
 }
 
-/// Re-seals a row under the active version and writes the marker of the sealer's record, unless
-/// the row changed since the query read it.
-async fn reseal(
+/// Re-seals the page of rows after `after`, in the order of `id`, whose marker is below `current`
+/// through one sealer, and writes it back in one `UPDATE` that stamps the sealer's marker and is
+/// conditional, row by row, on the bytes the query read. Returns the last id of the page, or
+/// `None` after the last page.
+///
+/// The `UPDATE` is the sealer's one write: it runs as soon as the page is sealed, so the sealer
+/// is not held across more than one statement.
+async fn reseal_page(
     keyring: &UsersKeyring,
     client: &Client,
-    candidate: Candidate,
-) -> Result<ResealOutcome, SweepError> {
-    let (id, read_email) = match candidate {
-        Candidate::Row { id, email } => (id, email),
-        Candidate::Unread(error) => return Err(SweepError::Users(error)),
-    };
-    let sealer = keyring.sealer().await;
-    let aad = EMAIL.aad(&EntityId::try_from(id.to_string())?);
-    // A value under a version newer than the sealer's record fails with `SealerOutdated`: the sweep
-    // counts it as failed, and the next run, on the reloaded record, re-seals it.
-    let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &read_email).await?;
-    let (email, outcome) = match resealed {
-        Some(resealed) => {
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, ResealOutcome::Resealed { from_compromised })
-        }
-        None => (read_email.clone(), ResealOutcome::Skipped),
-    };
-    let seal: SealMarker = sealer.record().seal_marker();
-    let updated: u64 = client
-        .execute(
-            "UPDATE users SET email = $2, seal = $3 WHERE id = $1 AND email = $4",
-            &[&id, &email, &seal, &read_email],
+    current: SealMarker,
+    after: i64,
+    report: &mut SweepReport,
+) -> Result<Option<i64>, tokio_postgres::Error> {
+    let rows: Vec<Row> = client
+        .query(
+            "SELECT id, email FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
+            &[&current, &after, &i64::from(PAGE_SIZE)],
         )
         .await?;
-    Ok(match updated {
-        // A write since the query: the writer sealed the row under its own record
-        0 => ResealOutcome::Skipped,
-        _ => outcome,
-    })
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let sealer = keyring.sealer().await;
+    let seal: SealMarker = sealer.record().seal_marker();
+    let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
+    let mut read_emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(rows.len());
+    let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(rows.len());
+    let mut outcomes: Vec<ResealOutcome> = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: i64 = row.try_get("id")?;
+        let queue = async {
+            let read_email: Encrypted<Email, Randomized> = row.try_get("email")?;
+            let aad = EMAIL.aad(&EntityId::try_from(id.to_string())?);
+            // A value under a version newer than the sealer's record fails with
+            // `SealerOutdated`: the sweep counts it as failed, and the next run, on the reloaded
+            // record, re-seals it.
+            let resealed: Option<Resealed<Email, Randomized>> =
+                sealer.reseal(&aad, &read_email).await?;
+            match resealed {
+                Some(resealed) => {
+                    let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+                    emails.push(resealed.value);
+                    outcomes.push(ResealOutcome::Resealed { from_compromised });
+                }
+                None => {
+                    emails.push(read_email.clone());
+                    outcomes.push(ResealOutcome::Skipped);
+                }
+            }
+            ids.push(id);
+            read_emails.push(read_email);
+            Ok::<(), SweepError>(())
+        };
+        if let Err(error) = queue.await {
+            tally(report, id, Err(&error));
+        }
+    }
+    let written: Result<Vec<Row>, tokio_postgres::Error> = client
+        .query(
+            "UPDATE users SET email = page.email, seal = $4
+             FROM unnest($1::BIGINT[], $2::BYTEA[], $3::BYTEA[]) AS page(id, email, read_email)
+             WHERE users.id = page.id AND users.email = page.read_email
+             RETURNING users.id",
+            &[&ids, &emails, &read_emails, &seal],
+        )
+        .await;
+    match written {
+        Ok(written) => {
+            let written: HashSet<i64> = written
+                .iter()
+                .map(|row| row.try_get("id"))
+                .collect::<Result<HashSet<i64>, tokio_postgres::Error>>()?;
+            for (id, outcome) in ids.into_iter().zip(outcomes) {
+                // A row the `UPDATE` did not return changed since the query: its writer sealed it
+                // under its own record
+                let outcome = if written.contains(&id) {
+                    outcome
+                } else {
+                    ResealOutcome::Skipped
+                };
+                tally(report, id, Ok(outcome));
+            }
+        }
+        Err(error) => {
+            let error = SweepError::Users(error);
+            for id in ids {
+                tally(report, id, Err(&error));
+            }
+        }
+    }
+    let last: Option<i64> = match rows.last() {
+        Some(row) if rows.len() == usize::from(PAGE_SIZE) => Some(row.try_get("id")?),
+        _ => None,
+    };
+    Ok(last)
 }
 
 /// Writes `count` users, rotates, sweeps, and retires the previous version.
@@ -240,13 +263,13 @@ async fn run(
 
     let started = Instant::now();
     let current: SealMarker = keyring.record().seal_marker();
-    let report: SweepReport = sweep::run(
-        keyring.id(),
-        candidates(client, current),
-        CONCURRENCY,
-        |candidate| reseal(keyring, client, candidate),
-    )
-    .await;
+    let mut report = SweepReport::default();
+    // Pages by `id`, not by marker: a re-sealed row leaves the query but not the order, so the
+    // next page starts after it whatever marker any write gave the rows of earlier pages.
+    let mut after: Option<i64> = Some(i64::MIN);
+    while let Some(last) = after {
+        after = reseal_page(keyring, client, current, last, &mut report).await?;
+    }
     println!(
         "swept to seal marker {current} in {:.2?}: scanned {}, resealed {}, skipped {}, failed {}",
         started.elapsed(),
