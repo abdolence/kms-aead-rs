@@ -34,7 +34,7 @@ subtle = { workspace = true }
 # `macros` lets it stop on a shutdown while it waits.
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
-firestore = { version = "0.58", optional = true }
+firestore = { version = "0.59", optional = true }
 tokio-postgres = { version = "0.7", optional = true, default-features = false, features = ["runtime"] }
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
