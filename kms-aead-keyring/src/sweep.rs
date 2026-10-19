@@ -128,6 +128,7 @@ use std::future::Future;
 use std::num::NonZeroUsize;
 use std::pin::pin;
 
+use futures_util::future::OptionFuture;
 use futures_util::{Stream, StreamExt};
 use rsb_derive::Builder;
 use tracing::Instrument;
@@ -337,36 +338,6 @@ impl SweepReport {
         self.failed += 1;
         spans::sweep_candidate_failed(keyring_id, error);
     }
-
-    /// Counts the `given` candidates of a batch whose re-seal failed as a whole, and logs it.
-    fn count_failed_batch<E: Display>(&mut self, keyring_id: &KeyringId, given: usize, error: &E) {
-        let given = u64::try_from(given).unwrap_or(u64::MAX);
-        self.scanned += given;
-        self.failed += given;
-        spans::sweep_batch_failed(keyring_id, given, error);
-    }
-
-    /// Counts the `given` candidates of a batch from the outcomes its re-seal returned, at most
-    /// `given` of them, and logs a count of outcomes other than `given`.
-    fn count_batch<T: Display, E: Display>(
-        &mut self,
-        keyring_id: &KeyringId,
-        given: usize,
-        outcomes: Vec<(T, Result<ResealOutcome, E>)>,
-    ) {
-        let returned = outcomes.len();
-        let [given_count, returned_count, shortfall] =
-            [given, returned, given.saturating_sub(returned)]
-                .map(|count| u64::try_from(count).unwrap_or(u64::MAX));
-        if returned != given {
-            spans::sweep_batch_outcomes_mismatched(keyring_id, given_count, returned_count);
-        }
-        self.scanned += given_count;
-        self.failed += shortfall;
-        for (candidate, outcome) in outcomes.into_iter().take(given) {
-            self.count_outcome(keyring_id, &candidate, outcome);
-        }
-    }
 }
 
 /// How [`run_batched`] cuts the candidates into batches, and how many batches it re-seals at
@@ -387,9 +358,9 @@ pub struct BatchedSweepOptions {
 
 impl BatchedSweepOptions {
     /// The default [`batch_size`](Self::batch_size): 100 candidates.
-    pub const DEFAULT_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(100).unwrap();
+    pub const DEFAULT_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(100).expect("100 is not zero");
     /// The default [`concurrency`](Self::concurrency): 4 batches.
-    pub const DEFAULT_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(4).unwrap();
+    pub const DEFAULT_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(4).expect("4 is not zero");
 }
 
 /// Runs `reseal` over every candidate of `candidates`, with at most `concurrency` re-seals in
@@ -435,10 +406,8 @@ where
                 let resealing =
                     candidate.map(|candidate| (candidate.to_string(), reseal(candidate)));
                 async move {
-                    match resealing {
-                        Ok((candidate, outcome)) => Ok((candidate, outcome.await)),
-                        Err(error) => Err(error),
-                    }
+                    let (candidate, outcome) = resealing?;
+                    Ok::<_, E>((candidate, outcome.await))
                 }
             })
             .buffer_unordered(concurrency.get()));
@@ -511,22 +480,37 @@ where
                 }
                 let given = candidates.len();
                 let resealing = (given > 0).then(|| reseal_batch(candidates));
-                async move {
-                    let outcomes = match resealing {
-                        Some(resealing) => Some(resealing.await),
-                        None => None,
-                    };
-                    (unread, given, outcomes)
-                }
+                async move { (unread, given, OptionFuture::from(resealing).await) }
             })
             .buffer_unordered(options.concurrency.get()));
         while let Some((unread, given, outcomes)) = batches.next().await {
             for error in &unread {
                 report.count_unread(keyring_id, error);
             }
+            let given_count = u64::try_from(given).unwrap_or(u64::MAX);
             match outcomes {
-                Some(Ok(outcomes)) => report.count_batch(keyring_id, given, outcomes),
-                Some(Err(error)) => report.count_failed_batch(keyring_id, given, &error),
+                Some(Ok(outcomes)) => {
+                    let returned = outcomes.len();
+                    if returned != given {
+                        let returned_count = u64::try_from(returned).unwrap_or(u64::MAX);
+                        spans::sweep_batch_outcomes_mismatched(
+                            keyring_id,
+                            given_count,
+                            returned_count,
+                        );
+                    }
+                    report.scanned += given_count;
+                    report.failed +=
+                        u64::try_from(given.saturating_sub(returned)).unwrap_or(u64::MAX);
+                    for (candidate, outcome) in outcomes.into_iter().take(given) {
+                        report.count_outcome(keyring_id, &candidate, outcome);
+                    }
+                }
+                Some(Err(error)) => {
+                    report.scanned += given_count;
+                    report.failed += given_count;
+                    spans::sweep_batch_failed(keyring_id, given_count, &error);
+                }
                 None => {}
             }
         }

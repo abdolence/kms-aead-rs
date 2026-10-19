@@ -231,7 +231,7 @@ those of `KeyringAdmin` calls, under the `admin` feature.
   `error`;
 - `WARN`: a batch of `sweep::run_batched` whose re-seal failed as a whole, with its number of
   candidates in `candidates` and the `Display` of the error in `error`, and a batch that returned
-  another number of outcomes than it was given candidates, with both counts in `candidates` and
+  a different number of outcomes from it was given candidates, with both counts in `candidates` and
   `outcomes`;
 - `DEBUG`: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
   retried.

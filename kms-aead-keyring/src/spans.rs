@@ -392,14 +392,15 @@ pub(crate) fn sweep_batch_failed(keyring: &KeyringId, candidates: u64, error: &i
     );
 }
 
-/// A batch of a sweep that returned another number of outcomes than it was given candidates: the
-/// sweep counts at most `candidates` outcomes, and the difference as failed when there are fewer.
+/// A batch of a sweep that returned a different number of outcomes from it was given candidates:
+/// the sweep counts at most `candidates` outcomes, and the difference as failed when there are
+/// fewer.
 pub(crate) fn sweep_batch_outcomes_mismatched(keyring: &KeyringId, candidates: u64, outcomes: u64) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_CANDIDATES } = candidates,
         { FIELD_OUTCOMES } = outcomes,
-        "A sweep batch returned another number of outcomes than it was given candidates"
+        "A sweep batch returned a different number of outcomes from it was given candidates"
     );
 }
 

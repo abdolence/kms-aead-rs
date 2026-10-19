@@ -936,25 +936,25 @@ impl Display for SweepError {
 /// The next page of the rows whose marker is below `current`, in the order of `id`: the rows
 /// after the id `after`, and the id to read the page after them from, `None` once a page came
 /// back short.
+///
+/// The page decodes only the cursor's `id`: a row whose other columns do not decode is one failed
+/// candidate, not a failed page that would end the stream at it on every run.
 async fn next_page(
     client: &Client,
     current: SealMarker,
     after: Option<i64>,
-) -> Result<Option<(Vec<UserRow>, Option<i64>)>, SweepError> {
+) -> Result<Option<(Vec<Row>, Option<i64>)>, SweepError> {
     let Some(after) = after else {
         return Ok(None);
     };
-    let page: Vec<UserRow> = client
+    let page: Vec<Row> = client
         .query(
             "SELECT id, email, seal FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
             &[&current, &after, &i64::from(PAGE_SIZE)],
         )
-        .await?
-        .into_iter()
-        .map(UserRow::try_from)
-        .collect::<Result<Vec<UserRow>, tokio_postgres::Error>>()?;
+        .await?;
     let next: Option<i64> = match page.last() {
-        Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last.id),
+        Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last.try_get("id")?),
         _ => None,
     };
     Ok(Some((page, next)))
@@ -1041,11 +1041,11 @@ let keyring: UsersKeyring = registry
     .await?;
 
 let current: SealMarker = keyring.record().seal_marker();
-// A page query that fails returns its error, which the sweep counts as failed, and ends the stream
+// A page query that fails returns its error, which the sweep counts as failed, and ends the stream.
 let candidates = stream::try_unfold(Some(i64::MIN), |after: Option<i64>| {
     next_page(&client, current, after)
 })
-.map_ok(|page: Vec<UserRow>| stream::iter(page).map(Ok))
+.map_ok(|page: Vec<Row>| stream::iter(page).map(UserRow::try_from).err_into())
 .try_flatten();
 let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |row: UserRow| {
     let (keyring, client) = (&keyring, &client);
