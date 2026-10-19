@@ -8,8 +8,7 @@ use std::str::FromStr;
 use jiff::Timestamp;
 use kms_aead::providers::KekVersion;
 use kms_aead::{
-    AeadAlgorithm, BeaconAlgorithm, DekEncryption, DeterministicAlgorithm,
-    EncryptedDataEncryptionKey, KekRef,
+    AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
 };
 use rsb_derive::Builder;
 
@@ -401,20 +400,11 @@ impl KeyVersion {
     /// DEK was last encrypted, at the creation or by `reencrypt_deks`. `None` for a destroyed
     /// version, and when the KMS reported no version, as under AWS KMS.
     pub fn kek_version(&self) -> Option<&KekVersion> {
-        self.dek_encryption()?.kek_version.as_ref()
+        self.encrypted_dek()?.kek_version()
     }
 
-    /// The encrypted DEK, with its KEK version, of every version but a destroyed one.
-    pub(crate) fn dek_encryption(&self) -> Option<&DekEncryption> {
-        match &self.state {
-            VersionState::Pending(dek_encryption) | VersionState::Active { dek_encryption, .. } => {
-                Some(dek_encryption)
-            }
-            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
-                Some(&kept.dek_encryption)
-            }
-            VersionState::Destroyed { .. } => None,
-        }
+    pub(crate) fn encrypted_dek(&self) -> Option<&EncryptedDataEncryptionKey> {
+        self.state.dek()
     }
 
     /// The encrypted DEK that opens values under this version, with its compromised flag, or
@@ -423,13 +413,12 @@ impl KeyVersion {
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
         match &self.state {
-            VersionState::Pending(dek_encryption) | VersionState::Active { dek_encryption, .. } => {
-                Some((&dek_encryption.encrypted_dek, None))
+            VersionState::Pending(encrypted_dek) | VersionState::Active { encrypted_dek, .. } => {
+                Some((encrypted_dek, None))
             }
-            VersionState::DecryptOnly(kept) => Some((
-                &kept.dek_encryption.encrypted_dek,
-                kept.compromised.as_ref(),
-            )),
+            VersionState::DecryptOnly(kept) => {
+                Some((&kept.encrypted_dek, kept.compromised.as_ref()))
+            }
             VersionState::Retired(_) | VersionState::Destroyed { .. } => None,
         }
     }
@@ -455,9 +444,9 @@ impl Debug for KeyVersion {
 /// open one are the only shapes there are.
 #[derive(Clone)]
 enum VersionState {
-    Pending(DekEncryption),
+    Pending(EncryptedDataEncryptionKey),
     Active {
-        dek_encryption: DekEncryption,
+        encrypted_dek: EncryptedDataEncryptionKey,
         /// The marker of the epoch the version became active at.
         seal_start: SealMarker,
     },
@@ -490,13 +479,25 @@ impl VersionState {
             VersionState::Destroyed { compromised, .. } => compromised.as_ref(),
         }
     }
+
+    fn dek(&self) -> Option<&EncryptedDataEncryptionKey> {
+        match self {
+            VersionState::Pending(encrypted_dek) | VersionState::Active { encrypted_dek, .. } => {
+                Some(encrypted_dek)
+            }
+            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
+                Some(&kept.encrypted_dek)
+            }
+            VersionState::Destroyed { .. } => None,
+        }
+    }
 }
 
-/// The encrypted DEK of a version past `Active`, with its KEK version, which may be compromised,
-/// and the markers of the records sealed under it while it was active.
+/// The encrypted DEK of a version past `Active`, which may be compromised, and the markers of the
+/// records sealed under it while it was active.
 #[derive(Clone)]
 struct RetainedDek {
-    dek_encryption: DekEncryption,
+    encrypted_dek: EncryptedDataEncryptionKey,
     compromised: Option<Compromise>,
     seal_range: SealRange,
 }
@@ -594,10 +595,10 @@ impl KeyringRecord {
         self.versions
             .iter()
             .find_map(|version| match &version.state {
-                VersionState::Active { dek_encryption, .. }
+                VersionState::Active { encrypted_dek, .. }
                     if version.algorithm.purpose() == purpose =>
                 {
-                    Some((version, &dek_encryption.encrypted_dek))
+                    Some((version, encrypted_dek))
                 }
                 _ => None,
             })
@@ -629,8 +630,8 @@ impl KeyringRecord {
     /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations.html#a-kek-version-the-kms-did-not-report).
     pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
         let mut kek_versions = Vec::new();
-        for dek_encryption in self.versions.iter().filter_map(KeyVersion::dek_encryption) {
-            let kek_version = dek_encryption.kek_version.as_ref();
+        for encrypted_dek in self.versions.iter().filter_map(KeyVersion::encrypted_dek) {
+            let kek_version = encrypted_dek.kek_version();
             if !kek_versions.contains(&kek_version) {
                 kek_versions.push(kek_version);
             }
@@ -638,11 +639,11 @@ impl KeyringRecord {
         kek_versions
     }
 
-    /// The encrypted DEK, with its KEK version, of every version that holds one, by key id.
-    pub(crate) fn dek_encryptions(&self) -> Vec<(KeyId, DekEncryption)> {
+    /// The encrypted DEK of every version that holds one, by key id.
+    pub(crate) fn encrypted_deks(&self) -> Vec<(KeyId, EncryptedDataEncryptionKey)> {
         self.versions
             .iter()
-            .filter_map(|version| Some((version.key_id, version.dek_encryption()?.clone())))
+            .filter_map(|version| Some((version.key_id, version.encrypted_dek()?.clone())))
             .collect()
     }
 }
@@ -657,8 +658,7 @@ impl KeyringRecord {
 /// the records it seals, under every version active in `held`, so such a range still holds
 /// them.
 ///
-/// The encrypted DEK and its KEK version are left out: a changed one under an unchanged id is a
-/// re-encryption.
+/// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
 pub(crate) fn check_successor(
     held_record: &KeyringRecord,
     next: &KeyringRecord,

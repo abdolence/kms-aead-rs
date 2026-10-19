@@ -381,7 +381,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let plaintext = dek.value().as_sensitive_base64_str();
             // The request buffer belongs to the HTTP stack and is freed without being zeroised.
@@ -393,20 +393,18 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
             let response: TransitResponse<EncryptData> = parse_response(&body)?;
             let ciphertext = response.data.ciphertext;
-            let kek_version = match transit_key_version(&ciphertext) {
+            let kek_version = transit_key_version(&ciphertext);
+            let encrypted_dek = EncryptedDataEncryptionKey::new(ciphertext.into_bytes());
+            match kek_version {
                 Ok(kek_version) => {
                     kms::record_kek_version(kek_version.as_str());
-                    Some(kek_version)
+                    Ok(encrypted_dek.with_kek_version(kek_version))
                 }
                 Err(error) => {
                     warn!(%error, "No key version in the Vault Transit ciphertext");
-                    None
+                    Ok(encrypted_dek)
                 }
-            };
-            Ok(DekEncryption {
-                encrypted_dek: EncryptedDataEncryptionKey::new(ciphertext.into_bytes()),
-                kek_version,
-            })
+            }
         })
         .await
     }
@@ -776,10 +774,7 @@ mod tests {
             ),
         );
 
-        let encrypted_dek = provider
-            .encrypt_data_encryption_key(&data_key())
-            .await?
-            .encrypted_dek;
+        let encrypted_dek = provider.encrypt_data_encryption_key(&data_key()).await?;
         provider.decrypt_data_encryption_key(&encrypted_dek).await?;
 
         let bodies: Vec<serde_json::Value> = requests
@@ -1119,23 +1114,23 @@ mod tests {
     async fn encrypt_reports_the_key_version_that_encrypted() -> KmsAeadResult<()> {
         let (provider, key_uri) = provider_with_own_key("versions").await?;
 
-        let dek_encryption_under_v1 = provider.encrypt_data_encryption_key(&data_key()).await?;
+        let encrypted_dek_under_v1 = provider.encrypt_data_encryption_key(&data_key()).await?;
         provider
             .post(
                 &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
                 Vec::new(),
             )
             .await?;
-        let dek_encryption_under_v2 = provider.encrypt_data_encryption_key(&data_key()).await?;
+        let encrypted_dek_under_v2 = provider.encrypt_data_encryption_key(&data_key()).await?;
 
         assert_eq!(
             [
-                dek_encryption_under_v1.kek_version,
-                dek_encryption_under_v2.kek_version
+                encrypted_dek_under_v1.kek_version(),
+                encrypted_dek_under_v2.kek_version()
             ],
             [
-                Some(KekVersion::try_from("1".to_string())?),
-                Some(KekVersion::try_from("2".to_string())?)
+                Some(&KekVersion::try_from("1".to_string())?),
+                Some(&KekVersion::try_from("2".to_string())?)
             ]
         );
         Ok(())

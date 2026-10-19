@@ -7,7 +7,7 @@ use secret_vault_value::SecretValue;
 use crate::errors::KmsAeadEncryptionError;
 use crate::{
     AeadAlgorithm, DataEncryptionKey, DeterministicAlgorithm, KeyId, KmsAeadEncryptionProvider,
-    KmsAeadResult, ValueStruct,
+    KmsAeadResult,
 };
 
 /// A Tink key type: the `google.crypto.tink` message a key of an algorithm is serialised as, with
@@ -243,7 +243,6 @@ impl TinkKeyset {
         let encrypted_keyset = provider
             .encrypt_data_encryption_key(&keyset_dek)
             .await?
-            .encrypted_dek
             .into_value();
         Ok(EncryptedKeyset { encrypted_keyset }.encode_to_vec())
     }

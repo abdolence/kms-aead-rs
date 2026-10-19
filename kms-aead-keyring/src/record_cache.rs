@@ -259,9 +259,8 @@ impl<S: KeyringStore> RecordCache<S> {
     /// Evicts from the DEK cache the keys of the cached record's versions, and no other key: the
     /// DEK cache may be shared with other keyrings and envelopes.
     pub(crate) fn evict_deks(&self) {
-        for (_, dek_encryption) in self.record().dek_encryptions() {
-            self.dek_cache
-                .invalidate(&self.kek, &dek_encryption.encrypted_dek);
+        for (_, encrypted_dek) in self.record().encrypted_deks() {
+            self.dek_cache.invalidate(&self.kek, &encrypted_dek);
         }
     }
 

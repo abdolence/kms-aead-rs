@@ -186,16 +186,14 @@ async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -
         azure_core::base64::encode_url_safe(&wrapped)
     );
 
-    let dek_encryption = provider_over(StatusCode::Ok, body)?
+    let encrypted_dek = provider_over(StatusCode::Ok, body)?
         .encrypt_data_encryption_key(&data_encryption_key())
         .await?;
 
+    assert_eq!(encrypted_dek, self::encrypted_key(&wrapped));
     assert_eq!(
-        dek_encryption,
-        DekEncryption {
-            encrypted_dek: self::encrypted_key(&wrapped),
-            kek_version: Some(KekVersion::try_from(KEY_VERSION.to_string())?),
-        }
+        encrypted_dek.kek_version(),
+        Some(&KekVersion::try_from(KEY_VERSION.to_string())?)
     );
     Ok(())
 }

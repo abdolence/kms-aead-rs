@@ -12,8 +12,8 @@ use tokio::sync::watch;
 use crate::errors::KmsAeadEncryptionError;
 use crate::formats::TinkKeyType;
 use crate::{
-    DataEncryptionKey, DekEncryption, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult, ValueStruct,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
+    KmsAeadResult,
 };
 
 #[cfg(feature = "ring")]
@@ -57,19 +57,16 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match self {
             #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
             TestKmsProvider::FailingToEncrypt => Err(KmsAeadEncryptionError::create(
                 "TEST_ENCRYPT",
                 "The test provider fails to encrypt",
             )),
-            _ => Ok(DekEncryption {
-                encrypted_dek: EncryptedDataEncryptionKey::new(
-                    dek.value().ref_sensitive_value().clone(),
-                ),
-                kek_version: None,
-            }),
+            _ => Ok(EncryptedDataEncryptionKey::new(
+                dek.value().ref_sensitive_value().clone(),
+            )),
         }
     }
 
@@ -169,7 +166,7 @@ impl KmsAeadEncryptionProvider for CountingKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         self.encryptions.fetch_add(1, Ordering::SeqCst);
         self.pass_gate().await;
         self.inner.encrypt_data_encryption_key(dek).await

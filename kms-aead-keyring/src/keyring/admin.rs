@@ -4,7 +4,7 @@
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
 use kms_aead::providers::KekVersion;
-use kms_aead::{DekEncryption, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
 
 use crate::errors::KeyringResult;
 use crate::purpose::unreserved;
@@ -359,38 +359,33 @@ where
         let keyring = &self.keyring;
         spans::in_span(spans::reencrypt_deks(keyring.id()), async {
             let mut reencrypted = Vec::new();
-            for (_, held_dek_encryption) in keyring.record().dek_encryptions() {
-                let new_dek_encryption =
-                    self.reencrypted(&held_dek_encryption.encrypted_dek).await?;
-                reencrypted.push((held_dek_encryption.encrypted_dek, new_dek_encryption));
+            for (_, encrypted_dek) in keyring.record().encrypted_deks() {
+                let new_encrypted_dek = self.reencrypted(&encrypted_dek).await?;
+                reencrypted.push((encrypted_dek, new_encrypted_dek));
             }
             let reencryptions = keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
                     async |edit: &mut RecordEdit| {
-                        let held_deks = edit.record().dek_encryptions();
-                        let mut reencryptions = Vec::with_capacity(held_deks.len());
-                        for (key_id, held_dek_encryption) in held_deks {
+                        let encrypted_deks = edit.record().encrypted_deks();
+                        let mut reencryptions = Vec::with_capacity(encrypted_deks.len());
+                        for (key_id, encrypted_dek) in encrypted_deks {
                             let prepared = reencrypted
                                 .iter()
-                                .find(|(encrypted_dek, _)| {
-                                    *encrypted_dek == held_dek_encryption.encrypted_dek
-                                })
-                                .map(|(_, new_dek_encryption)| new_dek_encryption.clone());
-                            let new_dek_encryption = match prepared {
-                                Some(new_dek_encryption) => new_dek_encryption,
+                                .find(|(held, _)| *held == encrypted_dek)
+                                .map(|(_, new_encrypted_dek)| new_encrypted_dek.clone());
+                            let new_encrypted_dek = match prepared {
+                                Some(new_encrypted_dek) => new_encrypted_dek,
                                 // A version that another writer added or encrypted again meanwhile.
-                                None => {
-                                    self.reencrypted(&held_dek_encryption.encrypted_dek).await?
-                                }
+                                None => self.reencrypted(&encrypted_dek).await?,
                             };
                             reencryptions.push(DekReencryption {
                                 key_id,
-                                previous_kek_version: held_dek_encryption.kek_version,
-                                kek_version: new_dek_encryption.kek_version.clone(),
+                                previous_kek_version: encrypted_dek.kek_version().cloned(),
+                                kek_version: new_encrypted_dek.kek_version().cloned(),
                             });
-                            edit.replace_dek(key_id, new_dek_encryption, Timestamp::now())?;
+                            edit.replace_dek(key_id, new_encrypted_dek, Timestamp::now())?;
                         }
                         Ok(reencryptions)
                     },
@@ -420,13 +415,12 @@ where
         .ok()
     }
 
-    /// `encrypted_dek` decrypted through the provider and encrypted again, with the KEK version
-    /// that encrypted it now. What the KMS decrypts is the serialised Tink key it encrypted, so it
-    /// is encrypted again as it is.
+    /// `encrypted_dek` decrypted through the provider and encrypted again. What the KMS decrypts
+    /// is the serialised Tink key it encrypted, so it is encrypted again as it is.
     async fn reencrypted(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KeyringResult<DekEncryption> {
+    ) -> KeyringResult<EncryptedDataEncryptionKey> {
         let provider = &self.keyring.provider;
         let dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
         Ok(provider.encrypt_data_encryption_key(&dek).await?)

@@ -58,8 +58,9 @@ around another provider. The implementation:
 - returns from `kek()` a `KekRef` with `KekProvider::Other` and a key name that identifies the
   key across every KMS instance it may address. A wrapper returns the inner provider's `kek()`;
 - names that KEK to the KMS on every decryption;
-- returns from `encrypt_data_encryption_key` the KEK version the KMS's response names, never the
-  one it expects, or `None` when the response names none;
+- adds to the encrypted DEK that `encrypt_data_encryption_key` returns, with `with_kek_version`,
+  the KEK version the KMS's response names, never the one it expects, and none when the response
+  names none;
 - keeps key material, plaintext or encrypted, out of its errors' `Display` and `Debug`.
 
 `generate_key_material` has a default implementation that returns `Ok(None)`, so the backend

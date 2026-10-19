@@ -109,7 +109,7 @@ KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to 
 AAD, so neither the id nor the version can be changed without the decryption failing.
 
 Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncryptionKey::from`
-or `try_from_hex_string`, see
+or `try_from_hex_string`. Neither holds the KEK version of `kek_version()`, see
 [Storing encrypted DEKs](./envelope-encryption.md#storing-encrypted-deks).
 
 ## Serialised DEKs
@@ -489,7 +489,7 @@ where
 }
 # use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
@@ -497,7 +497,7 @@ where
 # let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
 # let dek = cipher.generate_dek()?;
 # let bare = cipher.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
-# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?.encrypted_dek;
+# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
 # let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
 # legacy.extend_from_slice(encrypted_dek.value());
 # legacy.extend_from_slice(bare.value());

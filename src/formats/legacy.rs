@@ -249,11 +249,7 @@ where
             dek.value().ref_sensitive_value(),
         )?;
         let upgraded_encrypted_dek = match legacy_format {
-            Some(_) => {
-                encrypt_dek(&dek, self.algorithm().into(), &self.provider)
-                    .await?
-                    .encrypted_dek
-            }
+            Some(_) => encrypt_dek(&dek, self.algorithm().into(), &self.provider).await?,
             None => encrypted_dek,
         };
         Encrypted::join(
@@ -301,7 +297,7 @@ where
         )?;
         encrypt_dek(&dek, algorithm.into(), &self.provider)
             .await
-            .map(|dek_encryption| Some(dek_encryption.encrypted_dek))
+            .map(Some)
     }
 }
 
@@ -311,7 +307,6 @@ mod tests {
 
     use super::*;
     use crate::errors::KmsAeadError;
-    use crate::ValueStruct;
 
     /// The shortest sealed value: a nonce and a tag around an empty plaintext.
     const SEALED: [u8; 28] = [0xAB; 28];

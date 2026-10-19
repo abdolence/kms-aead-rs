@@ -96,11 +96,10 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
     assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
 
     let record = fixture.keyring.record();
-    let encrypted_dek = &record
+    let encrypted_dek = record
         .version(KeyId::new(1))
-        .and_then(KeyVersion::dek_encryption)
-        .ok_or("version 1 holds no key")?
-        .encrypted_dek;
+        .and_then(KeyVersion::encrypted_dek)
+        .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let bare = Encrypted::<String, Bare>::try_from(bytes[5..].to_vec())?;
     let (opened, _) = DekCache::disabled()
@@ -617,11 +616,10 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
-    let encrypted_dek = &held
+    let encrypted_dek = held
         .version(KeyId::new(1))
-        .and_then(KeyVersion::dek_encryption)
-        .ok_or("version 1 holds no key")?
-        .encrypted_dek;
+        .and_then(KeyVersion::encrypted_dek)
+        .ok_or("version 1 holds no key")?;
     fixture
         .other_process()
         .await?
@@ -676,11 +674,10 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let record = fixture.keyring.record();
-    let encrypted_dek = &record
+    let encrypted_dek = record
         .version(KeyId::new(1))
-        .and_then(KeyVersion::dek_encryption)
-        .ok_or("version 1 holds no key")?
-        .encrypted_dek;
+        .and_then(KeyVersion::encrypted_dek)
+        .ok_or("version 1 holds no key")?;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let first = KeyId::new(1);
     let (forged, _) = DekCache::disabled()
@@ -886,7 +883,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
     let stored = fixture.other_process().await?.keyring().record();
     let destroyed = stored.version(KeyId::new(1)).ok_or("version 1 is gone")?;
     assert_eq!(destroyed.state(), KeyVersionState::Destroyed);
-    assert!(destroyed.dek_encryption().is_none());
+    assert!(destroyed.encrypted_dek().is_none());
     Ok(())
 }
 
@@ -991,7 +988,7 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         .encrypt(&aad, &ALICE.to_string())
         .await?;
     let staged = admin.rotate(Purpose::Randomized).await?;
-    let previous_encrypted_deks = keyring.record().dek_encryptions();
+    let previous_encrypted_deks = keyring.record().encrypted_deks();
     let first_kek_version = KekVersion::try_from("1".to_string())?;
     let rotated_kek_version = KekVersion::try_from("2".to_string())?;
     assert_eq!(
@@ -1023,12 +1020,12 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         decryptions + 2
     );
-    let current_encrypted_deks = keyring.record().dek_encryptions();
-    for ((key_id, previous), (reencrypted_id, current)) in
+    let current_encrypted_deks = keyring.record().encrypted_deks();
+    for ((key_id, previous_encrypted_dek), (reencrypted_id, current_encrypted_dek)) in
         previous_encrypted_deks.iter().zip(&current_encrypted_deks)
     {
         assert_eq!(key_id, reencrypted_id);
-        assert_ne!(previous.encrypted_dek, current.encrypted_dek);
+        assert_ne!(previous_encrypted_dek, current_encrypted_dek);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
     Ok(())

@@ -197,7 +197,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_request = encrypt_request(self.kek.key(), dek)?;
 
@@ -208,20 +208,17 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
 
-            let kek_version = match crypto_key_version(self.kek.key(), &name) {
+            let encrypted_dek = EncryptedDataEncryptionKey::new(ciphertext);
+            match crypto_key_version(self.kek.key(), &name) {
                 Ok(kek_version) => {
                     kms::record_kek_version(kek_version.as_str());
-                    Some(kek_version)
+                    Ok(encrypted_dek.with_kek_version(kek_version))
                 }
                 Err(error) => {
                     warn!(name, %error, "No key version in the GCP KMS encrypt response");
-                    None
+                    Ok(encrypted_dek)
                 }
-            };
-            Ok(DekEncryption {
-                encrypted_dek: EncryptedDataEncryptionKey::new(ciphertext),
-                kek_version,
-            })
+            }
         })
         .await
     }
@@ -466,13 +463,13 @@ mod tests {
     async fn live_encrypt_reports_the_crypto_key_version_that_encrypted() -> KmsAeadResult<()> {
         let provider = GcpKmsProvider::new(&live_key_ref()).await?;
 
-        let dek_encryption = provider
+        let encrypted_dek = provider
             .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::from(KEY_MARKER)))
             .await?;
 
-        let kek_version = dek_encryption.kek_version;
+        let kek_version = encrypted_dek.kek_version();
         assert!(
-            kek_version.as_ref().is_some_and(|kek_version| kek_version
+            kek_version.is_some_and(|kek_version| kek_version
                 .as_str()
                 .bytes()
                 .all(|byte| byte.is_ascii_digit())),

@@ -11,8 +11,8 @@ use kms_aead::backends::AeadBackend;
 use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, DataEncryptionKey, DekEncryption, EncryptedDataEncryptionKey, KekProvider,
-    KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -121,7 +121,7 @@ impl KmsAeadEncryptionProvider for TestProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         if self.calls.fail_encryptions.load(Ordering::SeqCst) {
             return Err(KmsAeadNetworkError::create(
                 "UNAVAILABLE",

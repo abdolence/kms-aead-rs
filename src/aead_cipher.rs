@@ -8,8 +8,8 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
 use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
 use crate::types::checked_key_bytes;
 use crate::{
-    AeadAlgorithm, DataEncryptionKey, DekEncryption, Encrypted, KeyId, KmsAeadEncryptionProvider,
-    KmsAeadResult, Plaintext,
+    AeadAlgorithm, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
 };
 
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
@@ -63,12 +63,11 @@ impl<B: AeadBackend> AeadCipher<B> {
         B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
-    /// A new data encryption key and the same key encrypted by `provider`, to store, with the KEK
-    /// version that encrypted it. The key comes from the KMS generator when the provider is
-    /// configured to use one, and from the backend's CSPRNG otherwise. It is encrypted as Tink
-    /// encrypts a data encryption key, serialised as the Tink key of the algorithm, or raw under an
-    /// Azure KEK, so that [`Encrypted::join`](crate::Encrypted::join) can store it with the values
-    /// sealed under it.
+    /// A new data encryption key and the same key encrypted by `provider`, to store. The key comes
+    /// from the KMS generator when the provider is configured to use one, and from the backend's
+    /// CSPRNG otherwise. It is encrypted as Tink encrypts a data encryption key, serialised as the
+    /// Tink key of the algorithm, or raw under an Azure KEK, so that
+    /// [`Encrypted::join`](crate::Encrypted::join) can store it with the values sealed under it.
     ///
     /// # Errors
     ///
@@ -77,7 +76,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
-    ) -> KmsAeadResult<(DataEncryptionKey, DekEncryption)>
+    ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {

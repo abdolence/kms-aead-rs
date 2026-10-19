@@ -188,7 +188,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let parameters = self.key_operation(dek.value().ref_sensitive_value().clone())?;
             let wrapped = kms::timed(
@@ -230,10 +230,8 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
                 wrapped: &encrypted_bytes,
             };
             kms::record_kek_version(wrapped_key.key_version.as_str());
-            Ok(DekEncryption {
-                encrypted_dek: EncryptedDataEncryptionKey::new(wrapped_key.to_bytes()?),
-                kek_version: Some(wrapped_key.key_version),
-            })
+            Ok(EncryptedDataEncryptionKey::new(wrapped_key.to_bytes()?)
+                .with_kek_version(wrapped_key.key_version))
         })
         .await
     }

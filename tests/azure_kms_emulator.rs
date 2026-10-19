@@ -157,9 +157,9 @@ async fn encrypt_reports_the_key_version_that_encrypted() -> TestResult<()> {
     for key_version in [first_version, rotated_version] {
         let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
 
-        let (_, dek_encryption) = encryption.generate_encrypted_dek().await?;
+        let (_, encrypted_dek) = encryption.generate_encrypted_dek().await?;
 
-        assert_eq!(dek_encryption.kek_version, Some(key_version));
+        assert_eq!(encrypted_dek.kek_version(), Some(&key_version));
     }
     Ok(())
 }
@@ -241,7 +241,7 @@ async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResul
     let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
     let aad = b"test-aad";
 
-    let (dek, DekEncryption { encrypted_dek, .. }) = encryption.generate_encrypted_dek().await?;
+    let (dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
     let bare = encryption.encrypt_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
     let decrypted: SecretValue = encryption
         .decrypt(aad, &Encrypted::join(&bare, &encrypted_dek)?)

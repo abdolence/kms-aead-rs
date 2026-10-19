@@ -158,17 +158,14 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<DekEncryption> {
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_response = kms::timed(self.encrypt_request(dek).send())
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
                 // The response names no key material, so the KEK version is unknown.
-                Some(blob) => Ok(DekEncryption {
-                    encrypted_dek: EncryptedDataEncryptionKey::new(blob.into_inner()),
-                    kek_version: None,
-                }),
+                Some(blob) => Ok(EncryptedDataEncryptionKey::new(blob.into_inner())),
                 None => Err(KmsAeadEncryptionError::create(
                     "AWS_ERROR",
                     &format!(
@@ -634,8 +631,7 @@ mod tests {
         let encrypted_under_other = AwsKmsProvider::new(&other)
             .await?
             .encrypt_data_encryption_key(&dek)
-            .await?
-            .encrypted_dek;
+            .await?;
 
         let result = AwsKmsProvider::new(&configured)
             .await?
