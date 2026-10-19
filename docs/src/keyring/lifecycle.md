@@ -85,7 +85,7 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
 | `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on |
-| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes |
+| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
 version, its state and the `Transition`:

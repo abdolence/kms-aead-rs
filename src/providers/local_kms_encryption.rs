@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
+use super::KmsKeyVersion;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
@@ -16,7 +17,7 @@ use crate::formats::local_kms::LocalEncryptedDek;
 use crate::spans::{self, kms};
 use crate::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek,
 };
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
@@ -367,7 +368,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+    ) -> KmsAeadResult<KmsEncryptedDek> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let version = self.encrypting_version;
             let material = self.keks.get(&version).ok_or_else(|| {
@@ -376,7 +377,8 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            kms::record_key_version(&version.to_string());
+            let kek_version = KmsKeyVersion::from(version);
+            kms::record_key_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
             let encrypted_dek = kms::timed(async {
                 self.cipher.seal(
@@ -387,7 +389,10 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 )
             })
             .await?;
-            Ok(EncryptedDataEncryptionKey::new(encrypted_dek))
+            Ok(KmsEncryptedDek {
+                encrypted_dek: EncryptedDataEncryptionKey::new(encrypted_dek),
+                kek_version: Some(kek_version),
+            })
         })
         .await
     }
@@ -462,7 +467,10 @@ mod tests {
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = provider
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         assert_eq!(
             provider.decrypt_data_encryption_key(&encrypted_dek).await?,
@@ -483,7 +491,10 @@ mod tests {
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = provider
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         let (header, sealed) = encrypted_dek.value().split_at(2 + ORDERS.len() + 4);
         let opened: SecretValue = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
@@ -507,7 +518,7 @@ mod tests {
                 SecretValue::new(KEK_MATERIAL.to_vec()),
             )?],
         )?;
-        let old_encrypted_dek = old.encrypt_data_encryption_key(&dek).await?;
+        let old_encrypted_dek = old.encrypt_data_encryption_key(&dek).await?.encrypted_dek;
         let rotated = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
@@ -517,7 +528,10 @@ mod tests {
             ],
         )?;
 
-        let new_encrypted_dek = rotated.encrypt_data_encryption_key(&dek).await?;
+        let new_encrypted_dek = rotated
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         let version_at = 2 + ORDERS.len();
         assert_eq!(
@@ -554,13 +568,42 @@ mod tests {
         )?
         .with_encrypting_version(v1)?;
 
-        let encrypted_dek = restarted.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = restarted
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         assert_eq!(
             not_restarted
                 .decrypt_data_encryption_key(&encrypted_dek)
                 .await?,
             dek
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn encrypt_reports_the_kek_version_that_encrypted() -> KmsAeadResult<()> {
+        let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let rotated = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![
+                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
+                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+            ],
+        )?;
+
+        let under_v2 = rotated.encrypt_data_encryption_key(&dek).await?;
+        let rolled_back = rotated.with_encrypting_version(v1)?;
+        let under_v1 = rolled_back.encrypt_data_encryption_key(&dek).await?;
+
+        assert_eq!(
+            [under_v2.kek_version, under_v1.kek_version],
+            [
+                Some(KmsKeyVersion::try_from("2".to_string())?),
+                Some(KmsKeyVersion::try_from("1".to_string())?)
+            ]
         );
         Ok(())
     }
@@ -604,7 +647,10 @@ mod tests {
             dek
         );
 
-        let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = provider
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
         assert_eq!(&encrypted_dek.value()[..12], &golden[..12]);
         assert_eq!(encrypted_dek.value().len(), 12 + 12 + 32 + 16);
         Ok(())
@@ -655,7 +701,10 @@ mod tests {
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let encrypted_dek = orders?.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = orders?
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         let result = invoices?.decrypt_data_encryption_key(&encrypted_dek).await;
 
@@ -678,7 +727,10 @@ mod tests {
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let encrypted_dek = impostor?.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = impostor?
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         let result = original?.decrypt_data_encryption_key(&encrypted_dek).await;
 
@@ -701,7 +753,10 @@ mod tests {
             )
         });
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
-        let encrypted_dek = rotated?.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = rotated?
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         let result = old?.decrypt_data_encryption_key(&encrypted_dek).await;
 
@@ -793,7 +848,10 @@ mod tests {
             LocalKmsProvider::<TestBackend>::ephemeral(LocalKekId::try_from("tests".to_string())?)?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-        let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+        let encrypted_dek = provider
+            .encrypt_data_encryption_key(&dek)
+            .await?
+            .encrypted_dek;
 
         assert_eq!(
             provider.decrypt_data_encryption_key(&encrypted_dek).await?,
@@ -869,7 +927,10 @@ mod tests {
             )?;
             let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
-            let encrypted_dek = from_file.encrypt_data_encryption_key(&dek).await?;
+            let encrypted_dek = from_file
+                .encrypt_data_encryption_key(&dek)
+                .await?
+                .encrypted_dek;
 
             assert_eq!(
                 from_secret

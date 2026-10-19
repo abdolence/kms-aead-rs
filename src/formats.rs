@@ -26,7 +26,7 @@ use crate::errors::{
 };
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadResult, ValueStruct,
+    KmsAeadResult, KmsEncryptedDek, ValueStruct,
 };
 
 pub(crate) mod envelope;
@@ -64,7 +64,7 @@ pub(crate) async fn encrypt_dek<P>(
     dek: &DataEncryptionKey,
     key_type: TinkKeyType,
     provider: &P,
-) -> KmsAeadResult<EncryptedDataEncryptionKey>
+) -> KmsAeadResult<KmsEncryptedDek>
 where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
@@ -89,7 +89,7 @@ pub(crate) async fn generate_encrypted_dek<B, P>(
     key_type: TinkKeyType,
     key_len: usize,
     provider: &P,
-) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
+) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
 where
     B: AeadBackend,
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
@@ -107,8 +107,8 @@ where
         Some(material) => DataEncryptionKey::from(material),
         None => DataEncryptionKey::from(B::generate_random_bytes(key_len)?),
     };
-    let encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
-    Ok((dek, encrypted_dek))
+    let kms_encrypted_dek = encrypt_dek(&dek, key_type, provider).await?;
+    Ok((dek, kms_encrypted_dek))
 }
 
 /// The data encryption key that `encrypted_dek` holds, decrypted by `provider`, and the layout
@@ -156,7 +156,7 @@ where
 /// serialised Tink key, or under an Azure KEK the raw key. The key is never serialised again from
 /// its bytes, which do not record its Tink key type, so the new encrypted DEK holds the same key of
 /// the same type, whether an envelope, a beacon or a deterministic key, under the KEK version the
-/// provider encrypts with now.
+/// provider encrypts with now, which the result names.
 ///
 /// # Errors
 ///
@@ -166,7 +166,7 @@ where
 pub(crate) async fn reencrypt_encrypted_dek<P>(
     encrypted_dek: &EncryptedDataEncryptionKey,
     provider: &P,
-) -> KmsAeadResult<EncryptedDataEncryptionKey>
+) -> KmsAeadResult<KmsEncryptedDek>
 where
     P: KmsAeadEncryptionProvider + Sync + ?Sized,
 {
@@ -288,7 +288,7 @@ mod tests {
         ] {
             let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; len]));
 
-            let encrypted_dek = encrypt_dek(&dek, key_type, &provider).await?;
+            let encrypted_dek = encrypt_dek(&dek, key_type, &provider).await?.encrypted_dek;
             let (decrypted_dek, legacy) = decrypt_dek(&encrypted_dek, &provider).await?;
 
             assert_eq!(encrypted_dek.value(), dek.value().ref_sensitive_value());

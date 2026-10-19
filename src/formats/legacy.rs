@@ -249,7 +249,11 @@ where
             dek.value().ref_sensitive_value(),
         )?;
         let upgraded_encrypted_dek = match legacy_format {
-            Some(_) => encrypt_dek(&dek, self.algorithm().into(), &self.provider).await?,
+            Some(_) => {
+                encrypt_dek(&dek, self.algorithm().into(), &self.provider)
+                    .await?
+                    .encrypted_dek
+            }
             None => encrypted_dek,
         };
         Encrypted::join(
@@ -297,7 +301,7 @@ where
         )?;
         encrypt_dek(&dek, algorithm.into(), &self.provider)
             .await
-            .map(Some)
+            .map(|kms_encrypted_dek| Some(kms_encrypted_dek.encrypted_dek))
     }
 }
 

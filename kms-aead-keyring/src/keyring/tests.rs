@@ -5,6 +5,7 @@ use std::time::Duration;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::{Bare, Randomized};
+use kms_aead::providers::KmsKeyVersion;
 use kms_aead::{
     AeadAlgorithm, AeadCipher, BeaconAlgorithm, DeterministicAlgorithm, KekProvider, KmsAeadResult,
     Plaintext,
@@ -95,10 +96,11 @@ async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult
     assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
 
     let record = fixture.keyring.record();
-    let encrypted_dek = record
+    let encrypted_dek = &record
         .version(KeyId::new(1))
-        .and_then(KeyVersion::encrypted_dek)
-        .ok_or("version 1 holds no key")?;
+        .and_then(KeyVersion::kms_encrypted_dek)
+        .ok_or("version 1 holds no key")?
+        .encrypted_dek;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let bare = Encrypted::<String, Bare>::try_from(bytes[5..].to_vec())?;
     let (opened, _) = DekCache::disabled()
@@ -615,10 +617,11 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
 async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let held = fixture.keyring.record();
-    let encrypted_dek = held
+    let encrypted_dek = &held
         .version(KeyId::new(1))
-        .and_then(KeyVersion::encrypted_dek)
-        .ok_or("version 1 holds no key")?;
+        .and_then(KeyVersion::kms_encrypted_dek)
+        .ok_or("version 1 holds no key")?
+        .encrypted_dek;
     fixture
         .other_process()
         .await?
@@ -673,10 +676,11 @@ async fn a_forgery_under_a_known_dek_is_refused_under_block() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
     let record = fixture.keyring.record();
-    let encrypted_dek = record
+    let encrypted_dek = &record
         .version(KeyId::new(1))
-        .and_then(KeyVersion::encrypted_dek)
-        .ok_or("version 1 holds no key")?;
+        .and_then(KeyVersion::kms_encrypted_dek)
+        .ok_or("version 1 holds no key")?
+        .encrypted_dek;
     let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
     let first = KeyId::new(1);
     let (forged, _) = DekCache::disabled()
@@ -882,7 +886,7 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
     let stored = fixture.other_process().await?.keyring().record();
     let destroyed = stored.version(KeyId::new(1)).ok_or("version 1 is gone")?;
     assert_eq!(destroyed.state(), KeyVersionState::Destroyed);
-    assert!(destroyed.encrypted_dek().is_none());
+    assert!(destroyed.kms_encrypted_dek().is_none());
     Ok(())
 }
 
@@ -986,23 +990,115 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
-    admin.rotate(Purpose::Randomized).await?;
-    let previous_encrypted_deks = keyring.record().encrypted_deks();
+    let staged = admin.rotate(Purpose::Randomized).await?;
+    let previous_encrypted_deks = keyring.record().kms_encrypted_deks();
+    let first_kek_version = KmsKeyVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KmsKeyVersion::try_from("2".to_string())?;
+    assert_eq!(
+        keyring.record().kek_versions_in_use(),
+        [Some(&first_kek_version)]
+    );
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
-    assert_eq!(admin.reencrypt_deks().await?, 2);
+    let reencryptions = admin.reencrypt_deks().await?;
+
+    assert_eq!(
+        reencryptions,
+        [KeyId::new(1), staged].map(|key_id| DekReencryption {
+            key_id,
+            previous_kek_version: Some(first_kek_version.clone()),
+            kek_version: Some(rotated_kek_version.clone()),
+        })
+    );
+    assert_eq!(
+        keyring.record().kek_versions_in_use(),
+        [Some(&rotated_kek_version)]
+    );
     assert_eq!(
         fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         decryptions + 2
     );
-    let current_encrypted_deks = keyring.record().encrypted_deks();
-    for ((key_id, previous_encrypted_dek), (reencrypted_id, current_encrypted_dek)) in
+    let current_encrypted_deks = keyring.record().kms_encrypted_deks();
+    for ((key_id, previous), (reencrypted_id, current)) in
         previous_encrypted_deks.iter().zip(&current_encrypted_deks)
     {
         assert_eq!(key_id, reencrypted_id);
-        assert_ne!(previous_encrypted_dek, current_encrypted_dek);
+        assert_ne!(previous.encrypted_dek, current.encrypted_dek);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reencrypt_deks_records_the_kek_version_of_a_version_another_writer_added() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let staged = fixture
+        .other_process()
+        .await?
+        .rotate(Purpose::Randomized)
+        .await?;
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
+    fixture.store.calls.conflicts.store(1, Ordering::SeqCst);
+
+    let reencryptions = fixture.admin.reencrypt_deks().await?;
+
+    let first_kek_version = KmsKeyVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KmsKeyVersion::try_from("2".to_string())?;
+    assert_eq!(
+        reencryptions,
+        [KeyId::new(1), staged].map(|key_id| DekReencryption {
+            key_id,
+            previous_kek_version: Some(first_kek_version.clone()),
+            kek_version: Some(rotated_kek_version.clone()),
+        })
+    );
+    let stored = fixture.other_process().await?.keyring().record();
+    assert_eq!(stored.kek_versions_in_use(), [Some(&rotated_kek_version)]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_write_that_encrypts_a_dek_records_the_kek_version_it_stores() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let admin = &fixture.admin;
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
+    fixture.store.calls.conflicts.store(1, Ordering::SeqCst);
+
+    let staged = admin.rotate(Purpose::Randomized).await?;
+    let replacement = admin
+        .mark_compromised(KeyId::new(1), None)
+        .await?
+        .ok_or("the compromised active version is replaced")?;
+
+    let stored = fixture.other_process().await?.keyring().record();
+    let kek_versions: Vec<(KeyId, Option<&KmsKeyVersion>)> = stored
+        .versions()
+        .iter()
+        .map(|version| (version.id(), version.kek_version()))
+        .collect();
+    let first_kek_version = KmsKeyVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KmsKeyVersion::try_from("2".to_string())?;
+    assert_eq!(
+        kek_versions,
+        [
+            (KeyId::new(1), Some(&first_kek_version)),
+            (staged, Some(&rotated_kek_version)),
+            (replacement.current, Some(&rotated_kek_version)),
+        ]
+    );
     Ok(())
 }
 

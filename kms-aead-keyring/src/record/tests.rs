@@ -13,9 +13,11 @@ pub(super) const COMPROMISED: &str = "2026-05-01T12:00:00Z";
 pub(super) const ENCRYPTED_DEK: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
 /// [`ENCRYPTED_DEK`] in standard base64, as the record stores it.
 const ENCRYPTED_DEK_BASE64: &str = "wP/uwP/u";
+/// The KEK version of every fixture version's encrypted DEK.
+const KEK_VERSION: &str = "4";
 
-/// A version as the stored form writes it, with an encrypted DEK unless it is destroyed, and a
-/// seal range that fits its state in a [`document`] at epoch 2: open from 2 while active, from 1
+/// A version as the stored form writes it, with an encrypted DEK and its KEK version unless it is
+/// destroyed, and a seal range that fits its state in a [`document`] at epoch 2: open from 2 while active, from 1
 /// to 2 once decrypt-only or retired, and none while pending or once destroyed.
 pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> {
     let algorithm = if key_id >> 31 == 1 {
@@ -23,9 +25,9 @@ pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringRes
     } else {
         "aes-256-gcm"
     };
-    let encrypted_dek = match state {
-        "destroyed" => Value::Null,
-        _ => json!(ENCRYPTED_DEK_BASE64),
+    let (encrypted_dek, kek_version) = match state {
+        "destroyed" => (Value::Null, Value::Null),
+        _ => (json!(ENCRYPTED_DEK_BASE64), json!(KEK_VERSION)),
     };
     let compromised = match compromised {
         true => json!({ "at": COMPROMISED, "note": "laptop lost" }),
@@ -45,6 +47,7 @@ pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringRes
         "created_at": CREATED,
         "state_changed_at": ROTATED,
         "encrypted_dek": encrypted_dek,
+        "kek_version": kek_version,
     }))
 }
 
@@ -175,6 +178,7 @@ fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
 fn a_version_without_material_is_rejected() -> KeyringResult<()> {
     let mut retired = version(1, "retired", false)?;
     retired["encrypted_dek"] = Value::Null;
+    retired["kek_version"] = Value::Null;
     assert_eq!(
         refusal(&document(vec![retired, version(2, "active", false)?])),
         Some(RecordInvalidReason::MissingMaterial(KeyId::new(1)))
@@ -230,6 +234,21 @@ fn an_encrypted_dek_that_does_not_parse_is_rejected() -> KeyringResult<()> {
         assert_eq!(
             refusal(&document(vec![active])),
             Some(RecordInvalidReason::MalformedEncryptedDek(KeyId::new(1)))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_kek_version_that_does_not_parse_or_names_no_encrypted_dek_is_rejected() -> KeyringResult<()> {
+    let mut active = version(1, "active", false)?;
+    active["kek_version"] = json!("4/5");
+    let mut destroyed = version(1, "destroyed", false)?;
+    destroyed["kek_version"] = json!(KEK_VERSION);
+    for version in [active, destroyed] {
+        assert_eq!(
+            refusal(&document(vec![version])),
+            Some(RecordInvalidReason::MalformedKekVersion(KeyId::new(1)))
         );
     }
     Ok(())
@@ -464,6 +483,7 @@ fn a_regressed_record_is_refused() -> TestResult {
                 next["versions"][2]["state"] = json!("destroyed");
                 next["versions"][2]["seal_epochs"] = Value::Null;
                 next["versions"][2]["encrypted_dek"] = Value::Null;
+                next["versions"][2]["kek_version"] = Value::Null;
             },
             RegressionRule::SealRangeReverted(KeyId::new(3)),
         ),
@@ -506,6 +526,7 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     next["seal_epoch"] = json!(4);
     next["versions"][0]["state"] = json!("destroyed");
     next["versions"][0]["encrypted_dek"] = Value::Null;
+    next["versions"][0]["kek_version"] = Value::Null;
     next["versions"][1]["state"] = json!("retired");
     next["versions"][1]["seal_epochs"]["end"] = json!(4);
     next["versions"][2]["state"] = json!("decrypt_only");
@@ -521,6 +542,7 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     let mut destroyed = held()?;
     destroyed["versions"][4]["state"] = json!("destroyed");
     destroyed["versions"][4]["encrypted_dek"] = Value::Null;
+    destroyed["versions"][4]["kek_version"] = Value::Null;
     assert_eq!(check_successor(&held_record, &parse(&destroyed)?), Ok(()));
     let mut retired = held()?;
     retired["seal_epoch"] = json!(5);
@@ -544,6 +566,7 @@ fn versions_taken_out_of_use_are_withdrawn() -> TestResult {
     next["versions"][2]["state"] = json!("retired");
     next["versions"][4]["state"] = json!("destroyed");
     next["versions"][4]["encrypted_dek"] = Value::Null;
+    next["versions"][4]["kek_version"] = Value::Null;
     if let Some(versions) = next["versions"].as_array_mut() {
         versions.push(version(6, "active", false)?);
     }

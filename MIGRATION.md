@@ -26,7 +26,8 @@ In short:
   and fail with `DECRYPT` without it;
 - the AWS provider names the configured key on every decryption;
 - `EncryptedDataEncryptionKey` is the provider's bytes: store `value()` or `to_hex_string()`, and
-  read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`;
+  read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`. A call that
+  encrypts a DEK returns it in a `KmsEncryptedDek`, beside the KEK version that encrypted it;
 - to move stored values to the new format, upgrade every reader to 0.30 with `legacy-formats`,
   rewrite the values with `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD
   and opens the value before it writes, and `upgrade_legacy_encrypted_dek`, then turn the

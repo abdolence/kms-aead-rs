@@ -263,7 +263,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk...",
+      "kek_version": "1"
     },
     {
       "key_id": 2147483649,
@@ -273,7 +274,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+...",
+      "kek_version": "1"
     },
     {
       "key_id": 1073741825,
@@ -283,7 +285,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7...",
+      "kek_version": "1"
     },
     {
       "key_id": 2,
@@ -293,7 +296,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT...",
+      "kek_version": "1"
     },
     {
       "key_id": 3,
@@ -303,7 +307,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay...",
+      "kek_version": "1"
     }
   ],
   "created_at": "2026-10-18T12:18:31.053483320Z",
@@ -328,13 +333,17 @@ staged, with the encrypted DEKs shortened:
   was never active, see [Seal markers](#seal-markers);
 - `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
   provider returned, here the local KMS layout. It is `null` for a destroyed version;
+- `kek_version` is the version of the KEK that encrypted `encrypted_dek`, as the KMS reported it,
+  here the local KEK version. It is `null` for a destroyed version, and under a KMS that reports
+  none, such as AWS KMS;
 - the times are RFC 3339, in UTC.
 
 A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
 fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
-- an encrypted DEK on every version but the destroyed ones;
+- an encrypted DEK on every version but the destroyed ones, and a `kek_version`, when there is
+  one, of 1 to 255 ASCII alphanumerics beside it;
 - unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;
 - a `seal_epoch` of 1 or more;
 - `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
@@ -488,7 +497,7 @@ where
 # let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
 # let dek = cipher.generate_dek()?;
 # let bare = cipher.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
-# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?.encrypted_dek;
 # let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
 # legacy.extend_from_slice(encrypted_dek.value());
 # legacy.extend_from_slice(bare.value());

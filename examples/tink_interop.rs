@@ -18,7 +18,8 @@ use kms_aead::formats::{Envelope, Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
+    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult,
+    KmsEncryptedDek, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
@@ -154,7 +155,8 @@ where
     P: KmsAeadEncryptionProvider + Send + Sync,
 {
     let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
-    let (dek, encrypted_dek) = cipher.generate_encrypted_dek(&provider).await?;
+    let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
+        cipher.generate_encrypted_dek(&provider).await?;
     let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
     keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &dek)?;
     let aad = format!("orders/{kms}/{algorithm}");

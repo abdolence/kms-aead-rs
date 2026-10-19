@@ -100,7 +100,7 @@ mod aes_siv_cipher {
     use crate::types::checked_key_bytes;
     use crate::{
         spans, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, Plaintext,
+        KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadResult, KmsEncryptedDek, Plaintext,
     };
 
     /// Deterministic AEAD on the backend `B` and with the algorithm it was made with, without a
@@ -147,10 +147,10 @@ mod aes_siv_cipher {
             B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
         }
 
-        /// A new data encryption key and the same key encrypted by `provider`, to store. The key
-        /// comes from the KMS generator when the provider is configured to use one, and from the
-        /// backend's CSPRNG otherwise. It is encrypted as Tink encrypts a key, serialised as
-        /// Tink's `AesSivKey`, or raw under an Azure KEK.
+        /// A new data encryption key and the same key encrypted by `provider`, to store, with the
+        /// KEK version that encrypted it. The key comes from the KMS generator when the provider
+        /// is configured to use one, and from the backend's CSPRNG otherwise. It is encrypted as
+        /// Tink encrypts a key, serialised as Tink's `AesSivKey`, or raw under an Azure KEK.
         ///
         /// # Errors
         ///
@@ -159,7 +159,7 @@ mod aes_siv_cipher {
         pub async fn generate_encrypted_dek<P>(
             &self,
             provider: &P,
-        ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
+        ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
         where
             P: KmsAeadEncryptionProvider + Sync + ?Sized,
         {
@@ -295,9 +295,9 @@ mod aes_siv_cipher {
         P: KmsAeadEncryptionProvider + Send + Sync,
         B: AeadBackend,
     {
-        /// A new deterministic key and the same key encrypted by the provider, to store. The key
-        /// comes from the KMS generator when the provider is configured to use one, and from the
-        /// CSPRNG of the envelope's backend otherwise.
+        /// A new deterministic key and the same key encrypted by the provider, to store, with the
+        /// KEK version that encrypted it. The key comes from the KMS generator when the provider
+        /// is configured to use one, and from the CSPRNG of the envelope's backend otherwise.
         ///
         /// # Errors
         ///
@@ -306,7 +306,7 @@ mod aes_siv_cipher {
         pub async fn generate_encrypted_deterministic_dek(
             &self,
             algorithm: DeterministicAlgorithm,
-        ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
+        ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)> {
             let cipher = DeterministicCipher::<B>::new(algorithm)?;
             let span = spans::generate_encrypted_dek("deterministic", algorithm, B::NAME);
             spans::in_span(span, cipher.generate_encrypted_dek(&self.provider)).await
@@ -495,7 +495,7 @@ mod aes_siv_cipher {
                 let cipher = DeterministicCipher::<TestBackend>::new(algorithm)?;
                 let plain_text = SecretValue::from(PLAIN_TEXT);
 
-                let (dek, encrypted_dek) = envelope
+                let (dek, KmsEncryptedDek { encrypted_dek, .. }) = envelope
                     .generate_encrypted_deterministic_dek(algorithm)
                     .await?;
                 let (other_dek, _) = envelope

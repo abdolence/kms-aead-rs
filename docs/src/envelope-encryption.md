@@ -155,7 +155,7 @@ use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -187,7 +187,7 @@ let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?;
 let cache = DekCache::new(DekCacheOptions::new())?;
 
 // Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
-let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+let (_, KmsEncryptedDek { encrypted_dek, .. }): (DataEncryptionKey, KmsEncryptedDek) =
     cipher.generate_encrypted_dek(&provider).await?;
 
 // On every write and read: the key decrypted through the cache, no KMS call while it is cached
@@ -217,7 +217,8 @@ let (added, _) = cache
 added?;
 let first_level_keyset: EncryptedDataEncryptionKey = provider
     .encrypt_data_encryption_key(&DataEncryptionKey::from(keyset.to_bytes()))
-    .await?;
+    .await?
+    .encrypted_dek;
 # let _ = first_level_keyset;
 # Ok(())
 # }
@@ -271,7 +272,7 @@ values are `Encrypted<T, Bare>`, with no encrypted DEK in them.
 use kms_aead::backends::Ring;
 use kms_aead::formats::Bare;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope};
+use kms_aead::{Encrypted, KmsAeadEnvelope, KmsEncryptedDek};
 use secret_vault_value::SecretValue;
 
 # #[tokio::main(flavor = "current_thread")]
@@ -280,7 +281,7 @@ use secret_vault_value::SecretValue;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // One KMS call: a new DEK and the same DEK encrypted
-let (dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+let (dek, KmsEncryptedDek { encrypted_dek, .. }) = envelope.generate_encrypted_dek().await?;
 
 // No KMS call: seal and open with the plaintext DEK
 let first: Encrypted<SecretValue, Bare> =
@@ -301,7 +302,8 @@ assert_eq!(decrypted, SecretValue::from("second"));
 
 The calls are:
 
-- `generate_encrypted_dek`: a new DEK and the same DEK encrypted, one KMS call;
+- `generate_encrypted_dek`: a new DEK and the same DEK encrypted, with the KEK version that
+  encrypted it, one KMS call;
 - `encrypt_with_dek` and `decrypt_with_dek`: with a plaintext DEK, no KMS call;
 - `encrypt_with_encrypted_dek` and `decrypt_with_encrypted_dek`: with an encrypted DEK, decrypted
   through the envelope's DEK cache, so one KMS call per call without a cache.
@@ -317,14 +319,15 @@ and read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_stri
 
 ```rust
 use kms_aead::backends::Ring;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, ValueStruct};
+use kms_aead::providers::{KmsKeyVersion, LocalKekId, LocalKmsProvider};
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope, KmsEncryptedDek, ValueStruct};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+let (_dek, KmsEncryptedDek { encrypted_dek, kek_version }) =
+    envelope.generate_encrypted_dek().await?;
 
 let stored: Vec<u8> = encrypted_dek.value().clone();
 let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
@@ -333,9 +336,21 @@ let stored_hex: String = encrypted_dek.to_hex_string();
 let read_back_hex_encrypted_dek = EncryptedDataEncryptionKey::try_from_hex_string(&stored_hex)?;
 
 assert_eq!(read_back_encrypted_dek, read_back_hex_encrypted_dek);
+
+// The KEK version beside it, for the check before an old KEK version is disabled
+let stored_kek_version: Option<String> = kek_version.map(|kek_version| kek_version.to_string());
+let read_back_kek_version: Option<KmsKeyVersion> =
+    stored_kek_version.map(KmsKeyVersion::try_from).transpose()?;
+# assert!(read_back_kek_version.is_some());
 # Ok(())
 # }
 ```
+
+Every call that encrypts a DEK returns a `KmsEncryptedDek`: the encrypted DEK, and in `kek_version`
+the version of the KEK that encrypted it, as the KMS reported it. Decryption never needs it, so
+storing it is optional. Stored beside the encrypted DEK, it shows which DEKs are still under an old
+KEK version without a KMS call, see [The check](#the-check). It is `None` under AWS KMS, whose keys
+have no versions.
 
 The encrypted DEK is the one Tink stores in its KMS envelope, so `Encrypted::join` of a bare value
 and its encrypted DEK is an `Encrypted<T, Envelope>` that Tink reads. See
@@ -353,9 +368,10 @@ reading and writing:
    values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`. Then
    export the keyrings' keysets again and re-encrypt the application's own encrypted keysets, see
    [Encrypted keysets](#encrypted-keysets);
-3. once no process holds an encrypted DEK from before step 2, disable the old version, then check
-   that the KMS decrypts every stored DEK and every encrypted keyset. A DEK or a keyset it refuses
-   is one the sweep missed: enable the old version again, sweep again and check again. When to
+3. check that no keyring record names the old version among its `kek_versions_in_use`. Then, once
+   no process holds an encrypted DEK from before step 2, disable the old version, and check that
+   the KMS decrypts every stored DEK and every encrypted keyset. A DEK or a keyset it refuses is
+   one the sweep missed: enable the old version again, sweep again and check again. When to
    disable, and how the local KMS checks before it, are in [The check](#the-check);
 4. keep the old version disabled for as long as the backups of the stored values are kept, check
    once more, then destroy it.
@@ -403,7 +419,10 @@ where
         let new_encrypted_dek = match reencrypted.get(&encrypted_dek) {
             Some(new_encrypted_dek) => new_encrypted_dek.clone(),
             None => {
-                let new_encrypted_dek = envelope.reencrypt_encrypted_dek(&encrypted_dek).await?;
+                let new_encrypted_dek = envelope
+                    .reencrypt_encrypted_dek(&encrypted_dek)
+                    .await?
+                    .encrypted_dek;
                 reencrypted.insert(encrypted_dek, new_encrypted_dek.clone());
                 new_encrypted_dek
             }
@@ -478,6 +497,11 @@ The DEK cache plays no part: the sweep decrypts through the provider and leaves 
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
 current version. The sweep needs KMS encrypt and decrypt on the KEK.
 
+`reencrypt_encrypted_dek` returns a `KmsEncryptedDek`, whose `kek_version` names the KEK version
+the KMS encrypted the new encrypted DEK with. Under Cloud KMS, a sweep that ran before the new
+primary version had propagated shows the old version there, and the DEKs it names are re-encrypted
+again.
+
 ### Encrypted keysets
 
 An encrypted keyset is a KMS ciphertext as well, under the KEK version that encrypted it, and
@@ -504,7 +528,7 @@ async fn reencrypt_keyset<P: KmsAeadEncryptionProvider>(
     first_level_keyset: &EncryptedDataEncryptionKey,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
     let keyset = provider.decrypt_data_encryption_key(first_level_keyset).await?;
-    provider.encrypt_data_encryption_key(&keyset).await
+    Ok(provider.encrypt_data_encryption_key(&keyset).await?.encrypted_dek)
 }
 # use std::num::NonZeroU32;
 # use kms_aead::backends::Ring;
@@ -521,7 +545,8 @@ async fn reencrypt_keyset<P: KmsAeadEncryptionProvider>(
 #     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
 # )?
 # .encrypt_data_encryption_key(&keyset)
-# .await?;
+# .await?
+# .encrypted_dek;
 # let rotated = LocalKmsProvider::<Ring>::new(
 #     kek_id.clone(),
 #     vec![
@@ -620,9 +645,12 @@ where
 # }
 ```
 
-A keyring's record is checked by running `KeyringAdmin::reencrypt_deks` again with the old version
-disabled: it decrypts every DEK in the record through the provider, and fails on one still under
-the old version.
+A keyring's record names the KEK version of each of its DEKs, as the KMS reported it, so its check
+makes no KMS call and runs before the old version is disabled: `kek_versions_in_use` of the record
+that `Keyring::reload` returns must not list the old version. Under Cloud KMS, a `reencrypt_deks`
+that ran before the new primary version had propagated leaves the old version listed. See
+[Rotating the KEK](./operations.md#rotating-the-kek). An application that stores the `kek_version`
+of its own DEKs beside them checks those the same way.
 
 Under the local KMS the check needs no disable. A provider that lists the new version alone, as
 the sample above builds it, refuses every DEK under the old version, so the check runs before the

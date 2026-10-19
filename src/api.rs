@@ -5,7 +5,7 @@ use std::str::FromStr;
 use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
-use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
+use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult, KmsEncryptedDek};
 
 /// Encrypts and decrypts data encryption keys with a key encryption key (KEK) held by a KMS.
 ///
@@ -25,8 +25,10 @@ pub trait KmsAeadEncryptionProvider {
     /// a cache of decrypted keys may be keyed by it.
     fn kek(&self) -> &KekRef;
 
-    /// Encrypts `dek` with the KEK, recording the KEK version that encrypted it when the
-    /// KMS reports one.
+    /// Encrypts `dek` with the KEK. The result names the KEK version that encrypted it as the
+    /// KMS's response reports it, never as the provider expects it to be: a KMS that is still
+    /// propagating a rotation may encrypt under the previous version. An implementation whose
+    /// KMS reports no version returns `None` for it.
     ///
     /// # Errors
     ///
@@ -35,7 +37,7 @@ pub trait KmsAeadEncryptionProvider {
     async fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
+    ) -> KmsAeadResult<KmsEncryptedDek>;
 
     /// Decrypts `encrypted_dek` with the KEK. The request names the configured KEK, so a key
     /// encrypted under another KEK is refused by the KMS.

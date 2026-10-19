@@ -11,7 +11,7 @@ use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{
     Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, Encrypted, KeyId, KmsAeadEnvelope,
-    KmsAeadResult, Plaintext,
+    KmsAeadResult, KmsEncryptedDek, Plaintext,
 };
 use secret_vault_value::SecretValue;
 
@@ -44,9 +44,10 @@ impl Plaintext for Email {
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, encrypted_dek) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
-    .generate_encrypted_dek(envelope.provider())
-    .await?;
+let (_, KmsEncryptedDek { encrypted_dek, .. }) =
+    BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
+        .generate_encrypted_dek(envelope.provider())
+        .await?;
 
 // On every write: the field and its beacon
 let email = Email::new("Alice@Example.com");

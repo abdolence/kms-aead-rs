@@ -243,6 +243,7 @@ impl TinkKeyset {
         let encrypted_keyset = provider
             .encrypt_data_encryption_key(&keyset_dek)
             .await?
+            .encrypted_dek
             .into_value();
         Ok(EncryptedKeyset { encrypted_keyset }.encode_to_vec())
     }

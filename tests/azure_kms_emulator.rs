@@ -150,6 +150,24 @@ async fn value_encrypted_before_key_rotation_decrypts_after_it() -> TestResult<(
 
 #[tokio::test]
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
+async fn encrypt_reports_the_key_version_that_encrypted() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-encrypting-key")?;
+    let first_version = emulator.create_rsa_key_version(&key_name).await?;
+    let rotated_version = emulator.create_rsa_key_version(&key_name).await?;
+
+    for key_version in [first_version, rotated_version] {
+        let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
+
+        let (_, kms_encrypted_dek) = encryption.generate_encrypted_dek().await?;
+
+        assert_eq!(kms_encrypted_dek.kek_version, Some(key_version));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "needs the Lowkey Vault emulator, see the module docs"]
 async fn a_reencrypted_value_opens_with_the_old_key_version_disabled() -> TestResult<()> {
     let emulator = Emulator::connect()?;
     let key_name = unique_name("dek-encrypting-key")?;
@@ -225,7 +243,7 @@ async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResul
     let encryption = emulator.encryption(&key_name, key_version.clone()).await?;
     let aad = b"test-aad";
 
-    let (dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
+    let (dek, KmsEncryptedDek { encrypted_dek, .. }) = encryption.generate_encrypted_dek().await?;
     let bare = encryption.encrypt_with_dek(aad, &SecretValue::from("test-secret"), &dek)?;
     let decrypted: SecretValue = encryption
         .decrypt(aad, &Encrypted::join(&bare, &encrypted_dek)?)

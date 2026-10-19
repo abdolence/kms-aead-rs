@@ -11,8 +11,7 @@ use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::formats::TinkKeyType;
 use crate::types::checked_key_bytes;
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult,
-    Plaintext,
+    DataEncryptionKey, KeyId, KmsAeadEncryptionProvider, KmsAeadResult, KmsEncryptedDek, Plaintext,
 };
 
 #[cfg(feature = "postgres")]
@@ -237,9 +236,10 @@ impl<B: AeadBackend> BeaconMac<B> {
         B::generate_random_bytes(self.algorithm.key_len()).map(DataEncryptionKey::from)
     }
 
-    /// A new beacon key and the same key encrypted by `provider`, to store. The key comes from the
-    /// KMS generator when the provider is configured to use one, and from the backend's CSPRNG
-    /// otherwise. It is encrypted as a serialised Tink key with the key in `key_value`, so that
+    /// A new beacon key and the same key encrypted by `provider`, to store, with the KEK version
+    /// that encrypted it. The key comes from the KMS generator when the provider is configured to
+    /// use one, and from the backend's CSPRNG otherwise. It is encrypted as a serialised Tink key
+    /// with the key in `key_value`, so that
     /// [`DekCache::with_dek`](crate::cache::DekCache::with_dek) decrypts it.
     ///
     /// # Errors
@@ -249,7 +249,7 @@ impl<B: AeadBackend> BeaconMac<B> {
     pub async fn generate_encrypted_dek<P>(
         &self,
         provider: &P,
-    ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
+    ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)>
     where
         P: KmsAeadEncryptionProvider + Sync + ?Sized,
     {

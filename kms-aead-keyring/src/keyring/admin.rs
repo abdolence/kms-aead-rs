@@ -3,7 +3,8 @@
 
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
-use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
+use kms_aead::providers::KmsKeyVersion;
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsEncryptedDek};
 
 use crate::errors::KeyringResult;
 use crate::purpose::unreserved;
@@ -343,43 +344,55 @@ where
     /// Decrypts and encrypts again the key of every version that holds one, so that all of them sit
     /// under the KEK's current version after the KEK rotated in the KMS. No value changes. The
     /// keys are decrypted through the provider, never through the
-    /// [`DekCache`](kms_aead::cache::DekCache). Returns the number of versions encrypted again.
+    /// [`DekCache`](kms_aead::cache::DekCache).
+    ///
+    /// Returns what moved, one entry per version encrypted again: the KEK version its DEK was
+    /// under and the one the KMS encrypted it with now, which the record keeps, see
+    /// [`KeyringRecord::kek_versions_in_use`]. Under a KMS that is still propagating a rotation,
+    /// such as Cloud KMS, an entry may name the old version again, and the call is repeated once
+    /// the rotation has propagated.
     ///
     /// # Errors
     ///
     /// The provider's errors, and the errors of a write as for [`rotate`](Self::rotate).
-    pub async fn reencrypt_deks(&self) -> KeyringResult<usize> {
+    pub async fn reencrypt_deks(&self) -> KeyringResult<Vec<DekReencryption>> {
         let keyring = &self.keyring;
         spans::in_span(spans::reencrypt_deks(keyring.id()), async {
             let mut reencrypted = Vec::new();
-            for (_, encrypted_dek) in keyring.record().encrypted_deks() {
-                let new_encrypted_dek = self.reencrypted(&encrypted_dek).await?;
-                reencrypted.push((encrypted_dek, new_encrypted_dek));
+            for (_, held) in keyring.record().kms_encrypted_deks() {
+                let new = self.reencrypted(&held.encrypted_dek).await?;
+                reencrypted.push((held.encrypted_dek, new));
             }
-            let versions = keyring
+            let reencryptions = keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
                     async |edit: &mut RecordEdit| {
-                        let encrypted_deks = edit.record().encrypted_deks();
-                        for (key_id, encrypted_dek) in &encrypted_deks {
+                        let held_deks = edit.record().kms_encrypted_deks();
+                        let mut reencryptions = Vec::with_capacity(held_deks.len());
+                        for (key_id, held) in held_deks {
                             let prepared = reencrypted
                                 .iter()
-                                .find(|(held, _)| held == encrypted_dek)
-                                .map(|(_, new_encrypted_dek)| new_encrypted_dek.clone());
-                            let new_encrypted_dek = match prepared {
-                                Some(new_encrypted_dek) => new_encrypted_dek,
+                                .find(|(encrypted_dek, _)| *encrypted_dek == held.encrypted_dek)
+                                .map(|(_, new)| new.clone());
+                            let new = match prepared {
+                                Some(new) => new,
                                 // A version that another writer added or encrypted again meanwhile.
-                                None => self.reencrypted(encrypted_dek).await?,
+                                None => self.reencrypted(&held.encrypted_dek).await?,
                             };
-                            edit.replace_dek(*key_id, new_encrypted_dek, Timestamp::now())?;
+                            reencryptions.push(DekReencryption {
+                                key_id,
+                                previous_kek_version: held.kek_version,
+                                kek_version: new.kek_version.clone(),
+                            });
+                            edit.replace_dek(key_id, new, Timestamp::now())?;
                         }
-                        Ok(encrypted_deks.len())
+                        Ok(reencryptions)
                     },
                 )
                 .await?;
-            spans::record_versions(versions);
-            Ok(versions)
+            spans::record_versions(reencryptions.len());
+            Ok(reencryptions)
         })
         .await
     }
@@ -402,16 +415,28 @@ where
         .ok()
     }
 
-    /// `encrypted_dek` decrypted through the provider and encrypted again. What the KMS decrypts
-    /// is the serialised Tink key it encrypted, so it is encrypted again as it is.
+    /// `encrypted_dek` decrypted through the provider and encrypted again, with the KEK version
+    /// that encrypted it now. What the KMS decrypts is the serialised Tink key it encrypted, so it
+    /// is encrypted again as it is.
     async fn reencrypted(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KeyringResult<EncryptedDataEncryptionKey> {
+    ) -> KeyringResult<KmsEncryptedDek> {
         let provider = &self.keyring.provider;
         let dek = provider.decrypt_data_encryption_key(encrypted_dek).await?;
         Ok(provider.encrypt_data_encryption_key(&dek).await?)
     }
+}
+
+/// What [`KeyringAdmin::reencrypt_deks`] did to the encrypted DEK of one version.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DekReencryption {
+    /// The version whose DEK was encrypted again.
+    pub key_id: KeyId,
+    /// The KEK version the DEK was under before, as the record held it.
+    pub previous_kek_version: Option<KmsKeyVersion>,
+    /// The KEK version the KMS encrypted the DEK with now, which the record holds from then on.
+    pub kek_version: Option<KmsKeyVersion>,
 }
 
 /// What a promotion, or the replacement of a compromised active version, did.

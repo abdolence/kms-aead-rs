@@ -69,7 +69,7 @@ an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN alway
 AWS KMS rotates the key material of a key, on its rotation schedule or on demand, and keeps every
 earlier key material for as long as the key exists. A DEK encrypted before a rotation decrypts
 afterwards. AWS KMS exposes no versions of a key, so no earlier key material can be disabled or
-deleted on its own.
+deleted on its own, and the `kek_version` an encryption returns is `None`.
 
 The sweep of [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation)
 is optional under AWS KMS: it moves each DEK to the current key material, and with no version to

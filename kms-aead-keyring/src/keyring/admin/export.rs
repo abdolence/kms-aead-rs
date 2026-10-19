@@ -238,6 +238,7 @@ where
                         .provider
                         .encrypt_data_encryption_key(&keyset_dek)
                         .await?
+                        .encrypted_dek
                         .into_value()
                 }
                 Interop::Tink => keyset.into_encrypted_bytes(&keyring.provider).await?,
@@ -359,10 +360,11 @@ mod tests {
         let mut keyset = TinkKeyset::new(KeyId::new(primary));
         for key_id in key_ids {
             let key_id = KeyId::new(*key_id);
-            let encrypted_dek = record
+            let encrypted_dek = &record
                 .version(key_id)
-                .and_then(KeyVersion::encrypted_dek)
-                .ok_or("the version holds no key")?;
+                .and_then(KeyVersion::kms_encrypted_dek)
+                .ok_or("the version holds no key")?
+                .encrypted_dek;
             let (added, _) = DekCache::disabled()
                 .with_dek(provider, encrypted_dek, |dek| {
                     keyset.add_key(key_id, TinkKeyType::AesGcm, dek)

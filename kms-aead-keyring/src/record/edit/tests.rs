@@ -1,4 +1,4 @@
-use kms_aead::{AeadAlgorithm, DeterministicAlgorithm};
+use kms_aead::{AeadAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey};
 use serde_json::json;
 
 use super::*;
@@ -143,7 +143,7 @@ fn every_transition_of_the_lifecycle_is_accepted() -> TestResult {
                 );
             }
             assert_eq!(
-                version.encrypted_dek().is_some(),
+                version.kms_encrypted_dek().is_some(),
                 expected_state != KeyVersionState::Destroyed
             );
             edit.finish()?;
@@ -194,7 +194,10 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
 fn new_version(algorithm: KeyAlgorithm) -> NewVersion {
     NewVersion {
         algorithm,
-        encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
+        kms_encrypted_dek: KmsEncryptedDek {
+            encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
+            kek_version: None,
+        },
     }
 }
 

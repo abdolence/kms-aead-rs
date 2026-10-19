@@ -125,7 +125,8 @@ To rotate, add `kek-v2` the same way and list both versions, as the next section
 ## Key versions and rotation
 
 Every version in the provider's list decrypts, and the highest one encrypts unless
-`with_encrypting_version` names another. A process that does not list a version fails on a DEK
+`with_encrypting_version` names another. An encryption returns the version that encrypted, in
+decimal, as `kek_version`. A process that does not list a version fails on a DEK
 under it with `LOCAL_KEK_UNKNOWN_VERSION`, so a rotation without downtime takes two deploys:
 
 1. list the new version in every process, with `with_encrypting_version` keeping the current one

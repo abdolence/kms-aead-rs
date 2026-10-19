@@ -78,14 +78,14 @@ To drop one at once, invalidate it with the envelope's own KEK:
 # use kms_aead::cache::{DekCache, DekCacheOptions};
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 # use kms_aead::{KmsAeadEnvelope, KmsAeadEnvelopeOptions};
-use kms_aead::KmsAeadEncryptionProvider;
+use kms_aead::{KmsAeadEncryptionProvider, KmsEncryptedDek};
 
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> kms_aead::KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(provider,
 #     KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?))?;
-let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+let (_dek, KmsEncryptedDek { encrypted_dek, .. }) = envelope.generate_encrypted_dek().await?;
 
 // One encrypted DEK
 envelope

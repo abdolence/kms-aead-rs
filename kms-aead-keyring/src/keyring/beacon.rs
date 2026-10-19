@@ -187,10 +187,11 @@ mod tests {
         let beacon = keyring.sealer().await.beacon(&EMAIL, &alice).await?;
 
         let record = keyring.record();
-        let encrypted_dek = record
+        let encrypted_dek = &record
             .version(first)
-            .and_then(KeyVersion::encrypted_dek)
-            .ok_or("the first beacon version holds no key")?;
+            .and_then(KeyVersion::kms_encrypted_dek)
+            .ok_or("the first beacon version holds no key")?
+            .encrypted_dek;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
         let (expected, _) = DekCache::disabled()
             .with_dek(&provider, encrypted_dek, |dek| {

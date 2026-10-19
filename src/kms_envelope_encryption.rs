@@ -17,7 +17,7 @@ use crate::formats::{Bare, Envelope};
 use crate::{
     spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
     DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider,
-    KmsAeadResult, Plaintext,
+    KmsAeadResult, KmsEncryptedDek, Plaintext,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -522,14 +522,15 @@ where
 
     /// Generates a new DEK, from the KMS generator when the provider uses one and from the
     /// backend's CSPRNG otherwise, and encrypts it with the KMS as Tink does, so that
-    /// [`Encrypted::join`] can store it with values sealed under it.
+    /// [`Encrypted::join`] can store it with values sealed under it. The result names the KEK
+    /// version that encrypted it.
     ///
     /// # Errors
     ///
     /// The errors of [`AeadCipher::generate_encrypted_dek`].
     pub async fn generate_encrypted_dek(
         &self,
-    ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
+    ) -> KmsAeadResult<(DataEncryptionKey, KmsEncryptedDek)> {
         let span = spans::generate_encrypted_dek("randomized", self.cipher.algorithm(), B::NAME);
         spans::in_span(span, self.cipher.generate_encrypted_dek(&self.provider)).await
     }
@@ -568,9 +569,9 @@ where
                 }
                 error => error,
             })?;
-            let encrypted_dek =
+            let kms_encrypted_dek =
                 crate::formats::reencrypt_encrypted_dek(&encrypted_dek, &self.provider).await?;
-            Encrypted::join(&bare, &encrypted_dek)
+            Encrypted::join(&bare, &kms_encrypted_dek.encrypted_dek)
         })
         .await
     }
@@ -581,6 +582,9 @@ where
     /// stored apart from their values, such as those of the `*_with_encrypted_dek` calls, of
     /// beacons and of deterministic fields, and a DEK that many values share.
     ///
+    /// The result names the KEK version the KMS encrypted with, which shows a re-encryption that a
+    /// KMS still propagating a rotation ran under the old version.
+    ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a key kms-aead
@@ -589,7 +593,7 @@ where
     pub async fn reencrypt_encrypted_dek(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+    ) -> KmsAeadResult<KmsEncryptedDek> {
         spans::in_span(
             spans::reencrypt_dek(&self.dek_cache),
             crate::formats::reencrypt_encrypted_dek(encrypted_dek, &self.provider),
@@ -614,7 +618,7 @@ where
                 // Once it has left the cache, expired, invalidated or cleared, the writer renews
                 // instead of decrypting it again, so that `invalidate` and `clear` end its use.
                 let renew = || async {
-                    let (dek, encrypted_dek) =
+                    let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
                         self.cipher.generate_encrypted_dek(&self.provider).await?;
                     if let Some(enabled) = &self.dek_cache.0 {
                         enabled.insert(self.provider.kek(), &encrypted_dek, dek);
@@ -644,7 +648,7 @@ where
             }
             // Per call, and in store-less mode a value longer than `max_bytes`: a DEK of its own.
             _ => {
-                let (dek, encrypted_dek) =
+                let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
                     self.cipher.generate_encrypted_dek(&self.provider).await?;
                 self.seal_envelope(aad, plain_text, &dek, &encrypted_dek)?
             }
@@ -774,7 +778,8 @@ mod tests {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
         let plaintext = SecretValue::from("secret message");
 
-        let (dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
+        let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
+            encryption.generate_encrypted_dek().await?;
         let ciphertext = encryption.encrypt_with_dek(AAD, &plaintext, &dek)?;
 
         assert_eq!(
@@ -794,7 +799,8 @@ mod tests {
     async fn a_new_dek_is_encrypted_as_its_tink_key() -> KmsAeadResult<()> {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
 
-        let (dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
+        let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
+            encryption.generate_encrypted_dek().await?;
 
         assert_eq!(
             encrypted_dek,
@@ -808,7 +814,8 @@ mod tests {
         let encryption = Envelope::new(TestKmsProvider::Working)?;
         let plaintext = SecretValue::from("secret message");
 
-        let (_dek, encrypted_dek) = encryption.generate_encrypted_dek().await?;
+        let (_dek, KmsEncryptedDek { encrypted_dek, .. }) =
+            encryption.generate_encrypted_dek().await?;
         let ciphertext = encryption
             .encrypt_with_encrypted_dek(AAD, &plaintext, &encrypted_dek)
             .await?;
@@ -1250,7 +1257,7 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )?;
 
-        let (_, encrypted_dek) = envelope.generate_encrypted_dek().await?;
+        let (_, KmsEncryptedDek { encrypted_dek, .. }) = envelope.generate_encrypted_dek().await?;
         let value = envelope
             .encrypt_with_encrypted_dek(AAD, &SecretValue::from(PLAIN_TEXT), &encrypted_dek)
             .await?;
@@ -1602,7 +1609,8 @@ mod tests {
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )?;
         let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
-        let (dek, encrypted_dek) = mac.generate_encrypted_dek(encryption.provider()).await?;
+        let (dek, KmsEncryptedDek { encrypted_dek, .. }) =
+            mac.generate_encrypted_dek(encryption.provider()).await?;
         let key_id = KeyId::new(7);
         let email = "alice@example.com".to_string();
 
