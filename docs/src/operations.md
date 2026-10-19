@@ -357,7 +357,9 @@ as the sweep read it, and the re-seal returns `ResealOutcome::Skipped`.
 ### Running a sweep
 
 `sweep::run` drives the application's re-seal over a stream of candidates, with at most
-`concurrency` in flight, and counts what happened. A sweep is data plane: it takes a `Keyring`
+`concurrency` in flight, and counts what happened. The stream returns each candidate as a
+`Result`, so that the query that finds them can fail into the report rather than end the sweep in
+silence. A sweep is data plane: it takes a `Keyring`
 and needs the application's rights only, since a re-seal encrypts under a DEK the record already
 holds. The rotation before it and the `retire` after it are the administrative job's, on a
 `KeyringAdmin`. Here over an in-memory table, with both in one process:
@@ -489,7 +491,7 @@ let candidates = table
 
 let report: SweepReport = sweep::run(
     keyring.id(),
-    stream::iter(candidates),
+    stream::iter(candidates.into_iter().map(Ok)),
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
         let table = &table;
@@ -517,7 +519,9 @@ if let Some(previous) = rotation.previous {
 ```
 
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
-`failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
+`failed`. A candidate the stream returns as an error is counted in `scanned` and `failed`, and
+logged at `WARN` with the error's `Display`; a stream whose query cannot go on returns its error
+and ends. A re-seal that fails does not stop the sweep either: it is counted in `failed` and logged at
 `WARN` with the candidate's `Display` and the error's `Display`. A re-seal that fails with
 `SealerOutdated` is one of them: a process with a newer record rewrote the record after the query
 returned it. The record is counted as failed, and the next run's query no longer returns it,
@@ -527,8 +531,8 @@ fails in every run instead. A candidate is the application's own type, such as a
 struct of key columns or the record itself, and its `Display` names the record and nothing else. A
 record id is often an entity id, so read the sweep's log as an administrative log.
 
-The re-seal returns `Result<ResealOutcome, E>` with the application's own error type, any type
-that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`
+The stream returns `Result<T, E>` and the re-seal `Result<ResealOutcome, E>`, with the
+application's own error type, any type that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`
 impl on the application's error lets `?` convert it, as the examples below do with an error of
 their data store; a re-seal with no errors of its own returns `KeyringResult<ResealOutcome>`, as
 above. The error's `Display` is the application's text and goes to the log as it is, so it carries
@@ -586,7 +590,7 @@ use firestore::errors::FirestoreError;
 use firestore::{
     paths, FirestoreDb, FirestoreResult, FirestoreTimestamp, FirestoreWritePrecondition,
 };
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
@@ -638,20 +642,14 @@ struct UserDoc {
     seal: SealMarker,
 }
 
-/// A document the query returned, or the error of reading it, which the sweep counts as failed.
-struct Candidate(FirestoreResult<UserDoc>);
-
 /// The document id, and nothing of its fields.
-impl Display for Candidate {
+impl Display for UserDoc {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            Ok(doc) => write!(f, "{USERS}/{}", doc.id),
-            Err(_) => write!(f, "an unreadable document of {USERS}"),
-        }
+        write!(f, "{USERS}/{}", self.id)
     }
 }
 
-/// Why the re-seal of a document failed: an error of the keyring or of the users collection.
+/// Why the sweep failed on a document: an error of the keyring or of the users collection.
 enum SweepError {
     Keyring(KeyringError),
     Users(FirestoreError),
@@ -729,9 +727,8 @@ async fn reseal_email(
 async fn reseal(
     keyring: &UsersKeyring,
     db: &FirestoreDb,
-    candidate: Candidate,
+    doc: UserDoc,
 ) -> Result<ResealOutcome, SweepError> {
-    let doc = candidate.0?;
     let sealer: UsersSealer<'_> = keyring.sealer().await;
     let (email, outcome) = reseal_email(keyring, &sealer, &doc.id, doc.seal, &doc.email).await?;
     let update = UserDoc {
@@ -785,10 +782,10 @@ let candidates = db
     .obj::<UserDoc>()
     .stream_query_with_errors()
     .await?
-    .map(Candidate);
-let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |candidate| {
+    .err_into::<SweepError>();
+let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |doc: UserDoc| {
     let (keyring, db) = (&keyring, &db);
-    async move { reseal(keyring, db, candidate).await }
+    async move { reseal(keyring, db, doc).await }
 })
 .await;
 println!("{report:?}");
@@ -828,7 +825,7 @@ CREATE INDEX users_seal ON users (seal);
 ```
 
 The candidates stream in pages by keyset pagination on the primary key, with
-`futures_util::stream::unfold`: each page is one short query, so no transaction stays open across
+`futures_util::stream::try_unfold`: each page is one short query, so no transaction stays open across
 the sweep, and memory holds one page. The `UPDATE` is conditional on the bytes it read, which a write
 of any other process changes, since every randomised value has its own nonce. A process that has
 not seen the promotion yet still seals under the old version and stamps the old epoch, which the
@@ -838,7 +835,7 @@ row holds already, so the marker alone does not detect its write:
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{stream, StreamExt, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
@@ -877,33 +874,26 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 #     }
 # }
 #
-/// A row the query returned, or the error of reading its page, which the sweep counts as failed.
-enum Candidate {
-    /// `email` is an envelope value under `SealMarker::ENVELOPE`, a keyring value under any other
-    /// marker.
-    Row {
-        id: i64,
-        email: Vec<u8>,
-        seal: SealMarker,
-    },
-    Unread(tokio_postgres::Error),
+/// A row the query returned.
+struct UserRow {
+    id: i64,
+    /// An envelope value under `SealMarker::ENVELOPE`, a keyring value under any other marker.
+    email: Vec<u8>,
+    seal: SealMarker,
 }
 
 /// The row id, and nothing of its columns.
-impl Display for Candidate {
+impl Display for UserRow {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Candidate::Row { id, .. } => write!(f, "users/{id}"),
-            Candidate::Unread(_) => f.write_str("a row or page of users that did not read"),
-        }
+        write!(f, "users/{}", self.id)
     }
 }
 
-impl TryFrom<Row> for Candidate {
+impl TryFrom<Row> for UserRow {
     type Error = tokio_postgres::Error;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        Ok(Candidate::Row {
+        Ok(UserRow {
             id: row.try_get("id")?,
             email: row.try_get("email")?,
             seal: row.try_get("seal")?,
@@ -911,7 +901,7 @@ impl TryFrom<Row> for Candidate {
     }
 }
 
-/// Why the re-seal of a row failed: an error of the keyring or of the users table.
+/// Why the sweep failed on a row or a page: an error of the keyring or of the users table.
 enum SweepError {
     Keyring(KeyringError),
     Users(tokio_postgres::Error),
@@ -943,33 +933,31 @@ impl Display for SweepError {
     }
 }
 
-/// The rows whose marker is below `current`, a page at a time in the order of `id`.
-fn candidates(client: &Client, current: SealMarker) -> impl Stream<Item = Candidate> + '_ {
-    stream::unfold(Some(i64::MIN), move |after| async move {
-        let rows = client
-            .query(
-                "SELECT id, email, seal FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
-                &[&current, &after?, &i64::from(PAGE_SIZE)],
-            )
-            .await;
-        let page = match rows {
-            Ok(rows) => rows
-                .into_iter()
-                .map(|row| Candidate::try_from(row).unwrap_or_else(Candidate::Unread))
-                .collect::<Vec<Candidate>>(),
-            Err(error) => return Some((vec![Candidate::Unread(error)], None)),
-        };
-        let last = page.iter().rev().find_map(|candidate| match candidate {
-            Candidate::Row { id, .. } => Some(*id),
-            Candidate::Unread(_) => None,
-        });
-        let next = match last {
-            Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last),
-            _ => None,
-        };
-        (!page.is_empty()).then_some((page, next))
-    })
-    .flat_map(stream::iter)
+/// The next page of the rows whose marker is below `current`, in the order of `id`: the rows
+/// after the id `after`, and the id to read the page after them from, `None` once a page came
+/// back short.
+async fn next_page(
+    client: &Client,
+    current: SealMarker,
+    after: Option<i64>,
+) -> Result<Option<(Vec<UserRow>, Option<i64>)>, SweepError> {
+    let Some(after) = after else {
+        return Ok(None);
+    };
+    let page: Vec<UserRow> = client
+        .query(
+            "SELECT id, email, seal FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
+            &[&current, &after, &i64::from(PAGE_SIZE)],
+        )
+        .await?
+        .into_iter()
+        .map(UserRow::try_from)
+        .collect::<Result<Vec<UserRow>, tokio_postgres::Error>>()?;
+    let next: Option<i64> = match page.last() {
+        Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last.id),
+        _ => None,
+    };
+    Ok(Some((page, next)))
 }
 
 /// The AAD the application gave its envelope values.
@@ -1015,19 +1003,15 @@ async fn reseal_email(
 async fn reseal(
     keyring: &UsersKeyring,
     client: &Client,
-    candidate: Candidate,
+    row: UserRow,
 ) -> Result<ResealOutcome, SweepError> {
-    let (id, email, row_seal) = match candidate {
-        Candidate::Row { id, email, seal } => (id, email, seal),
-        Candidate::Unread(error) => return Err(SweepError::Users(error)),
-    };
     let sealer: UsersSealer<'_> = keyring.sealer().await;
-    let (new_email, outcome) = reseal_email(keyring, &sealer, id, row_seal, &email).await?;
+    let (email, outcome) = reseal_email(keyring, &sealer, row.id, row.seal, &row.email).await?;
     let seal: SealMarker = sealer.record().seal_marker();
     let updated: u64 = client
         .execute(
             "UPDATE users SET email = $2, seal = $3 WHERE id = $1 AND email = $4",
-            &[&id, &new_email, &seal, &email],
+            &[&row.id, &email, &seal, &row.email],
         )
         .await?;
     Ok(match updated {
@@ -1057,15 +1041,16 @@ let keyring: UsersKeyring = registry
     .await?;
 
 let current: SealMarker = keyring.record().seal_marker();
-let report: SweepReport = sweep::run(
-    keyring.id(),
-    candidates(&client, current),
-    CONCURRENCY,
-    |candidate| {
-        let (keyring, client) = (&keyring, &client);
-        async move { reseal(keyring, client, candidate).await }
-    },
-)
+// A page query that fails returns its error, which the sweep counts as failed, and ends the stream
+let candidates = stream::try_unfold(Some(i64::MIN), |after: Option<i64>| {
+    next_page(&client, current, after)
+})
+.map_ok(|page: Vec<UserRow>| stream::iter(page).map(Ok))
+.try_flatten();
+let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |row: UserRow| {
+    let (keyring, client) = (&keyring, &client);
+    async move { reseal(keyring, client, row).await }
+})
 .await;
 println!("{report:?}");
 registry.shutdown().await?;
@@ -1092,8 +1077,8 @@ PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row a
 
 The [`sweep_postgres` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs)
 runs this sweep end to end, from the writes to the `retire`, on a local PostgreSQL. It runs on
-`sweep::run_batched` in place of `sweep::run`: each page of 1000 rows is one batch, re-sealed through
-one sealer and written back in one `UPDATE` over arrays of the ids, the new values and the values it
+`sweep::run_batched` in place of `sweep::run`: each batch of 1000 rows is re-sealed through one
+sealer and written back in one `UPDATE` over arrays of the ids, the new values and the values it
 read, instead of one statement per row.
 
 #### BigQuery
@@ -1283,15 +1268,15 @@ async fn reseal_phone(
 /// Re-seals the `pages` of the query, one sealer per page, and writes each through `merge`, which
 /// runs the `MERGE` with `@seal` bound to the marker it is given, the marker of the page's
 /// sealer, and returns its number of affected rows. `ClientError` is the error of the
-/// application's BigQuery client, which a `KeyringError` converts into, and its `Display` is the
-/// text the sweep logs for a failed page.
+/// application's BigQuery client, which a page that did not read returns and a `KeyringError`
+/// converts into, and its `Display` is the text the sweep logs for a failed page.
 async fn sweep_phones<Pages, Merge, Merged, ClientError>(
     keyring: &UsersKeyring,
     pages: Pages,
     merge: Merge,
 ) -> SweepReport
 where
-    Pages: Stream<Item = UsersPage>,
+    Pages: Stream<Item = Result<UsersPage, ClientError>>,
     Merge: Fn(Vec<PhoneUpdate>, SealMarker) -> Merged,
     Merged: Future<Output = Result<u64, ClientError>>,
     ClientError: From<KeyringError> + Display,

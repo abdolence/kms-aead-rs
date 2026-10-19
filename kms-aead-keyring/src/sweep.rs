@@ -129,6 +129,7 @@ use std::num::NonZeroUsize;
 use std::pin::pin;
 
 use futures_util::{Stream, StreamExt};
+use rsb_derive::Builder;
 use tracing::Instrument;
 
 use crate::errors::{KeyringError, KeyringResult};
@@ -294,7 +295,7 @@ pub enum ResealOutcome {
 /// `skipped` or `failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SweepReport {
-    /// The candidates visited.
+    /// The candidates visited, those the stream returned as an error included.
     pub scanned: u64,
     /// The records re-sealed.
     pub resealed: u64,
@@ -302,19 +303,19 @@ pub struct SweepReport {
     pub resealed_from_compromised: u64,
     /// The records the re-seal skipped.
     pub skipped: u64,
-    /// The records whose re-seal returned an error.
+    /// The candidates the stream returned as an error, and the records whose re-seal returned an
+    /// error or no outcome.
     pub failed: u64,
 }
 
 impl SweepReport {
-    /// Counts the outcome of one candidate, and logs a failure.
-    fn count<E: Display>(
+    /// Counts the outcome of a candidate already counted in `scanned`, and logs a failure.
+    fn count_outcome<E: Display>(
         &mut self,
         keyring_id: &KeyringId,
         candidate: &impl Display,
         outcome: Result<ResealOutcome, E>,
     ) {
-        self.scanned += 1;
         match outcome {
             Ok(ResealOutcome::Resealed { from_compromised }) => {
                 self.resealed += 1;
@@ -329,25 +330,87 @@ impl SweepReport {
             }
         }
     }
+
+    /// Counts a candidate the stream returned as an error, and logs it.
+    fn count_unread<E: Display>(&mut self, keyring_id: &KeyringId, error: &E) {
+        self.scanned += 1;
+        self.failed += 1;
+        spans::sweep_candidate_failed(keyring_id, error);
+    }
+
+    /// Counts the `given` candidates of a batch whose re-seal failed as a whole, and logs it.
+    fn count_failed_batch<E: Display>(&mut self, keyring_id: &KeyringId, given: usize, error: &E) {
+        let given = u64::try_from(given).unwrap_or(u64::MAX);
+        self.scanned += given;
+        self.failed += given;
+        spans::sweep_batch_failed(keyring_id, given, error);
+    }
+
+    /// Counts the `given` candidates of a batch from the outcomes its re-seal returned, at most
+    /// `given` of them, and logs a count of outcomes other than `given`.
+    fn count_batch<T: Display, E: Display>(
+        &mut self,
+        keyring_id: &KeyringId,
+        given: usize,
+        outcomes: Vec<(T, Result<ResealOutcome, E>)>,
+    ) {
+        let returned = outcomes.len();
+        let [given_count, returned_count, shortfall] =
+            [given, returned, given.saturating_sub(returned)]
+                .map(|count| u64::try_from(count).unwrap_or(u64::MAX));
+        if returned != given {
+            spans::sweep_batch_outcomes_mismatched(keyring_id, given_count, returned_count);
+        }
+        self.scanned += given_count;
+        self.failed += shortfall;
+        for (candidate, outcome) in outcomes.into_iter().take(given) {
+            self.count_outcome(keyring_id, &candidate, outcome);
+        }
+    }
+}
+
+/// How [`run_batched`] cuts the candidates into batches, and how many batches it re-seals at
+/// once.
+#[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
+pub struct BatchedSweepOptions {
+    /// The candidates of a batch, all but the last: [`DEFAULT_BATCH_SIZE`](Self::DEFAULT_BATCH_SIZE)
+    /// by default. A store's limit of writes per request bounds it, such as Firestore's 500 writes
+    /// per `BatchWrite`.
+    #[default = "Self::DEFAULT_BATCH_SIZE"]
+    pub batch_size: NonZeroUsize,
+    /// The batches in flight at once: [`DEFAULT_CONCURRENCY`](Self::DEFAULT_CONCURRENCY) by
+    /// default.
+    #[default = "Self::DEFAULT_CONCURRENCY"]
+    pub concurrency: NonZeroUsize,
+}
+
+impl BatchedSweepOptions {
+    /// The default [`batch_size`](Self::batch_size): 100 candidates.
+    pub const DEFAULT_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(100).unwrap();
+    /// The default [`concurrency`](Self::concurrency): 4 batches.
+    pub const DEFAULT_CONCURRENCY: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 }
 
 /// Runs `reseal` over every candidate of `candidates`, with at most `concurrency` re-seals in
 /// flight, and counts what they did. A candidate is whatever the application identifies a record
-/// by, such as its id or its key columns.
+/// by, such as its id or its key columns, and the stream returns each as a `Result`, so that the
+/// query that finds them can fail without ending the sweep in silence.
 ///
-/// A re-seal returns the application's own error type `E`, so that an error of its table is
-/// returned as it is. The keyring's calls inside it, such as
-/// [`Sealer::reseal`](crate::Sealer::reseal), return a
-/// [`KeyringError`], which `?` converts into `E` through a `From` impl the
-/// application gives its error; `E` is `KeyringError` itself for a re-seal that has no other
-/// errors.
+/// The stream and the re-seal return the application's own error type `E`, so that an error of
+/// its table is returned as it is. The keyring's calls inside the re-seal, such as
+/// [`Sealer::reseal`](crate::Sealer::reseal), return a [`KeyringError`], which `?` converts into
+/// `E` through a `From` impl the application gives its error; `E` is `KeyringError` itself for a
+/// re-seal that has no other errors.
 ///
-/// A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at `WARN`
-/// with the candidate's `Display` and the error's `Display`. The report keeps counts only; an
-/// application that wants the errors themselves records them inside `reseal`. Both texts are the
-/// application's own and go to the log as they are, so they name the record and the failure and
-/// carry no value, secret or personal data. The sweep opens a `Keyring sweep` span for
-/// `keyring_id`, which carries the counts once it ends.
+/// An error does not stop the sweep. A candidate the stream returned as an error is counted in
+/// `scanned` and `failed`, and logged at `WARN` with the error's `Display`; a stream whose query
+/// cannot go on returns its error and ends. A re-seal that fails is counted in `failed` and
+/// logged at `WARN` with the candidate's `Display` and the error's `Display`. The report keeps
+/// counts only; an application that wants the errors themselves records them inside `reseal`.
+/// Both texts are the application's own and go to the log as they are, so they name the record
+/// and the failure and carry no value, secret or personal data. The sweep opens a `Keyring sweep`
+/// span for `keyring_id`, which carries the counts once it ends.
 ///
 /// [`run_batched`] drives a re-seal that writes many records at once.
 pub async fn run<T, C, F, Fut, E>(
@@ -358,7 +421,7 @@ pub async fn run<T, C, F, Fut, E>(
 ) -> SweepReport
 where
     T: Display,
-    C: Stream<Item = T>,
+    C: Stream<Item = Result<T, E>>,
     F: FnMut(T) -> Fut,
     Fut: Future<Output = Result<ResealOutcome, E>>,
     E: Display,
@@ -369,13 +432,24 @@ where
         let mut outcomes = pin!(candidates
             .map(|candidate| {
                 // Formatted before `reseal` takes the candidate, for the log line of a failure.
-                let shown = candidate.to_string();
-                let outcome = reseal(candidate);
-                async move { (shown, outcome.await) }
+                let resealing =
+                    candidate.map(|candidate| (candidate.to_string(), reseal(candidate)));
+                async move {
+                    match resealing {
+                        Ok((candidate, outcome)) => Ok((candidate, outcome.await)),
+                        Err(error) => Err(error),
+                    }
+                }
             })
             .buffer_unordered(concurrency.get()));
-        while let Some((candidate, outcome)) = outcomes.next().await {
-            report.count(keyring_id, &candidate, outcome);
+        while let Some(resealed) = outcomes.next().await {
+            match resealed {
+                Ok((candidate, outcome)) => {
+                    report.scanned += 1;
+                    report.count_outcome(keyring_id, &candidate, outcome);
+                }
+                Err(error) => report.count_unread(keyring_id, &error),
+            }
         }
         report
     }
@@ -385,56 +459,75 @@ where
     report
 }
 
-/// Runs `reseal_batch` over the candidates of `candidates` cut into batches of `batch_size`, with
-/// at most `concurrency` batches in flight, and counts what they did: [`run`] for a store that
-/// writes many records in one request, such as a Firestore `BatchWrite` or one PostgreSQL
-/// `UPDATE` over arrays. The last batch holds the candidates left over, fewer than `batch_size`
-/// when they do not fill it.
+/// Runs `reseal_batch` over the candidates of `candidates` cut into batches of
+/// [`batch_size`](BatchedSweepOptions::batch_size), with at most
+/// [`concurrency`](BatchedSweepOptions::concurrency) batches in flight, and counts what they did:
+/// [`run`] for a store that writes many records in one request, such as a Firestore `BatchWrite`
+/// or one PostgreSQL `UPDATE` over arrays. The last batch holds the candidates left over, fewer
+/// than `batch_size` when they do not fill it.
+///
+/// A candidate the stream returned as an error takes its place in a batch, so that batch reaches
+/// `reseal_batch` one candidate short; it is counted and logged as in [`run`], and a batch of
+/// errors alone never reaches `reseal_batch`.
 ///
 /// `reseal_batch` returns one outcome per candidate it was given, each beside its candidate, in
-/// any order. A batch that returns fewer outcomes than it was given counts the missing ones in
-/// `scanned` and `failed` and logs one `WARN` with their number, since the sweep cannot tell which
-/// candidates they were; every outcome a batch returns is counted, an extra one included.
+/// any order, or an error for the whole batch, which counts every candidate of the batch in
+/// `failed` and logs one `WARN` with the error's `Display` and the size of the batch. The sweep
+/// counts a batch by the candidates it was given: an outcome for a candidate outside the batch,
+/// or a second one for the same candidate, can only take the place of one the batch left out, and
+/// never adds to `scanned`. A batch that returns fewer outcomes than it was given counts the
+/// difference in `failed`, since the sweep cannot tell which candidates they were. Either way the
+/// sweep logs one `WARN` with both counts.
 ///
-/// Errors, logs and the span are those of [`run`]: a failed outcome is counted in `failed` and
-/// logged at `WARN` with the candidate's `Display` and the error's `Display`, and the sweep goes
-/// on. One [`Sealer`](crate::Sealer) re-seals a whole batch and stamps its marker on every record
-/// of the batch's write, so every record lies in the range of each version it is under.
+/// A failed outcome is counted and logged as in [`run`], and the sweep goes on. One
+/// [`Sealer`](crate::Sealer) re-seals a whole batch and stamps its marker on every record of the
+/// batch's write, so every record lies in the range of each version it is under.
 pub async fn run_batched<T, C, F, Fut, E>(
     keyring_id: &KeyringId,
     candidates: C,
-    batch_size: NonZeroUsize,
-    concurrency: NonZeroUsize,
+    options: BatchedSweepOptions,
     mut reseal_batch: F,
 ) -> SweepReport
 where
     T: Display,
-    C: Stream<Item = T>,
+    C: Stream<Item = Result<T, E>>,
     F: FnMut(Vec<T>) -> Fut,
-    Fut: Future<Output = Vec<(T, Result<ResealOutcome, E>)>>,
+    Fut: Future<Output = Result<Vec<(T, Result<ResealOutcome, E>)>, E>>,
     E: Display,
 {
     let span = spans::sweep(keyring_id);
     let report = async {
         let mut report = SweepReport::default();
         let mut batches = pin!(candidates
-            .chunks(batch_size.get())
+            .chunks(options.batch_size.get())
             .map(|batch| {
-                let given = batch.len();
-                let outcomes = reseal_batch(batch);
-                async move { (given, outcomes.await) }
+                let mut candidates: Vec<T> = Vec::with_capacity(batch.len());
+                let mut unread: Vec<E> = Vec::new();
+                for candidate in batch {
+                    match candidate {
+                        Ok(candidate) => candidates.push(candidate),
+                        Err(error) => unread.push(error),
+                    }
+                }
+                let given = candidates.len();
+                let resealing = (given > 0).then(|| reseal_batch(candidates));
+                async move {
+                    let outcomes = match resealing {
+                        Some(resealing) => Some(resealing.await),
+                        None => None,
+                    };
+                    (unread, given, outcomes)
+                }
             })
-            .buffer_unordered(concurrency.get()));
-        while let Some((given, outcomes)) = batches.next().await {
-            let missing = given.saturating_sub(outcomes.len());
-            for (candidate, outcome) in outcomes {
-                report.count(keyring_id, &candidate, outcome);
+            .buffer_unordered(options.concurrency.get()));
+        while let Some((unread, given, outcomes)) = batches.next().await {
+            for error in &unread {
+                report.count_unread(keyring_id, error);
             }
-            if missing > 0 {
-                let missing = u64::try_from(missing).unwrap_or(u64::MAX);
-                report.scanned += missing;
-                report.failed += missing;
-                spans::sweep_outcomes_missing(keyring_id, missing);
+            match outcomes {
+                Some(Ok(outcomes)) => report.count_batch(keyring_id, given, outcomes),
+                Some(Err(error)) => report.count_failed_batch(keyring_id, given, &error),
+                None => {}
             }
         }
         report
@@ -448,7 +541,6 @@ where
 #[cfg(test)]
 mod tests {
     use std::io;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Mutex, PoisonError};
 
     use futures_util::stream;
@@ -507,40 +599,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn run_counts_scanned_resealed_skipped_failed_with_the_applications_errors() {
-        let report = run(
-            &TENANT,
-            stream::iter(["1", "2", "3", "4", "5", "6"]),
-            NonZeroUsize::MIN.saturating_add(1),
-            |candidate| async move {
-                match candidate {
-                    "3" => Ok(ResealOutcome::Skipped),
-                    "4" => Err(io::Error::other("the users table is unavailable")),
-                    "5" => Err(io::Error::other(KeyringError::RecordMissing(TENANT))),
-                    "6" => Ok(ResealOutcome::Resealed {
-                        from_compromised: true,
-                    }),
-                    _ => Ok(ResealOutcome::Resealed {
-                        from_compromised: false,
-                    }),
-                }
-            },
-        )
-        .await;
-
-        assert_eq!(
-            report,
-            SweepReport {
-                scanned: 6,
-                resealed: 3,
-                resealed_from_compromised: 1,
-                skipped: 1,
-                failed: 2,
-            }
-        );
-    }
-
     /// The outcome the tests' re-seals give each candidate: `3` is skipped, `4` and `5` fail, `6`
     /// is re-sealed from a compromised version, and every other candidate is re-sealed.
     fn outcome_of(candidate: u32) -> Result<ResealOutcome, io::Error> {
@@ -558,24 +616,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_counts_scanned_resealed_skipped_failed_with_the_applications_errors() {
+        let report = run(
+            &TENANT,
+            stream::iter((1..=6).map(Ok)),
+            NonZeroUsize::MIN.saturating_add(1),
+            |candidate| async move { outcome_of(candidate) },
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 6,
+                resealed: 3,
+                resealed_from_compromised: 1,
+                skipped: 1,
+                failed: 2,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed() {
+        let candidates = stream::iter([
+            Ok(1),
+            Err(io::Error::other("the users query failed")),
+            Ok(2),
+        ]);
+
+        let report = run(
+            &TENANT,
+            candidates,
+            NonZeroUsize::MIN,
+            |candidate| async move { outcome_of(candidate) },
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 3,
+                resealed: 2,
+                resealed_from_compromised: 0,
+                skipped: 0,
+                failed: 1,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn run_batched_counts_every_batch_and_the_short_last_one() {
         let batch_sizes = Mutex::new(Vec::new());
 
         let report = run_batched(
             &TENANT,
-            stream::iter(1..=7_u32),
-            NonZeroUsize::MIN.saturating_add(2),
-            NonZeroUsize::MIN.saturating_add(1),
+            stream::iter((1..=7).map(Ok)),
+            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(3).unwrap()),
             |batch: Vec<u32>| {
                 batch_sizes
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(batch.len());
                 async move {
-                    batch
+                    Ok(batch
                         .into_iter()
                         .map(|candidate| (candidate, outcome_of(candidate)))
-                        .collect::<Vec<_>>()
+                        .collect())
                 }
             },
         )
@@ -600,23 +707,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_batched_counts_a_candidate_without_an_outcome_as_failed() {
+    async fn run_batched_counts_the_outcomes_a_batch_left_out_as_failed() {
         let report = run_batched(
             &TENANT,
-            stream::iter(1..=5_u32),
-            NonZeroUsize::MIN.saturating_add(1),
-            NonZeroUsize::MIN,
+            stream::iter((1..=5).map(Ok)),
+            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
             |batch: Vec<u32>| async move {
-                batch
+                Ok(batch
                     .into_iter()
                     .take(1)
-                    .map(|candidate| {
-                        (
-                            candidate,
-                            Ok::<ResealOutcome, KeyringError>(ResealOutcome::Skipped),
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                    .map(|candidate| (candidate, outcome_of(candidate)))
+                    .collect())
             },
         )
         .await;
@@ -625,46 +726,105 @@ mod tests {
             report,
             SweepReport {
                 scanned: 5,
-                resealed: 0,
+                resealed: 1,
                 resealed_from_compromised: 0,
-                skipped: 3,
+                skipped: 1,
+                failed: 3,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_batched_counts_no_more_outcomes_than_a_batch_was_given() {
+        let report = run_batched(
+            &TENANT,
+            stream::iter([Ok(1), Ok(2)]),
+            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
+            |batch: Vec<u32>| async move {
+                Ok(batch
+                    .into_iter()
+                    .flat_map(|candidate| {
+                        [candidate; 2].map(|candidate| (candidate, outcome_of(candidate)))
+                    })
+                    .collect())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 2,
+                resealed: 2,
+                resealed_from_compromised: 0,
+                skipped: 0,
+                failed: 0,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn run_batched_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed() {
+        let candidates = stream::iter([
+            Ok(1),
+            Err(io::Error::other("the users query failed")),
+            Ok(2),
+            Err(io::Error::other("the users query failed")),
+        ]);
+
+        let report = run_batched(
+            &TENANT,
+            candidates,
+            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
+            |batch: Vec<u32>| async move {
+                Ok(batch
+                    .into_iter()
+                    .map(|candidate| (candidate, outcome_of(candidate)))
+                    .collect())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 4,
+                resealed: 2,
+                resealed_from_compromised: 0,
+                skipped: 0,
                 failed: 2,
             }
         );
     }
 
     #[tokio::test]
-    async fn run_batched_keeps_at_most_concurrency_batches_in_flight() {
-        let in_flight = AtomicUsize::new(0);
-        let most_in_flight = AtomicUsize::new(0);
-
-        run_batched(
+    async fn run_batched_counts_every_candidate_of_a_failed_batch_as_failed() {
+        let report = run_batched(
             &TENANT,
-            stream::iter(1..=12_u32),
-            NonZeroUsize::MIN.saturating_add(1),
-            NonZeroUsize::MIN.saturating_add(2),
-            |batch: Vec<u32>| {
-                let (in_flight, most_in_flight) = (&in_flight, &most_in_flight);
-                async move {
-                    let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-                    most_in_flight.fetch_max(now, Ordering::SeqCst);
-                    tokio::task::yield_now().await;
-                    in_flight.fetch_sub(1, Ordering::SeqCst);
-                    batch
-                        .into_iter()
-                        .map(|candidate| {
-                            (
-                                candidate,
-                                Ok::<ResealOutcome, KeyringError>(ResealOutcome::Skipped),
-                            )
-                        })
-                        .collect::<Vec<_>>()
+            stream::iter((1..=5).map(Ok)),
+            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
+            |batch: Vec<u32>| async move {
+                if batch.contains(&3) {
+                    return Err(io::Error::other("the users table is unavailable"));
                 }
+                Ok(batch
+                    .into_iter()
+                    .map(|candidate| (candidate, outcome_of(candidate)))
+                    .collect())
             },
         )
         .await;
 
-        assert_eq!(most_in_flight.into_inner(), 3);
+        assert_eq!(
+            report,
+            SweepReport {
+                scanned: 5,
+                resealed: 2,
+                resealed_from_compromised: 0,
+                skipped: 0,
+                failed: 3,
+            }
+        );
     }
 
     #[cfg(all(
@@ -769,7 +929,7 @@ mod tests {
             let candidates = behind(keyring, users);
             run(
                 &TENANT,
-                stream::iter(candidates),
+                stream::iter(candidates.into_iter().map(Ok)),
                 NonZeroUsize::MIN,
                 |user| async move {
                     let Some(row) = row_of(users, user) else {
@@ -1027,7 +1187,7 @@ mod tests {
 
             let report = run(
                 &TENANT,
-                stream::iter(["42"]),
+                stream::iter([Ok("42")]),
                 NonZeroUsize::MIN,
                 |_| async {
                     let email = keyring.decrypt_with_trust(&email_aad, &email).await?;

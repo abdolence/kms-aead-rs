@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let table = Table::new(rows);
     let report: SweepReport = sweep::run(
         keyring.id(),
-        stream::iter(candidates),
+        stream::iter(candidates.into_iter().map(Ok)),
         NonZeroUsize::MIN,
         |candidate| {
             let table = &table;

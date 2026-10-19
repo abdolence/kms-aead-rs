@@ -23,13 +23,12 @@
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 use std::time::Instant;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreResult,
+    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb,
     FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
 };
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -38,7 +37,9 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealRange, SweepReport};
+use kms_aead_keyring::sweep::{
+    self, BatchedSweepOptions, ResealOutcome, SealMarker, SealRange, SweepReport,
+};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
     KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
@@ -98,13 +99,12 @@ struct DocId {
     id: String,
 }
 
-/// Why the re-seal of a document failed: an error of the keyring, of the users collection, shared
-/// by every document of a batch whose request failed, or the status of its write in a batch,
-/// `None` for a status the batch did not return.
-#[derive(Clone)]
+/// Why the sweep failed on a document or a batch: an error of the keyring or of the users
+/// collection, or the status of a document's write in a batch, `None` for a status the batch did
+/// not return.
 enum SweepError {
     Keyring(KeyringError),
-    Users(Arc<FirestoreError>),
+    Users(FirestoreError),
     Write(Option<Code>),
 }
 
@@ -116,7 +116,7 @@ impl From<KeyringError> for SweepError {
 
 impl From<FirestoreError> for SweepError {
     fn from(error: FirestoreError) -> Self {
-        SweepError::Users(Arc::new(error))
+        SweepError::Users(error)
     }
 }
 
@@ -126,7 +126,7 @@ impl Display for SweepError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             SweepError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
-            SweepError::Users(error) => match error.as_ref() {
+            SweepError::Users(error) => match error {
                 FirestoreError::DatabaseError(error) => {
                     write!(f, "the users collection failed with {}", error.public.code)
                 }
@@ -141,16 +141,10 @@ impl Display for SweepError {
     }
 }
 
-/// A document the sweep's query returned, or the error of reading it, which the sweep counts as
-/// failed.
-struct Candidate(Result<UserDoc, SweepError>);
-
-impl Display for Candidate {
+/// A document by its id, the candidate the sweep logs a failure with.
+impl Display for UserDoc {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match &self.0 {
-            Ok(doc) => write!(f, "users/{}", doc.id),
-            Err(_) => f.write_str("an unreadable document of users"),
-        }
+        write!(f, "users/{}", self.id)
     }
 }
 
@@ -164,28 +158,17 @@ async fn reseal_batch(
     keyring: &UsersKeyring,
     writer: &FirestoreSimpleBatchWriter,
     users: &FirestoreCollectionId,
-    candidates: Vec<Candidate>,
-) -> Vec<(Candidate, Result<ResealOutcome, SweepError>)> {
+    docs: Vec<UserDoc>,
+) -> Result<Vec<(UserDoc, Result<ResealOutcome, SweepError>)>, SweepError> {
     let sealer = keyring.sealer().await;
     let seal: SealMarker = sealer.record().seal_marker();
     let mut batch = writer.new_batch();
-    let mut done: Vec<(Candidate, Result<ResealOutcome, SweepError>)> =
-        Vec::with_capacity(candidates.len());
-    let mut queued: Vec<(Candidate, ResealOutcome)> = Vec::with_capacity(candidates.len());
-    for candidate in candidates {
-        let doc: &UserDoc = match &candidate.0 {
-            Ok(doc) => doc,
-            Err(error) => {
-                let error = error.clone();
-                done.push((candidate, Err(error)));
-                continue;
-            }
-        };
+    let mut done: Vec<(UserDoc, Result<ResealOutcome, SweepError>)> =
+        Vec::with_capacity(docs.len());
+    let mut queued: Vec<(UserDoc, ResealOutcome)> = Vec::with_capacity(docs.len());
+    for doc in docs {
         let queue = async {
             let aad = EMAIL.aad(&EntityId::try_from(doc.id.as_str())?);
-            // A value under a version newer than the sealer's record fails with
-            // `SealerOutdated`: the sweep counts it as failed, and the next run, on the
-            // reloaded record, re-seals it.
             let resealed: Option<Resealed<Email, Randomized>> =
                 sealer.reseal(&aad, &doc.email).await?;
             let (email, outcome) = match resealed {
@@ -208,45 +191,34 @@ async fn reseal_batch(
             Ok::<ResealOutcome, SweepError>(outcome)
         };
         match queue.await {
-            Ok(outcome) => queued.push((candidate, outcome)),
-            Err(error) => done.push((candidate, Err(error))),
+            Ok(outcome) => queued.push((doc, outcome)),
+            Err(error) => done.push((doc, Err(error))),
         }
     }
     if queued.is_empty() {
-        return done;
+        return Ok(done);
     }
-    match batch.write().await {
-        Ok(response) => {
-            done.extend(
-                queued
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, (candidate, outcome))| {
-                        let code: Option<Code> = response
-                            .statuses
-                            .get(index)
-                            .and_then(|status| Code::try_from(status.code).ok());
-                        let outcome = match code {
-                            Some(Code::Ok) => Ok(outcome),
-                            // A write since the query: the writer sealed the document under its
-                            // own record.
-                            Some(Code::FailedPrecondition) => Ok(ResealOutcome::Skipped),
-                            _ => Err(SweepError::Write(code)),
-                        };
-                        (candidate, outcome)
-                    }),
-            );
-        }
-        Err(error) => {
-            let error = SweepError::from(error);
-            done.extend(
-                queued
-                    .into_iter()
-                    .map(|(candidate, _)| (candidate, Err(error.clone()))),
-            );
-        }
-    }
-    done
+    let response: FirestoreBatchWriteResponse = batch.write().await?;
+    done.extend(
+        queued
+            .into_iter()
+            .enumerate()
+            .map(|(index, (doc, outcome))| {
+                let code: Option<Code> = response
+                    .statuses
+                    .get(index)
+                    .and_then(|status| Code::try_from(status.code).ok());
+                let outcome = match code {
+                    Some(Code::Ok) => Ok(outcome),
+                    // A write since the query: the writer sealed the document under its own
+                    // record.
+                    Some(Code::FailedPrecondition) => Ok(ResealOutcome::Skipped),
+                    _ => Err(SweepError::Write(code)),
+                };
+                (doc, outcome)
+            }),
+    );
+    Ok(done)
 }
 
 /// Fails unless every write of a seeding or cleanup batch succeeded, with the code of the first
@@ -372,13 +344,14 @@ async fn run(
         .obj::<UserDoc>()
         .stream_query_with_errors()
         .await?
-        .map(|doc: FirestoreResult<UserDoc>| Candidate(doc.map_err(SweepError::from)));
+        .err_into::<SweepError>();
     let report: SweepReport = sweep::run_batched(
         keyring.id(),
         candidates,
-        BATCH_SIZE,
-        CONCURRENCY,
-        |batch: Vec<Candidate>| reseal_batch(keyring, writer, users, batch),
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |docs: Vec<UserDoc>| reseal_batch(keyring, writer, users, docs),
     )
     .await;
     println!(

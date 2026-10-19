@@ -218,7 +218,9 @@ async fn run(
         "swept to seal marker {} in {:.2?}: resealed {}",
         keyset.seal_marker(),
         started.elapsed(),
-        swept.num_dml_affected_rows.unwrap_or_default()
+        swept
+            .num_dml_affected_rows
+            .map_or_else(|| "unknown".to_string(), |rows| rows.to_string())
     );
 
     let started = Instant::now();

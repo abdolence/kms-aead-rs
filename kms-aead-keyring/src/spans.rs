@@ -31,7 +31,6 @@ const FIELD_ALGORITHM: &str = "/kms_aead_keyring/algorithm";
 const FIELD_BACKEND: &str = "/kms_aead_keyring/backend";
 const FIELD_DEK_CACHE: &str = "/kms_aead_keyring/dek_cache";
 const FIELD_KEY_STATE: &str = "/kms_aead_keyring/key_state";
-const FIELD_MISSING: &str = "/kms_aead_keyring/missing";
 const FIELD_RELOAD: &str = "/kms_aead_keyring/reload";
 const FIELD_STORE: &str = "/kms_aead_keyring/store";
 const FIELD_REASON: &str = "/kms_aead_keyring/reason";
@@ -48,6 +47,8 @@ const FIELD_SKIPPED: &str = "/kms_aead_keyring/skipped";
 const FIELD_FAILED: &str = "/kms_aead_keyring/failed";
 const FIELD_RECORD: &str = "/kms_aead_keyring/record";
 const FIELD_ERROR: &str = "/kms_aead_keyring/error";
+const FIELD_CANDIDATES: &str = "/kms_aead_keyring/candidates";
+const FIELD_OUTCOMES: &str = "/kms_aead_keyring/outcomes";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the keyring has a
 /// cache: `reencrypt_deks`, a keyset export, and a compromised version read by
@@ -370,13 +371,35 @@ pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &impl Display, error:
     );
 }
 
-/// A batch of a sweep that returned fewer outcomes than it was given candidates, by how many it
-/// left out: the sweep counts them as failed without knowing which they were.
-pub(crate) fn sweep_outcomes_missing(keyring: &KeyringId, missing: u64) {
+/// A candidate the sweep's stream returned as an error, by the application's error: the sweep
+/// counts it as failed without knowing which record it was.
+pub(crate) fn sweep_candidate_failed(keyring: &KeyringId, error: &impl Display) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
-        { FIELD_MISSING } = missing,
-        "A sweep batch returned no outcome for some of its records"
+        { FIELD_ERROR } = %error,
+        "The sweep could not read a candidate"
+    );
+}
+
+/// A batch of a sweep whose re-seal failed as a whole, by its number of candidates and the
+/// application's error: the sweep counts every candidate of it as failed.
+pub(crate) fn sweep_batch_failed(keyring: &KeyringId, candidates: u64, error: &impl Display) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_CANDIDATES } = candidates,
+        { FIELD_ERROR } = %error,
+        "The sweep could not re-seal a batch"
+    );
+}
+
+/// A batch of a sweep that returned another number of outcomes than it was given candidates: the
+/// sweep counts at most `candidates` outcomes, and the difference as failed when there are fewer.
+pub(crate) fn sweep_batch_outcomes_mismatched(keyring: &KeyringId, candidates: u64, outcomes: u64) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_CANDIDATES } = candidates,
+        { FIELD_OUTCOMES } = outcomes,
+        "A sweep batch returned another number of outcomes than it was given candidates"
     );
 }
 
