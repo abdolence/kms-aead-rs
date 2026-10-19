@@ -1,4 +1,5 @@
-//! A sweep on BigQuery: writes users through a `Sealer`, each with its seal marker, rotates and
+//! A sweep on BigQuery: writes users through a `Sealer`, each with its seal marker, through the
+//! Storage Write API, rotates and
 //! promotes the randomised version, re-seals every row whose marker is below the current one with
 //! one `UPDATE` in SQL through an exported keyset, and prints the rows it re-sealed. The statement
 //! is the one of
@@ -29,7 +30,7 @@ use std::time::Instant;
 
 use bigquery::{
     BigQueryDatasetId, BigQueryDb, BigQueryFieldType, BigQueryLocation, BigQueryQueryOutcome,
-    BigQueryTableId,
+    BigQueryTableId, BigQueryWriteSummary,
 };
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
@@ -58,8 +59,9 @@ const EMAIL: FieldSpec = FieldSpec::new(
 /// The users table, which the statements name as `users` in the example's default dataset: a
 /// table name cannot be a query parameter.
 const USERS: BigQueryTableId = BigQueryTableId::from_static("users");
-/// The rows of one `INSERT`, each statement sealed by one sealer.
-const INSERT_ROWS: usize = 1000;
+/// The rows one sealer seals, which share its marker. The writer sends rows in requests of up to
+/// 19 MB whatever this is, so it bounds only how long one sealer is held.
+const SEAL_ROWS: usize = 1000;
 const DEFAULT_USERS: u32 = 100;
 
 /// The application's email type, sealed as the UTF-8 of the address, which BigQuery reads as a
@@ -77,7 +79,7 @@ impl Plaintext for Email {
     }
 }
 
-/// A row of the users table, sent as one `STRUCT` of an `ARRAY` parameter.
+/// A row of the users table.
 #[derive(Serialize)]
 struct User {
     id: String,
@@ -112,14 +114,16 @@ async fn run(
     let keyring: &UsersKeyring = admin.keyring();
 
     let started = Instant::now();
-    let ids: Vec<u32> = (1..=count).collect();
-    for page in ids.chunks(INSERT_ROWS) {
-        // One sealer per statement, so that every row of it stores the marker of the record its
-        // values were sealed under.
+    // The table's default stream, whose rows an `UPDATE` can modify as soon as they are
+    // acknowledged. The writer holds only the requests in flight, so memory stays flat.
+    let (mut writer, _) = db
+        .create_streaming_writer::<User>(dataset.table(USERS))
+        .await?;
+    for first in (1..=count).step_by(SEAL_ROWS) {
+        // Every row stores the marker of the record its values were sealed under
         let sealer = keyring.sealer().await;
         let seal: SealMarker = sealer.record().seal_marker();
-        let mut rows: Vec<User> = Vec::with_capacity(page.len());
-        for id in page {
+        for id in (first..=count).take(SEAL_ROWS) {
             let id = id.to_string();
             let email: Encrypted<Email, Randomized> = sealer
                 .encrypt(
@@ -127,14 +131,12 @@ async fn run(
                     &Email(format!("user-{id}@example.com")),
                 )
                 .await?;
-            rows.push(User { id, email, seal });
+            writer.write(&User { id, email, seal }).await?;
         }
-        db.fluent()
-            .query("INSERT INTO users (id, email, seal) SELECT id, email, seal FROM UNNEST(@rows)")
-            .default_dataset(dataset.clone())
-            .param("rows", rows)
-            .execute()
-            .await?;
+    }
+    let written: BigQueryWriteSummary = writer.finish().await?;
+    if written.rows_failed > 0 {
+        return Err(format!("{} of {count} users failed to write", written.rows_failed).into());
     }
     println!(
         "wrote {count} users at seal marker {} in {:.2?}",

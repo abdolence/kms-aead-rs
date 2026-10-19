@@ -3,8 +3,10 @@
 //! re-seal over the records a query of that marker finds, one record or one batch at a time.
 //!
 //! A sweep is a job the application runs, a CLI or a Kubernetes Job, never a task inside the
-//! library: only the application knows its tables, its pages and its write rules. It re-seals
-//! after a rotation, to retire the old version, and migrates envelope values to keyring values.
+//! library: only the application knows its tables, its queries and its write rules. It re-seals
+//! after a rotation, to retire the old version, and migrates envelope values to keyring values. It
+//! runs on a schedule, and again until its [`SweepReport`] shows nothing scanned; retiring the old
+//! version is a separate step of the administrative job.
 //!
 //! # The seal marker
 //!
