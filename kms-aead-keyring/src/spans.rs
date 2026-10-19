@@ -201,12 +201,13 @@ pub(crate) fn read_refused(keyring: &KeyringId, version: &KeyVersion) {
     );
 }
 
-/// A reload for an unknown key id refused inside the reload interval.
-pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId) {
+/// A reload for a key id the cached record missed, refused inside the reload interval.
+pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId, reason: LoadReason) {
     tracing::debug!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_KEY_ID } = %key_id.as_u32(),
-        "Not reloading the keyring record for an unknown key id inside the reload interval"
+        { FIELD_REASON } = reason.as_str(),
+        "Not reloading the keyring record for a key id inside the reload interval"
     );
 }
 
@@ -375,6 +376,7 @@ pub(crate) enum LoadReason {
     Ttl,
     Watch,
     UnknownKeyId,
+    PendingKeyId,
     Forced,
     #[cfg(feature = "admin")]
     Export,
@@ -389,6 +391,7 @@ impl LoadReason {
             LoadReason::Ttl => "ttl",
             LoadReason::Watch => "watch",
             LoadReason::UnknownKeyId => "unknown_key_id",
+            LoadReason::PendingKeyId => "pending_key_id",
             LoadReason::Forced => "forced",
             #[cfg(feature = "admin")]
             LoadReason::Export => "export",

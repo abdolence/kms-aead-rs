@@ -230,12 +230,14 @@ same for deterministic values, under the `deterministic` feature.
 A sealer never seals a value back under an older version. A value under a version that is pending
 in the sealer's record, or missing from it, was sealed by a process with a newer record, and a
 sealer taken before a `mark_compromised` would otherwise move it back under the compromised
-version. The re-seal reloads the cached record, as `decrypt` does for a key id it lacks, and fails
-with `KeyringError::SealerOutdated`. The sealer keeps its own record, so that its marker still names
-every version the write seals under. The write is safe to retry: it takes a new sealer and runs
-again, and once the cached record holds the version, the new sealer finds the value current or
-seals it under its active version. A key id the reloaded record lacks too fails with
-`KeyVersionUnknown`.
+version. The re-seal fails with `KeyringError::SealerOutdated`, after reloading the cached record
+when it lacks the version or holds it as pending, under the same rate limit as `decrypt`'s reload
+for a key id it lacks. The sealer keeps its own record, so that its marker still names every
+version the write seals under. The write is safe to retry: it takes a new sealer and runs again,
+and the new sealer, taken from the reloaded record, finds the value current or seals it under its
+active version. Inside `reload_min_interval` of another such reload the cached record may not have
+moved yet, and the retry fails the same way until it does. A key id the reloaded record lacks too
+fails with `KeyVersionUnknown`.
 
 A beacon cannot be re-sealed: it is a MAC of the plaintext. `sealer.is_current(beacon.key_id())`
 applies the same rule to it: `true` under the active beacon version of the sealer's record, and the

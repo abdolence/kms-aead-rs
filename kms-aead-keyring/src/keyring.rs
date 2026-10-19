@@ -17,7 +17,7 @@ use crate::errors::{
     RecordInvalidReason,
 };
 use crate::record::withdrawn_deks;
-use crate::record_cache::RecordCache;
+use crate::record_cache::{RecordCache, VersionLookup};
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
 use crate::{
@@ -160,7 +160,7 @@ where
         spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
-                let (record, reload) = self.cache.find(key_id).await;
+                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 self.apply_read_policy(version, compromise)?;
@@ -188,7 +188,7 @@ where
         spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
-                let (record, reload) = self.cache.find(key_id).await;
+                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 let (opened, trust) = match compromise {

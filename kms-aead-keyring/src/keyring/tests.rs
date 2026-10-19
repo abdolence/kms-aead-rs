@@ -1249,6 +1249,47 @@ async fn a_sealer_older_than_a_value_refuses_to_reseal_it_under_its_own_versions
     Ok(())
 }
 
+#[tokio::test]
+async fn reseal_under_a_version_the_cache_holds_as_pending_reloads_the_cache() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let alice = ALICE.to_string();
+    let old = fixture.keyring.sealer().await.encrypt(&aad, &alice).await?;
+    let pending = fixture.admin.rotate(Purpose::Randomized).await?;
+    let stale = fixture.keyring.sealer().await;
+    let admin = fixture.other_process().await?;
+    admin.promote(pending).await?;
+    let newer = admin.keyring().sealer().await.encrypt(&aad, &alice).await?;
+    let revalidations = fixture.store.calls.revalidations.load(Ordering::SeqCst);
+
+    let refused = stale.reseal(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == pending
+        ),
+        "a re-seal back under the previous version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
+    );
+    let sealer = fixture.keyring.sealer().await;
+    assert!(sealer.reseal(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal(&aad, &old)
+        .await?
+        .ok_or("a value under the previous version is re-sealed")?;
+    assert_eq!(resealed.value.key_id(), pending);
+    assert!(matches!(
+        stale.reseal(&aad, &newer).await,
+        Err(KeyringError::SealerOutdated(_))
+    ));
+    assert_eq!(
+        fixture.store.calls.revalidations.load(Ordering::SeqCst),
+        revalidations + 1
+    );
+    Ok(())
+}
+
 #[cfg(feature = "deterministic")]
 #[tokio::test]
 async fn a_sealer_that_holds_a_values_version_as_pending_refuses_to_reseal_it() -> TestResult {
@@ -1293,7 +1334,6 @@ async fn a_sealer_that_holds_a_values_version_as_pending_refuses_to_reseal_it() 
         "a re-seal back under the previous version: {:?}",
         refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
     );
-    keyring.reload().await?;
     let sealer = keyring.sealer().await;
     assert!(sealer.reseal_deterministic(&aad, &newer).await?.is_none());
     let resealed = sealer

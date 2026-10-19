@@ -5,7 +5,8 @@
 //!   finds it so, while the other calls keep using it. A failed revalidation keeps it, and is
 //!   retried after the reload interval.
 //! - An unknown key id causes one reload, which concurrent misses share, at most once per reload
-//!   interval.
+//!   interval. So does a key id that a sealer looks up and the record holds as pending, since a
+//!   value under it shows that another process saw the version active.
 //! - A store's change signal causes a revalidation, at most once per reload interval; signals
 //!   inside the interval collapse into the next one.
 //! - A refreshed record is taken only if it moves forward from the cached one, and a record that
@@ -27,7 +28,7 @@ use crate::spans::{self, LoadChanged, LoadReason, Reload};
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, WatchEvent};
 #[cfg(feature = "admin")]
 use crate::{errors::RecordConflictError, record::RecordEdit, store::Swap};
-use crate::{KeyId, KeyVersion, KeyringError, KeyringId, KeyringRecord, Purpose};
+use crate::{KeyId, KeyVersion, KeyVersionState, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
 pub(crate) struct RecordCache<S: KeyringStore> {
@@ -40,11 +41,11 @@ pub(crate) struct RecordCache<S: KeyringStore> {
     cached: Mutex<Cached<S::Revision>>,
     /// Held by every store read that may change the cached record, and by every write, so that
     /// one runs at a time and none takes a record older than the one another just took. It
-    /// holds when the last reload for an unknown key id ran.
+    /// holds when the last reload for a key id that [`find`](Self::find) missed ran.
     refresh: tokio::sync::Mutex<Option<Instant>>,
-    /// The reloads for unknown key ids so far, read before waiting for `refresh`, so that a
-    /// caller can tell that a reload ran while it waited.
-    unknown_id_reloads: AtomicU64,
+    /// The reloads for key ids that `find` missed so far, read before waiting for `refresh`, so
+    /// that a caller can tell that a reload ran while it waited.
+    lookup_reloads: AtomicU64,
 }
 
 struct Cached<R> {
@@ -77,7 +78,7 @@ impl<S: KeyringStore> RecordCache<S> {
                 revalidate_at: after(Instant::now(), record_ttl),
             }),
             refresh: tokio::sync::Mutex::default(),
-            unknown_id_reloads: AtomicU64::new(0),
+            lookup_reloads: AtomicU64::new(0),
         }
     }
 
@@ -107,32 +108,36 @@ impl<S: KeyringStore> RecordCache<S> {
         self.record()
     }
 
-    /// The cached record, reloaded first when it has no version `key_id`: once for all the
-    /// calls that miss it together, and at most once per reload interval. Returns the record,
-    /// which may still lack the version, and what the miss caused, the `reload` span value.
-    pub(crate) async fn find(&self, key_id: KeyId) -> (Arc<KeyringRecord>, Reload) {
+    /// The cached record, reloaded first when `lookup` finds version `key_id` missing from it,
+    /// or not yet usable: once for all the calls that miss it together, and at most once per
+    /// reload interval. Returns the record, which may still miss the version, and what the miss
+    /// caused, the `reload` span value.
+    pub(crate) async fn find(
+        &self,
+        key_id: KeyId,
+        lookup: VersionLookup,
+    ) -> (Arc<KeyringRecord>, Reload) {
         let record = self.current().await;
-        if record.version(key_id).is_some() {
+        if lookup.miss(&record, key_id).is_none() {
             return (record, Reload::NotNeeded);
         }
-        let reloads = self.unknown_id_reloads.load(Ordering::SeqCst);
+        let reloads = self.lookup_reloads.load(Ordering::SeqCst);
         let mut last_reload = self.refresh.lock().await;
         let record = self.record();
-        if record.version(key_id).is_some() {
+        let Some(reason) = lookup.miss(&record, key_id) else {
             return (record, Reload::NotNeeded);
-        }
-        if self.unknown_id_reloads.load(Ordering::SeqCst) != reloads {
+        };
+        if self.lookup_reloads.load(Ordering::SeqCst) != reloads {
             return (record, Reload::Reloaded);
         }
         let now = Instant::now();
         if last_reload.is_some_and(|last| now < after(last, self.reload_min_interval)) {
-            spans::reload_rate_limited(&self.id, key_id);
+            spans::reload_rate_limited(&self.id, key_id, reason);
             return (record, Reload::RateLimited);
         }
         *last_reload = Some(now);
-        self.revalidate(&last_reload, LoadReason::UnknownKeyId)
-            .await;
-        self.unknown_id_reloads.fetch_add(1, Ordering::SeqCst);
+        self.revalidate(&last_reload, reason).await;
+        self.lookup_reloads.fetch_add(1, Ordering::SeqCst);
         (self.record(), Reload::Reloaded)
     }
 
@@ -406,6 +411,30 @@ type RefreshGuard<'a> = tokio::sync::MutexGuard<'a, Option<Instant>>;
 
 /// `wait` after `start`, or an instant beyond any process's lifetime when that overflows, so
 /// that a `Duration::MAX` option means never rather than a panic.
+/// The versions that [`RecordCache::find`] takes from the cached record without a reload.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum VersionLookup {
+    /// Any version the record holds: what `decrypt` opens a value with.
+    Any,
+    /// A version past pending. A value or beacon under a version the record holds as pending
+    /// was sealed by a process that saw it active, so the record is behind the store.
+    PastPending,
+}
+
+impl VersionLookup {
+    /// Why `record` misses version `key_id` for this lookup, the reason of the reload, or `None`
+    /// when it has the version.
+    fn miss(self, record: &KeyringRecord, key_id: KeyId) -> Option<LoadReason> {
+        match (self, record.version(key_id).map(KeyVersion::state)) {
+            (_, None) => Some(LoadReason::UnknownKeyId),
+            (VersionLookup::PastPending, Some(KeyVersionState::Pending)) => {
+                Some(LoadReason::PendingKeyId)
+            }
+            (_, Some(_)) => None,
+        }
+    }
+}
+
 fn after(start: Instant, wait: Duration) -> Instant {
     const FAR_FUTURE: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
     start

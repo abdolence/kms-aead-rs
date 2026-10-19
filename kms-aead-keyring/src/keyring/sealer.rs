@@ -9,6 +9,7 @@ use kms_aead::{Encrypted, KmsAeadEncryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult};
 use crate::purpose::unreserved;
+use crate::record_cache::VersionLookup;
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{FieldAad, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose, Resealed};
@@ -148,9 +149,11 @@ where
     /// A version that is pending in the record, or missing from it, was active in a newer record
     /// than the sealer's, under which another process sealed. Sealing again under the sealer's
     /// versions would move the value back to an older version, one possibly flagged compromised
-    /// since, so the call fails instead, after reloading the cached record as
-    /// [`Keyring::decrypt`] does for a key id it lacks. The sealer's own record stays as it is,
-    /// so that its marker keeps naming every version the write seals under.
+    /// since, so the call fails instead. It first reloads the cached record when that record
+    /// lacks the version too, or holds it as pending, under the rate limit of
+    /// [`Keyring::decrypt`]'s reload for a key id it lacks, so that a sealer taken after the
+    /// failure has the version. The sealer's own record stays as it is, so that its marker keeps
+    /// naming every version the write seals under.
     ///
     /// # Errors
     ///
@@ -176,7 +179,7 @@ where
         {
             return Ok(false);
         }
-        let (cached, _) = keyring.cache.find(key_id).await;
+        let (cached, _) = keyring.cache.find(key_id, VersionLookup::PastPending).await;
         Err(match cached.version(key_id) {
             Some(_) => KeyringError::sealer_outdated(keyring.id(), key_id),
             None => KeyringError::key_version_unknown(keyring.id(), key_id),

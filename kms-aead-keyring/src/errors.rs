@@ -65,15 +65,18 @@ pub enum KeyringError {
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
     /// A value or beacon under a key version that the [`Sealer`](crate::Sealer)'s record holds
-    /// as pending, or lacks while the cached record, reloaded for it, has it: a process with a
+    /// as pending, or lacks, while the cached record, reloaded for it, has it: a process with a
     /// newer record sealed it. A sealer never seals such a value again under its own versions,
     /// which are older and may have been flagged compromised since.
     ///
     /// The write is safe to retry: it takes a new sealer from
-    /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. Once the cached record holds
-    /// the version as active or older, from the reload that returned this error, a watch signal
-    /// or the record TTL, the new sealer finds the value current or seals it under the active
-    /// version. A sweep counts the record as failed, and its next run visits it again.
+    /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. The reload that returned this
+    /// error took the store's record, so the new sealer finds the value current or seals it
+    /// under the active version. Inside `reload_min_interval` of another such reload, which
+    /// bounds the store reads that values with odd key ids cause, the cached record may still
+    /// hold the version as pending, and the retry fails the same way until the next reload, a
+    /// watch signal or the record TTL. A sweep counts the record as failed, and its next run
+    /// visits it again.
     SealerOutdated(KeyVersionError),
     /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
