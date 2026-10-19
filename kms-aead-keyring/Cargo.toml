@@ -46,6 +46,10 @@ serde_bytes = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 sqlx-core = { workspace = true, optional = true }
 sqlx-postgres = { workspace = true, optional = true }
+# The client of the `sweep_bigquery` example, with the root store and crypto provider of
+# kms-aead's `gcp-kms-encryption`. An optional dependency rather than a dev-dependency, so that the
+# rows that build no BigQuery do not compile it.
+bigquery = { version = "0.9", optional = true }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -104,9 +108,10 @@ s3 = ["dep:aws-sdk-s3"]
 # build it.
 bigquery-export = ["admin", "kms-aead/gcp-kms-encryption-base"]
 # The live test of the keyset export: BigQuery's `jobs.query`, and a root store and crypto provider
-# for its Cloud KMS and BigQuery clients.
+# for its Cloud KMS and BigQuery clients; and the BigQuery client of the `sweep_bigquery` example.
 ci-bigquery = [
     "bigquery-export",
+    "dep:bigquery",
     "dep:gcloud-sdk",
     "gcloud-sdk/google-cloud-bigquery-v2",
     "kms-aead/gcp-kms-encryption",
@@ -154,7 +159,7 @@ required-features = ["ring", "admin"]
 [[example]]
 name = "sweep_bigquery"
 path = "examples/sweep_bigquery.rs"
-required-features = ["ci-bigquery", "ring"]
+required-features = ["ci-bigquery", "ring", "serde"]
 
 [[example]]
 name = "sweep_firestore"

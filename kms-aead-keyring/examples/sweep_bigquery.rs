@@ -15,7 +15,7 @@
 //!
 //! ```sh
 //! PROJECT_ID=my-project PROJECT_LOCATION=europe-north1 KMS_KEY_RING=my-key-ring KMS_KEY=my-key \
-//!   cargo run -p kms-aead-keyring --example sweep_bigquery --features ring,ci-bigquery -- 1000
+//!   cargo run -p kms-aead-keyring --example sweep_bigquery --features ring,serde,ci-bigquery -- 1000
 //! ```
 //!
 //! The argument is the number of users, 100 by default.
@@ -23,10 +23,10 @@
 use std::error::Error;
 use std::time::Instant;
 
-use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClient;
-use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest, QueryResponse};
-use gcloud_sdk::prost_types::value::Kind;
-use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
+use bigquery::{
+    BigQueryDatasetId, BigQueryDb, BigQueryFieldType, BigQueryLocation, BigQueryQueryOutcome,
+    BigQueryTableId, BigQueryTableRef,
+};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadResult;
@@ -40,9 +40,9 @@ use kms_aead_keyring::{
     KeyringRegistryOptions, KeysetSelection, Plaintext, Purpose, Rotation,
 };
 use secret_vault_value::SecretValue;
+use serde::{Deserialize, Serialize};
 
 type UsersKeyring = Keyring<MemoryKeyringStore, GcpKmsProvider, Ring>;
-type BigQueryClient = GoogleApi<JobServiceClient<GoogleAuthMiddleware>>;
 
 const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 /// The email field, with the AAD layout BigQuery's `AEAD` functions take.
@@ -51,9 +51,12 @@ const EMAIL: FieldSpec = FieldSpec::new(
     FieldName::from_static("email"),
 )
 .with_interop(Interop::BigQuery);
-/// The rows of one `INSERT`, which keeps each statement under BigQuery's query length limit.
+const USERS: BigQueryTableId = BigQueryTableId::from_static("users");
+/// The rows of one `INSERT`, each statement sealed by one sealer.
 const INSERT_ROWS: usize = 1000;
 const DEFAULT_USERS: u32 = 100;
+/// The AAD of a user's email in SQL, the UTF-8 of the text `EMAIL.aad` binds.
+const EMAIL_AAD: &str = "CAST(CONCAT('user/', id, '/email') AS BYTES)";
 
 /// The application's email type, sealed as the UTF-8 of the address, which BigQuery reads as a
 /// `STRING`.
@@ -70,70 +73,24 @@ impl Plaintext for Email {
     }
 }
 
-/// Where the example's queries run: a project and its location.
-struct BigQueryJobs {
-    client: BigQueryClient,
-    project: String,
-    location: String,
+/// A row of the users table, sent as one `STRUCT` of an `ARRAY` parameter.
+#[derive(Serialize)]
+struct User {
+    id: String,
+    email: Encrypted<Email, Randomized>,
+    seal: SealMarker,
 }
 
-impl BigQueryJobs {
-    /// Runs `sql` to completion.
-    async fn query(&self, sql: String) -> Result<QueryResponse, Box<dyn Error>> {
-        let response = self
-            .client
-            .get()
-            .query(PostQueryRequest {
-                project_id: self.project.clone(),
-                query_request: Some(QueryRequest {
-                    query: sql,
-                    use_legacy_sql: Some(false),
-                    location: self.location.clone(),
-                    timeout_ms: Some(120_000),
-                    ..Default::default()
-                }),
-            })
-            .await?
-            .into_inner();
-        if !response.errors.is_empty() || response.job_complete != Some(true) {
-            return Err(format!("the query failed: {:?}", response.errors).into());
-        }
-        Ok(response)
-    }
-
-    /// The `INT64` of the one cell `sql` returns, such as a `COUNT(*)`.
-    async fn count(&self, sql: String) -> Result<u64, Box<dyn Error>> {
-        let response = self.query(sql).await?;
-        let cell = response
-            .rows
-            .first()
-            .and_then(|row| row.fields.get("f"))
-            .and_then(|cells| match &cells.kind {
-                Some(Kind::ListValue(cells)) => cells.values.first(),
-                _ => None,
-            })
-            .and_then(|cell| match &cell.kind {
-                Some(Kind::StructValue(cell)) => cell.fields.get("v"),
-                _ => None,
-            });
-        match cell.and_then(|value| value.kind.as_ref()) {
-            // BigQuery's JSON rows hold an `INT64` as its decimal text.
-            Some(Kind::StringValue(count)) => Ok(count.parse()?),
-            _ => Err("the query returned no count".into()),
-        }
-    }
-}
-
-/// `bytes` as a GoogleSQL expression.
-fn from_hex(bytes: &[u8]) -> String {
-    let hex: String = bytes.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("FROM_HEX('{hex}')")
+/// The one cell of a `SELECT … AS count`.
+#[derive(Deserialize)]
+struct Count {
+    count: u64,
 }
 
 /// Writes `count` users, rotates, sweeps, and retires the previous version.
 async fn run(
-    jobs: &BigQueryJobs,
-    users: &str,
+    db: &BigQueryDb,
+    users: &BigQueryTableRef,
     key_ref: &GcpKmsKeyRef,
     count: u32,
 ) -> Result<(), Box<dyn Error>> {
@@ -157,25 +114,24 @@ async fn run(
         // values were sealed under.
         let sealer = keyring.sealer().await;
         let seal: SealMarker = sealer.record().seal_marker();
-        let mut rows = Vec::with_capacity(page.len());
+        let mut rows: Vec<User> = Vec::with_capacity(page.len());
         for id in page {
+            let id = id.to_string();
             let email: Encrypted<Email, Randomized> = sealer
                 .encrypt(
-                    &EMAIL.aad(&EntityId::try_from(id.to_string())?),
+                    &EMAIL.aad(&EntityId::try_from(id.as_str())?),
                     &Email(format!("user-{id}@example.com")),
                 )
                 .await?;
-            rows.push(format!(
-                "('{id}', {}, {})",
-                from_hex(email.value()),
-                from_hex(seal.value())
-            ));
+            rows.push(User { id, email, seal });
         }
-        jobs.query(format!(
-            "INSERT INTO {users} (id, email, seal) VALUES {}",
-            rows.join(", ")
-        ))
-        .await?;
+        db.fluent()
+            .query(format!(
+                "INSERT INTO `{users}` (id, email, seal) SELECT id, email, seal FROM UNNEST(@rows)"
+            ))
+            .param("rows", rows)
+            .execute()
+            .await?;
     }
     println!(
         "wrote {count} users at seal marker {} in {:.2?}",
@@ -198,21 +154,20 @@ async fn run(
     let keyset: EncryptedKeyset<BigQuery> = admin
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
-    let chain = format!(
-        "KEYS.KEYSET_CHAIN('{}', {})",
-        keyset.key_uri(),
-        keyset.to_sql_literal()
-    );
-    let seal = from_hex(keyset.seal_marker().value());
-    let aad = "CAST(CONCAT('user/', id, '/email') AS BYTES)";
-    let swept = jobs
+    let chain = format!("KEYS.KEYSET_CHAIN('{}', @keyset)", keyset.key_uri());
+    let keyset_bytes = BigQueryFieldType::Bytes { max_length: None };
+    let swept: BigQueryQueryOutcome = db
+        .fluent()
         .query(format!(
-            "UPDATE {users}
-             SET email = AEAD.ENCRYPT({chain}, AEAD.DECRYPT_BYTES({chain}, email, {aad}), {aad}),
-                 seal = {seal}
-             WHERE seal < {seal} AND seal > {envelope}",
-            envelope = from_hex(SealMarker::ENVELOPE.value()),
+            "UPDATE `{users}`
+             SET email = AEAD.ENCRYPT({chain}, AEAD.DECRYPT_BYTES({chain}, email, {EMAIL_AAD}), {EMAIL_AAD}),
+                 seal = @seal
+             WHERE seal < @seal AND seal > @envelope"
         ))
+        .param_as("keyset", keyset_bytes.clone(), keyset.value())
+        .param("seal", keyset.seal_marker())
+        .param("envelope", SealMarker::ENVELOPE)
+        .execute()
         .await?;
     println!(
         "swept to seal marker {} in {:.2?}: resealed {}",
@@ -229,16 +184,20 @@ async fn run(
         .version(previous)
         .and_then(KeyVersion::seal_range)
         .ok_or("a replaced version has a seal range")?;
-    let end = match range.end() {
-        Some(end) => from_hex(end.value()),
-        None => "CAST(NULL AS BYTES)".to_string(),
-    };
-    let under_previous = jobs
-        .count(format!(
-            "SELECT COUNT(*) FROM {users} WHERE seal >= {start} AND ({end} IS NULL OR seal < {end})",
-            start = from_hex(range.start().value()),
+    let under_previous: u64 = db
+        .fluent()
+        .query(format!(
+            "SELECT COUNT(*) AS count FROM `{users}`
+             WHERE seal >= @start AND (@end IS NULL OR seal < @end)"
         ))
-        .await?;
+        .param("start", range.start())
+        .param_as("end", keyset_bytes.clone(), range.end())
+        .obj::<Count>()
+        .query()
+        .await?
+        .pop()
+        .ok_or("the count returned no row")?
+        .count;
     if under_previous > 0 {
         return Err(format!(
             "{under_previous} users are left under key version {}",
@@ -253,12 +212,19 @@ async fn run(
         started.elapsed()
     );
 
-    let readable = jobs
-        .count(format!(
+    let readable: u64 = db
+        .fluent()
+        .query(format!(
             "SELECT COUNTIF(AEAD.DECRYPT_STRING({chain}, email, CONCAT('user/', id, '/email'))
-               = CONCAT('user-', id, '@example.com')) FROM {users}"
+               = CONCAT('user-', id, '@example.com')) AS count FROM `{users}`"
         ))
-        .await?;
+        .param_as("keyset", keyset_bytes, keyset.value())
+        .obj::<Count>()
+        .query()
+        .await?
+        .pop()
+        .ok_or("the count returned no row")?
+        .count;
     if readable != u64::from(count) {
         return Err(format!("{readable} of {count} users read back in BigQuery").into());
     }
@@ -273,37 +239,45 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(count) => count.parse()?,
         None => DEFAULT_USERS,
     };
-    let jobs = BigQueryJobs {
-        client: GoogleApi::from_function(
-            JobServiceClient::new,
-            "https://bigquery.googleapis.com",
-            None,
-        )
-        .await?,
-        project: std::env::var("PROJECT_ID")?,
-        location: std::env::var("PROJECT_LOCATION")?,
-    };
+    let project = std::env::var("PROJECT_ID")?;
+    let location = std::env::var("PROJECT_LOCATION")?;
+    let db = BigQueryDb::new(&project).await?;
     let key_ref = GcpKmsKeyRef::new(
-        jobs.project.clone(),
-        jobs.location.clone(),
+        project,
+        location.clone(),
         std::env::var("KMS_KEY_RING")?,
         std::env::var("KMS_KEY")?,
     );
-    let dataset = format!(
-        "{}.sweep_example_{}",
-        jobs.project,
-        uuid::Uuid::now_v7().simple()
-    );
-    jobs.query(format!(
-        "CREATE SCHEMA `{dataset}` OPTIONS (location = '{}');
-         CREATE TABLE `{dataset}.users` (id STRING NOT NULL, email BYTES NOT NULL, seal BYTES NOT NULL)",
-        jobs.location
-    ))
-    .await?;
-
-    let users = format!("`{dataset}.users`");
-    let outcome = run(&jobs, &users, &key_ref, count).await;
-    jobs.query(format!("DROP SCHEMA `{dataset}` CASCADE"))
+    let dataset =
+        BigQueryDatasetId::new(format!("sweep_example_{}", uuid::Uuid::now_v7().simple()))?;
+    db.fluent()
+        .schema()
+        .dataset(dataset.clone())
+        .create()
+        .location(BigQueryLocation::new(location)?)
+        .execute()
+        .await?;
+    let users: BigQueryTableRef = dataset.table(USERS);
+    let outcome = async {
+        db.fluent()
+            .schema()
+            .table(users.clone())
+            .columns(|columns| {
+                columns.fields([
+                    columns.field("id").string().required(),
+                    columns.field("email").bytes().required(),
+                    columns.field("seal").bytes().required(),
+                ])
+            })
+            .sync()
+            .await?;
+        run(&db, &users, &key_ref, count).await
+    }
+    .await;
+    db.fluent()
+        .schema()
+        .dataset(dataset.clone())
+        .dangerously_delete_with_contents()
         .await?;
     println!("dropped the example's dataset {dataset}");
     outcome
