@@ -12,7 +12,7 @@ use tracing::Span;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use crate::errors::{KmsAeadError, KmsAeadSystemError};
+use crate::errors::{KmsAeadError, KmsAeadLegacyFormatError, KmsAeadSystemError};
 use crate::formats::{Bare, Envelope};
 use crate::{
     spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
@@ -562,7 +562,12 @@ where
         value: &Encrypted<T, Envelope>,
     ) -> KmsAeadResult<Encrypted<T, Envelope>> {
         spans::in_span(spans::reencrypt_dek(&self.dek_cache), async {
-            let (bare, encrypted_dek) = value.separate()?;
+            let (bare, encrypted_dek) = value.separate().map_err(|error| match error {
+                KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError { format, .. }) => {
+                    KmsAeadLegacyFormatError::refused_by_reencryption(format)
+                }
+                error => error,
+            })?;
             let encrypted_dek =
                 crate::formats::reencrypt_encrypted_dek(&encrypted_dek, &self.provider).await?;
             Encrypted::join(&bare, &encrypted_dek)
@@ -1150,6 +1155,31 @@ mod tests {
             matches!(&layout_v1, Err(KmsAeadError::LegacyFormat(error))
                 if error.format == KmsAeadLegacyFormat::EncryptedDekV1),
             "{layout_v1:?}"
+        );
+        Ok(())
+    }
+
+    /// A value in the envelope layout v1 of 0.29, which only `legacy-formats` reads, is refused by
+    /// re-encryption with the error that names the upgrade calls.
+    #[cfg(feature = "legacy-formats")]
+    #[tokio::test]
+    async fn reencryption_refuses_a_value_in_the_envelope_layout_v1() -> KmsAeadResult<()> {
+        let value = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
+            hex::decode(ENVELOPE_FROM_0_29).unwrap(),
+        )?;
+        let KmsAeadError::LegacyFormat(refused) =
+            KmsAeadLegacyFormatError::refused_by_reencryption(KmsAeadLegacyFormat::EnvelopeV1)
+        else {
+            unreachable!()
+        };
+
+        let result = Envelope::new(TestKmsProvider::Working)?
+            .reencrypt_dek(&value)
+            .await;
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if *error == refused),
+            "{result:?}"
         );
         Ok(())
     }

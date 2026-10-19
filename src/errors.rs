@@ -513,10 +513,10 @@ impl KmsAeadLegacyFormatError {
     pub(crate) fn refused_by_reencryption(format: KmsAeadLegacyFormat) -> KmsAeadError {
         Self::error(
             format,
-            "The encrypted DEK is in a layout of kms-aead 0.29 or earlier, which re-encryption \
-             never reads, with or without the legacy-formats feature. upgrade_legacy_value and \
-             upgrade_legacy_encrypted_dek of that feature rewrite it in Tink's format, under the \
-             KEK's current version",
+            "The value or its encrypted DEK is in a layout of kms-aead 0.29 or earlier, which \
+             re-encryption never reads, with or without the legacy-formats feature. \
+             upgrade_legacy_value and upgrade_legacy_encrypted_dek of that feature rewrite it in \
+             Tink's format, under the KEK's current version",
         )
     }
 
