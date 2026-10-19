@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "../searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -254,8 +254,10 @@ let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, R
 
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
-let first: Encrypted&lt;Email, Deterministic&gt; = keyring.encrypt_deterministic(&amp;aad, &amp;alice).await?;
-let second: Encrypted&lt;Email, Deterministic&gt; = keyring.encrypt_deterministic(&amp;aad, &amp;alice).await?;
+let first: Encrypted&lt;Email, Deterministic&gt; =
+    keyring.sealer().await.encrypt_deterministic(&amp;aad, &amp;alice).await?;
+let second: Encrypted&lt;Email, Deterministic&gt; =
+    keyring.sealer().await.encrypt_deterministic(&amp;aad, &amp;alice).await?;
 
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
@@ -319,7 +321,8 @@ So an equality query matches against every version that still decrypts, with
 </span><span class="boring">let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
 </span>let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
-let before: Encrypted&lt;Email, Deterministic&gt; = keyring.encrypt_deterministic(&amp;aad, &amp;alice).await?;
+let before: Encrypted&lt;Email, Deterministic&gt; =
+    keyring.sealer().await.encrypt_deterministic(&amp;aad, &amp;alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
 admin.promote(staged).await?;

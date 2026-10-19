@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -335,10 +335,10 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Keyring encrypt</code></td><td><code>encrypt</code>, <code>encrypt_deterministic</code>, <code>deterministic_probes</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring encrypt</code></td><td>a sealer’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>deterministic_probes</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring beacon</code></td><td><code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring beacon</code></td><td>a sealer’s <code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring rotate</code></td><td><code>rotate</code>, <code>change_algorithm</code></td><td><code>keyring</code>, <code>purpose</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring promote</code></td><td><code>promote</code></td><td><code>keyring</code>, <code>key_id</code>, <code>from_key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring mark compromised</code></td><td><code>mark_compromised</code></td><td><code>keyring</code>, <code>key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
@@ -365,7 +365,7 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><td><code>reload</code></td><td>what an unknown key id caused: <code>none</code>, <code>reloaded</code> or <code>rate_limited</code></td></tr>
 <tr><td><code>dek_cache</code></td><td><code>hit</code>, <code>miss</code> or <code>disabled</code>; <code>bypassed</code> for <code>reencrypt_deks</code>, the export, and a compromised version read past the cache; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
 <tr><td><code>store</code></td><td><code>memory</code>, <code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>, or an application store’s name</td></tr>
-<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
+<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>pending_key_id</code> for a re-seal under a version the cached record holds as pending, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
 <tr><td><code>changed</code></td><td><code>true</code> for a new record taken, <code>false</code>, or <code>regressed</code> for one refused because it moves a version backwards</td></tr>
 <tr><td><code>revision</code></td><td>the store’s revision of the record read, as text</td></tr>
 <tr><td><code>response_time</code></td><td>milliseconds the store call took</td></tr>

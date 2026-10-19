@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "../searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -214,7 +214,7 @@ decrypts with Cloud KMS only. A field BigQuery also decrypts is declared with
 <li>a deterministic value is sealed under an AES-SIV version;</li>
 <li>the KEK is in Google Cloud KMS.</li>
 </ul>
-<p>The check runs on <code>encrypt</code> and <code>encrypt_deterministic</code>, before sealing, and fails with
+<p>The check runs on a sealer’s <code>encrypt</code> and <code>encrypt_deterministic</code>, before sealing, and fails with
 <code>KeyringError::Interop</code> naming the first requirement broken. Values already written always
 decrypt: only sealing checks. So a <code>change_algorithm</code> away from AES-256-GCM, or a keyring on
 another KMS, fails the next write of the field instead of silently writing values BigQuery
@@ -267,7 +267,8 @@ let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, R
 
 let aad = EMAIL.aad(&amp;EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-let refused: KeyringResult&lt;Encrypted&lt;Email, Randomized&gt;&gt; = keyring.encrypt(&amp;aad, &amp;alice).await;
+let refused: KeyringResult&lt;Encrypted&lt;Email, Randomized&gt;&gt; =
+    keyring.sealer().await.encrypt(&amp;aad, &amp;alice).await;
 assert!(matches!(
     refused,
     Err(KeyringError::Interop(InteropError {

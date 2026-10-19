@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -199,8 +199,9 @@ the envelope modes of kms-aead.</p>
 <h2 id="applications-and-administration"><a class="header" href="#applications-and-administration">Applications and administration</a></h2>
 <p>A keyring has two sides, each with its own handle and its own rights:</p>
 <ul>
-<li>the application encrypts, decrypts, computes beacons and runs sweeps, on a <code>Keyring</code>, which
-<code>KeyringRegistry::open</code> returns in every build;</li>
+<li>the application decrypts and runs sweeps on a <code>Keyring</code>, which <code>KeyringRegistry::open</code> returns
+in every build, and encrypts, computes beacons and re-seals on the <code>Sealer</code> the <code>Keyring</code>
+hands out for each write;</li>
 <li>the administration creates keyrings, rotates, promotes, retires and destroys versions, flags
 compromised ones, re-encrypts DEKs and exports keysets, on a <code>KeyringAdmin</code>, which
 <code>KeyringRegistry::create</code>, <code>open_or_create</code> and <code>admin</code> return with the <code>admin</code> feature.</li>
@@ -263,15 +264,17 @@ as <code>kms_aead::backends::Ring</code>;</li>
 <li><code>admin</code>: <code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types
 of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the
 <code>encodings</code> module, see <a href="#applications-and-administration">Applications and administration</a>;</li>
-<li><code>deterministic</code>: deterministic key versions and every call on them, <code>encrypt_deterministic</code>,
-<code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code>, see
+<li><code>deterministic</code>: deterministic key versions and every call on them, <code>encrypt_deterministic</code>
+and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>,
+<code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see
 <a href="./keyring/deterministic.html">Deterministic fields</a>. The deterministic types exist in every
 build, so a process without the feature keeps a record’s deterministic versions intact;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>;</li>
+<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes;</li>
 <li><code>serde-json</code>: <code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON;</li>
 <li><code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>: the keyring stores, see
 <a href="./keyring/stores.html">Keyring stores</a>. <code>gcs</code> has TLS variants listed there, and <code>postgres</code>
-also binds <code>Encrypted</code> in tokio-postgres;</li>
+also binds <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code>;</li>
+<li><code>sqlx</code>: <code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code>;</li>
 <li><code>bigquery-export</code>: <code>admin</code>, and <code>export_bigquery_keyset</code>, see
 <a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>.</li>
 </ul>
@@ -289,6 +292,7 @@ use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Sealer,
 };
 use secret_vault_value::SecretValue;
 
@@ -328,7 +332,9 @@ let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, R
 // The AAD ties the value to user 42's email: `user/42/email`
 let aad: FieldAad = EMAIL.aad(&amp;EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-let value: Encrypted&lt;Email, Randomized&gt; = keyring.encrypt(&amp;aad, &amp;alice).await?;
+// One sealer per write of a record, for every encrypted field it holds
+let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = keyring.sealer().await;
+let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
 // A staged rotation keeps the previous version decrypting
@@ -376,7 +382,10 @@ watch, so a write through the <code>KeyringAdmin</code> is seen by every <code>K
 and sweeps inside an administrative job. The example takes its <code>Keyring</code> there too, since the
 ephemeral local KEK has no second copy to <code>open</code> the keyring with: <code>LocalKmsProvider</code> is not
 <code>Clone</code>.</p>
-<p><code>encrypt</code> seals under the active version, and <code>decrypt</code> opens under the version the value names.
+<p><code>Keyring::sealer</code> takes the cached record, and the <code>Sealer</code> seals under that record’s active
+versions; <code>decrypt</code> opens under the version the value names. A write takes one sealer and seals
+every encrypted field of the record through it, so that the seal marker it stores beside them
+names the versions they are under, see <a href="./operations.html#the-seal-marker">The seal marker</a>.
 Neither calls the store while the cached record is fresh, nor the KMS while the version’s DEK is
 in the DEK cache, see <a href="./keyring/record-cache.html">Record cache</a>.</p>
 <p>Full example available

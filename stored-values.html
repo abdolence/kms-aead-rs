@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -198,8 +198,8 @@ to store.</p>
 <tbody>
 <tr><td><code>Envelope</code></td><td><a href="./formats.html#tinks-kms-envelope">Tink’s KMS envelope</a>, the encrypted DEK inside</td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
 <tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td><code>KmsAeadEnvelope::encrypt_with_dek</code>, <code>AeadCipher::encrypt_bare</code></td><td><code>KmsAeadEnvelope::decrypt_with_dek</code>, <code>AeadCipher::decrypt_bare</code></td><td>no</td><td>none</td></tr>
-<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Keyring::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
-<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Keyring::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
+<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Sealer::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
+<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Sealer::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
 </tbody>
 </table>
 </div>

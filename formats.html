@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -425,12 +425,14 @@ staged, with the encrypted DEKs shortened:</p>
     "deterministic": "aes-256-siv",
     "beacon": "hmac-sha256"
   },
+  "seal_epoch": 2,
   "versions": [
     {
       "key_id": 1,
       "algorithm": "aes-256-gcm",
       "state": "decrypt_only",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
@@ -440,6 +442,7 @@ staged, with the encrypted DEKs shortened:</p>
       "algorithm": "aes-256-siv",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
@@ -449,6 +452,7 @@ staged, with the encrypted DEKs shortened:</p>
       "algorithm": "hmac-sha256",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
@@ -458,6 +462,7 @@ staged, with the encrypted DEKs shortened:</p>
       "algorithm": "aes-256-gcm",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
@@ -467,6 +472,7 @@ staged, with the encrypted DEKs shortened:</p>
       "algorithm": "aes-256-gcm",
       "state": "pending",
       "compromised": null,
+      "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
@@ -481,11 +487,16 @@ staged, with the encrypted DEKs shortened:</p>
 <li><code>kek</code> names the provider and the KEK the keyring was created with;</li>
 <li><code>algorithms</code> holds the algorithm new versions of each purpose use. <code>deterministic</code> and <code>beacon</code>
 are <code>null</code> for a keyring without versions of that purpose;</li>
+<li><code>seal_epoch</code> counts the writes that made a version active, from 1 at the creation, see
+<a href="#seal-markers">Seal markers</a>;</li>
 <li><code>versions</code> holds every version ever created, in creation order, each under its
 <a href="#keyring-key-ids">key id</a>;</li>
 <li><code>state</code> is <code>pending</code>, <code>active</code>, <code>decrypt_only</code>, <code>retired</code> or <code>destroyed</code>. For a pending version,
 <code>state_changed_at</code> is the time it was staged;</li>
 <li><code>compromised</code> is <code>null</code>, or <code>{"at": "&lt;time&gt;", "note": "&lt;the operator's note, or null&gt;"}</code>;</li>
+<li><code>seal_epochs</code> is the version’s seal range as epochs, <code>{"start": &lt;epoch&gt;, "end": &lt;epoch or null&gt;}</code>: the epoch of the write that made it active, and the epoch of the first write after it
+stopped being active that moved the epoch on, <code>null</code> until then. It is <code>null</code> for a version that
+was never active, see <a href="#seal-markers">Seal markers</a>;</li>
 <li><code>encrypted_dek</code> is the standard base64 of the <a href="#encrypted-deks">encrypted DEK</a>, the bytes the
 provider returned, here the local KMS layout. It is <code>null</code> for a destroyed version;</li>
 <li>the times are RFC 3339, in UTC.</li>
@@ -495,8 +506,27 @@ fails with <code>RecordInvalid</code> on a document that breaks any of:</p>
 <ul>
 <li>at most one active and one pending version per purpose, neither of them compromised;</li>
 <li>an encrypted DEK on every version but the destroyed ones;</li>
-<li>unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.</li>
+<li>unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;</li>
+<li>a <code>seal_epoch</code> of 1 or more;</li>
+<li><code>seal_epochs</code> on every active, decrypt-only and retired version and on no pending one, open on
+the active version, starting at 1 or more and below its end, and within the <code>seal_epoch</code>.</li>
 </ul>
+<h2 id="seal-markers"><a class="header" href="#seal-markers">Seal markers</a></h2>
+<p>A seal marker is the seal epoch of the keyring record a write sealed a record’s fields under,
+which the application stores beside them:</p>
+<pre><code class="language-text">[0x01][seal epoch: u32 BE]
+</code></pre>
+<p>5 bytes in all, so that markers compare as their epochs do, and so do their bytes as Firestore,
+PostgreSQL and BigQuery compare them. <code>SealMarker::ENVELOPE</code>, <code>01 00 00 00 00</code>, is epoch 0, the
+marker of a record of envelope values. <code>SealMarker::try_from</code> fails with <code>InvalidSealMarker</code> on
+bytes of any other length or first byte. The <code>serde</code> feature stores a marker as bytes, an array of
+numbers in serde_json, and the <code>postgres</code> and <code>sqlx</code> features as <code>BYTEA</code>. See
+<a href="./operations.html#sweeps">Sweeps</a> for the query it serves.</p>
+<p><code>KeyVersion::seal_range()</code> returns the markers of a version’s <code>seal_epochs</code> as a <code>SealRange</code>:
+<code>start()</code>, and <code>end()</code>, <code>None</code> while the range is open. A record whose fields were sealed through
+one <code>Sealer</code>, and which stores the marker of the sealer’s record, lies in the range of every
+version its fields are under. See
+<a href="./operations.html#records-under-a-version">Records under a version</a> for the query it serves.</p>
 <h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
 <p>The first bytes of a stored value:</p>
 <div class="table-wrapper">

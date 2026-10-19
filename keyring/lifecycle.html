@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "../searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -187,7 +187,11 @@ id, a PostgreSQL key, a part of a GCS object name or an S3 object key, and a Big
 without escaping. It is an identifier, not a secret, and appears in spans and errors;</li>
 <li>the KEK of the provider the keyring was created with;</li>
 <li>the algorithms new versions use, one per purpose;</li>
-<li>every key version ever created, in creation order, each with its encrypted DEK and its state.</li>
+<li>the seal epoch, which every write that makes a version active moves on by one, and which the
+application stores beside its records as a <code>SealMarker</code>, see <a href="../operations.html#sweeps">Sweeps</a>;</li>
+<li>every key version ever created, in creation order, each with its encrypted DEK, its state and,
+once it was active, its seal range: the markers of the records sealed under it, see
+<a href="../operations.html#records-under-a-version">Records under a version</a>.</li>
 </ul>
 <p>Every store keeps it as the same JSON document, see <a href="../formats.html#keyring-records">Keyring records</a>
 for the document and the rules every read checks. A record that breaks one fails with
@@ -267,8 +271,8 @@ value. <code>destroy</code> it instead.</li>
 again after a conflict up to <code>KeyringOptions::cas_retries</code> times,
 <code>KeyringOptions::DEFAULT_CAS_RETRIES</code> by default, before <code>RecordConflict</code>.</p>
 <p>States move forward only: nothing returns to <code>Pending</code>, and <code>Pending</code> moves only to <code>Active</code> or
-<code>Destroyed</code>. A running process refuses a record that moves a version backwards, see
-<a href="./record-cache.html#when-the-store-fails-or-misbehaves">Record cache</a>.</p>
+<code>Destroyed</code>. A running process refuses a record that moves a version or the seal epoch backwards,
+see <a href="./record-cache.html#when-the-store-fails-or-misbehaves">Record cache</a>.</p>
 <h2 id="staged-rotation"><a class="header" href="#staged-rotation">Staged rotation</a></h2>
 <p>A rotation is two calls, so that no process meets a value under a version it does not know yet:</p>
 <ol>

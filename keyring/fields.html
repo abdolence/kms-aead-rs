@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7ff84b6e.js";
+            window.path_to_searchindex_js = "../searchindex-11125221.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -253,7 +253,7 @@ struct User {
 let alice = Email("alice@example.com".to_string());
 let user = User {
     id: "42".to_string(),
-    email: keyring.encrypt(&amp;EMAIL.aad(&amp;id), &amp;alice).await?,
+    email: keyring.sealer().await.encrypt(&amp;EMAIL.aad(&amp;id), &amp;alice).await?,
 };
 let stored: Vec&lt;u8&gt; = serde_json::to_vec(&amp;user)?;
 
@@ -293,8 +293,11 @@ async fn store_email(
     id: &amp;str,
     email: &amp;Email,
 ) -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-    let value: Encrypted&lt;Email, Randomized&gt; =
-        keyring.encrypt(&amp;field.aad(&amp;EntityId::try_from(id)?), email).await?;
+    let value: Encrypted&lt;Email, Randomized&gt; = keyring
+        .sealer()
+        .await
+        .encrypt(&amp;field.aad(&amp;EntityId::try_from(id)?), email)
+        .await?;
     client
         .execute("UPDATE users SET email = $1 WHERE id = $2", &amp;[&amp;value, &amp;id])
         .await?;
@@ -429,7 +432,7 @@ let with_context: FieldAad = EMAIL.aad(&amp;id).with_context(b"tenant-7");
 let custom: FieldAad = EMAIL.custom_aad(format!("signup/{user_id}").as_bytes())?;
 
 for aad in [default_aad, with_context, custom] {
-    let value: Encrypted&lt;String, Randomized&gt; = keyring.encrypt(&amp;aad, &amp;email).await?;
+    let value: Encrypted&lt;String, Randomized&gt; = keyring.sealer().await.encrypt(&amp;aad, &amp;email).await?;
     assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, email);
 }
 
