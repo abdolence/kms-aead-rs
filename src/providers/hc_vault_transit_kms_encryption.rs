@@ -1066,6 +1066,53 @@ mod tests {
         }
     }
 
+    /// Creates a Transit key of its own on the server in `VAULT_ADDR`, since it rotates the key
+    /// and moves its `min_decryption_version`.
+    #[tokio::test]
+    #[ignore = "needs a Vault server with the Transit secrets engine"]
+    async fn a_reencrypted_value_opens_once_vault_refuses_the_old_version() -> KmsAeadResult<()> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let provider = HcVaultTransitProvider::new(&HcVaultTransitKeyRef::new(format!(
+            "reencrypted-{nanos}"
+        )))?;
+        let key_uri = provider
+            .encrypt_uri
+            .to_string()
+            .replace("/encrypt/", "/keys/");
+        provider
+            .post(&Uri::try_from(key_uri.clone()).unwrap(), Vec::new())
+            .await?;
+        let envelope =
+            KmsAeadEnvelope::<HcVaultTransitProvider, TestBackend>::new(provider.clone())?;
+        let secret = SecretValue::from("order-secret");
+        let value = envelope.encrypt(b"orders-aad", &secret).await?;
+        provider
+            .post(
+                &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
+                Vec::new(),
+            )
+            .await?;
+
+        let reencrypted = envelope.reencrypt_dek(&value).await?;
+
+        provider
+            .post(
+                &Uri::try_from(format!("{key_uri}/config")).unwrap(),
+                br#"{"min_decryption_version": 2}"#.to_vec(),
+            )
+            .await?;
+        assert_eq!(envelope.decrypt(b"orders-aad", &reencrypted).await?, secret);
+        let before_reencryption = envelope.decrypt(b"orders-aad", &value).await;
+        assert!(
+            matches!(&before_reencryption, Err(e) if e.code() == "VAULT_STATUS_400"),
+            "{before_reencryption:?}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn invalid_token_is_rejected() {

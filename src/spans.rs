@@ -22,7 +22,6 @@ const FIELD_ERROR_CODE: &str = "/kms_aead/error_code";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the envelope has
 /// a cache.
-#[cfg(feature = "deterministic")]
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// The spans of the calls to a KMS, which the providers open.
@@ -207,12 +206,30 @@ pub(crate) fn decrypt_dek(algorithm: impl Display, dek_cache: &DekCache) -> Span
         { FIELD_DEK_CACHE } = field::Empty,
         { FIELD_ERROR_CODE } = field::Empty,
     );
+    record_bypassed_cache(&span, dek_cache);
+    span
+}
+
+/// `KMS AEAD re-encrypt DEK`, around the envelope's re-encryption of a DEK, which never goes
+/// through the cache.
+pub(crate) fn reencrypt_dek(dek_cache: &DekCache) -> Span {
+    let span = debug_span!(
+        "KMS AEAD re-encrypt DEK",
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    );
+    record_bypassed_cache(&span, dek_cache);
+    span
+}
+
+/// Records `dek_cache` as `bypassed` for a call that decrypts through the provider beside an
+/// enabled cache, and as `disabled` without one.
+fn record_bypassed_cache(span: &Span, dek_cache: &DekCache) {
     if dek_cache.is_enabled() {
         span.record(FIELD_DEK_CACHE, DEK_CACHE_BYPASSED);
     } else {
         span.record(FIELD_DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
-    span
 }
 
 /// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.

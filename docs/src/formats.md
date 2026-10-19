@@ -429,6 +429,12 @@ serialised Tink key when it was in an older layout: one KMS call for a current v
 one. A value in Tink's framing needs the decryption to be told from the 32-bit layout before 0.24.0.
 The AEAD bytes stay as they are.
 
+An upgraded DEK is encrypted under the KEK's current version, so the upgrade also does what
+`reencrypt_dek` and `reencrypt_encrypted_dek` do for a value or a DEK already in Tink's format, see
+[Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+Those two refuse a layout of 0.29 or earlier with `LEGACY_FORMAT`, so a sweep after a KEK rotation
+upgrades a value in an old layout and re-encrypts the DEK of a value in Tink's format.
+
 The envelope's algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
 0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
 encrypted DEK of the upgrade records it as a Tink key type, so `upgrade_legacy_value` takes the

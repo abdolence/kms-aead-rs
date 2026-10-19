@@ -13,6 +13,7 @@ The spans are:
   `decrypt_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_encrypted_dek` and `generate_encrypted_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
+- `KMS AEAD re-encrypt DEK`: `reencrypt_dek` and `reencrypt_encrypted_dek`;
 - `KMS AEAD beacon`: the envelope's `beacon`;
 - `KMS encrypt DEK`: each provider's encryption of a DEK;
 - `KMS decrypt DEK`: each provider's decryption of a DEK;
@@ -116,6 +117,16 @@ left unrecorded, never recorded as `0` or an empty string.
 | `backend` | generate DEK only: the envelope's backend, `ring`, `aws-lc` or `rustcrypto` |
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
 | `error_code` | the code of the error the call returned |
+
+### KMS AEAD re-encrypt DEK
+
+| Field | Value |
+|---|---|
+| `dek_cache` | `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
+| `error_code` | the code of the error the call returned |
+
+Its children are a `KMS decrypt DEK` under the version that encrypted the DEK and a `KMS encrypt DEK`
+under the current one.
 
 ### KMS encrypt DEK, KMS decrypt DEK and KMS random
 

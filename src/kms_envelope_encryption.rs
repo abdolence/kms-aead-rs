@@ -12,7 +12,7 @@ use tracing::Span;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
-use crate::errors::{KmsAeadError, KmsAeadSystemError};
+use crate::errors::{KmsAeadError, KmsAeadLegacyFormatError, KmsAeadSystemError};
 use crate::formats::{Bare, Envelope};
 use crate::{
     spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
@@ -534,6 +534,69 @@ where
         spans::in_span(span, self.cipher.generate_encrypted_dek(&self.provider)).await
     }
 
+    /// `value` with its DEK encrypted again under the KEK version the provider encrypts with now,
+    /// and its AEAD bytes as they are, so that the KEK version that encrypted it can be disabled
+    /// once no stored value needs it. It takes no AAD and opens nothing, so the algorithm and the
+    /// AAD of the value play no part, and the value decrypts as before.
+    ///
+    /// It makes two KMS calls, through the provider and never through the [`DekCache`]: the KMS
+    /// decrypts the DEK with the version that encrypted it and encrypts it again with its current
+    /// one. The cache is left as it is, so a sweep evicts no entry that serves reads. An entry of
+    /// the old encrypted DEK serves until it expires: it holds the same key, and the values not
+    /// swept yet still carry it.
+    ///
+    /// Every call encrypts again, also for a value already under the current version. Values that
+    /// share a DEK, as a store-less envelope writes them, each receive an encrypted DEK of their own
+    /// here: to keep them sharing one, re-encrypt each distinct encrypted DEK once with
+    /// [`reencrypt_encrypted_dek`](Self::reencrypt_encrypted_dek) and [`Encrypted::join`] it with
+    /// each of its values.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Encrypted::separate`] and of the provider, `INVALID_KEY_FORMAT` when the
+    /// decrypted key is not a key kms-aead encrypts, and `LEGACY_FORMAT` for a value in a layout of
+    /// 0.29 or earlier, with or without `legacy-formats`. `upgrade_legacy_value` rewrites such a
+    /// value in Tink's format, with its DEK encrypted under the current version.
+    pub async fn reencrypt_dek<T>(
+        &self,
+        value: &Encrypted<T, Envelope>,
+    ) -> KmsAeadResult<Encrypted<T, Envelope>> {
+        spans::in_span(spans::reencrypt_dek(&self.dek_cache), async {
+            let (bare, encrypted_dek) = value.separate().map_err(|error| match error {
+                KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError { format, .. }) => {
+                    KmsAeadLegacyFormatError::refused_by_reencryption(format)
+                }
+                error => error,
+            })?;
+            let encrypted_dek =
+                crate::formats::reencrypt_encrypted_dek(&encrypted_dek, &self.provider).await?;
+            Encrypted::join(&bare, &encrypted_dek)
+        })
+        .await
+    }
+
+    /// `encrypted_dek` encrypted again under the KEK version the provider encrypts with now, as
+    /// [`reencrypt_dek`](Self::reencrypt_dek) does for the DEK in a value: two KMS calls, never
+    /// through the [`DekCache`], and the same key in the new encrypted DEK. It serves the keys
+    /// stored apart from their values, such as those of the `*_with_encrypted_dek` calls, of
+    /// beacons and of deterministic fields, and a DEK that many values share.
+    ///
+    /// # Errors
+    ///
+    /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a key kms-aead
+    /// encrypts, and `LEGACY_FORMAT` for a key in a layout of 0.29 or earlier, with or without
+    /// `legacy-formats`. `upgrade_legacy_encrypted_dek` rewrites such a key.
+    pub async fn reencrypt_encrypted_dek(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        spans::in_span(
+            spans::reencrypt_dek(&self.dek_cache),
+            crate::formats::reencrypt_encrypted_dek(encrypted_dek, &self.provider),
+        )
+        .await
+    }
+
     /// Seals `plain_text` as `encrypt` does, in the span of the caller.
     async fn seal<T>(
         &self,
@@ -674,17 +737,21 @@ where
     any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto")
 ))]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
-    #[cfg(not(feature = "legacy-formats"))]
     use crate::errors::KmsAeadLegacyFormat;
     use crate::formats::TinkKeyType;
+    use crate::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
     use crate::test_provider::{
         encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
         TestKmsProvider, CONCURRENT_CALLS,
     };
+    use crate::{KekProvider, KekRef};
 
     type Envelope = KmsAeadEnvelope<TestKmsProvider, TestBackend>;
     type CountingEnvelope = KmsAeadEnvelope<CountingKmsProvider, TestBackend>;
+    type LocalEnvelope = KmsAeadEnvelope<LocalKmsProvider<TestBackend>, TestBackend>;
 
     const AAD: &[u8] = b"orders/1042";
     const PLAIN_TEXT: &str = "4111 1111 1111 1111";
@@ -1020,6 +1087,75 @@ mod tests {
         );
         assert_eq!(aes_256_gcm.provider.encryptions(), 0);
         assert_eq!(chacha20_poly1305.provider.encryptions(), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_reencrypted_dek_opens_the_same_bytes_without_the_old_kek_version(
+    ) -> KmsAeadResult<()> {
+        let [v1, v2] =
+            [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+        let kek_id = LocalKekId::try_from(ORDERS_KEK.to_string())?;
+        let before_rotation = LocalEnvelope::new(LocalKmsProvider::new(
+            kek_id.clone(),
+            vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+        )?)?;
+        let rotated = LocalEnvelope::new(LocalKmsProvider::new(
+            kek_id.clone(),
+            vec![
+                LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
+                LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+            ],
+        )?)?;
+        let old_version_removed = LocalEnvelope::new(LocalKmsProvider::new(
+            kek_id,
+            vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+        )?)?;
+        let value = before_rotation
+            .encrypt(AAD, &SecretValue::from(PLAIN_TEXT))
+            .await?;
+
+        let reencrypted = rotated.reencrypt_dek(&value).await?;
+
+        let (bare, _) = value.separate()?;
+        let (reencrypted_bare, _) = reencrypted.separate()?;
+        assert_eq!(reencrypted_bare.value(), bare.value());
+        assert_eq!(
+            old_version_removed.decrypt(AAD, &reencrypted).await?,
+            SecretValue::from(PLAIN_TEXT)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn reencryption_refuses_the_layouts_of_0_29_and_earlier() -> KmsAeadResult<()> {
+        let raw_key_value = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
+            hex::decode(ENVELOPE_FROM_0_23_0_ON_32_BIT).unwrap(),
+        )?;
+        let built_in_kek = CountingEnvelope::new(CountingKmsProvider::with_kek(
+            TestKmsProvider::Working,
+            KekRef::new(KekProvider::Gcp, ORDERS_KEK),
+        ))?;
+        // `[0xFF][0x01][k = 0]` before the KMS's encrypted DEK, as 0.29's `to_bytes` wrote it.
+        let encrypted_dek_v1 = EncryptedDataEncryptionKey::new(vec![0xFF, 0x01, 0x00, 0x42]);
+
+        let raw_key = Envelope::new(TestKmsProvider::Working)?
+            .reencrypt_dek(&raw_key_value)
+            .await;
+        let layout_v1 = built_in_kek
+            .reencrypt_encrypted_dek(&encrypted_dek_v1)
+            .await;
+
+        assert!(
+            matches!(&raw_key, Err(KmsAeadError::LegacyFormat(error))
+                if error.format == KmsAeadLegacyFormat::RawEncryptedDek),
+            "{raw_key:?}"
+        );
+        assert!(
+            matches!(&layout_v1, Err(KmsAeadError::LegacyFormat(error))
+                if error.format == KmsAeadLegacyFormat::EncryptedDekV1),
+            "{layout_v1:?}"
+        );
         Ok(())
     }
 

@@ -64,6 +64,17 @@ The provider turns the key id into an ARN with the region and the account: an al
 an alias ARN, a key id into a key ARN, and an ARN stays as it is. That ARN always starts with
 `arn:aws:`, so outside the `aws` partition, such as in GovCloud or China, give the full ARN.
 
+## Key versions and rotation
+
+AWS KMS rotates the key material of a key, on its rotation schedule or on demand, and keeps every
+earlier key material for as long as the key exists. A DEK encrypted before a rotation decrypts
+afterwards. AWS KMS exposes no versions of a key, so no earlier key material can be disabled or
+deleted on its own.
+
+The sweep of [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation)
+is optional under AWS KMS: it moves each DEK to the current key material, and with no version to
+disable, the check and the destruction do not apply.
+
 ## Errors
 
 An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyException` or

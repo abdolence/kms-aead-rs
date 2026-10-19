@@ -35,7 +35,9 @@ pub enum KmsAeadError {
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
     /// A stored value in a layout written by 0.29 or earlier, which only the `legacy-formats`
-    /// feature reads.
+    /// feature reads. The envelope's [`reencrypt_dek`](crate::KmsAeadEnvelope::reencrypt_dek) and
+    /// [`reencrypt_encrypted_dek`](crate::KmsAeadEnvelope::reencrypt_encrypted_dek) return it with
+    /// the feature too: the upgrades rewrite such a value.
     LegacyFormat(KmsAeadLegacyFormatError),
 }
 
@@ -474,7 +476,7 @@ pub struct KmsAeadLegacyFormatError {
     pub public: KmsAeadErrorPublicGenericDetails,
     /// The layout of the stored value.
     pub format: KmsAeadLegacyFormat,
-    /// Names the feature that reads the layout.
+    /// Names the feature that reads the layout or, from a re-encryption, the calls that rewrite it.
     pub message: String,
 }
 
@@ -502,6 +504,23 @@ impl KmsAeadLegacyFormatError {
                  it"
             }
         };
+        Self::error(format, message)
+    }
+
+    /// The error of a re-encryption, which reads no layout of 0.29 or earlier, with or without
+    /// `legacy-formats`, so the message names the calls that rewrite the layout instead of the
+    /// feature.
+    pub(crate) fn refused_by_reencryption(format: KmsAeadLegacyFormat) -> KmsAeadError {
+        Self::error(
+            format,
+            "The value or its encrypted DEK is in a layout of kms-aead 0.29 or earlier, which \
+             re-encryption never reads, with or without the legacy-formats feature. \
+             upgrade_legacy_value and upgrade_legacy_encrypted_dek of that feature rewrite it in \
+             Tink's format, under the KEK's current version",
+        )
+    }
+
+    fn error(format: KmsAeadLegacyFormat, message: &str) -> KmsAeadError {
         KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError::new(
             KmsAeadErrorPublicGenericDetails::new("LEGACY_FORMAT".to_string()),
             format,
