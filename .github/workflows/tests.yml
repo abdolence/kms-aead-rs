@@ -310,7 +310,7 @@ jobs:
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
   # only, as keyring-gcs does. The keyring lives in the memory store, the test's queries read
-  # literals, and the `sweep_bigquery` example creates a dataset of its own and drops it.
+  # parameters, and the `sweep_bigquery` example creates a dataset of its own and drops it.
   keyring-bigquery:
     name: keyring-bigquery
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'

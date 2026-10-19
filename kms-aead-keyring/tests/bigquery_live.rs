@@ -4,9 +4,7 @@
 //! credentials. The principal needs the KMS key's encrypt and decrypt rights and
 //! `bigquery.jobs.create` in the project.
 
-use gcloud_sdk::google::cloud::bigquery::v2::job_service_client::JobServiceClient;
-use gcloud_sdk::google::cloud::bigquery::v2::{PostQueryRequest, QueryRequest};
-use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
+use bigquery::{BigQueryDb, BigQueryFieldType, BigQueryLocation};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::DeterministicAlgorithm;
@@ -16,6 +14,7 @@ use kms_aead_keyring::{
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeysetSelection,
     Purpose,
 };
+use serde::Deserialize;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -37,56 +36,14 @@ fn env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
     std::env::var(name).map_err(|error| format!("{name}: {error}").into())
 }
 
-/// The cells of the one row `query` returns, as BigQuery's JSON rows give them: a `NULL` cell is
-/// `None`, and every other cell is its value as text.
-async fn single_row(
-    project: &str,
-    location: &str,
-    query: String,
-) -> Result<Vec<Option<String>>, Box<dyn std::error::Error>> {
-    let client: GoogleApi<JobServiceClient<GoogleAuthMiddleware>> = GoogleApi::from_function(
-        JobServiceClient::new,
-        "https://bigquery.googleapis.com",
-        None,
-    )
-    .await?;
-    let response = client
-        .get()
-        .query(PostQueryRequest {
-            project_id: project.to_string(),
-            query_request: Some(QueryRequest {
-                query,
-                use_legacy_sql: Some(false),
-                location: location.to_string(),
-                timeout_ms: Some(60_000),
-                ..Default::default()
-            }),
-        })
-        .await?
-        .into_inner();
-    assert_eq!(response.job_complete, Some(true));
-    assert!(response.errors.is_empty(), "{:?}", response.errors);
-    let [row] = response.rows.as_slice() else {
-        return Err(format!("{} rows", response.rows.len()).into());
-    };
-    let cells = match row.fields.get("f").and_then(|cells| cells.kind.as_ref()) {
-        Some(gcloud_sdk::prost_types::value::Kind::ListValue(cells)) => &cells.values,
-        other => return Err(format!("no cells in {other:?}").into()),
-    };
-    Ok(cells
-        .iter()
-        .map(|cell| match cell.kind.as_ref() {
-            Some(gcloud_sdk::prost_types::value::Kind::StructValue(cell)) => {
-                match cell.fields.get("v").and_then(|value| value.kind.as_ref()) {
-                    Some(gcloud_sdk::prost_types::value::Kind::StringValue(value)) => {
-                        Some(value.clone())
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        })
-        .collect())
+/// The one row of the test's query: a `NULL` cell is `None`.
+#[derive(Debug, PartialEq, Deserialize)]
+struct Row {
+    first: Option<String>,
+    second: Option<String>,
+    relabelled: Option<String>,
+    deterministic: Option<String>,
+    deterministic_hex: Option<String>,
 }
 
 #[tokio::test]
@@ -152,40 +109,46 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         deterministic_keyset.to_sql_literal()
     );
 
-    let row = single_row(
-        &project,
-        &location,
-        format!(
+    let db = BigQueryDb::new(&project).await?;
+    let rows: Vec<Row> = db
+        .fluent()
+        .query(format!(
             "WITH users AS (
-               SELECT '42' AS id, FROM_HEX('{first}') AS email_first,
-                 FROM_HEX('{second}') AS email_second, FROM_HEX('{relabelled}') AS email_relabelled,
-                 FROM_HEX('{deterministic}') AS email_det
+               SELECT '42' AS id, @first AS email_first, @second AS email_second,
+                 @relabelled AS email_relabelled, @deterministic AS email_det
              )
              SELECT
-               AEAD.DECRYPT_STRING({randomized_chain}, u.email_first, CONCAT('user/', u.id, '/email')),
-               AEAD.DECRYPT_STRING({randomized_chain}, u.email_second, CONCAT('user/', u.id, '/email')),
-               SAFE.AEAD.DECRYPT_STRING({randomized_chain}, u.email_relabelled, CONCAT('user/', u.id, '/email')),
-               DETERMINISTIC_DECRYPT_STRING({deterministic_chain}, u.email_det, 'user/email'),
-               TO_HEX(DETERMINISTIC_ENCRYPT({deterministic_chain}, '{ALICE}', 'user/email'))
-             FROM users u",
-            first = hex(first.value()),
-            second = hex(second.value()),
-            relabelled = hex(&relabelled),
-            deterministic = hex(deterministic.value()),
-        ),
-    )
-    .await?;
+               AEAD.DECRYPT_STRING({randomized_chain}, u.email_first, CONCAT('user/', u.id, '/email')) AS first,
+               AEAD.DECRYPT_STRING({randomized_chain}, u.email_second, CONCAT('user/', u.id, '/email')) AS second,
+               SAFE.AEAD.DECRYPT_STRING({randomized_chain}, u.email_relabelled, CONCAT('user/', u.id, '/email')) AS relabelled,
+               DETERMINISTIC_DECRYPT_STRING({deterministic_chain}, u.email_det, 'user/email') AS deterministic,
+               TO_HEX(DETERMINISTIC_ENCRYPT({deterministic_chain}, @alice, 'user/email')) AS deterministic_hex
+             FROM users u"
+        ))
+        .param("first", &first)
+        .param("second", &second)
+        .param_as(
+            "relabelled",
+            BigQueryFieldType::Bytes { max_length: None },
+            relabelled,
+        )
+        .param("deterministic", &deterministic)
+        .param("alice", ALICE)
+        .location(BigQueryLocation::new(location)?)
+        .obj::<Row>()
+        .query()
+        .await?;
 
     assert_eq!(randomized_keyset.key_ids(), [KeyId::new(1), KeyId::new(2)]);
     assert_eq!(
-        row,
-        [
-            Some(ALICE.to_string()),
-            Some(ALICE.to_string()),
-            None,
-            Some(ALICE.to_string()),
-            Some(hex(deterministic.value())),
-        ]
+        rows,
+        [Row {
+            first: Some(ALICE.to_string()),
+            second: Some(ALICE.to_string()),
+            relabelled: None,
+            deterministic: Some(ALICE.to_string()),
+            deterministic_hex: Some(hex(deterministic.value())),
+        }]
     );
     Ok(())
 }
