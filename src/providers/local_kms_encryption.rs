@@ -378,7 +378,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 )
             })?;
             let kek_version = KekVersion::from(version);
-            kms::record_key_version(kek_version.as_str());
+            kms::record_kek_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
             let encrypted_dek = kms::timed(async {
                 self.cipher.seal(
@@ -418,7 +418,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 ));
             }
             let version = layout.kek_version;
-            kms::record_key_version(&version.to_string());
+            kms::record_kek_version(&version.to_string());
             let material = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",

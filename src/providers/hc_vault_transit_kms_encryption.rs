@@ -395,7 +395,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let ciphertext = response.data.ciphertext;
             let kek_version = match transit_key_version(&ciphertext) {
                 Ok(kek_version) => {
-                    kms::record_key_version(kek_version.as_str());
+                    kms::record_kek_version(kek_version.as_str());
                     Some(kek_version)
                 }
                 Err(error) => {
@@ -425,7 +425,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
                 )
             })?;
             if let Ok(key_version) = transit_key_version(ciphertext) {
-                kms::record_key_version(key_version.as_str());
+                kms::record_kek_version(key_version.as_str());
             }
             let request = serde_json::to_vec(&DecryptRequest { ciphertext })
                 .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
@@ -1119,17 +1119,20 @@ mod tests {
     async fn encrypt_reports_the_key_version_that_encrypted() -> KmsAeadResult<()> {
         let (provider, key_uri) = provider_with_own_key("versions").await?;
 
-        let before_rotation = provider.encrypt_data_encryption_key(&data_key()).await?;
+        let dek_encryption_under_v1 = provider.encrypt_data_encryption_key(&data_key()).await?;
         provider
             .post(
                 &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
                 Vec::new(),
             )
             .await?;
-        let after_rotation = provider.encrypt_data_encryption_key(&data_key()).await?;
+        let dek_encryption_under_v2 = provider.encrypt_data_encryption_key(&data_key()).await?;
 
         assert_eq!(
-            [before_rotation.kek_version, after_rotation.kek_version],
+            [
+                dek_encryption_under_v1.kek_version,
+                dek_encryption_under_v2.kek_version
+            ],
             [
                 Some(KekVersion::try_from("1".to_string())?),
                 Some(KekVersion::try_from("2".to_string())?)

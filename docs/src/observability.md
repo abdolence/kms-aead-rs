@@ -59,7 +59,7 @@ let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 The decrypt prints, without timestamps:
 
 ```text
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/kek_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
 DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 ```
 
@@ -69,7 +69,7 @@ run it with `cargo run --example tracing --features ring`.
 ## OpenTelemetry
 
 With [tracing-opentelemetry](https://github.com/tokio-rs/tracing-opentelemetry) every span field
-becomes a span attribute with the same name, such as `/kms_aead/key_version`, so the KMS calls and
+becomes a span attribute with the same name, such as `/kms_aead/kek_version`, so the KMS calls and
 cache hits show up next to the latency of a request in Cloud Trace, Jaeger, etc.
 
 The fields are declared empty when the span opens and recorded once their value is known, which
@@ -134,7 +134,7 @@ under the current one.
 |---|---|
 | `provider` | `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of an application's own provider |
 | `key` | the KEK, see below; for `KMS random` the GCP location, and unrecorded on AWS |
-| `key_version` | `KMS encrypt DEK` and `KMS decrypt DEK`: from the KMS response on encryption, from the encrypted DEK's bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption |
+| `kek_version` | `KMS encrypt DEK` and `KMS decrypt DEK`: from the KMS response on encryption, from the encrypted DEK's bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption |
 | `len` | random only: the bytes requested from the KMS generator |
 | `response_time` | milliseconds the KMS call took |
 | `error_code` | the code of the error the call returned |
@@ -158,7 +158,7 @@ Besides the spans, the library logs:
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `INFO`, when a local KMS provider is created: its KEK id and versions, each with where it came
-  from, in the `key` and `key_versions` fields.
+  from, in the `key` and `kek_versions` fields.
 
 The library retries nothing itself, so there is no retry field.
 

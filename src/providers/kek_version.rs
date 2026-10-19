@@ -28,8 +28,9 @@ impl From<LocalKekVersion> for KekVersion {
     }
 }
 
-/// The key version of `bytes`, read from storage. The error reports the length and the class of
-/// the first rejected byte, never the bytes themselves, which end up in logs.
+/// The KEK version that `bytes` hold, read from storage or from a KMS response. The error reports
+/// the length and the class of the first rejected byte, never the bytes themselves, which end up
+/// in logs.
 pub(crate) fn read_kek_version(bytes: &[u8]) -> KmsAeadResult<KekVersion> {
     let rejected = if bytes.is_empty() || bytes.len() > usize::from(u8::MAX) {
         Some("is not 1 to 255 bytes long")
@@ -88,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn a_key_version_error_echoes_no_stored_bytes() {
+    fn a_kek_version_error_echoes_no_stored_bytes() {
         let error = KekVersion::try_from("marker/18".to_string()).unwrap_err();
 
         assert!(

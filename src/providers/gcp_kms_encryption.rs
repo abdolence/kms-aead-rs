@@ -210,7 +210,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
 
             let kek_version = match crypto_key_version(self.kek.key(), &name) {
                 Ok(kek_version) => {
-                    kms::record_key_version(kek_version.as_str());
+                    kms::record_kek_version(kek_version.as_str());
                     Some(kek_version)
                 }
                 Err(error) => {
