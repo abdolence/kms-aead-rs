@@ -182,12 +182,16 @@ fn a_destroyed_version_with_material_is_rejected() -> KeyringResult<()> {
 
 #[test]
 fn a_version_without_material_is_rejected() -> KeyringResult<()> {
-    let mut retired = version(1, "retired", false)?;
-    retired["encrypted_dek"] = Value::Null;
-    assert_eq!(
-        refusal(&document(vec![retired, version(2, "active", false)?])),
-        Some(RecordInvalidReason::MissingMaterial(KeyId::new(1)))
-    );
+    for kek_version in [Value::Null, json!(KEK_VERSION)] {
+        let mut retired = version(1, "retired", false)?;
+        retired["encrypted_dek"] = Value::Null;
+        retired["kek_version"] = kek_version.clone();
+        assert_eq!(
+            refusal(&document(vec![retired, version(2, "active", false)?])),
+            Some(RecordInvalidReason::MissingMaterial(KeyId::new(1))),
+            "{kek_version}"
+        );
+    }
     Ok(())
 }
 
