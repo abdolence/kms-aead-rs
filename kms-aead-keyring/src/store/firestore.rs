@@ -22,8 +22,9 @@ mod listener;
 /// its precondition, so that Firestore refuses a write over a record that changed since it was
 /// read. [`watch`](KeyringStore::watch) listens to the document through the store's listener,
 /// whose single listen stream to Firestore carries every keyring that the store and its clones
-/// watch. [`shutdown`](KeyringStore::shutdown) closes it, and
-/// [`with_collection`](Self::with_collection) starts a listener of its own.
+/// watch. [`shutdown`](KeyringStore::shutdown) closes it, and so does dropping the store's last
+/// clone, which ends every watch. [`with_collection`](Self::with_collection) starts a listener of
+/// its own.
 ///
 /// [`FirestoreDb`] and [`FirestoreTimestamp`] are firestore-rs's own types, a deliberate
 /// integration point: the application builds the client, with the project, the database and the
@@ -166,9 +167,11 @@ impl KeyringStore for FirestoreKeyringStore {
     /// firestore-rs reconnects a lost stream on its own and resumes every target, and the update
     /// time covers what Firestore sends again, so a reconnect signals nothing. When Firestore
     /// removes the keyring's target, the watch sends [`Disconnected`](super::WatchEvent::Disconnected),
-    /// then [`Reconnected`](super::WatchEvent::Reconnected) once firestore-rs adds the target back. A
-    /// removal that denies permission, finds no database or parent, or is unimplemented ends the
-    /// watch instead: firestore-rs does not add that target back.
+    /// then [`Reconnected`](super::WatchEvent::Reconnected) once firestore-rs adds the target back.
+    /// The watch ends instead when firestore-rs does not add it back: after a removal that denies
+    /// permission, finds no database or parent, or is unimplemented, and after one that rejects an
+    /// invalid argument or a failed precondition, unless firestore-rs resumed the target on a
+    /// reconnected stream.
     ///
     /// firestore-rs reports a listener that stopped on its own only when a target is added. The
     /// first watch of a keyring the store does not watch yet then fails, every watch ends, and

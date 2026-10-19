@@ -6,7 +6,7 @@
 //! open stream, and removes it once the last watch is dropped. The listener's callback routes
 //! each event by its target id to the watches of that target's keyring.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
@@ -15,7 +15,6 @@ use ::firestore::gcloud_sdk::google::firestore::v1::{
     DocumentDelete, DocumentRemove, TargetChange,
 };
 use ::firestore::gcloud_sdk::prost_types::Timestamp;
-use ::firestore::gcloud_sdk::tonic::Code;
 use ::firestore::{
     FirestoreCollectionDocuments, FirestoreDb, FirestoreListenEvent, FirestoreListener,
     FirestoreListenerTarget, FirestoreListenerTargetChangeType, FirestoreListenerTargetParams,
@@ -25,15 +24,21 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinSet;
-use tokio::time::Instant;
+use tokio::time::{Instant, MissedTickBehavior};
 
+use super::FirestoreKeyringStore;
 use crate::errors::{KeyringError, KeyringResult};
-use crate::store::{join_until, KeyringWatch, StoreKind, StoreOperation, WatchEvent};
+use crate::store::{join_until, KeyringStore, KeyringWatch, StoreOperation, WatchEvent};
 use crate::KeyringId;
 
 /// How long a watch waits for Firestore's first state of the document. The keyring awaits the
 /// watch when it opens, and the load just before it reached Firestore.
 const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How often the task asks firestore-rs whether it still listens to a target Firestore removed.
+/// firestore-rs decides only after the callback has returned, and adds a target it keeps back only
+/// after its retry delay, so the task asks until the target is back or gone.
+const REMOVAL_CHECK_INTERVAL: Duration = Duration::from_millis(50);
 
 /// The listener of a store and its clones. The first watch starts its task, and the store's
 /// shutdown stops it.
@@ -47,7 +52,8 @@ pub(super) struct SharedListener {
 #[derive(Default)]
 struct ListenerState {
     commands: Commands,
-    /// The listener task, kept until a shutdown has joined it, a cancelled one included.
+    /// The listener task, kept until a shutdown has joined it, a cancelled one included. Dropping
+    /// it with the last store clone aborts the task, which ends every watch.
     task: JoinSet<()>,
 }
 
@@ -57,21 +63,18 @@ enum Commands {
     /// No watch has started the task.
     #[default]
     Unstarted,
-    Running(mpsc::UnboundedSender<ListenerCommand>),
+    /// The task stops once this sender is dropped and it has served the requests sent before.
+    Running(mpsc::UnboundedSender<WatchRequest>),
     /// The store was shut down: no watch starts the task again.
     Stopped,
 }
 
-enum ListenerCommand {
-    /// Adds `events` to the watches of `id`, and answers with the `current` flag of the keyring's
-    /// route, or with the error that kept the keyring's target off the stream.
-    Watch {
-        id: KeyringId,
-        events: mpsc::Sender<WatchEvent>,
-        registered: oneshot::Sender<KeyringResult<watch::Receiver<bool>>>,
-    },
-    /// Shuts the listener down, which ends every watch.
-    Stop,
+/// A watch of `id` signalled through `events`. The task answers on `registered` with the
+/// `current` flag of the keyring's route, or with the error that kept its target off the stream.
+struct WatchRequest {
+    id: KeyringId,
+    events: mpsc::Sender<WatchEvent>,
+    registered: oneshot::Sender<KeyringResult<watch::Receiver<bool>>>,
 }
 
 /// The task that owns a store's firestore-rs listener.
@@ -90,10 +93,13 @@ struct ListenerTask {
     /// One future per watch, which resolves with the watch's target once the watch is dropped or
     /// its route ends.
     releases: FuturesUnordered<BoxFuture<'static, FirestoreListenerTarget>>,
+    /// The targets Firestore removed whose routes wait for firestore-rs to add them back or to
+    /// stop listening to them.
+    unsettled: HashSet<FirestoreListenerTarget>,
 }
 
-/// The watched keyrings, by keyring and by target. The task adds routes and removes released
-/// ones; the callback routes events, and ends the route of a target Firestore ended.
+/// The watched keyrings, by keyring and by target. The task adds routes, and removes released
+/// ones and those of targets firestore-rs stopped listening to; the callback routes events.
 ///
 /// No code under the lock panics between two changes of the maps, so a poisoned lock is taken as
 /// it is.
@@ -114,8 +120,18 @@ struct Route {
     /// `true` once Firestore has sent the document's state on this target. A watch waits for it,
     /// and the route signals nothing before it. Dropped when the route ends.
     current: watch::Sender<bool>,
+    state: TargetState,
+}
+
+/// Where a route's target stands, going by Firestore's target changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TargetState {
+    /// Firestore has not acknowledged the target yet. A change for every target leaves it out,
+    /// as firestore-rs does.
+    Adding,
+    Listening,
     /// Firestore removed the target, and firestore-rs has not added it back yet.
-    removed: bool,
+    Removed,
 }
 
 impl SharedListener {
@@ -133,19 +149,19 @@ impl SharedListener {
             let mut state = self.state.lock().await;
             let state = &mut *state;
             if let Commands::Unstarted = state.commands {
-                let (commands, received) = mpsc::unbounded_channel();
+                let (sender, requests) = mpsc::unbounded_channel();
                 state.task.spawn(ListenerTask::run(
                     db.clone(),
                     collection.to_string(),
-                    received,
+                    requests,
                 ));
-                state.commands = Commands::Running(commands);
+                state.commands = Commands::Running(sender);
             }
             let Commands::Running(commands) = &state.commands else {
                 return Ok(None);
             };
             // A closed channel means that the task has ended, and `registration` fails below.
-            let _ = commands.send(ListenerCommand::Watch {
+            let _ = commands.send(WatchRequest {
                 id: id.clone(),
                 events,
                 registered,
@@ -168,13 +184,13 @@ impl SharedListener {
                     return Ok(None);
                 }
                 Err(KeyringError::store(
-                    StoreKind::Firestore,
+                    FirestoreKeyringStore::KIND,
                     StoreOperation::Watch,
                     "Firestore stopped listening to the document",
                 ))
             }
             Err(_) => Err(KeyringError::store(
-                StoreKind::Firestore,
+                FirestoreKeyringStore::KIND,
                 StoreOperation::Watch,
                 "Firestore sent no state of the document",
             )),
@@ -185,48 +201,45 @@ impl SharedListener {
     pub(super) async fn shutdown(&self, timeout: Option<Duration>) {
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         let mut state = self.state.lock().await;
-        if let Commands::Running(commands) =
-            std::mem::replace(&mut state.commands, Commands::Stopped)
-        {
-            // A closed channel means that the task has ended, and the join returns at once.
-            let _ = commands.send(ListenerCommand::Stop);
-        }
+        state.commands = Commands::Stopped;
         join_until(&mut state.task, deadline).await;
     }
 }
 
 impl ListenerTask {
-    /// Serves the watches that `commands` brings until a stop, or until every store clone is
-    /// dropped and then every watch, and shuts the listener down.
+    /// Serves the watches that `requests` brings until the store shuts down, and shuts the
+    /// listener down.
     async fn run(
         db: FirestoreDb,
         collection: String,
-        mut commands: mpsc::UnboundedReceiver<ListenerCommand>,
+        mut requests: mpsc::UnboundedReceiver<WatchRequest>,
     ) {
         let routes = Arc::new(Mutex::new(Routes::default()));
+        let (report_removal, mut removals) = mpsc::unbounded_channel();
         let mut task = ListenerTask {
-            listener: Self::start(&db, Arc::downgrade(&routes))
+            listener: Self::start(&db, Arc::downgrade(&routes), report_removal)
                 .await
                 .map_err(Arc::new),
             routes,
             collection,
             next_target: 1,
             releases: FuturesUnordered::new(),
+            unsettled: HashSet::new(),
         };
-        let mut store_dropped = false;
+        let mut removal_checks = tokio::time::interval(REMOVAL_CHECK_INTERVAL);
+        removal_checks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 biased;
-                command = commands.recv(), if !store_dropped => match command {
-                    Some(ListenerCommand::Watch { id, events, registered }) => {
-                        task.register(id, events, registered).await;
-                    }
-                    Some(ListenerCommand::Stop) => break,
-                    // No watch comes any more: the task serves those left and stops after them.
-                    None => store_dropped = true,
+                request = requests.recv() => match request {
+                    Some(request) => task.register(request).await,
+                    None => break,
                 },
                 Some(target) = task.releases.next() => task.release(target).await,
-                else => break,
+                Some(target) = removals.recv() => {
+                    task.unsettled.insert(target);
+                }
+                _ = removal_checks.tick(), if !task.unsettled.is_empty() => task.settle_removals(),
             }
         }
         if let Ok(listener) = &mut task.listener {
@@ -235,10 +248,12 @@ impl ListenerTask {
         }
     }
 
-    /// A started listener without targets, whose callback routes every event through `routes`.
+    /// A started listener without targets, whose callback routes every event through `routes`
+    /// and sends each target Firestore removed to `report_removal`.
     async fn start(
         db: &FirestoreDb,
         routes: Weak<Mutex<Routes>>,
+        report_removal: mpsc::UnboundedSender<FirestoreListenerTarget>,
     ) -> FirestoreResult<FirestoreListener<FirestoreDb, FirestoreMemListenStateStorage>> {
         let mut listener = db
             .create_listener(FirestoreMemListenStateStorage::new())
@@ -246,7 +261,11 @@ impl ListenerTask {
         listener
             .start(move |event| {
                 if let Some(routes) = routes.upgrade() {
-                    Routes::lock(&routes).route(event);
+                    let removed = Routes::lock(&routes).route(event);
+                    for target in removed {
+                        // A closed channel means that the task has ended.
+                        let _ = report_removal.send(target);
+                    }
                 }
                 std::future::ready(Ok(()))
             })
@@ -254,17 +273,20 @@ impl ListenerTask {
         Ok(listener)
     }
 
-    /// Adds `events` to the watches of `id`, with a new target for a keyring not watched yet,
-    /// and answers `registered`.
-    async fn register(
-        &mut self,
-        id: KeyringId,
-        events: mpsc::Sender<WatchEvent>,
-        registered: oneshot::Sender<KeyringResult<watch::Receiver<bool>>>,
-    ) {
+    /// Adds the request's watch to the watches of its keyring, with a new target for a keyring not
+    /// watched yet, and answers it.
+    async fn register(&mut self, request: WatchRequest) {
+        let WatchRequest {
+            id,
+            events,
+            registered,
+        } = request;
+        // A route firestore-rs stopped listening to is ended first, so that the watch does not
+        // join it.
+        self.settle_removals();
         let joined = Routes::lock(&self.routes).join(&id, &events);
-        let joined = match joined {
-            Some(joined) => Ok(joined),
+        let route = match joined {
+            Some(route) => Ok(route),
             None => {
                 let target = FirestoreListenerTarget::new(self.next_target);
                 // firestore-rs refuses every target past `i32::MAX`, so a saturated counter fails
@@ -277,7 +299,7 @@ impl ListenerTask {
                     .map(|()| (target, current))
             }
         };
-        let answer = match joined {
+        let answer = match route {
             Ok((target, current)) => {
                 let mut ended = current.clone();
                 self.releases.push(Box::pin(async move {
@@ -291,7 +313,7 @@ impl ListenerTask {
                 Ok(current)
             }
             Err(error) => Err(KeyringError::store_caused_by(
-                StoreKind::Firestore,
+                FirestoreKeyringStore::KIND,
                 StoreOperation::Watch,
                 error,
             )),
@@ -349,6 +371,19 @@ impl ListenerTask {
             let _ = listener.remove_target(&target).await;
         }
     }
+
+    /// Ends the routes of the removed targets that firestore-rs no longer listens to, and forgets
+    /// those it has added back.
+    fn settle_removals(&mut self) {
+        let listener = self.listener.as_ref().ok();
+        let mut routes = Routes::lock(&self.routes);
+        self.unsettled.retain(|target| {
+            routes.settle(
+                target,
+                listener.is_some_and(|listener| listener.has_target(target)),
+            )
+        });
+    }
 }
 
 impl Routes {
@@ -384,7 +419,7 @@ impl Routes {
                 events: vec![events],
                 update_time: None,
                 current,
-                removed: false,
+                state: TargetState::Adding,
             },
         );
         receiver
@@ -416,27 +451,29 @@ impl Routes {
         false
     }
 
+    /// Ends the route of the removed `target` unless firestore-rs still `listened` to it, and
+    /// returns whether the route still waits for firestore-rs to add the target back.
+    fn settle(&mut self, target: &FirestoreListenerTarget, listened: bool) -> bool {
+        let removed = self
+            .targets
+            .get(target)
+            .and_then(|id| self.keyrings.get(id))
+            .is_some_and(|route| route.state == TargetState::Removed);
+        if removed && !listened {
+            self.end(target);
+        }
+        removed && listened
+    }
+
     /// The route of the target with the wire id `target`, if it has one.
     fn route_mut(&mut self, target: i32) -> Option<&mut Route> {
         let target = FirestoreListenerTarget::try_from(target).ok()?;
         self.keyrings.get_mut(self.targets.get(&target)?)
     }
 
-    /// The keyrings of the targets a target change names, or of every route when it names none.
-    fn keyrings_of(&self, target_ids: &[i32]) -> Vec<KeyringId> {
-        if target_ids.is_empty() {
-            return self.keyrings.keys().cloned().collect();
-        }
-        target_ids
-            .iter()
-            .filter_map(|target| FirestoreListenerTarget::try_from(*target).ok())
-            .filter_map(|target| self.targets.get(&target).cloned())
-            .collect()
-    }
-
-    /// Applies one event of the listen stream. An event for a target without a route, such as
-    /// one removed since, is dropped.
-    fn route(&mut self, event: FirestoreListenEvent) {
+    /// Applies one event of the listen stream, and returns the targets Firestore removed. An
+    /// event for a target without a route, such as one removed since, is dropped.
+    fn route(&mut self, event: FirestoreListenEvent) -> Vec<FirestoreListenerTarget> {
         match event {
             FirestoreListenEvent::DocumentChange(change) => {
                 let update_time = change.document.and_then(|document| document.update_time);
@@ -458,60 +495,81 @@ impl Routes {
                     }
                 }
             }
-            FirestoreListenEvent::TargetChange(change) => self.target_change(change),
+            FirestoreListenEvent::TargetChange(change) => return self.target_change(change),
             // An existence filter checks a query's count, which a single document needs no
             // check of.
             FirestoreListenEvent::Filter(_) => {}
         }
+        Vec::new()
     }
 
-    /// Applies a target change to the routes of the targets it names, or to every route when it
-    /// names none.
-    fn target_change(&mut self, change: TargetChange) {
-        let change_type = FirestoreListenerTargetChangeType::try_from(change.target_change_type);
-        for id in self.keyrings_of(&change.target_ids) {
-            let Some(route) = self.keyrings.get_mut(&id) else {
-                continue;
+    /// Applies a target change to the routes of the targets it names, or, when it names none, to
+    /// those of the targets Firestore has acknowledged, and returns the targets Firestore removed.
+    fn target_change(&mut self, change: TargetChange) -> Vec<FirestoreListenerTarget> {
+        let change_type =
+            match FirestoreListenerTargetChangeType::try_from(change.target_change_type) {
+                Ok(
+                    change_type @ (FirestoreListenerTargetChangeType::Add
+                    | FirestoreListenerTargetChangeType::Current),
+                ) => change_type,
+                Ok(FirestoreListenerTargetChangeType::Remove) if change.cause.is_some() => {
+                    FirestoreListenerTargetChangeType::Remove
+                }
+                // A removal without a cause acknowledges that of a released target, whose route is
+                // gone. A reset resends the document's state, which the update time compares.
+                _ => return Vec::new(),
             };
-            match (&change_type, &change.cause) {
-                (Ok(FirestoreListenerTargetChangeType::Current), _) => {
-                    route.current.send_replace(true);
+        let mut removed = Vec::new();
+        let mut apply = |route: &mut Route| {
+            if route.target_change(change_type) {
+                removed.push(route.target.clone());
+            }
+        };
+        if change.target_ids.is_empty() {
+            self.keyrings
+                .values_mut()
+                .filter(|route| route.state == TargetState::Listening)
+                .for_each(apply);
+        } else {
+            for target in change.target_ids {
+                if let Some(route) = self.route_mut(target) {
+                    apply(route);
                 }
-                // A reconnected stream adds every target back with its resume state, and the
-                // update time covers what Firestore sends again, so only a target Firestore
-                // removed is reconnected.
-                (Ok(FirestoreListenerTargetChangeType::Add), _) if route.removed => {
-                    route.removed = false;
-                    route.signal(WatchEvent::Reconnected);
-                }
-                // firestore-rs ends a target removed for these causes whatever its resume state,
-                // and does not add it back.
-                (Ok(FirestoreListenerTargetChangeType::Remove), Some(cause))
-                    if matches!(
-                        Code::from(cause.code),
-                        Code::PermissionDenied | Code::NotFound | Code::Unimplemented
-                    ) =>
-                {
-                    let target = route.target.clone();
-                    self.end(&target);
-                }
-                // firestore-rs also ends a target refused as an invalid argument or a failed
-                // precondition when it added the target without a resume state, which the
-                // callback cannot tell from one it adds back. Such a route stays disconnected,
-                // and the record TTL bounds its keyring.
-                (Ok(FirestoreListenerTargetChangeType::Remove), Some(_)) => {
-                    route.removed = true;
-                    route.signal(WatchEvent::Disconnected);
-                }
-                // A removal without a cause acknowledges that of a released target, whose route
-                // is gone. A reset resends the document's state, which the update time compares.
-                _ => {}
             }
         }
+        removed
     }
 }
 
 impl Route {
+    /// Applies a target change of `change_type`, a removal being one Firestore made on its own,
+    /// and returns whether Firestore removed the target.
+    fn target_change(&mut self, change_type: FirestoreListenerTargetChangeType) -> bool {
+        match change_type {
+            FirestoreListenerTargetChangeType::Current => {
+                self.current.send_replace(true);
+            }
+            // A reconnected stream adds every target back with its resume state, and the update
+            // time covers what Firestore sends again, so only a target Firestore removed is
+            // reconnected.
+            FirestoreListenerTargetChangeType::Add => {
+                if std::mem::replace(&mut self.state, TargetState::Listening)
+                    == TargetState::Removed
+                {
+                    self.signal(WatchEvent::Reconnected);
+                }
+            }
+            FirestoreListenerTargetChangeType::Remove => {
+                self.state = TargetState::Removed;
+                self.signal(WatchEvent::Disconnected);
+                return true;
+            }
+            FirestoreListenerTargetChangeType::NoChange
+            | FirestoreListenerTargetChangeType::Reset => {}
+        }
+        false
+    }
+
     /// Takes the document's update time from a change or deletion, and signals a change of it.
     fn document(&mut self, update_time: Option<Timestamp>) {
         if self.update_time != update_time {
@@ -539,20 +597,21 @@ mod tests {
     use std::error::Error;
 
     use ::firestore::gcloud_sdk::google::rpc::Status;
+    use ::firestore::gcloud_sdk::tonic::Code;
     use tokio::sync::mpsc::error::TryRecvError;
 
     use super::*;
     use crate::test_support::TestResult;
 
-    /// A target change of `change_type` for `target`, caused by `cause` when it is one.
+    /// A target change of `change_type` for `targets`, caused by `cause` when it is one.
     fn target_change(
         change_type: FirestoreListenerTargetChangeType,
-        target: i32,
+        targets: &[i32],
         cause: Option<Code>,
     ) -> FirestoreListenEvent {
         FirestoreListenEvent::TargetChange(TargetChange {
             target_change_type: change_type.into(),
-            target_ids: vec![target],
+            target_ids: targets.to_vec(),
             cause: cause.map(|code| Status {
                 code: code.into(),
                 ..Status::default()
@@ -573,11 +632,12 @@ mod tests {
             FirestoreListenerTarget::try_from(target)?,
             events,
         );
-        routes.route(target_change(
+        for change_type in [
+            FirestoreListenerTargetChangeType::Add,
             FirestoreListenerTargetChangeType::Current,
-            target,
-            None,
-        ));
+        ] {
+            routes.route(target_change(change_type, &[target], None));
+        }
         Ok(watch)
     }
 
@@ -587,20 +647,22 @@ mod tests {
         let mut routes = Routes::default();
         let mut tenant_a = watched(&mut routes, "tenant-a", 1)?;
         let mut tenant_b = watched(&mut routes, "tenant-b", 2)?;
-        routes.route(target_change(
+        for target in routes.route(target_change(
             FirestoreListenerTargetChangeType::Remove,
-            1,
+            &[1],
             Some(Code::Unavailable),
-        ));
+        )) {
+            routes.settle(&target, true);
+        }
         routes.route(target_change(
             FirestoreListenerTargetChangeType::Add,
-            1,
+            &[1],
             None,
         ));
         // A reconnected stream adds every target back.
         routes.route(target_change(
             FirestoreListenerTargetChangeType::Add,
-            2,
+            &[2],
             None,
         ));
         assert_eq!(tenant_a.try_recv(), Ok(WatchEvent::Disconnected));
@@ -611,17 +673,43 @@ mod tests {
     }
 
     #[test]
-    fn a_target_removed_for_good_ends_only_its_keyrings_watch() -> TestResult {
+    fn a_target_firestore_rs_ended_ends_only_its_keyrings_watch() -> TestResult {
         let mut routes = Routes::default();
         let mut tenant_a = watched(&mut routes, "tenant-a", 1)?;
         let mut tenant_b = watched(&mut routes, "tenant-b", 2)?;
-        routes.route(target_change(
+        for target in routes.route(target_change(
             FirestoreListenerTargetChangeType::Remove,
-            1,
-            Some(Code::PermissionDenied),
-        ));
+            &[1],
+            Some(Code::InvalidArgument),
+        )) {
+            routes.settle(&target, false);
+        }
+        assert_eq!(tenant_a.try_recv(), Ok(WatchEvent::Disconnected));
         assert_eq!(tenant_a.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(tenant_b.try_recv(), Err(TryRecvError::Empty));
+        let (events, _watch) = mpsc::channel(16);
+        assert!(routes
+            .join(&KeyringId::try_from("tenant-a".to_string())?, &events)
+            .is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn a_change_for_every_target_skips_the_targets_firestore_has_not_added() -> TestResult {
+        let mut routes = Routes::default();
+        let _tenant_a = watched(&mut routes, "tenant-a", 1)?;
+        let (events, _tenant_b) = mpsc::channel(16);
+        let tenant_b = routes.insert(
+            KeyringId::try_from("tenant-b".to_string())?,
+            FirestoreListenerTarget::try_from(2)?,
+            events,
+        );
+        routes.route(target_change(
+            FirestoreListenerTargetChangeType::Current,
+            &[],
+            None,
+        ));
+        assert!(!*tenant_b.borrow());
         Ok(())
     }
 }

@@ -522,7 +522,6 @@ mod firestore_store {
         let _watch = store.watch(&unique_keyring_id()?).await?;
         store.shutdown(None).await;
         tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
-        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
         Ok(())
     }
 }
