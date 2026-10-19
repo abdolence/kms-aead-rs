@@ -41,6 +41,11 @@ gcloud-sdk = { workspace = true, optional = true }
 tokio-stream = { version = "0.1", optional = true, default-features = false }
 # The features kms-aead's aws-sdk-kms has, so that both share one HTTPS client and runtime.
 aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
+serde_bytes = { workspace = true, optional = true }
+# The buffer `ToSql::to_sql` writes into, which tokio-postgres does not re-export.
+bytes = { workspace = true, optional = true }
+sqlx-core = { workspace = true, optional = true }
+sqlx-postgres = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -54,11 +59,13 @@ aws-config = { version = "1", default-features = false, features = ["behavior-ve
 # tokio-postgres-rustls builds only on tokio-postgres's `runtime`, which a build without the
 # `postgres` feature does not turn on.
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
-tokio-postgres-rustls = "0.13"
+tokio-postgres-rustls = "0.14"
 # No crypto provider of its own: a second one beside the aws-lc-rs of gcloud-sdk or aws-sdk-s3
 # leaves rustls without a process default, and their clients panic.
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
+# The pool of the `sqlx` feature's live test.
+sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
 
 [features]
 default = []
@@ -74,15 +81,17 @@ deterministic = ["kms-aead/deterministic"]
 # DEKs, write the record or export keysets, for the job or service that administers keyrings. An
 # application that only encrypts, decrypts and sweeps builds without it.
 admin = []
-# `Serialize` and `Deserialize` for `Encrypted`.
-serde = ["kms-aead/serde"]
+# `Serialize` and `Deserialize` for `Encrypted` and `SealMarker`, as bytes.
+serde = ["kms-aead/serde", "dep:serde_bytes"]
 # `Json<T>`, a plaintext stored as its JSON.
 serde-json = ["serde", "kms-aead/serde-json"]
 # `FirestoreKeyringStore`, on firestore-rs with its default TLS roots and crypto provider.
 firestore = ["dep:firestore"]
-# `PostgresKeyringStore` on tokio-postgres, and kms-aead's `ToSql` and `FromSql` for `Encrypted`
-# as `BYTEA`.
-postgres = ["dep:tokio-postgres", "kms-aead/postgres"]
+# `PostgresKeyringStore` on tokio-postgres, and `ToSql` and `FromSql` for `Encrypted` and
+# `SealMarker` as `BYTEA`.
+postgres = ["dep:tokio-postgres", "kms-aead/postgres", "dep:bytes"]
+# sqlx's `Type`, `Encode` and `Decode` for `Encrypted` and `SealMarker` on Postgres, as `BYTEA`.
+sqlx = ["kms-aead/sqlx", "dep:sqlx-core", "dep:sqlx-postgres"]
 # `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
 # feature from the application, or one of the two below, to build.
 gcs = ["dep:gcloud-sdk", "gcloud-sdk/google-storage-v2", "dep:tokio-stream"]
@@ -121,6 +130,7 @@ features = [
     "serde-json",
     "firestore",
     "postgres",
+    "sqlx",
     "gcs-tls-roots",
     "s3",
     "bigquery-export",
@@ -134,7 +144,7 @@ required-features = ["ring", "admin"]
 [[example]]
 name = "migrate"
 path = "examples/migrate.rs"
-required-features = ["ring", "admin"]
+required-features = ["ring", "admin", "serde"]
 
 [[example]]
 name = "tink_export"

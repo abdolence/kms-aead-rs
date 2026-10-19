@@ -13,6 +13,7 @@ The spans are:
   `decrypt_with_encrypted_dek`;
 - `KMS AEAD generate DEK`: `generate_encrypted_dek` and `generate_encrypted_deterministic_dek`;
 - `KMS AEAD decrypt DEK`: `decrypt_deterministic_dek`;
+- `KMS AEAD re-encrypt DEK`: `reencrypt_dek` and `reencrypt_encrypted_dek`;
 - `KMS AEAD beacon`: the envelope's `beacon`;
 - `KMS encrypt DEK`: each provider's encryption of a DEK;
 - `KMS decrypt DEK`: each provider's decryption of a DEK;
@@ -58,7 +59,7 @@ let decrypted: SecretValue = envelope.decrypt(aad, &encrypted).await?;
 The decrypt prints, without timestamps:
 
 ```text
-DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/kek_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
 DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 ```
 
@@ -68,7 +69,7 @@ run it with `cargo run --example tracing --features ring`.
 ## OpenTelemetry
 
 With [tracing-opentelemetry](https://github.com/tokio-rs/tracing-opentelemetry) every span field
-becomes a span attribute with the same name, such as `/kms_aead/key_version`, so the KMS calls and
+becomes a span attribute with the same name, such as `/kms_aead/kek_version`, so the KMS calls and
 cache hits show up next to the latency of a request in Cloud Trace, Jaeger, etc.
 
 The fields are declared empty when the span opens and recorded once their value is known, which
@@ -117,13 +118,23 @@ left unrecorded, never recorded as `0` or an empty string.
 | `dek_cache` | decrypt DEK only: `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
 | `error_code` | the code of the error the call returned |
 
+### KMS AEAD re-encrypt DEK
+
+| Field | Value |
+|---|---|
+| `dek_cache` | `bypassed` beside an enabled cache, since the call never goes through it, `disabled` otherwise |
+| `error_code` | the code of the error the call returned |
+
+Its children are a `KMS decrypt DEK` under the version that encrypted the DEK and a `KMS encrypt DEK`
+under the current one.
+
 ### KMS encrypt DEK, KMS decrypt DEK and KMS random
 
 | Field | Value |
 |---|---|
 | `provider` | `gcp`, `aws`, `azure`, `hc_vault_transit`, `local`, or the name of an application's own provider |
 | `key` | the KEK, see below; for `KMS random` the GCP location, and unrecorded on AWS |
-| `key_version` | `KMS encrypt DEK` and `KMS decrypt DEK`: from the KMS response on encryption, from the encrypted DEK's bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption |
+| `kek_version` | `KMS encrypt DEK` and `KMS decrypt DEK`: from the KMS response on encryption, from the encrypted DEK's bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption |
 | `len` | random only: the bytes requested from the KMS generator |
 | `response_time` | milliseconds the KMS call took |
 | `error_code` | the code of the error the call returned |
@@ -147,7 +158,7 @@ Besides the spans, the library logs:
 - `WARN`, when a Vault Transit provider is created: an `http` address to another host, or a system
   CA certificate that cannot be loaded;
 - `INFO`, when a local KMS provider is created: its KEK id and versions, each with where it came
-  from, in the `key` and `key_versions` fields.
+  from, in the `key` and `kek_versions` fields.
 
 The library retries nothing itself, so there is no retry field.
 
@@ -162,10 +173,10 @@ those of `KeyringAdmin` calls, under the `admin` feature.
 
 | Span | Opened by | Fields |
 |---|---|---|
-| `Keyring encrypt` | `encrypt`, `encrypt_deterministic`, `deterministic_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
+| `Keyring encrypt` | a sealer's `encrypt` and `encrypt_deterministic`, `deterministic_probes` | `keyring`, `purpose`, `key_id`, `algorithm`, `backend`, `dek_cache`, `error_code` |
 | `Keyring decrypt` | `decrypt`, `decrypt_with_trust`, their deterministic pair, `decrypt_envelope_for_migration` | `keyring`, `purpose`, `key_id`, `key_state`, `reload`, `dek_cache`, `error_code` |
 | `Keyring load` | every store read: `open`, a revalidation, a reload, the read before a write of a `KeyringAdmin` | `keyring`, `store`, `reason`, `changed`, `revision`, `response_time`, `error_code` |
-| `Keyring beacon` | `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
+| `Keyring beacon` | a sealer's `beacon`, `beacon_probes` | `keyring`, `key_id`, `algorithm`, `dek_cache`, `error_code` |
 | `Keyring rotate` | `rotate`, `change_algorithm` | `keyring`, `purpose`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring promote` | `promote` | `keyring`, `key_id`, `from_key_id`, `to_key_id`, `cas_retries`, `error_code` |
 | `Keyring mark compromised` | `mark_compromised` | `keyring`, `key_id`, `to_key_id`, `cas_retries`, `error_code` |
@@ -186,7 +197,7 @@ those of `KeyringAdmin` calls, under the `admin` feature.
 | `reload` | what an unknown key id caused: `none`, `reloaded` or `rate_limited` |
 | `dek_cache` | `hit`, `miss` or `disabled`; `bypassed` for `reencrypt_deks`, the export, and a compromised version read past the cache; unrecorded for `deterministic_probes` and `beacon_probes` |
 | `store` | `memory`, `firestore`, `postgres`, `gcs`, `s3`, or an application store's name |
-| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
+| `reason` | `open`, `ttl`, `watch`, `unknown_key_id`, `pending_key_id` for a re-seal under a version the cached record holds as pending, `forced` for `Keyring::reload`, `export` for the read a keyset export selects its versions from, `admin` for the read before a write |
 | `changed` | `true` for a new record taken, `false`, or `regressed` for one refused because it moves a version backwards |
 | `revision` | the store's revision of the record read, as text |
 | `response_time` | milliseconds the store call took |

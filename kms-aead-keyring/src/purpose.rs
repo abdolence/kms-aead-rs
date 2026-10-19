@@ -117,36 +117,6 @@ pub(crate) fn next_key_id(key_id: KeyId) -> Option<KeyId> {
     (id & KEY_ID_ORDINAL_MASK != KEY_ID_ORDINAL_MASK).then(|| KeyId::new(id + 1))
 }
 
-/// Serde for an optional key id as a number or `null`, which refuses a reserved id on read.
-pub(crate) mod optional_key_id {
-    use kms_aead::KeyId;
-    use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    use crate::errors::KeyringError;
-
-    pub(crate) fn serialize<S: Serializer>(
-        key_id: &Option<KeyId>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        key_id.map(KeyId::as_u32).serialize(serializer)
-    }
-
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<KeyId>, D::Error> {
-        Option::<u32>::deserialize(deserializer)?
-            .map(KeyId::new)
-            .map(|key_id| {
-                if super::is_reserved(key_id) {
-                    return Err(D::Error::custom(KeyringError::ReservedKeyId));
-                }
-                Ok(key_id)
-            })
-            .transpose()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

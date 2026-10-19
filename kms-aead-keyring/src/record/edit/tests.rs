@@ -1,6 +1,8 @@
 use kms_aead::{AeadAlgorithm, DeterministicAlgorithm};
+use serde_json::json;
 
 use super::*;
+use crate::errors::RecordInvalidError;
 use crate::record::tests::{document, parse, rotated, version, COMPROMISED, ENCRYPTED_DEK};
 use crate::test_support::TestResult;
 
@@ -265,6 +267,25 @@ fn a_promotion_moves_the_active_version_to_decrypt_only() -> TestResult {
 }
 
 #[test]
+fn an_activation_past_the_last_seal_epoch_is_refused() -> TestResult {
+    let mut last_epoch = document(vec![
+        version(1, "active", false)?,
+        version(2, "pending", false)?,
+    ]);
+    last_epoch["seal_epoch"] = json!(u32::MAX);
+    let mut edit = RecordEdit::from(parse(&last_epoch)?);
+
+    assert!(matches!(
+        edit.promote(KeyId::new(2), Timestamp::now()),
+        Err(KeyringError::RecordInvalid(RecordInvalidError {
+            reason: RecordInvalidReason::SealEpochOutOfRange,
+            ..
+        }))
+    ));
+    Ok(())
+}
+
+#[test]
 fn compromising_the_active_version_rotates_in_the_same_change() -> KeyringResult<()> {
     let now = Timestamp::now();
     let mut edit = RecordEdit::from(parse(&rotated()?)?);
@@ -320,6 +341,53 @@ fn a_compromise_replacement_is_active_beside_a_pending_version() -> KeyringResul
     assert_eq!(
         record.version(KeyId::new(2)).map(KeyVersion::state),
         Some(KeyVersionState::Pending)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_range_a_compromise_left_open_ends_at_the_next_activation() -> TestResult {
+    let now = Timestamp::now();
+    let (randomized, deterministic, pending) = (
+        KeyId::new(1),
+        KeyId::new(0x8000_0001),
+        KeyId::new(0x8000_0002),
+    );
+    let mut flag_alone = RecordEdit::from(parse(&document(vec![
+        version(1, "active", false)?,
+        version(0x8000_0001, "active", false)?,
+        version(0x8000_0002, "pending", false)?,
+    ]))?);
+    flag_alone.mark_compromised(randomized, Compromise::new(now, None), None, now)?;
+    let record = flag_alone.finish()?;
+    assert_eq!(record.seal_marker(), SealMarker::of_epoch(2));
+    assert_eq!(
+        record.version(randomized).and_then(KeyVersion::seal_range),
+        Some(SealRange::new(SealMarker::of_epoch(2), None))
+    );
+
+    let mut promotion = RecordEdit::from(record);
+    promotion.promote(pending, now)?;
+    let record = promotion.finish()?;
+
+    assert_eq!(record.seal_marker(), SealMarker::of_epoch(3));
+    let ended = Some(SealRange::new(
+        SealMarker::of_epoch(2),
+        Some(SealMarker::of_epoch(3)),
+    ));
+    assert_eq!(
+        record.version(randomized).and_then(KeyVersion::seal_range),
+        ended
+    );
+    assert_eq!(
+        record
+            .version(deterministic)
+            .and_then(KeyVersion::seal_range),
+        ended
+    );
+    assert_eq!(
+        record.version(pending).and_then(KeyVersion::seal_range),
+        Some(SealRange::new(SealMarker::of_epoch(3), None))
     );
     Ok(())
 }

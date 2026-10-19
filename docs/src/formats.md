@@ -56,7 +56,7 @@ assert_eq!(joined.value(), encrypted.value());
   Tink's AWS client sends no encryption context and its GCP client no additional authenticated data;
 - the rest is a [`Bare` value](#formats-of-encrypted).
 
-The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+The envelope records neither the algorithm nor the KEK version, so the writer and the reader,
 kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:
 
 | Algorithm | Tink key type | Tink for Java and Go | Tink for C++ and Python |
@@ -89,7 +89,7 @@ the Cloud KMS key. `tests/tink_interop.py` and `examples/tink_interop.rs` repeat
 ## Encrypted DEKs
 
 `EncryptedDataEncryptionKey` is the bytes the provider returned from an encryption, which are also
-the bytes to store and the bytes it decrypts. Each provider's bytes name the KMS key version that
+the bytes to store and the bytes it decrypts. Each provider's bytes name the KEK version that
 encrypted the DEK where the KMS needs one to decrypt:
 
 | Provider | Bytes | Key version |
@@ -109,7 +109,7 @@ KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to 
 AAD, so neither the id nor the version can be changed without the decryption failing.
 
 Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncryptionKey::from`
-or `try_from_hex_string`, see
+or `try_from_hex_string`. Neither holds the KEK version of `kek_version()`, see
 [Storing encrypted DEKs](./envelope-encryption.md#storing-encrypted-deks).
 
 ## Serialised DEKs
@@ -253,51 +253,62 @@ staged, with the encrypted DEKs shortened:
     "deterministic": "aes-256-siv",
     "beacon": "hmac-sha256"
   },
+  "seal_epoch": 2,
   "versions": [
     {
       "key_id": 1,
       "algorithm": "aes-256-gcm",
       "state": "decrypt_only",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk...",
+      "kek_version": "1"
     },
     {
       "key_id": 2147483649,
       "algorithm": "aes-256-siv",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+...",
+      "kek_version": "1"
     },
     {
       "key_id": 1073741825,
       "algorithm": "hmac-sha256",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7...",
+      "kek_version": "1"
     },
     {
       "key_id": 2,
       "algorithm": "aes-256-gcm",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT...",
+      "kek_version": "1"
     },
     {
       "key_id": 3,
       "algorithm": "aes-256-gcm",
       "state": "pending",
       "compromised": null,
+      "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay...",
+      "kek_version": "1"
     }
   ],
   "created_at": "2026-10-18T12:18:31.053483320Z",
@@ -309,21 +320,72 @@ staged, with the encrypted DEKs shortened:
 - `kek` names the provider and the KEK the keyring was created with;
 - `algorithms` holds the algorithm new versions of each purpose use. `deterministic` and `beacon`
   are `null` for a keyring without versions of that purpose;
+- `seal_epoch` counts the writes that made a version active, from 1 at the creation, see
+  [Seal markers](#seal-markers);
 - `versions` holds every version ever created, in creation order, each under its
   [key id](#keyring-key-ids);
 - `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
   `state_changed_at` is the time it was staged;
 - `compromised` is `null`, or `{"at": "<time>", "note": "<the operator's note, or null>"}`;
+- `seal_epochs` is the version's seal range as epochs, `{"start": <epoch>, "end": <epoch or
+  null>}`: the epoch of the write that made it active, and the epoch of the first write after it
+  stopped being active that moved the epoch on, `null` until then. It is `null` for a version that
+  was never active, see [Seal markers](#seal-markers);
 - `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
   provider returned, here the local KMS layout. It is `null` for a destroyed version;
+- `kek_version` is the version of the KEK that encrypted `encrypted_dek`, as the KMS reported it,
+  here the local KEK version. It is `null` for a destroyed version, and under a KMS that reports
+  none, such as AWS KMS;
 - the times are RFC 3339, in UTC.
 
-A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
-fails with `RecordInvalid` on a document that breaks any of:
+A reader parses at most 1 MiB of JSON. The size of a version is mostly its encrypted DEK, so the
+number of versions that fit depends on the KMS:
+
+| KEK | Bytes per version | Versions in 1 MiB |
+|---|---|---|
+| local KMS | 359 | about 2,900 |
+| Vault Transit | 380 | about 2,750 |
+| GCP Cloud KMS | 412 | about 2,550 |
+| AWS KMS | 504 | about 2,050 |
+| Azure, RSA 2048-bit key | 674 | about 1,550 |
+| Azure, RSA 4096-bit key | 1,014 | about 1,050 |
+
+The local KMS row was measured on a record the crate wrote after 500 randomised rotations, each
+version AES-256-GCM, decrypt-only with a seal range. The other rows are the same record with each
+encrypted DEK replaced by one of that KMS's length, and a KEK version of that KMS's form: none for
+AWS, two digits for GCP and Vault, 32 hex digits for Azure.
+
+A reader fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
-- an encrypted DEK on every version but the destroyed ones;
-- unique key ids of the purpose of their algorithm, increasing within a purpose in creation order.
+- an encrypted DEK on every version but the destroyed ones, and a `kek_version`, when there is
+  one, of 1 to 255 ASCII alphanumerics beside it;
+- unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;
+- a `seal_epoch` of 1 or more;
+- `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
+  the active version, starting at 1 or more and below its end, and within the `seal_epoch`.
+
+## Seal markers
+
+A seal marker is the seal epoch of the keyring record a write sealed a record's fields under,
+which the application stores beside them:
+
+```text
+[0x01][seal epoch: u32 BE]
+```
+
+5 bytes in all, so that markers compare as their epochs do, and so do their bytes as Firestore,
+PostgreSQL and BigQuery compare them. `SealMarker::ENVELOPE`, `01 00 00 00 00`, is epoch 0, the
+marker of a record of envelope values. `SealMarker::try_from` fails with `InvalidSealMarker` on
+bytes of any other length or first byte. The `serde` feature stores a marker as bytes, an array of
+numbers in serde_json, and the `postgres` and `sqlx` features as `BYTEA`. See
+[Sweeps](./operations.md#sweeps) for the query it serves.
+
+`KeyVersion::seal_range()` returns the markers of a version's `seal_epochs` as a `SealRange`:
+`start()`, and `end()`, `None` while the range is open. A record whose fields were sealed through
+one `Sealer`, and which stores the marker of the sealer's record, lies in the range of every
+version its fields are under. See
+[Records under a version](./operations.md#records-under-a-version) for the query it serves.
 
 ## Telling layouts apart
 
@@ -392,6 +454,12 @@ serialised Tink key when it was in an older layout: one KMS call for a current v
 one. A value in Tink's framing needs the decryption to be told from the 32-bit layout before 0.24.0.
 The AEAD bytes stay as they are.
 
+An upgraded DEK is encrypted under the KEK's current version, so the upgrade also does what
+`reencrypt_dek` and `reencrypt_encrypted_dek` do for a value or a DEK already in Tink's format, see
+[Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+Those two refuse a layout of 0.29 or earlier with `LEGACY_FORMAT`, so a sweep after a KEK rotation
+upgrades a value in an old layout and re-encrypts the DEK of a value in Tink's format.
+
 The envelope's algorithm is the one the values were sealed with: ChaCha20-Poly1305 for values that
 0.29 and earlier sealed under their default. A raw DEK does not record its algorithm, and the
 encrypted DEK of the upgrade records it as a Tink key type, so `upgrade_legacy_value` takes the
@@ -437,7 +505,7 @@ where
 }
 # use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;

@@ -48,11 +48,12 @@ The crate declares `rust-version = "1.99"`.
 | `CipherTextWithEncryptedKey::new(&cipher_text, &encrypted_dek)` | `Encrypted::<SecretValue, Envelope>::join(&bare, &encrypted_dek)?`, in Tink's KMS envelope format |
 | `cipher_text.to_hex_string()` | `value.to_hex_string()`, read back with `Encrypted::try_from_hex_string` |
 | `cipher_text == other` | `value.value() == other.value()` |
-| `EncryptedDataEncryptionKey::new(encrypted, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one |
+| `EncryptedDataEncryptionKey::new(encrypted, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one; a provider adds the KEK version the KMS reported with `with_kek_version` |
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
-| `encrypted_dek.key_version()` | removed; the `key_version` field of the KMS spans |
-| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KmsKeyVersion`, the type of `AzureKmsKeyRef::key_version` |
+| `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
+| `AzureKmsKeyRef::with_key_version` | `AzureKmsKeyRef::with_kek_version` |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
@@ -85,9 +86,8 @@ calls that make no KMS call are not `async`:
 | `cipher.decrypt_value(&aad, &cipher_text, &key).await?` | `cipher.decrypt_bare(&aad, &bare, &key)?` |
 
 Every cipher text is an `Encrypted<T, F>`, see [Formats](./formats.md#formats-of-encrypted). It
-has its own `value()` and `into_value()`. Those of `EncryptedDataEncryptionKey` come from
-`ValueStruct`, which the crate re-exports: `use kms_aead::ValueStruct`. `DataEncryptionKey` no
-longer implements `ValueStruct`, and has its own `value()`.
+has its own `value()` and `into_value()`, and so has `EncryptedDataEncryptionKey`.
+`DataEncryptionKey` no longer implements `ValueStruct`, and has its own `value()`.
 
 ## Your own provider
 
@@ -99,8 +99,9 @@ An application's own implementation of the provider trait:
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator;
-- returns `EncryptedDataEncryptionKey::new(bytes)`. A KMS that needs the key version to decrypt
-  gets it from those bytes, as the Azure provider's do.
+- returns `EncryptedDataEncryptionKey::new(bytes)` from `encrypt_data_encryption_key`, with the
+  KEK version the KMS reported added by `with_kek_version`. A KMS that needs the key version to
+  decrypt gets it from those bytes, as the Azure provider's do.
 
 The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 [Formats](./formats.md#serialised-deks). The library never inspects the provider's own bytes.

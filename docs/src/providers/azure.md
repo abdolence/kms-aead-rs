@@ -65,6 +65,20 @@ as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm take
 which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 [Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
 
+## Key versions and rotation
+
+A rotation adds a version to the key, by hand or by the key's rotation policy. Without a key version
+in `AzureKmsKeyRef`, the latest version encrypts new DEKs; with one, that version does, so move it
+to the new version before a sweep. A sweep with a provider pinned to the old version re-encrypts
+under the old version. The `kek_version()` of the encrypted DEK an encryption returns is the
+version Key Vault encrypted with, read from the `kid` of its response.
+
+Once the sweep has reached every value, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
+Key Vault deletes a key with all its versions and never one version alone, so the old version stays
+disabled rather than destroyed.
+
 ## Errors
 
 A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or

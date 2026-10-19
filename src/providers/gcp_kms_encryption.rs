@@ -1,5 +1,7 @@
 use rsb_derive::*;
 
+use super::kek_version::read_kek_version;
+use super::KekVersion;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::spans::{self, kms};
 use crate::*;
@@ -59,11 +61,20 @@ fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<toni
     Ok(request)
 }
 
-/// The `N` of the `…/cryptoKeyVersions/N` name that Cloud KMS returns from encrypt for `key`,
-/// for the span only: decrypt addresses the CryptoKey, and Cloud KMS finds the version in its
-/// ciphertext.
-fn crypto_key_version<'n>(key: &str, name: &'n str) -> Option<&'n str> {
-    name.strip_prefix(key)?.strip_prefix("/cryptoKeyVersions/")
+/// The `N` of the `…/cryptoKeyVersions/N` name that Cloud KMS returns from encrypt for `key`: the
+/// version that encrypted, which can be the previous primary version while a change of primary
+/// propagates. Decrypt addresses the CryptoKey, and Cloud KMS finds the version in its ciphertext.
+fn crypto_key_version(key: &str, name: &str) -> KmsAeadResult<KekVersion> {
+    let version = name
+        .strip_prefix(key)
+        .and_then(|version_path| version_path.strip_prefix("/cryptoKeyVersions/"))
+        .ok_or_else(|| {
+            KmsAeadEncryptionError::create(
+                "INVALID_KEY_VERSION",
+                "The name is not a CryptoKeyVersion of the configured key",
+            )
+        })?;
+    read_kek_version(version.as_bytes())
 }
 
 /// Encrypts under the primary version of the CryptoKey `key`.
@@ -197,11 +208,17 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
 
+            let encrypted_dek = EncryptedDataEncryptionKey::new(ciphertext);
             match crypto_key_version(self.kek.key(), &name) {
-                Some(key_version) => kms::record_key_version(key_version),
-                None => warn!(name, "No key version in the GCP KMS encrypt response"),
+                Ok(kek_version) => {
+                    kms::record_kek_version(kek_version.as_str());
+                    Ok(encrypted_dek.with_kek_version(kek_version))
+                }
+                Err(error) => {
+                    warn!(name, %error, "No key version in the GCP KMS encrypt response");
+                    Ok(encrypted_dek)
+                }
             }
-            Ok(EncryptedDataEncryptionKey::new(ciphertext))
         })
         .await
     }
@@ -393,21 +410,21 @@ mod tests {
     }
 
     #[test]
-    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key() {
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key(
+    ) -> KmsAeadResult<()> {
         assert_eq!(
             crypto_key_version(
                 KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
-            ),
-            Some("18")
+            )?,
+            KekVersion::try_from("18".to_string())?
         );
-        assert_eq!(
-            crypto_key_version(
-                KEY_NAME,
-                "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
-            ),
-            None
-        );
+        assert!(crypto_key_version(
+            KEY_NAME,
+            "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/other-key/cryptoKeyVersions/18"
+        )
+        .is_err());
+        Ok(())
     }
 
     /// `KmsEnvelopeAead` on the Cloud KMS key the live tests configure, which stays enabled while
@@ -440,6 +457,26 @@ mod tests {
             value: "000000740a25006b8d8e5aa71290d3f41610c57a8eb343729c94e910e4b043b215195740b7f36897844f01124b00eaf42f63d18c7beacf3d46a38d13240bea3bc0c92f8280c0268c6156c749e91e736428b592e54d4448b6fbb0dd7e7be925fe9c91cf36fa2d38ae78027bc339d2b20088548f026bda2290b19a7120c26f0a32aad89f56e5d59252d5d774f8c5cea4228e13cd52c2f3249161da2e702b30169e7094bb842ca26a064dc6b5a179c6",
         },
     ];
+
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_encrypt_reports_the_crypto_key_version_that_encrypted() -> KmsAeadResult<()> {
+        let provider = GcpKmsProvider::new(&live_key_ref()).await?;
+
+        let encrypted_dek = provider
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::from(KEY_MARKER)))
+            .await?;
+
+        let kek_version = encrypted_dek.kek_version();
+        assert!(
+            kek_version.is_some_and(|kek_version| kek_version
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())),
+            "{kek_version:?}"
+        );
+        Ok(())
+    }
 
     /// Decrypts the values of the algorithms the test backend implements: every one but
     /// AES-256-GCM-SIV on ring.

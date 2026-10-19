@@ -516,11 +516,12 @@ mod tests {
     use super::*;
     use crate::errors::KmsAeadError;
     use crate::formats::TinkKeyType;
+    use crate::providers::{LocalKekId, LocalKmsProvider};
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider,
-        CONCURRENT_CALLS,
+        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
+        TestKmsProvider, CONCURRENT_CALLS,
     };
-    use crate::ValueStruct;
+    use crate::{AeadAlgorithm, AeadCipher};
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
@@ -637,6 +638,29 @@ mod tests {
         }
 
         assert_eq!(provider.decryptions(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry(
+    ) -> KmsAeadResult<()> {
+        let provider = LocalKmsProvider::<TestBackend>::ephemeral(LocalKekId::try_from(
+            ORDERS_KEK.to_string(),
+        )?)?;
+        let cache = DekCache::new(DekCacheOptions::new())?;
+        let (_, encrypted_dek) = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
+            .generate_encrypted_dek(&provider)
+            .await?;
+        let read_back = EncryptedDataEncryptionKey::from(encrypted_dek.value().clone());
+        assert_ne!(encrypted_dek.kek_version(), read_back.kek_version());
+
+        let ((), fresh) = cache.with_dek(&provider, &encrypted_dek, |_| ()).await?;
+        let ((), stored) = cache.with_dek(&provider, &read_back, |_| ()).await?;
+
+        assert_eq!(
+            [fresh, stored],
+            [DekCacheOutcome::Miss, DekCacheOutcome::Hit]
+        );
         Ok(())
     }
 

@@ -283,10 +283,6 @@ mod spans;
 mod types;
 pub use types::*;
 
-/// The trait whose `value()` and `into_value()` read the bytes of an
-/// [`EncryptedDataEncryptionKey`].
-pub use rvstruct::ValueStruct;
-
 pub mod providers;
 
 // The book's code uses every provider, backend and optional feature, so it compiles in the build

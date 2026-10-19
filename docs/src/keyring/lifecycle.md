@@ -10,7 +10,11 @@ A keyring record holds:
   without escaping. It is an identifier, not a secret, and appears in spans and errors;
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
-- every key version ever created, in creation order, each with its encrypted DEK and its state.
+- the seal epoch, which every write that makes a version active moves on by one, and which the
+  application stores beside its records as a `SealMarker`, see [Sweeps](../operations.md#sweeps);
+- every key version ever created, in creation order, each with its encrypted DEK, its state and,
+  once it was active, its seal range: the markers of the records sealed under it, see
+  [Records under a version](../operations.md#records-under-a-version).
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
@@ -81,7 +85,7 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
 | `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on |
-| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes |
+| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
 version, its state and the `Transition`:
@@ -96,8 +100,8 @@ again after a conflict up to `KeyringOptions::cas_retries` times,
 `KeyringOptions::DEFAULT_CAS_RETRIES` by default, before `RecordConflict`.
 
 States move forward only: nothing returns to `Pending`, and `Pending` moves only to `Active` or
-`Destroyed`. A running process refuses a record that moves a version backwards, see
-[Record cache](./record-cache.md#when-the-store-fails-or-misbehaves).
+`Destroyed`. A running process refuses a record that moves a version or the seal epoch backwards,
+see [Record cache](./record-cache.md#when-the-store-fails-or-misbehaves).
 
 ## Staged rotation
 

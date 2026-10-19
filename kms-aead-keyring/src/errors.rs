@@ -64,6 +64,22 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
+    /// A value or beacon under a key version that the [`Sealer`](crate::Sealer)'s record holds
+    /// as pending, or lacks, while the cached record, reloaded for it, has it: a process with a
+    /// newer record sealed it. A sealer never seals such a value again under its own versions,
+    /// which are older and may have been flagged compromised since.
+    ///
+    /// The write is safe to retry: it takes a new sealer from
+    /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. The reload that returned this
+    /// error took the store's record, so the new sealer finds the value current or seals it
+    /// under the active version. Inside `reload_min_interval` of another such reload, which
+    /// bounds the store reads that values under unknown or pending key ids cause, the cached
+    /// record may still hold the version as pending, and the retry fails the same way until the
+    /// next reload, a watch signal or the record TTL. When the store's record itself holds the
+    /// version as pending, as for a value from another keyring whose key id is pending here or
+    /// after a restore from an older backup, every retry fails with `SEALER_OUTDATED`, at no
+    /// more than one store read per `reload_min_interval`. A sweep counts the record as failed.
+    SealerOutdated(KeyVersionError),
     /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
@@ -86,6 +102,9 @@ pub enum KeyringError {
     ExportAlgorithmUnsupported(KeyVersionError),
     /// A name that is not one a [`KeyVersionState`] displays as.
     UnknownKeyVersionState,
+    /// Stored bytes that are not a [`SealMarker`](crate::sweep::SealMarker): not 5 bytes long,
+    /// or not starting with the marker version `0x01`.
+    InvalidSealMarker,
 }
 
 impl KeyringError {
@@ -110,6 +129,7 @@ impl KeyringError {
             KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
             KeyringError::KeyVersionPending(_) => "KEY_VERSION_PENDING",
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
+            KeyringError::SealerOutdated(_) => "SEALER_OUTDATED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
@@ -118,6 +138,7 @@ impl KeyringError {
             KeyringError::CustomAadUnsupported(_) => "CUSTOM_AAD_UNSUPPORTED",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
             KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
+            KeyringError::InvalidSealMarker => "INVALID_SEAL_MARKER",
         }
     }
 
@@ -142,6 +163,13 @@ impl KeyringError {
 
     pub(crate) fn key_version_unknown(keyring: &KeyringId, key_id: KeyId) -> Self {
         KeyringError::KeyVersionUnknown(KeyVersionError {
+            keyring: keyring.clone(),
+            key_id,
+        })
+    }
+
+    pub(crate) fn sealer_outdated(keyring: &KeyringId, key_id: KeyId) -> Self {
+        KeyringError::SealerOutdated(KeyVersionError {
             keyring: keyring.clone(),
             key_id,
         })
@@ -308,6 +336,11 @@ impl Display for KeyringError {
                 error.keyring,
                 error.compromise.at()
             ),
+            KeyringError::SealerOutdated(error) => write!(
+                f,
+                "The key version {} of the keyring {} is newer than the sealer's record: take a new sealer",
+                error.key_id.as_u32(), error.keyring
+            ),
             KeyringError::KeyPurposeMismatch(error) => write!(
                 f,
                 "The key id {} is not a {} key id",
@@ -339,6 +372,9 @@ impl Display for KeyringError {
             KeyringError::UnknownKeyVersionState => f.write_str(
                 "Not the name of a key version state: the names are pending, active, \
                  decrypt_only, retired and destroyed",
+            ),
+            KeyringError::InvalidSealMarker => f.write_str(
+                "Not a seal marker: a marker is the version byte 1 and a 4-byte seal epoch",
             ),
         }
     }
@@ -489,7 +525,7 @@ pub enum RecordInvalidReason {
     CompromisedActive(KeyId),
     /// A pending version flagged compromised.
     CompromisedPending(KeyId),
-    /// A destroyed version that still holds an encrypted DEK.
+    /// A destroyed version that still holds an encrypted DEK or a KEK version.
     DestroyedWithMaterial(KeyId),
     /// A version that is not destroyed and holds no encrypted DEK.
     MissingMaterial(KeyId),
@@ -497,8 +533,18 @@ pub enum RecordInvalidReason {
     OrdinalOrder(KeyId),
     /// An encrypted DEK that is not standard base64 of one byte or more.
     MalformedEncryptedDek(KeyId),
+    /// A KEK version that is not 1 to 255 ASCII alphanumerics.
+    MalformedKekVersion(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
+    /// The seal epoch is 0, the epoch of records sealed before the keyring, or a version would
+    /// become active past the last one, 2^32 - 1.
+    SealEpochOutOfRange,
+    /// The version's seal range does not fit its state: a pending version with one, an active
+    /// version without one or with an end, or a decrypt-only or retired version without one; or
+    /// it starts at epoch 0, ends where or before it starts, or lies past the record's seal
+    /// epoch.
+    SealRangeInvalid(KeyId),
 }
 
 impl Display for RecordInvalidReason {
@@ -572,7 +618,7 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::DestroyedWithMaterial(key_id) => {
                 write!(
                     f,
-                    "the destroyed key version {key_id} holds an encrypted DEK",
+                    "the destroyed key version {key_id} holds an encrypted DEK or a KEK version",
                     key_id = key_id.as_u32()
                 )
             }
@@ -595,9 +641,24 @@ impl Display for RecordInvalidReason {
                     key_id = key_id.as_u32()
                 )
             }
+            RecordInvalidReason::MalformedKekVersion(key_id) => {
+                write!(
+                    f,
+                    "the KEK version of key version {key_id} does not parse",
+                    key_id = key_id.as_u32()
+                )
+            }
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
                 write!(f, "every {purpose} key id is taken")
             }
+            RecordInvalidReason::SealEpochOutOfRange => {
+                f.write_str("the seal epoch is 0 or cannot count up any more")
+            }
+            RecordInvalidReason::SealRangeInvalid(key_id) => write!(
+                f,
+                "the seal range of key version {key_id} does not fit its state or the seal epoch",
+                key_id = key_id.as_u32()
+            ),
         }
     }
 }
@@ -623,8 +684,8 @@ pub struct RecordRegressedError {
     pub rule: RegressionRule,
 }
 
-/// How a record read from the store moves backwards from the record a process holds. Each
-/// names the version of the held record that it concerns.
+/// How a record read from the store moves backwards from the record a process holds. Each rule
+/// of a version names the version of the held record that it concerns.
 ///
 /// Two more properties hold whenever these do, so they need no rule of their own: a destroyed
 /// version never regains an encrypted DEK, since `Destroyed` moves nowhere and holds none, and the
@@ -643,6 +704,13 @@ pub enum RegressionRule {
     /// The version's state moved against the lifecycle, back to `Active` or out of
     /// `Destroyed`.
     StateReverted(KeyId),
+    /// The record's seal epoch is below the held one, so that records sealed under different
+    /// active versions would carry the same [`SealMarker`](crate::sweep::SealMarker).
+    SealEpochReverted,
+    /// The version's [`SealRange`](crate::sweep::SealRange) lost its start or its end, one of
+    /// them moved, or one was set at or below the held seal epoch, so that records the held
+    /// record sealed under the version could fall outside it.
+    SealRangeReverted(KeyId),
 }
 
 impl Display for RegressionRule {
@@ -677,6 +745,12 @@ impl Display for RegressionRule {
                     key_id = key_id.as_u32()
                 )
             }
+            RegressionRule::SealEpochReverted => f.write_str("the seal epoch moved back"),
+            RegressionRule::SealRangeReverted(key_id) => write!(
+                f,
+                "the seal range of key version {key_id} moved back",
+                key_id = key_id.as_u32()
+            ),
         }
     }
 }
@@ -715,8 +789,8 @@ pub struct PurposeError {
 }
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
-/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`] and
-/// [`KeyringError::ExportAlgorithmUnsupported`].
+/// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`],
+/// [`KeyringError::SealerOutdated`] and [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyVersionError {

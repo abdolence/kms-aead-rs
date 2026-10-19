@@ -87,9 +87,20 @@ The token needs `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`.
 ## Key versions and rotation
 
 The encrypted DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
-it still decrypts after the key is rotated. The KMS spans record that version as `key_version`.
+it still decrypts after the key is rotated. The KMS spans record that version as `kek_version`, and
+so does the `kek_version()` of the encrypted DEK an encryption returns: the `N` of `vault:vN:`, as
+`min_decryption_version` counts it.
 
 The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.
+
+A rotation is `<mount>/keys/<key>/rotate`, and the new version encrypts every DEK after it. Once
+the sweep has reached every value, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+disable the old versions by setting `min_decryption_version` in the key's configuration to the new
+version: Vault then refuses to decrypt under older versions, with `VAULT_STATUS_400`, and lowering
+it again restores them. Once
+nothing needs them, the backups included, `min_available_version` and a trim of the key delete the
+older versions for good.
 
 ## Errors
 

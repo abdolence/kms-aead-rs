@@ -80,7 +80,7 @@ let id = EntityId::try_from("42")?;
 let alice = Email("alice@example.com".to_string());
 let user = User {
     id: "42".to_string(),
-    email: keyring.encrypt(&EMAIL.aad(&id), &alice).await?,
+    email: keyring.sealer().await.encrypt(&EMAIL.aad(&id), &alice).await?,
 };
 let stored: Vec<u8> = serde_json::to_vec(&user)?;
 
@@ -125,8 +125,11 @@ async fn store_email(
     id: &str,
     email: &Email,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let value: Encrypted<Email, Randomized> =
-        keyring.encrypt(&field.aad(&EntityId::try_from(id)?), email).await?;
+    let value: Encrypted<Email, Randomized> = keyring
+        .sealer()
+        .await
+        .encrypt(&field.aad(&EntityId::try_from(id)?), email)
+        .await?;
     client
         .execute("UPDATE users SET email = $1 WHERE id = $2", &[&value, &id])
         .await?;
@@ -267,7 +270,7 @@ let with_context: FieldAad = EMAIL.aad(&id).with_context(b"tenant-7");
 let custom: FieldAad = EMAIL.custom_aad(format!("signup/{user_id}").as_bytes())?;
 
 for aad in [default_aad, with_context, custom] {
-    let value: Encrypted<String, Randomized> = keyring.encrypt(&aad, &email).await?;
+    let value: Encrypted<String, Randomized> = keyring.sealer().await.encrypt(&aad, &email).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, email);
 }
 

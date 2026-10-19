@@ -78,7 +78,12 @@ where
         .await?;
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let plain_text = format!("sealed by kms-aead-keyring {}", env!("CARGO_PKG_VERSION"));
-    let value: Encrypted<String, Randomized> = admin.keyring().encrypt(&aad, &plain_text).await?;
+    let value: Encrypted<String, Randomized> = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt(&aad, &plain_text)
+        .await?;
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
     admin.promote(staged).await?;
     let keyset: EncryptedKeyset<encodings::Tink> = admin

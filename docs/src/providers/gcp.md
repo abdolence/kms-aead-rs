@@ -63,6 +63,35 @@ The principal needs `cloudkms.cryptoKeyVersions.useToEncrypt` and `useToDecrypt`
 in the `roles/cloudkms.cryptoKeyEncrypterDecrypter` role, and `cloudkms.locations.generateRandomBytes`
 on the location when the KMS generator is on.
 
+## Key versions and rotation
+
+A rotation adds a version to the CryptoKey and makes it the primary version, by hand or on the
+key's rotation schedule. New DEKs are encrypted under the primary version from then on, and Cloud
+KMS decrypts every DEK with the version that encrypted it, for as long as that version is enabled.
+
+To retire the old version, disable it once the sweep has reached every value, see
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation):
+decryptions under it fail, and enabling it again restores them. Destroying it schedules its
+destruction, 30 days later by default, and until then the version can be restored.
+
+Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
+[Cloud KMS resource consistency](https://docs.cloud.google.com/kms/docs/consistency). Until a new
+primary version has propagated, `Encrypt` may still use the previous one, and a disabled version
+"typically remains usable for encrypting and decrypting data for up to 1 minute after it is
+disabled", for several hours in exceptional cases. So:
+
+- start the sweep only once the new primary version has propagated. The `kek_version()` of the
+  encrypted DEK an encryption returns, and the `kek_version` field of the `KMS encrypt DEK` span,
+  name the version Cloud KMS encrypted with, the `N` of `cryptoKeyVersions/N`, see
+  [Observability](../observability.md). A keyring whose `reencrypt_deks` ran before the new
+  primary version had propagated still lists the old version among its `kek_versions_in_use`:
+  run `reencrypt_deks` again, see [Rotating the KEK](../operations.md#rotating-the-kek);
+- run the check only once the disable has propagated, and run it again before destroying the
+  version. A check inside that window passes on DEKs that are still under the old version.
+
+Enabling a version is strongly consistent: an enabled version is available at once, so enabling
+the old version again after a failed check takes effect immediately.
+
 ## Errors
 
 The code of a failed KMS call is the gRPC status code. `Unavailable`, `DeadlineExceeded`,

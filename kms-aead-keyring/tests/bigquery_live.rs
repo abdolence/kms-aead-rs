@@ -115,14 +115,24 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let aad = field.aad(&EntityId::try_from("42")?);
     let deterministic_aad = field.deterministic_aad();
 
-    let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let first = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     admin
         .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
-    let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let second = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let mut relabelled = first.value().to_vec();
     relabelled[1..5].copy_from_slice(&ABSENT_KEY_ID.to_be_bytes());
     let deterministic = keyring
+        .sealer()
+        .await
         .encrypt_deterministic(&deterministic_aad, &ALICE.to_string())
         .await?;
     let randomized_keyset = admin

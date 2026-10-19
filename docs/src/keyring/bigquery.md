@@ -47,7 +47,7 @@ decrypts with Cloud KMS only. A field BigQuery also decrypts is declared with
 - a deterministic value is sealed under an AES-SIV version;
 - the KEK is in Google Cloud KMS.
 
-The check runs on `encrypt` and `encrypt_deterministic`, before sealing, and fails with
+The check runs on a sealer's `encrypt` and `encrypt_deterministic`, before sealing, and fails with
 `KeyringError::Interop` naming the first requirement broken. Values already written always
 decrypt: only sealing checks. So a `change_algorithm` away from AES-256-GCM, or a keyring on
 another KMS, fails the next write of the field instead of silently writing values BigQuery
@@ -102,7 +102,8 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-let refused: KeyringResult<Encrypted<Email, Randomized>> = keyring.encrypt(&aad, &alice).await;
+let refused: KeyringResult<Encrypted<Email, Randomized>> =
+    keyring.sealer().await.encrypt(&aad, &alice).await;
 assert!(matches!(
     refused,
     Err(KeyringError::Interop(InteropError {
@@ -219,6 +220,12 @@ BigQuery from the first one. After `mark_compromised`, whose replacement is acti
 replacement's values do not read, and the compromised version stays in a keyset exported before
 it, until the keyset is exported again.
 
+A KEK rotation changes no key inside a keyset and leaves the keyset under the KEK version that
+encrypted it at the export, so `KEYS.KEYSET_CHAIN` fails once that version is disabled. Export
+every keyset again after `reencrypt_deks`, once the new primary version has propagated, and replace
+the old bytes in every query and column that holds them before the old version is disabled, see
+[Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
+
 ### Queries
 
 With `keyset` standing for the `KEYS.KEYSET_CHAIN(…)` expression of each export:
@@ -289,6 +296,10 @@ serialised keyset, see
 An Azure Key Vault key, a local or an application's own KEK, and an AWS key named without its
 ARN have no Tink client. The export fails on them with `KeyringError::Interop`, `Interop::Tink`
 and `InteropRequirement::Kek`, before any store or KMS call.
+
+After a KEK rotation, a Tink keyset is exported again and replaces the old one wherever a Tink
+reader opens it, as a BigQuery keyset does, see
+[Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
 
 ```rust,no_run
 use kms_aead::backends::Ring;

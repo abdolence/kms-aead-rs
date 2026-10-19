@@ -22,7 +22,6 @@ const FIELD_ERROR_CODE: &str = "/kms_aead/error_code";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the envelope has
 /// a cache.
-#[cfg(feature = "deterministic")]
 const DEK_CACHE_BYPASSED: &str = "bypassed";
 
 /// The spans of the calls to a KMS, which the providers open.
@@ -37,8 +36,8 @@ pub(crate) mod kms {
 
     const FIELD_PROVIDER: &str = "/kms_aead/provider";
     const FIELD_KEY: &str = "/kms_aead/key";
-    const FIELD_KEY_VERSION: &str = "/kms_aead/key_version";
-    const FIELD_KEY_VERSIONS: &str = "/kms_aead/key_versions";
+    const FIELD_KEK_VERSION: &str = "/kms_aead/kek_version";
+    const FIELD_KEK_VERSIONS: &str = "/kms_aead/kek_versions";
     const FIELD_RESPONSE_TIME: &str = "/kms_aead/response_time";
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
     const FIELD_LEN: &str = "/kms_aead/len";
@@ -49,7 +48,7 @@ pub(crate) mod kms {
             "KMS encrypt DEK",
             { FIELD_PROVIDER } = %kek.provider(),
             { FIELD_KEY } = kek.key(),
-            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_KEK_VERSION } = field::Empty,
             { FIELD_RESPONSE_TIME } = field::Empty,
             { FIELD_ERROR_CODE } = field::Empty,
         )
@@ -61,7 +60,7 @@ pub(crate) mod kms {
             "KMS decrypt DEK",
             { FIELD_PROVIDER } = %kek.provider(),
             { FIELD_KEY } = kek.key(),
-            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_KEK_VERSION } = field::Empty,
             { FIELD_RESPONSE_TIME } = field::Empty,
             { FIELD_ERROR_CODE } = field::Empty,
         )
@@ -94,15 +93,15 @@ pub(crate) mod kms {
     pub(crate) fn local_kek_loaded(key: &impl std::fmt::Display, versions: &str) {
         tracing::info!(
             { FIELD_KEY } = %key,
-            { FIELD_KEY_VERSIONS } = versions,
+            { FIELD_KEK_VERSIONS } = versions,
             "A local KEK encrypts and decrypts data encryption keys"
         );
     }
 
-    /// Records on the current KMS span the version of the KMS key that encrypts or encrypted the
-    /// key: from the KMS response on encryption, from the encrypted DEK on decryption.
-    pub(crate) fn record_key_version(key_version: &str) {
-        Span::current().record(FIELD_KEY_VERSION, key_version);
+    /// Records on the current KMS span the version of the KEK that encrypts or encrypted the DEK:
+    /// from the KMS response on encryption, from the encrypted DEK on decryption.
+    pub(crate) fn record_kek_version(kek_version: &str) {
+        Span::current().record(FIELD_KEK_VERSION, kek_version);
     }
 
     /// Sends a KMS request and records on the current span how long it took, in milliseconds.
@@ -207,12 +206,30 @@ pub(crate) fn decrypt_dek(algorithm: impl Display, dek_cache: &DekCache) -> Span
         { FIELD_DEK_CACHE } = field::Empty,
         { FIELD_ERROR_CODE } = field::Empty,
     );
+    record_bypassed_cache(&span, dek_cache);
+    span
+}
+
+/// `KMS AEAD re-encrypt DEK`, around the envelope's re-encryption of a DEK, which never goes
+/// through the cache.
+pub(crate) fn reencrypt_dek(dek_cache: &DekCache) -> Span {
+    let span = debug_span!(
+        "KMS AEAD re-encrypt DEK",
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    );
+    record_bypassed_cache(&span, dek_cache);
+    span
+}
+
+/// Records `dek_cache` as `bypassed` for a call that decrypts through the provider beside an
+/// enabled cache, and as `disabled` without one.
+fn record_bypassed_cache(span: &Span, dek_cache: &DekCache) {
     if dek_cache.is_enabled() {
         span.record(FIELD_DEK_CACHE, DEK_CACHE_BYPASSED);
     } else {
         span.record(FIELD_DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
-    span
 }
 
 /// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.
