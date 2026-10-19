@@ -152,6 +152,21 @@ path = "examples/rotate.rs"
 required-features = ["ring", "admin"]
 
 [[example]]
+name = "sweep_bigquery"
+path = "examples/sweep_bigquery.rs"
+required-features = ["ci-bigquery", "ring"]
+
+[[example]]
+name = "sweep_firestore"
+path = "examples/sweep_firestore.rs"
+required-features = ["ring", "admin", "serde", "firestore"]
+
+[[example]]
+name = "sweep_postgres"
+path = "examples/sweep_postgres.rs"
+required-features = ["ring", "admin", "postgres"]
+
+[[example]]
 name = "tink_export"
 path = "examples/tink_export.rs"
 required-features = ["ci-tink", "aws-lc"]

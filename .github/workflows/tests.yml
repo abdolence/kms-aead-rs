@@ -221,6 +221,7 @@ jobs:
       # `ci-firestore-live` compiles the live test, which runs by hand against Firestore.
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES,ci-firestore-live" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+      - run: cargo run -p kms-aead-keyring --example sweep_firestore --features "$FEATURES" -- 50
   keyring-postgres:
     name: keyring-postgres
     if: github.event_name != 'schedule'
@@ -247,6 +248,7 @@ jobs:
           components: clippy
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+      - run: cargo run -p kms-aead-keyring --example sweep_postgres --features "$FEATURES" -- 50
   # GCS runs against a real bucket, on master only: the workload identity binding admits this
   # repository's master branch, and the bucket's lifecycle rule deletes each run's objects after a
   # day.
@@ -307,8 +309,8 @@ jobs:
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
-  # only, as keyring-gcs does. The keyring lives in the memory store, and the queries read
-  # literals, so the job creates no table.
+  # only, as keyring-gcs does. The keyring lives in the memory store, the test's queries read
+  # literals, and the `sweep_bigquery` example creates a dataset of its own and drops it.
   keyring-bigquery:
     name: keyring-bigquery
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -337,6 +339,7 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
+      - run: cargo run -p kms-aead-keyring --example sweep_bigquery --features "$FEATURES" -- 50
   # The keyring without a store, one row per AEAD backend alone so that one backend never hides a
   # missing feature gate in another, plus the optional encodings. The unit tests create keyrings,
   # so these rows build `admin`. The last row is an application's build: every store and encoding

@@ -811,6 +811,9 @@ name, of the field name and of the value, plus 32 bytes, by Firestore's storage 
 70 bytes for a short document id in a top-level collection. 10 million documents hold about 0.1 GB
 of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.
 
+The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs)
+runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator.
+
 #### PostgreSQL
 
 The marker is a `BYTEA` column with a btree index. Its default, the bytes of
@@ -1084,6 +1087,9 @@ few distinct epochs stores each one once per page with the list of its rows: mea
 PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.
 10 million rows hold about 130 MB of markers and index.
 
+The [`sweep_postgres` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs)
+runs this sweep end to end, from the writes to the `retire`, on a local PostgreSQL.
+
 #### BigQuery
 
 The marker is a `BYTES` column. BigQuery gives a column added to a table `NULL` in the rows already
@@ -1331,6 +1337,9 @@ Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep's query 
 700,000 bytes, the `seal` column alone. BigQuery does not cluster a `BYTES` column, so the query
 reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB
 on demand, and its storage about $0.0013 a month at $0.02 per GiB.
+
+The [`sweep_bigquery` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs)
+runs the `UPDATE` above end to end, from the writes to the `retire`, against Cloud KMS and BigQuery.
 
 ### The trust of re-sealed values
 
