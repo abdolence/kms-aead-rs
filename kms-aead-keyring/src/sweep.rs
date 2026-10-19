@@ -38,9 +38,12 @@
 //! pending in the sealer's record, or missing from it, was sealed under a newer record:
 //! [`Sealer::reseal`](crate::Sealer::reseal) fails with
 //! [`KeyringError::SealerOutdated`], and so does
-//! [`Sealer::is_current`](crate::Sealer::is_current) for a beacon. [`run`] counts such a
-//! record as failed, its marker stays below the current one, and the next run re-seals it under a
-//! new sealer.
+//! [`Sealer::is_current`](crate::Sealer::is_current) for a beacon. Inside a sweep, this happens
+//! when a process with a newer record rewrote the record after the query returned it. [`run`]
+//! counts the record as failed, and the next run's query no longer returns it: the process that
+//! sealed it stamped a marker at or past the activation of the newer version. A value under a
+//! version the store's record itself holds as pending, such as a value from another keyring whose
+//! key id is pending here, fails in every run instead, as [`KeyringError::SealerOutdated`] states.
 //!
 //! The re-seal reads every field with [`decrypt_with_trust`](crate::Keyring::decrypt_with_trust),
 //! as [`Sealer::reseal`](crate::Sealer::reseal) does, and reports in

@@ -409,8 +409,6 @@ impl<S: KeyringStore> RecordCache<S> {
 /// reads and writes that change the cached record.
 type RefreshGuard<'a> = tokio::sync::MutexGuard<'a, Option<Instant>>;
 
-/// `wait` after `start`, or an instant beyond any process's lifetime when that overflows, so
-/// that a `Duration::MAX` option means never rather than a panic.
 /// The versions that [`RecordCache::find`] takes from the cached record without a reload.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum VersionLookup {
@@ -435,6 +433,8 @@ impl VersionLookup {
     }
 }
 
+/// `wait` after `start`, or an instant beyond any process's lifetime when that overflows, so
+/// that a `Duration::MAX` option means never rather than a panic.
 fn after(start: Instant, wait: Duration) -> Instant {
     const FAR_FUTURE: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
     start

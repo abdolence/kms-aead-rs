@@ -236,8 +236,11 @@ for a key id it lacks. The sealer keeps its own record, so that its marker still
 version the write seals under. The write is safe to retry: it takes a new sealer and runs again,
 and the new sealer, taken from the reloaded record, finds the value current or seals it under its
 active version. Inside `reload_min_interval` of another such reload the cached record may not have
-moved yet, and the retry fails the same way until it does. A key id the reloaded record lacks too
-fails with `KeyVersionUnknown`.
+moved yet, and the retry fails the same way until it does. When the store's record itself holds the
+version as pending, as for a value from another keyring whose key id is pending here or after a
+restore from an older backup, every retry fails with `SEALER_OUTDATED`, at no more than one store
+read per `reload_min_interval`. A key id the reloaded record lacks too fails with
+`KeyVersionUnknown`.
 
 A beacon cannot be re-sealed: it is a MAC of the plaintext. `sealer.is_current(beacon.key_id())`
 applies the same rule to it: `true` under the active beacon version of the sealer's record, and the
@@ -414,11 +417,13 @@ if let Some(previous) = rotation.previous {
 The `SweepReport` counts every candidate once in `scanned`, and once in `resealed`, `skipped` or
 `failed`. A re-seal that fails does not stop the sweep: it is counted in `failed` and logged at
 `WARN` with the candidate's `Display` and the error's `Display`. A re-seal that fails with
-`SealerOutdated` is one of them: the record keeps its marker, and the next run re-seals it under a
-new sealer. A candidate is the application's
-own type, such as a record id, a struct of key columns or the record itself, and its `Display`
-names the record and nothing else. A record id is often an entity id, so read the sweep's log as
-an administrative log.
+`SealerOutdated` is one of them: a process with a newer record rewrote the record after the query
+returned it. The record is counted as failed, and the next run's query no longer returns it,
+because the process that sealed it stamped a newer marker. A value under a version the store's
+record itself holds as pending, such as a value from another keyring whose key id is pending here,
+fails in every run instead. A candidate is the application's own type, such as a record id, a
+struct of key columns or the record itself, and its `Display` names the record and nothing else. A
+record id is often an entity id, so read the sweep's log as an administrative log.
 
 The re-seal returns `Result<ResealOutcome, E>` with the application's own error type, any type
 that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`

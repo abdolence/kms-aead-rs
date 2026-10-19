@@ -160,7 +160,7 @@ where
     /// [`KeyringError::ReservedKeyId`] for a reserved `key_id` and
     /// [`KeyringError::NoActiveVersion`] when the record has no active version of its purpose,
     /// before any store call; [`KeyringError::SealerOutdated`] for a version pending in the
-    /// record or missing from it, when the reloaded cached record has it; and
+    /// record or missing from it, when the cached record has it; and
     /// [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks it too.
     pub async fn is_current(&self, key_id: KeyId) -> KeyringResult<bool> {
         let keyring = self.keyring;

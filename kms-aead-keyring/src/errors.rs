@@ -73,10 +73,12 @@ pub enum KeyringError {
     /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. The reload that returned this
     /// error took the store's record, so the new sealer finds the value current or seals it
     /// under the active version. Inside `reload_min_interval` of another such reload, which
-    /// bounds the store reads that values with odd key ids cause, the cached record may still
-    /// hold the version as pending, and the retry fails the same way until the next reload, a
-    /// watch signal or the record TTL. A sweep counts the record as failed, and its next run
-    /// visits it again.
+    /// bounds the store reads that values under unknown or pending key ids cause, the cached
+    /// record may still hold the version as pending, and the retry fails the same way until the
+    /// next reload, a watch signal or the record TTL. When the store's record itself holds the
+    /// version as pending, as for a value from another keyring whose key id is pending here or
+    /// after a restore from an older backup, every retry fails with `SEALER_OUTDATED`, at no
+    /// more than one store read per `reload_min_interval`. A sweep counts the record as failed.
     SealerOutdated(KeyVersionError),
     /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
