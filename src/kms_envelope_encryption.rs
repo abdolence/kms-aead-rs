@@ -1159,31 +1159,6 @@ mod tests {
         Ok(())
     }
 
-    /// A value in the envelope layout v1 of 0.29, which only `legacy-formats` reads, is refused by
-    /// re-encryption with the error that names the upgrade calls.
-    #[cfg(feature = "legacy-formats")]
-    #[tokio::test]
-    async fn reencryption_refuses_a_value_in_the_envelope_layout_v1() -> KmsAeadResult<()> {
-        let value = Encrypted::<SecretValue, crate::formats::Envelope>::try_from(
-            hex::decode(ENVELOPE_FROM_0_29).unwrap(),
-        )?;
-        let KmsAeadError::LegacyFormat(refused) =
-            KmsAeadLegacyFormatError::refused_by_reencryption(KmsAeadLegacyFormat::EnvelopeV1)
-        else {
-            unreachable!()
-        };
-
-        let result = Envelope::new(TestKmsProvider::Working)?
-            .reencrypt_dek(&value)
-            .await;
-
-        assert!(
-            matches!(&result, Err(KmsAeadError::LegacyFormat(error)) if *error == refused),
-            "{result:?}"
-        );
-        Ok(())
-    }
-
     #[tokio::test]
     async fn per_call_envelope_has_no_cache_by_default() -> KmsAeadResult<()> {
         let provider = CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK);

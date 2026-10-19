@@ -668,5 +668,6 @@ procedure above with the old version as the current one.
 
 The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
 of the key, since the provider names no version in its request, and no older version becomes the
-latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS keeps every
-earlier key material decrypting and none can be disabled, so a rotation needs no rollback there.
+latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS
+keeps every earlier key material decrypting and none can be disabled, so a rotation needs no
+rollback there.
