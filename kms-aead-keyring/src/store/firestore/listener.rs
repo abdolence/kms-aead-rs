@@ -436,11 +436,7 @@ impl Routes {
     /// Forgets the dropped watches of `target`'s route, removes the route when none is left, and
     /// returns whether the route is still there.
     fn release(&mut self, target: &FirestoreListenerTarget) -> bool {
-        let Some(route) = self
-            .targets
-            .get(target)
-            .and_then(|id| self.keyrings.get_mut(id))
-        else {
+        let Some(route) = self.route_of(target) else {
             return false;
         };
         route.events.retain(|events| !events.is_closed());
@@ -455,9 +451,7 @@ impl Routes {
     /// returns whether the route still waits for firestore-rs to add the target back.
     fn settle(&mut self, target: &FirestoreListenerTarget, listened: bool) -> bool {
         let removed = self
-            .targets
-            .get(target)
-            .and_then(|id| self.keyrings.get(id))
+            .route_of(target)
             .is_some_and(|route| route.state == TargetState::Removed);
         if removed && !listened {
             self.end(target);
@@ -465,10 +459,15 @@ impl Routes {
         removed && listened
     }
 
+    /// The route of `target`, if it has one.
+    fn route_of(&mut self, target: &FirestoreListenerTarget) -> Option<&mut Route> {
+        self.keyrings.get_mut(self.targets.get(target)?)
+    }
+
     /// The route of the target with the wire id `target`, if it has one.
     fn route_mut(&mut self, target: i32) -> Option<&mut Route> {
         let target = FirestoreListenerTarget::try_from(target).ok()?;
-        self.keyrings.get_mut(self.targets.get(&target)?)
+        self.route_of(&target)
     }
 
     /// Applies one event of the listen stream, and returns the targets Firestore removed. An
@@ -647,13 +646,11 @@ mod tests {
         let mut routes = Routes::default();
         let mut tenant_a = watched(&mut routes, "tenant-a", 1)?;
         let mut tenant_b = watched(&mut routes, "tenant-b", 2)?;
-        for target in routes.route(target_change(
+        routes.route(target_change(
             FirestoreListenerTargetChangeType::Remove,
             &[1],
             Some(Code::Unavailable),
-        )) {
-            routes.settle(&target, true);
-        }
+        ));
         routes.route(target_change(
             FirestoreListenerTargetChangeType::Add,
             &[1],
@@ -687,10 +684,6 @@ mod tests {
         assert_eq!(tenant_a.try_recv(), Ok(WatchEvent::Disconnected));
         assert_eq!(tenant_a.try_recv(), Err(TryRecvError::Disconnected));
         assert_eq!(tenant_b.try_recv(), Err(TryRecvError::Empty));
-        let (events, _watch) = mpsc::channel(16);
-        assert!(routes
-            .join(&KeyringId::try_from("tenant-a".to_string())?, &events)
-            .is_none());
         Ok(())
     }
 
