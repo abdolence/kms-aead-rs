@@ -27,7 +27,9 @@ use crate::{FieldAad, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose, R
 /// deterministic fields included: a write that touches any encrypted field seals all of them
 /// again, so that none stays under a version the new marker does not name. A sealer goes on
 /// sealing under its record's versions after a refresh has taken them out of use, as after a
-/// compromise, for as long as it is held, so it is held for one write and no longer.
+/// compromise, for as long as it is held, so it is held for one write and no longer. One write
+/// may cover many records, such as a batch of a [`run_batched`](crate::sweep::run_batched) sweep,
+/// since every record in it is stamped with the marker of the sealer's record.
 pub struct Sealer<'k, S: KeyringStore, P, B> {
     pub(super) keyring: &'k Keyring<S, P, B>,
     pub(super) record: Arc<KeyringRecord>,

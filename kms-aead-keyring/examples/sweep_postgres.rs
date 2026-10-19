@@ -1,8 +1,8 @@
-//! A sweep on PostgreSQL: writes users through a `Sealer`, each with its seal marker, rotates and
-//! promotes the randomised version, re-seals every row whose marker is below the current one in
-//! pages ordered by `id`, each page through one sealer and written back in one `UPDATE`
-//! conditional on the bytes it read of each row, and retires the
-//! previous version once the query of its seal range finds no row. The re-seal is the one of
+//! A sweep on PostgreSQL: writes users a page at a time, each page through a `Sealer` and in one
+//! `INSERT`, rotates and promotes the randomised version, re-seals every row whose marker is below
+//! the current one with `sweep::run_batched`, in pages ordered by `id`, each page through one
+//! sealer and written back in one `UPDATE` conditional on the bytes it read of each row, and
+//! retires the previous version once the query of its seal range finds no row. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#postgresql) in the book.
 //!
 //! The example creates a schema of its own, with the keyring table and the users table in it, and
@@ -16,19 +16,21 @@
 //!
 //! The argument is the number of users, 100 by default.
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::time::Instant;
 
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, Stream, StreamExt, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::sweep::{ResealOutcome, SealMarker, SealRange, SweepReport};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealRange, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
     KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
@@ -44,9 +46,12 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-/// The rows of a page, re-sealed through one sealer and written back in one `UPDATE` of three
-/// arrays of this length, some 0.2 MB of parameters at the example's row size.
+/// The rows of a page: the sweep's query reads them, one sealer re-seals them, and one `UPDATE`
+/// of three arrays of this length, some 0.2 MB of parameters at the example's row size, writes
+/// them back. The seeding writes the same number of rows per `INSERT`.
 const PAGE_SIZE: u16 = 1000;
+/// [`PAGE_SIZE`], so that each batch of the sweep is one page of its query.
+const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(PAGE_SIZE as usize).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 const DEFAULT_USERS: i64 = 100;
 
@@ -63,10 +68,12 @@ impl Plaintext for Email {
     }
 }
 
-/// Why the re-seal of a row failed: an error of the keyring or of the users table.
+/// Why the re-seal of a row failed: an error of the keyring or of the users table, shared by
+/// every row of a batch whose `UPDATE` failed.
+#[derive(Clone)]
 enum SweepError {
     Keyring(KeyringError),
-    Users(tokio_postgres::Error),
+    Users(Arc<tokio_postgres::Error>),
 }
 
 impl From<KeyringError> for SweepError {
@@ -77,7 +84,7 @@ impl From<KeyringError> for SweepError {
 
 impl From<tokio_postgres::Error> for SweepError {
     fn from(error: tokio_postgres::Error) -> Self {
-        SweepError::Users(error)
+        SweepError::Users(Arc::new(error))
     }
 }
 
@@ -95,119 +102,144 @@ impl Display for SweepError {
     }
 }
 
-/// Counts one row's outcome in `report`, and prints a failure with the row and the code of the
-/// error.
-fn tally(report: &mut SweepReport, id: i64, outcome: Result<ResealOutcome, &SweepError>) {
-    report.scanned += 1;
-    match outcome {
-        Ok(ResealOutcome::Resealed { from_compromised }) => {
-            report.resealed += 1;
-            report.resealed_from_compromised += u64::from(from_compromised);
-        }
-        Ok(ResealOutcome::Skipped) => report.skipped += 1,
-        Err(error) => {
-            report.failed += 1;
-            eprintln!("the re-seal of users/{id} failed: {error}");
-        }
+/// A row the sweep's query returned, by its id.
+struct UserRow {
+    id: i64,
+    row: Row,
+}
+
+impl Display for UserRow {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "users/{}", self.id)
     }
 }
 
-/// Re-seals the page of rows after `after`, in the order of `id`, whose marker is below `current`
-/// through one sealer, and writes it back in one `UPDATE` that stamps the sealer's marker and is
-/// conditional, row by row, on the bytes the query read. Returns the last id of the page, or
-/// `None` after the last page.
+/// The rows whose marker is below `current`, in the order of `id`, read a page of `PAGE_SIZE` at
+/// a time as the sweep takes them. A page query that fails ends the stream, and its error is left
+/// in `query_failed`.
 ///
-/// The `UPDATE` is the sealer's one write: it runs as soon as the page is sealed, so the sealer
+/// Each page starts after the last id of the one before, whatever the sweep wrote meanwhile: a
+/// re-sealed row leaves the query but not the order, so a page read while earlier pages are still
+/// being written neither repeats nor skips a row.
+fn behind<'a>(
+    client: &'a Client,
+    current: SealMarker,
+    query_failed: &'a Cell<Option<tokio_postgres::Error>>,
+) -> impl Stream<Item = UserRow> + 'a {
+    stream::unfold(Some(i64::MIN), move |after: Option<i64>| async move {
+        let after: i64 = after?;
+        let page: Vec<UserRow> =
+            async {
+                client
+                .query(
+                    "SELECT id, email FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
+                    &[&current, &after, &i64::from(PAGE_SIZE)],
+                )
+                .await?
+                .into_iter()
+                .map(|row| Ok(UserRow { id: row.try_get("id")?, row }))
+                .collect::<Result<Vec<UserRow>, tokio_postgres::Error>>()
+            }
+            .await
+            .map_err(|error| query_failed.set(Some(error)))
+            .ok()?;
+        let next: Option<i64> = match page.last() {
+            Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last.id),
+            _ => None,
+        };
+        Some((stream::iter(page), next))
+    })
+    .flatten()
+}
+
+/// Re-seals a batch of rows through one sealer, and writes it back in one `UPDATE` that stamps
+/// the sealer's marker and is conditional, row by row, on the bytes the query read.
+///
+/// The `UPDATE` is the sealer's one write: it runs as soon as the batch is sealed, so the sealer
 /// is not held across more than one statement.
-async fn reseal_page(
+async fn reseal_batch(
     keyring: &UsersKeyring,
     client: &Client,
-    current: SealMarker,
-    after: i64,
-    report: &mut SweepReport,
-) -> Result<Option<i64>, tokio_postgres::Error> {
-    let rows: Vec<Row> = client
-        .query(
-            "SELECT id, email FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
-            &[&current, &after, &i64::from(PAGE_SIZE)],
-        )
-        .await?;
-    if rows.is_empty() {
-        return Ok(None);
-    }
+    batch: Vec<UserRow>,
+) -> Vec<(UserRow, Result<ResealOutcome, SweepError>)> {
     let sealer = keyring.sealer().await;
     let seal: SealMarker = sealer.record().seal_marker();
-    let mut ids: Vec<i64> = Vec::with_capacity(rows.len());
-    let mut read_emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(rows.len());
-    let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(rows.len());
-    let mut outcomes: Vec<ResealOutcome> = Vec::with_capacity(rows.len());
-    for row in &rows {
-        let id: i64 = row.try_get("id")?;
-        let queue = async {
-            let read_email: Encrypted<Email, Randomized> = row.try_get("email")?;
-            let aad = EMAIL.aad(&EntityId::try_from(id.to_string())?);
+    let mut done: Vec<(UserRow, Result<ResealOutcome, SweepError>)> =
+        Vec::with_capacity(batch.len());
+    let mut queued: Vec<(UserRow, ResealOutcome)> = Vec::with_capacity(batch.len());
+    let mut ids: Vec<i64> = Vec::with_capacity(batch.len());
+    let mut read_emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(batch.len());
+    let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(batch.len());
+    for user in batch {
+        let resealed = async {
+            let read_email: Encrypted<Email, Randomized> = user.row.try_get("email")?;
+            let aad = EMAIL.aad(&EntityId::try_from(user.id.to_string())?);
             // A value under a version newer than the sealer's record fails with
             // `SealerOutdated`: the sweep counts it as failed, and the next run, on the reloaded
             // record, re-seals it.
             let resealed: Option<Resealed<Email, Randomized>> =
                 sealer.reseal(&aad, &read_email).await?;
-            match resealed {
-                Some(resealed) => {
-                    let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-                    emails.push(resealed.value);
-                    outcomes.push(ResealOutcome::Resealed { from_compromised });
-                }
-                None => {
-                    emails.push(read_email.clone());
-                    outcomes.push(ResealOutcome::Skipped);
-                }
-            }
-            ids.push(id);
-            read_emails.push(read_email);
-            Ok::<(), SweepError>(())
+            Ok::<
+                (
+                    Encrypted<Email, Randomized>,
+                    Option<Resealed<Email, Randomized>>,
+                ),
+                SweepError,
+            >((read_email, resealed))
         };
-        if let Err(error) = queue.await {
-            tally(report, id, Err(&error));
+        match resealed.await {
+            Ok((read_email, Some(resealed))) => {
+                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+                emails.push(resealed.value);
+                read_emails.push(read_email);
+                ids.push(user.id);
+                queued.push((user, ResealOutcome::Resealed { from_compromised }));
+            }
+            Ok((read_email, None)) => {
+                emails.push(read_email.clone());
+                read_emails.push(read_email);
+                ids.push(user.id);
+                queued.push((user, ResealOutcome::Skipped));
+            }
+            Err(error) => done.push((user, Err(error))),
         }
     }
-    let written: Result<Vec<Row>, tokio_postgres::Error> = client
-        .query(
-            "UPDATE users SET email = page.email, seal = $4
-             FROM unnest($1::BIGINT[], $2::BYTEA[], $3::BYTEA[]) AS page(id, email, read_email)
-             WHERE users.id = page.id AND users.email = page.read_email
-             RETURNING users.id",
-            &[&ids, &emails, &read_emails, &seal],
-        )
-        .await;
+    let written: Result<HashSet<i64>, tokio_postgres::Error> = async {
+        client
+            .query(
+                "UPDATE users SET email = batch.email, seal = $4
+                 FROM unnest($1::BIGINT[], $2::BYTEA[], $3::BYTEA[]) AS batch(id, email, read_email)
+                 WHERE users.id = batch.id AND users.email = batch.read_email
+                 RETURNING users.id",
+                &[&ids, &emails, &read_emails, &seal],
+            )
+            .await?
+            .iter()
+            .map(|row| row.try_get("id"))
+            .collect::<Result<HashSet<i64>, tokio_postgres::Error>>()
+    }
+    .await;
     match written {
-        Ok(written) => {
-            let written: HashSet<i64> = written
-                .iter()
-                .map(|row| row.try_get("id"))
-                .collect::<Result<HashSet<i64>, tokio_postgres::Error>>()?;
-            for (id, outcome) in ids.into_iter().zip(outcomes) {
-                // A row the `UPDATE` did not return changed since the query: its writer sealed it
-                // under its own record
-                let outcome = if written.contains(&id) {
-                    outcome
-                } else {
-                    ResealOutcome::Skipped
-                };
-                tally(report, id, Ok(outcome));
-            }
-        }
+        Ok(written) => done.extend(queued.into_iter().map(|(user, outcome)| {
+            // A row the `UPDATE` did not return changed since the query: its writer sealed it
+            // under its own record.
+            let outcome = if written.contains(&user.id) {
+                outcome
+            } else {
+                ResealOutcome::Skipped
+            };
+            (user, Ok(outcome))
+        })),
         Err(error) => {
-            let error = SweepError::Users(error);
-            for id in ids {
-                tally(report, id, Err(&error));
-            }
+            let error = SweepError::from(error);
+            done.extend(
+                queued
+                    .into_iter()
+                    .map(|(user, _)| (user, Err(error.clone()))),
+            );
         }
     }
-    let last: Option<i64> = match rows.last() {
-        Some(row) if rows.len() == usize::from(PAGE_SIZE) => Some(row.try_get("id")?),
-        _ => None,
-    };
-    Ok(last)
+    done
 }
 
 /// Writes `count` users, rotates, sweeps, and retires the previous version.
@@ -226,21 +258,29 @@ async fn run(
     let keyring: &UsersKeyring = admin.keyring();
 
     let started = Instant::now();
+    // Each page of users is sealed through one sealer and written in one `INSERT`.
     stream::iter(1..=count)
+        .chunks(usize::from(PAGE_SIZE))
         .map(Ok)
-        .try_for_each_concurrent(CONCURRENCY.get(), |id: i64| async move {
+        .try_for_each_concurrent(CONCURRENCY.get(), |ids: Vec<i64>| async move {
             let sealer = keyring.sealer().await;
-            let email: Encrypted<Email, Randomized> = sealer
-                .encrypt(
-                    &EMAIL.aad(&EntityId::try_from(id.to_string())?),
-                    &Email(format!("user-{id}@example.com")),
-                )
-                .await?;
+            let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(ids.len());
+            for id in &ids {
+                emails.push(
+                    sealer
+                        .encrypt(
+                            &EMAIL.aad(&EntityId::try_from(id.to_string())?),
+                            &Email(format!("user-{id}@example.com")),
+                        )
+                        .await?,
+                );
+            }
             let seal: SealMarker = sealer.record().seal_marker();
             client
                 .execute(
-                    "INSERT INTO users (id, email, seal) VALUES ($1, $2, $3)",
-                    &[&id, &email, &seal],
+                    "INSERT INTO users (id, email, seal)
+                     SELECT id, email, $3 FROM unnest($1::BIGINT[], $2::BYTEA[]) AS page(id, email)",
+                    &[&ids, &emails, &seal],
                 )
                 .await?;
             Ok::<(), Box<dyn Error>>(())
@@ -263,12 +303,17 @@ async fn run(
 
     let started = Instant::now();
     let current: SealMarker = keyring.record().seal_marker();
-    let mut report = SweepReport::default();
-    // Pages by `id`, not by marker: a re-sealed row leaves the query but not the order, so the
-    // next page starts after it whatever marker any write gave the rows of earlier pages.
-    let mut after: Option<i64> = Some(i64::MIN);
-    while let Some(last) = after {
-        after = reseal_page(keyring, client, current, last, &mut report).await?;
+    let query_failed: Cell<Option<tokio_postgres::Error>> = Cell::new(None);
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        behind(client, current, &query_failed),
+        BATCH_SIZE,
+        CONCURRENCY,
+        |batch: Vec<UserRow>| reseal_batch(keyring, client, batch),
+    )
+    .await;
+    if let Some(error) = query_failed.take() {
+        return Err(error.into());
     }
     println!(
         "swept to seal marker {current} in {:.2?}: scanned {}, resealed {}, skipped {}, failed {}",
@@ -345,9 +390,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
     let outcome = run(&registry, &client, count).await;
     registry.shutdown().await?;
+    let started = Instant::now();
     client
         .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
         .await?;
-    println!("dropped the example's schema {schema}");
+    println!(
+        "dropped the example's schema {schema} in {:.2?}",
+        started.elapsed()
+    );
     outcome
 }

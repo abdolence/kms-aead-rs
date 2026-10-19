@@ -31,6 +31,7 @@ const FIELD_ALGORITHM: &str = "/kms_aead_keyring/algorithm";
 const FIELD_BACKEND: &str = "/kms_aead_keyring/backend";
 const FIELD_DEK_CACHE: &str = "/kms_aead_keyring/dek_cache";
 const FIELD_KEY_STATE: &str = "/kms_aead_keyring/key_state";
+const FIELD_MISSING: &str = "/kms_aead_keyring/missing";
 const FIELD_RELOAD: &str = "/kms_aead_keyring/reload";
 const FIELD_STORE: &str = "/kms_aead_keyring/store";
 const FIELD_REASON: &str = "/kms_aead_keyring/reason";
@@ -360,12 +361,22 @@ pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
 
 /// A record the sweep could not re-seal, by the application's candidate for it, which is often
 /// an entity id, and the application's error: the sweep's log is read as an administrative log.
-pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &str, error: &impl Display) {
+pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &impl Display, error: &impl Display) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_RECORD } = %candidate,
         { FIELD_ERROR } = %error,
         "The sweep could not re-seal a record"
+    );
+}
+
+/// A batch of a sweep that returned fewer outcomes than it was given candidates, by how many it
+/// left out: the sweep counts them as failed without knowing which they were.
+pub(crate) fn sweep_outcomes_missing(keyring: &KeyringId, missing: u64) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_MISSING } = missing,
+        "A sweep batch returned no outcome for some of its records"
     );
 }
 
