@@ -11,14 +11,14 @@ use azure_security_keyvault_keys::models::{
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use std::sync::Arc;
 
-use super::KmsKeyVersion;
+use super::KekVersion;
 use crate::formats::azure::AzureWrappedKey;
 use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
 
 /// A Key Vault or Managed HSM key that encrypts data encryption keys.
 ///
-/// Without `key_version` the latest version encrypts new keys. Each encrypted key carries the
+/// Without `kek_version` the latest version encrypts new keys. Each encrypted key carries the
 /// version that encrypted it, and decrypting uses that version, so keys encrypted before a rotation
 /// still decrypt afterwards.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
@@ -28,7 +28,7 @@ pub struct AzureKmsKeyRef {
     /// The key name: `0-9`, `a-z`, `A-Z` and `-`.
     pub key_name: String,
     /// The version that encrypts new keys. Without one, the latest version encrypts them.
-    pub key_version: Option<KmsKeyVersion>,
+    pub kek_version: Option<KekVersion>,
 }
 
 /// Options for [`AzureKmsProvider`].
@@ -108,7 +108,7 @@ impl AzureKmsProvider {
         credential: Arc<dyn TokenCredential>,
     ) -> KmsAeadResult<Self> {
         // The SDK substitutes the name and version into the request path without escaping,
-        // so a `/` or `?` in either would address a different resource. `KmsKeyVersion`
+        // so a `/` or `?` in either would address a different resource. `KekVersion`
         // admits only alphanumerics.
         if !is_key_vault_name(&kms_key_ref.key_name) {
             return Err(KmsAeadSystemError::create(
@@ -198,9 +198,9 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
                     Some(KeyClientWrapKeyOptions {
                         key_version: self
                             .azure_key_ref
-                            .key_version
+                            .kek_version
                             .as_ref()
-                            .map(KmsKeyVersion::to_string),
+                            .map(KekVersion::to_string),
                         ..Default::default()
                     }),
                 ),
@@ -209,7 +209,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
             .and_then(|response| response.into_model())
             .map_err(KmsAeadError::from_azure_error)?;
 
-            let key_version = wrapped
+            let kek_version = wrapped
                 .resource_id()
                 .map_err(KmsAeadError::from_azure_error)?
                 .version
@@ -226,11 +226,12 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
                 )
             })?;
             let wrapped_key = AzureWrappedKey {
-                key_version: KmsKeyVersion::try_from(key_version)?,
+                kek_version: KekVersion::try_from(kek_version)?,
                 wrapped: &encrypted_bytes,
             };
-            kms::record_key_version(wrapped_key.key_version.as_str());
-            wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
+            kms::record_kek_version(wrapped_key.kek_version.as_str());
+            Ok(EncryptedDataEncryptionKey::new(wrapped_key.to_bytes()?)
+                .with_kek_version(wrapped_key.kek_version))
         })
         .await
     }
@@ -244,12 +245,12 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
             let wrapped_key = AzureWrappedKey::try_from(encrypted_dek.value().as_slice())?;
-            kms::record_key_version(wrapped_key.key_version.as_str());
+            kms::record_kek_version(wrapped_key.kek_version.as_str());
 
             let parameters = self.key_operation(wrapped_key.wrapped.to_vec())?;
             let unwrapped = kms::timed(self.client.unwrap_key(
                 &self.azure_key_ref.key_name,
-                wrapped_key.key_version.as_str(),
+                wrapped_key.kek_version.as_str(),
                 parameters,
                 None,
             ))

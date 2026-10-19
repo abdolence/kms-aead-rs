@@ -1,7 +1,6 @@
 use crate::errors::{
     KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
 };
-use rvstruct::ValueStruct;
 
 use crate::formats::{Bare, Envelope};
 use crate::{Encrypted, EncryptedDataEncryptionKey, KmsAeadResult};

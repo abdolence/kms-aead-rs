@@ -525,7 +525,7 @@ pub enum RecordInvalidReason {
     CompromisedActive(KeyId),
     /// A pending version flagged compromised.
     CompromisedPending(KeyId),
-    /// A destroyed version that still holds an encrypted DEK.
+    /// A destroyed version that still holds an encrypted DEK or a KEK version.
     DestroyedWithMaterial(KeyId),
     /// A version that is not destroyed and holds no encrypted DEK.
     MissingMaterial(KeyId),
@@ -533,6 +533,8 @@ pub enum RecordInvalidReason {
     OrdinalOrder(KeyId),
     /// An encrypted DEK that is not standard base64 of one byte or more.
     MalformedEncryptedDek(KeyId),
+    /// A KEK version that is not 1 to 255 ASCII alphanumerics.
+    MalformedKekVersion(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
     /// The seal epoch is 0, the epoch of records sealed before the keyring, or a version would
@@ -616,7 +618,7 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::DestroyedWithMaterial(key_id) => {
                 write!(
                     f,
-                    "the destroyed key version {key_id} holds an encrypted DEK",
+                    "the destroyed key version {key_id} holds an encrypted DEK or a KEK version",
                     key_id = key_id.as_u32()
                 )
             }
@@ -636,6 +638,13 @@ impl Display for RecordInvalidReason {
                 write!(
                     f,
                     "the encrypted DEK of key version {key_id} does not parse",
+                    key_id = key_id.as_u32()
+                )
+            }
+            RecordInvalidReason::MalformedKekVersion(key_id) => {
+                write!(
+                    f,
+                    "the KEK version of key version {key_id} does not parse",
                     key_id = key_id.as_u32()
                 )
             }

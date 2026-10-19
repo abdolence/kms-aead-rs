@@ -581,6 +581,10 @@ where
     /// stored apart from their values, such as those of the `*_with_encrypted_dek` calls, of
     /// beacons and of deterministic fields, and a DEK that many values share.
     ///
+    /// The result's [`kek_version`](EncryptedDataEncryptionKey::kek_version) names the KEK version
+    /// the KMS encrypted with, which shows a re-encryption that a KMS still propagating a rotation
+    /// ran under the old version.
+    ///
     /// # Errors
     ///
     /// The provider's errors, `INVALID_KEY_FORMAT` when the decrypted key is not a key kms-aead

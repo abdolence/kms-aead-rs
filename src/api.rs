@@ -25,8 +25,9 @@ pub trait KmsAeadEncryptionProvider {
     /// a cache of decrypted keys may be keyed by it.
     fn kek(&self) -> &KekRef;
 
-    /// Encrypts `dek` with the KEK, recording the KEK version that encrypted it when the
-    /// KMS reports one.
+    /// Encrypts `dek` with the KEK. The result carries the KEK version the KMS's response names,
+    /// set with [`with_kek_version`](EncryptedDataEncryptionKey::with_kek_version), and none when
+    /// the response names none.
     ///
     /// # Errors
     ///

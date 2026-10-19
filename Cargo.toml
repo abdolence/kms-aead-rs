@@ -58,7 +58,6 @@ bench = false
 [dependencies]
 tracing = { workspace = true }
 secret-vault-value = { workspace = true }
-rvstruct = "0.3.4"
 rsb_derive = { workspace = true }
 async-trait = { workspace = true }
 hex = "0.4"

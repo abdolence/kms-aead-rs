@@ -36,8 +36,8 @@ pub(crate) mod kms {
 
     const FIELD_PROVIDER: &str = "/kms_aead/provider";
     const FIELD_KEY: &str = "/kms_aead/key";
-    const FIELD_KEY_VERSION: &str = "/kms_aead/key_version";
-    const FIELD_KEY_VERSIONS: &str = "/kms_aead/key_versions";
+    const FIELD_KEK_VERSION: &str = "/kms_aead/kek_version";
+    const FIELD_KEK_VERSIONS: &str = "/kms_aead/kek_versions";
     const FIELD_RESPONSE_TIME: &str = "/kms_aead/response_time";
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
     const FIELD_LEN: &str = "/kms_aead/len";
@@ -48,7 +48,7 @@ pub(crate) mod kms {
             "KMS encrypt DEK",
             { FIELD_PROVIDER } = %kek.provider(),
             { FIELD_KEY } = kek.key(),
-            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_KEK_VERSION } = field::Empty,
             { FIELD_RESPONSE_TIME } = field::Empty,
             { FIELD_ERROR_CODE } = field::Empty,
         )
@@ -60,7 +60,7 @@ pub(crate) mod kms {
             "KMS decrypt DEK",
             { FIELD_PROVIDER } = %kek.provider(),
             { FIELD_KEY } = kek.key(),
-            { FIELD_KEY_VERSION } = field::Empty,
+            { FIELD_KEK_VERSION } = field::Empty,
             { FIELD_RESPONSE_TIME } = field::Empty,
             { FIELD_ERROR_CODE } = field::Empty,
         )
@@ -93,15 +93,15 @@ pub(crate) mod kms {
     pub(crate) fn local_kek_loaded(key: &impl std::fmt::Display, versions: &str) {
         tracing::info!(
             { FIELD_KEY } = %key,
-            { FIELD_KEY_VERSIONS } = versions,
+            { FIELD_KEK_VERSIONS } = versions,
             "A local KEK encrypts and decrypts data encryption keys"
         );
     }
 
-    /// Records on the current KMS span the version of the KMS key that encrypts or encrypted the
-    /// key: from the KMS response on encryption, from the encrypted DEK on decryption.
-    pub(crate) fn record_key_version(key_version: &str) {
-        Span::current().record(FIELD_KEY_VERSION, key_version);
+    /// Records on the current KMS span the version of the KEK that encrypts or encrypted the DEK:
+    /// from the KMS response on encryption, from the encrypted DEK on decryption.
+    pub(crate) fn record_kek_version(kek_version: &str) {
+        Span::current().record(FIELD_KEK_VERSION, kek_version);
     }
 
     /// Sends a KMS request and records on the current span how long it took, in milliseconds.

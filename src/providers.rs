@@ -4,8 +4,8 @@
 //! reference and options types it is built from. `LocalKmsProvider`, with a key encryption key
 //! the application holds, is in every build.
 
-pub(crate) mod kms_key_version;
-pub use kms_key_version::KmsKeyVersion;
+pub(crate) mod kek_version;
+pub use kek_version::KekVersion;
 
 mod local_kms_encryption;
 pub use local_kms_encryption::*;

@@ -164,6 +164,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                 .await
                 .map_err(KmsAeadError::from_aws_sdk_error)?;
             match encrypt_response.ciphertext_blob {
+                // The response names no key material, so the KEK version is unknown.
                 Some(blob) => Ok(EncryptedDataEncryptionKey::new(blob.into_inner())),
                 None => Err(KmsAeadEncryptionError::create(
                     "AWS_ERROR",

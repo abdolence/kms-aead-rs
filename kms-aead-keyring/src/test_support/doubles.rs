@@ -1,16 +1,18 @@
 //! The test doubles that need an AEAD backend: a local KMS provider and a memory store that
 //! count their calls and fail on demand.
 
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use kms_aead::backends::AeadBackend;
 use kms_aead::errors::KmsAeadNetworkError;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 use kms_aead::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
+    KmsAeadEncryptionProvider, KmsAeadResult,
 };
 
 use crate::errors::KeyringResult;
@@ -51,10 +53,13 @@ pub(crate) fn email_of(user: &str) -> KeyringResult<FieldAad> {
 
 /// A local KMS provider whose clones share counters of its calls, whose encryptions fail while
 /// [`fail_encryptions`](ProviderCalls::fail_encryptions) is set, and wait while a test holds
-/// [`encryption_gate`](ProviderCalls::encryption_gate) for writing.
+/// [`encryption_gate`](ProviderCalls::encryption_gate) for writing. Its KEK has the versions 1
+/// and 2: version 1 encrypts until [`kek_rotated`](ProviderCalls::kek_rotated) is set, as a KMS
+/// moves its primary version on in a rotation, then version 2, and both decrypt.
 #[derive(Clone)]
 pub(crate) struct TestProvider {
     kms: Arc<LocalKmsProvider<TestBackend>>,
+    rotated_kms: Arc<LocalKmsProvider<TestBackend>>,
     kek: KekRef,
     pub(crate) calls: Arc<ProviderCalls>,
 }
@@ -64,16 +69,33 @@ pub(crate) struct ProviderCalls {
     pub(crate) decryptions: AtomicUsize,
     pub(crate) encryptions: AtomicUsize,
     pub(crate) fail_encryptions: AtomicBool,
+    pub(crate) kek_rotated: AtomicBool,
     pub(crate) encryption_gate: tokio::sync::RwLock<()>,
 }
 
 impl TestProvider {
     /// A provider for a random local KEK named `kek`.
     pub(crate) fn new(kek: &str) -> KmsAeadResult<Self> {
-        let kms = LocalKmsProvider::ephemeral(LocalKekId::try_from(kek.to_string())?)?;
+        let id = LocalKekId::try_from(kek.to_string())?;
+        let [first, rotated] =
+            [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+        let key_len = AeadAlgorithm::Aes256Gcm.key_len();
+        let first_material = TestBackend::generate_random_bytes(key_len)?;
+        let rotated_material = TestBackend::generate_random_bytes(key_len)?;
+        let encrypting_with = |version| -> KmsAeadResult<_> {
+            let keks = vec![
+                LocalKek::from_secret(first, first_material.clone())?,
+                LocalKek::from_secret(rotated, rotated_material.clone())?,
+            ];
+            Ok(Arc::new(
+                LocalKmsProvider::new(id.clone(), keks)?.with_encrypting_version(version)?,
+            ))
+        };
+        let kms = encrypting_with(first)?;
         Ok(Self {
             kek: kms.kek().clone(),
-            kms: Arc::new(kms),
+            kms,
+            rotated_kms: encrypting_with(rotated)?,
             calls: Arc::default(),
         })
     }
@@ -108,7 +130,11 @@ impl KmsAeadEncryptionProvider for TestProvider {
         }
         self.calls.encryptions.fetch_add(1, Ordering::SeqCst);
         let _open = self.calls.encryption_gate.read().await;
-        self.kms.encrypt_data_encryption_key(dek).await
+        if self.calls.kek_rotated.load(Ordering::SeqCst) {
+            self.rotated_kms.encrypt_data_encryption_key(dek).await
+        } else {
+            self.kms.encrypt_data_encryption_key(dek).await
+        }
     }
 
     async fn decrypt_data_encryption_key(

@@ -7,7 +7,7 @@ use azure_core::http::{
 use azure_security_keyvault_keys::models::EncryptionAlgorithm;
 use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion};
 use kms_aead::*;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -104,12 +104,12 @@ fn provider_over(status: StatusCode, body: String) -> KmsAeadResult<AzureKmsProv
 /// `wrapped` in the layout of the provider's encrypted keys, after the key version `KEY_VERSION`:
 /// `[0x01][k: u8][key version: k][encrypted DEK]`.
 fn encrypted_key(wrapped: &[u8]) -> EncryptedDataEncryptionKey {
-    let key_version = KEY_VERSION.as_bytes();
+    let kek_version = KEY_VERSION.as_bytes();
     let header = [
         0x01,
-        u8::try_from(key_version.len()).expect("KEY_VERSION is 32 characters"),
+        u8::try_from(kek_version.len()).expect("KEY_VERSION is 32 characters"),
     ];
-    EncryptedDataEncryptionKey::new([&header[..], key_version, wrapped].concat())
+    EncryptedDataEncryptionKey::new([&header[..], kek_version, wrapped].concat())
 }
 
 fn data_encryption_key() -> DataEncryptionKey {
@@ -191,6 +191,10 @@ async fn encryption_with_the_latest_key_version_carries_the_version_from_kid() -
         .await?;
 
     assert_eq!(encrypted_dek, self::encrypted_key(&wrapped));
+    assert_eq!(
+        encrypted_dek.kek_version(),
+        Some(&KekVersion::try_from(KEY_VERSION.to_string())?)
+    );
     Ok(())
 }
 

@@ -13,7 +13,7 @@ use crate::errors::KmsAeadEncryptionError;
 use crate::formats::TinkKeyType;
 use crate::{
     DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef, KmsAeadEncryptionProvider,
-    KmsAeadResult, ValueStruct,
+    KmsAeadResult,
 };
 
 #[cfg(feature = "ring")]

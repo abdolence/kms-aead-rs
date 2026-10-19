@@ -56,7 +56,7 @@ assert_eq!(joined.value(), encrypted.value());
   Tink's AWS client sends no encryption context and its GCP client no additional authenticated data;
 - the rest is a [`Bare` value](#formats-of-encrypted).
 
-The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+The envelope records neither the algorithm nor the KEK version, so the writer and the reader,
 kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:
 
 | Algorithm | Tink key type | Tink for Java and Go | Tink for C++ and Python |
@@ -89,7 +89,7 @@ the Cloud KMS key. `tests/tink_interop.py` and `examples/tink_interop.rs` repeat
 ## Encrypted DEKs
 
 `EncryptedDataEncryptionKey` is the bytes the provider returned from an encryption, which are also
-the bytes to store and the bytes it decrypts. Each provider's bytes name the KMS key version that
+the bytes to store and the bytes it decrypts. Each provider's bytes name the KEK version that
 encrypted the DEK where the KMS needs one to decrypt:
 
 | Provider | Bytes | Key version |
@@ -109,7 +109,7 @@ KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to 
 AAD, so neither the id nor the version can be changed without the decryption failing.
 
 Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncryptionKey::from`
-or `try_from_hex_string`, see
+or `try_from_hex_string`. Neither holds the KEK version of `kek_version()`, see
 [Storing encrypted DEKs](./envelope-encryption.md#storing-encrypted-deks).
 
 ## Serialised DEKs
@@ -263,7 +263,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk...",
+      "kek_version": "1"
     },
     {
       "key_id": 2147483649,
@@ -273,7 +274,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+...",
+      "kek_version": "1"
     },
     {
       "key_id": 1073741825,
@@ -283,7 +285,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7...",
+      "kek_version": "1"
     },
     {
       "key_id": 2,
@@ -293,7 +296,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT...",
+      "kek_version": "1"
     },
     {
       "key_id": 3,
@@ -303,7 +307,8 @@ staged, with the encrypted DEKs shortened:
       "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay...",
+      "kek_version": "1"
     }
   ],
   "created_at": "2026-10-18T12:18:31.053483320Z",
@@ -328,13 +333,33 @@ staged, with the encrypted DEKs shortened:
   was never active, see [Seal markers](#seal-markers);
 - `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
   provider returned, here the local KMS layout. It is `null` for a destroyed version;
+- `kek_version` is the version of the KEK that encrypted `encrypted_dek`, as the KMS reported it,
+  here the local KEK version. It is `null` for a destroyed version, and under a KMS that reports
+  none, such as AWS KMS;
 - the times are RFC 3339, in UTC.
 
-A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
-fails with `RecordInvalid` on a document that breaks any of:
+A reader parses at most 1 MiB of JSON. The size of a version is mostly its encrypted DEK, so the
+number of versions that fit depends on the KMS:
+
+| KEK | Bytes per version | Versions in 1 MiB |
+|---|---|---|
+| local KMS | 359 | about 2,900 |
+| Vault Transit | 380 | about 2,750 |
+| GCP Cloud KMS | 412 | about 2,550 |
+| AWS KMS | 504 | about 2,050 |
+| Azure, RSA 2048-bit key | 674 | about 1,550 |
+| Azure, RSA 4096-bit key | 1,014 | about 1,050 |
+
+The local KMS row was measured on a record the crate wrote after 500 randomised rotations, each
+version AES-256-GCM, decrypt-only with a seal range. The other rows are the same record with each
+encrypted DEK replaced by one of that KMS's length, and a KEK version of that KMS's form: none for
+AWS, two digits for GCP and Vault, 32 hex digits for Azure.
+
+A reader fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
-- an encrypted DEK on every version but the destroyed ones;
+- an encrypted DEK on every version but the destroyed ones, and a `kek_version`, when there is
+  one, of 1 to 255 ASCII alphanumerics beside it;
 - unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;
 - a `seal_epoch` of 1 or more;
 - `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
@@ -480,7 +505,7 @@ where
 }
 # use kms_aead::backends::Ring;
 # use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions};
 # #[tokio::main(flavor = "current_thread")]
 # async fn main() -> KmsAeadResult<()> {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;

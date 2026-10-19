@@ -28,7 +28,7 @@ use crate::{
 #[cfg(feature = "admin")]
 mod admin;
 #[cfg(feature = "admin")]
-pub use admin::{EncryptedKeyset, KeyringAdmin, KeysetSelection, Rotation};
+pub use admin::{DekReencryption, EncryptedKeyset, KeyringAdmin, KeysetSelection, Rotation};
 
 mod beacon;
 

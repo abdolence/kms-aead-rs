@@ -5,6 +5,7 @@ use std::time::Duration;
 use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::{Bare, Randomized};
+use kms_aead::providers::KekVersion;
 use kms_aead::{
     AeadAlgorithm, AeadCipher, BeaconAlgorithm, DeterministicAlgorithm, KekProvider, KmsAeadResult,
     Plaintext,
@@ -986,11 +987,35 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
-    admin.rotate(Purpose::Randomized).await?;
+    let staged = admin.rotate(Purpose::Randomized).await?;
     let previous_encrypted_deks = keyring.record().encrypted_deks();
+    let first_kek_version = KekVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KekVersion::try_from("2".to_string())?;
+    assert_eq!(
+        keyring.record().kek_versions_in_use(),
+        [Some(&first_kek_version)]
+    );
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
-    assert_eq!(admin.reencrypt_deks().await?, 2);
+    let reencryptions = admin.reencrypt_deks().await?;
+
+    assert_eq!(
+        reencryptions,
+        [KeyId::new(1), staged].map(|key_id| DekReencryption {
+            key_id,
+            previous_kek_version: Some(first_kek_version.clone()),
+            kek_version: Some(rotated_kek_version.clone()),
+        })
+    );
+    assert_eq!(
+        keyring.record().kek_versions_in_use(),
+        [Some(&rotated_kek_version)]
+    );
     assert_eq!(
         fixture.provider.calls.decryptions.load(Ordering::SeqCst),
         decryptions + 2
@@ -1003,6 +1028,74 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
         assert_ne!(previous_encrypted_dek, current_encrypted_dek);
     }
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reencrypt_deks_records_the_kek_version_of_a_version_another_writer_added() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let staged = fixture
+        .other_process()
+        .await?
+        .rotate(Purpose::Randomized)
+        .await?;
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
+    fixture.store.calls.conflicts.store(1, Ordering::SeqCst);
+
+    let reencryptions = fixture.admin.reencrypt_deks().await?;
+
+    let first_kek_version = KekVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KekVersion::try_from("2".to_string())?;
+    assert_eq!(
+        reencryptions,
+        [KeyId::new(1), staged].map(|key_id| DekReencryption {
+            key_id,
+            previous_kek_version: Some(first_kek_version.clone()),
+            kek_version: Some(rotated_kek_version.clone()),
+        })
+    );
+    let stored = fixture.other_process().await?.keyring().record();
+    assert_eq!(stored.kek_versions_in_use(), [Some(&rotated_kek_version)]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_write_that_encrypts_a_dek_records_the_kek_version_it_stores() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let admin = &fixture.admin;
+    fixture
+        .provider
+        .calls
+        .kek_rotated
+        .store(true, Ordering::SeqCst);
+    fixture.store.calls.conflicts.store(1, Ordering::SeqCst);
+
+    let staged = admin.rotate(Purpose::Randomized).await?;
+    let replacement = admin
+        .mark_compromised(KeyId::new(1), None)
+        .await?
+        .ok_or("the compromised active version is replaced")?;
+
+    let stored = fixture.other_process().await?.keyring().record();
+    let kek_versions: Vec<(KeyId, Option<&KekVersion>)> = stored
+        .versions()
+        .iter()
+        .map(|version| (version.id(), version.kek_version()))
+        .collect();
+    let first_kek_version = KekVersion::try_from("1".to_string())?;
+    let rotated_kek_version = KekVersion::try_from("2".to_string())?;
+    assert_eq!(
+        kek_versions,
+        [
+            (KeyId::new(1), Some(&first_kek_version)),
+            (staged, Some(&rotated_kek_version)),
+            (replacement.current, Some(&rotated_kek_version)),
+        ]
+    );
     Ok(())
 }
 

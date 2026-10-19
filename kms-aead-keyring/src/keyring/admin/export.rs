@@ -9,9 +9,7 @@ use kms_aead::cache::DekCache;
 use kms_aead::formats::{TinkKeyType, TinkKeyset};
 #[cfg(feature = "bigquery-export")]
 use kms_aead::providers::GcpKmsProvider;
-use kms_aead::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, ValueStruct,
-};
+use kms_aead::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
 
 use crate::encodings::{BigQuery, KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};

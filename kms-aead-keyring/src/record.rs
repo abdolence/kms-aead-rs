@@ -6,6 +6,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 use jiff::Timestamp;
+use kms_aead::providers::KekVersion;
 use kms_aead::{
     AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
 };
@@ -328,7 +329,8 @@ impl Compromise {
 
 /// One data encryption key of a keyring, encrypted by the KEK, with its state.
 ///
-/// `Debug` shows the id, the algorithm, the state and the times, never the encrypted DEK.
+/// `Debug` shows the id, the algorithm, the state, the KEK version and the times, never the
+/// encrypted DEK.
 pub struct KeyVersion {
     key_id: KeyId,
     algorithm: KeyAlgorithm,
@@ -394,6 +396,13 @@ impl KeyVersion {
         matches!(self.state, VersionState::Pending(_)).then_some(self.state_changed_at)
     }
 
+    /// The version of the KEK that encrypted this version's DEK, as the KMS reported it when the
+    /// DEK was last encrypted, at the creation or by `reencrypt_deks`. `None` for a destroyed
+    /// version, and when the KMS reported no version, as under AWS KMS.
+    pub fn kek_version(&self) -> Option<&KekVersion> {
+        self.encrypted_dek()?.kek_version()
+    }
+
     pub(crate) fn encrypted_dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         self.state.dek()
     }
@@ -421,6 +430,7 @@ impl Debug for KeyVersion {
             .field("key_id", &self.key_id)
             .field("algorithm", &self.algorithm)
             .field("state", &self.state())
+            .field("kek_version", &self.kek_version())
             .field("compromised", &self.compromised())
             .field("seal_range", &self.seal_range())
             .field("created_at", &self.created_at)
@@ -500,8 +510,8 @@ struct RetainedDek {
 /// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
 /// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
 /// order, a seal epoch of 1 or more, a seal range on every version that was active, open-ended on
-/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: at about
-/// 400 bytes per version with its encrypted DEK, about 2,600 versions.
+/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: from
+/// about 1,050 versions under an Azure RSA 4096-bit key to about 2,900 under the local KMS.
 ///
 /// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]
@@ -602,6 +612,31 @@ impl KeyringRecord {
     /// When the record was last written.
     pub fn updated_at(&self) -> Timestamp {
         self.updated_at
+    }
+
+    /// The KEK versions the encrypted DEKs of this record are under, each once, in the order of
+    /// the first version under it: every version but the destroyed ones, retired versions
+    /// included, since `reinstate` makes them decrypt again. `None` stands for the DEKs whose KMS
+    /// reported no version: every one under AWS KMS, and under a KMS with versions, a version
+    /// that is unknown.
+    ///
+    /// It makes no KMS call. A KEK version may be disabled only once this lists the new version
+    /// alone: it still lists an old version while `reencrypt_deks` has not run since the
+    /// rotation, or ran while a KMS that propagates a rotation, such as Cloud KMS, still encrypted
+    /// under it. A cached record can predate the last `reencrypt_deks`, so that check reads the
+    /// record [`Keyring::reload`](crate::Keyring::reload) returns. Under a provider that reports
+    /// no version, a `None` stays in the list and the check never passes: the steps for that case
+    /// are in
+    /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations.html#a-kek-version-the-kms-did-not-report).
+    pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
+        let mut kek_versions = Vec::new();
+        for encrypted_dek in self.versions.iter().filter_map(KeyVersion::encrypted_dek) {
+            let kek_version = encrypted_dek.kek_version();
+            if !kek_versions.contains(&kek_version) {
+                kek_versions.push(kek_version);
+            }
+        }
+        kek_versions
     }
 
     /// The encrypted DEK of every version that holds one, by key id.

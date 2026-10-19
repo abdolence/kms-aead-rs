@@ -7,7 +7,8 @@ use std::str::FromStr;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use jiff::Timestamp;
-use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef, ValueStruct};
+use kms_aead::providers::KekVersion;
+use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -19,8 +20,9 @@ use crate::purpose::is_reserved;
 use crate::sweep::{SealMarker, SealRange};
 use crate::{KeyId, Purpose};
 
-/// The largest document a reader parses. A record the crate writes takes under 400 bytes per
-/// version, so this holds a few thousand versions.
+/// The largest document a reader parses. A record the crate writes takes from about 360 bytes per
+/// version under the local KMS to about 1,000 under an Azure RSA 4096-bit key, so this holds
+/// a thousand versions or more.
 pub(crate) const MAX_RECORD_DOCUMENT_LEN: usize = 1 << 20;
 const RECORD_SCHEMA_VERSION: u32 = 1;
 
@@ -64,6 +66,9 @@ struct StoredVersion {
     /// The standard base64 of the encrypted DEK's bytes, as the provider returned them; `None`
     /// once destroyed.
     encrypted_dek: Option<String>,
+    /// The KEK version that encrypted `encrypted_dek`, as the KMS reported it; `None` once
+    /// destroyed, and under a KMS that reports none.
+    kek_version: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,6 +106,7 @@ impl From<&KeyringRecord> for StoredRecord {
                 encrypted_dek: version
                     .encrypted_dek()
                     .map(|encrypted_dek| STANDARD.encode(encrypted_dek.value())),
+                kek_version: version.kek_version().map(KekVersion::to_string),
             })
             .collect();
         Self {
@@ -290,6 +296,27 @@ impl TryFrom<StoredVersion> for KeyVersion {
                     .ok_or(RecordInvalidReason::MalformedEncryptedDek(key_id))
             })
             .transpose()?;
+        let kek_version = stored
+            .kek_version
+            .map(|kek_version| {
+                KekVersion::try_from(kek_version)
+                    .map_err(|_| RecordInvalidReason::MalformedKekVersion(key_id))
+            })
+            .transpose()?;
+        let kind: KeyVersionState = stored
+            .state
+            .parse()
+            .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
+        let encrypted_dek = match (encrypted_dek, kek_version) {
+            (Some(encrypted_dek), Some(kek_version)) => {
+                Some(encrypted_dek.with_kek_version(kek_version))
+            }
+            (encrypted_dek, None) => encrypted_dek,
+            (None, Some(_)) if kind == KeyVersionState::Destroyed => {
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+            }
+            (None, Some(_)) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
+        };
         let compromised = stored
             .compromised
             .map(|compromise| Compromise::new(compromise.at, compromise.note));
@@ -299,10 +326,6 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 epochs.end.map(SealMarker::of_epoch),
             )
         });
-        let kind: KeyVersionState = stored
-            .state
-            .parse()
-            .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
         let state = match (kind, encrypted_dek) {
             (KeyVersionState::Destroyed, None) => VersionState::Destroyed {
                 compromised,

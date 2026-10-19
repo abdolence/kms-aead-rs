@@ -6,9 +6,9 @@ use std::num::NonZeroU32;
 use std::path::Path;
 
 use async_trait::async_trait;
-use rvstruct::ValueStruct;
 use secret_vault_value::SecretValue;
 
+use super::KekVersion;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
@@ -71,7 +71,7 @@ impl From<NonZeroU32> for LocalKekVersion {
     }
 }
 
-/// The version in decimal, as the `key_version` span field records it.
+/// The version in decimal, as the `kek_version` span field records it.
 impl Display for LocalKekVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -376,7 +376,8 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            kms::record_key_version(&version.to_string());
+            let kek_version = KekVersion::from(version);
+            kms::record_kek_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
             let encrypted_dek = kms::timed(async {
                 self.cipher.seal(
@@ -387,7 +388,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 )
             })
             .await?;
-            Ok(EncryptedDataEncryptionKey::new(encrypted_dek))
+            Ok(EncryptedDataEncryptionKey::new(encrypted_dek).with_kek_version(kek_version))
         })
         .await
     }
@@ -413,7 +414,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                 ));
             }
             let version = layout.kek_version;
-            kms::record_key_version(&version.to_string());
+            kms::record_kek_version(&version.to_string());
             let material = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",
@@ -561,6 +562,35 @@ mod tests {
                 .decrypt_data_encryption_key(&encrypted_dek)
                 .await?,
             dek
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn encrypt_reports_the_kek_version_that_encrypted() -> KmsAeadResult<()> {
+        let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let rotated = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![
+                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
+                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+            ],
+        )?;
+
+        let encrypted_dek_under_v2 = rotated.encrypt_data_encryption_key(&dek).await?;
+        let rolled_back = rotated.with_encrypting_version(v1)?;
+        let encrypted_dek_under_v1 = rolled_back.encrypt_data_encryption_key(&dek).await?;
+
+        assert_eq!(
+            [
+                encrypted_dek_under_v2.kek_version(),
+                encrypted_dek_under_v1.kek_version()
+            ],
+            [
+                Some(&KekVersion::try_from("2".to_string())?),
+                Some(&KekVersion::try_from("1".to_string())?)
+            ]
         );
         Ok(())
     }

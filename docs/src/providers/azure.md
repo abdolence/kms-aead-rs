@@ -70,7 +70,8 @@ which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 A rotation adds a version to the key, by hand or by the key's rotation policy. Without a key version
 in `AzureKmsKeyRef`, the latest version encrypts new DEKs; with one, that version does, so move it
 to the new version before a sweep. A sweep with a provider pinned to the old version re-encrypts
-under the old version.
+under the old version. The `kek_version()` of the encrypted DEK an encryption returns is the
+version Key Vault encrypted with, read from the `kid` of its response.
 
 Once the sweep has reached every value, see
 [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),

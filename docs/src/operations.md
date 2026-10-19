@@ -55,6 +55,102 @@ that is not re-encrypted keeps working as long as the old KEK versions stay enab
 `reencrypt_deks` is a `KeyringAdmin` call and runs in the administrative job, like every call that
 encrypts a DEK.
 
+The record keeps the KEK version of each encrypted DEK, as the KMS reported it when it encrypted the
+DEK: `KeyVersion::kek_version`. `reencrypt_deks` returns one `DekReencryption` per version, with the
+KEK version its DEK was under and the one the KMS encrypted it with now, and `kek_versions_in_use`
+of the record lists every KEK version the record's DEKs are under. Before the old KEK version is
+disabled, the record that `Keyring::reload` returns must list the new version alone, which needs no
+KMS call. Once the old version is disabled, `reencrypt_deks` runs again: it decrypts every DEK
+through the KMS and fails on one the KMS no longer decrypts. Here with the local KMS, rotated from
+version 1 to version 2, where dropping version 1 from the provider stands for disabling it:
+
+```rust
+use std::num::NonZeroU32;
+
+use kms_aead::backends::Ring;
+use kms_aead::providers::{
+    KekVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
+};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    DekReencryption, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+};
+use secret_vault_value::SecretValue;
+
+const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+let kek_id = LocalKekId::try_from("tenant-kek".to_string())?;
+let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+    MemoryKeyringStore::new(),
+    KeyringRegistryOptions::new(),
+)?;
+# let before_rotation = LocalKmsProvider::<Ring>::new(
+#     kek_id.clone(),
+#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+# )?;
+# registry
+#     .create(before_rotation, TENANT, KeyringAlgorithms::new())
+#     .await?;
+
+// The administrative job after the rotation, with the new version encrypting
+let rotated = LocalKmsProvider::<Ring>::new(
+    kek_id.clone(),
+    vec![
+        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
+        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+    ],
+)?;
+let admin = registry.admin(rotated, TENANT).await?;
+
+// One entry per version: the KEK version its DEK was under, and the one it is under now
+let moved: Vec<DekReencryption> = admin.reencrypt_deks().await?;
+let new_kek_version = KekVersion::from(v2);
+assert!(moved
+    .iter()
+    .all(|reencryption| reencryption.kek_version.as_ref() == Some(&new_kek_version)));
+
+// The check before the old version is disabled: every DEK is under the new version
+let record = admin.keyring().reload().await?;
+assert_eq!(record.kek_versions_in_use(), [Some(&new_kek_version)]);
+
+// The check once the old version is disabled: every DEK still decrypts
+let disabled = LocalKmsProvider::<Ring>::new(
+    kek_id,
+    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+)?;
+registry.admin(disabled, TENANT).await?.reencrypt_deks().await?;
+# Ok(())
+# }
+```
+
+Under Cloud KMS, a `reencrypt_deks` that ran before the new primary version had propagated reports
+the old version as the one the DEK is under now, and the record keeps listing it: run
+`reencrypt_deks` again once the rotation has propagated. Under Vault Transit,
+`min_decryption_version` disables every version below it at once, which is why the check asks for
+the new version alone.
+
+The whole procedure, with the application's own DEKs and keysets, is in
+[Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+
+### A KEK version the KMS did not report
+
+A `None` among the versions in use stands for the DEKs whose KMS reported no version: every DEK
+under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application's
+own provider that returns none. `reencrypt_deks` keeps such a DEK at `None`, so the check before the
+disable never passes, and the check once the old version is disabled is the only one:
+
+1. run `reencrypt_deks` after the rotation;
+2. disable the old version in the KMS;
+3. run `reencrypt_deks` again. It decrypts every DEK through the KMS, so an error is a DEK the KMS
+   no longer decrypts: enable the old version again, and go back to step 1.
+
+Between steps 2 and 3, a DEK still under the old version fails in the application too, once its
+DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
+[AWS KMS](./providers/aws.md#key-versions-and-rotation).
+
 ## Sweeps
 
 A sweep re-seals stored values under the active versions: after a rotation, to retire the old
