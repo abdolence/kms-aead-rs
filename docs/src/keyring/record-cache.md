@@ -80,8 +80,10 @@ is `DecryptOnly`.
   processes fail at `open` with `RecordMissing`;
 - a refreshed record is taken only if it moves every version forward from the cached one: no
   version missing, no changed algorithm or creation time, no compromised flag cleared, no state
-  moved back against the lifecycle, such as a version back to `Pending`, and no seal epoch below
-  the cached one, which would give records sealed under different versions one marker. Otherwise
+  moved back against the lifecycle, such as a version back to `Pending`, no seal epoch below
+  the cached one, which would give records sealed under different versions one marker, and no
+  seal range moved back or started or ended at or below the cached epoch, which would leave the
+  records this process sealed under a version outside its range. Otherwise
   the process keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a
   write of a `KeyringAdmin` return `RecordRegressed` in that case.
 

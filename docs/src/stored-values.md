@@ -19,8 +19,8 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
 |---|---|---|---|---|---|
 | `Envelope` | [Tink's KMS envelope](./formats.md#tinks-kms-envelope), the encrypted DEK inside | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
 | `Bare` | `[nonce: 12][ciphertext][tag: 16]` | `KmsAeadEnvelope::encrypt_with_dek`, `AeadCipher::encrypt_bare` | `KmsAeadEnvelope::decrypt_with_dek`, `AeadCipher::decrypt_bare` | no | none |
-| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Keyring::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
-| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Keyring::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
+| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Sealer::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
+| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Sealer::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
 
 - `key_id()` returns the `KeyId` that the TINK prefix names, the key to open the value with. The
   prefix is not authenticated: a changed key id fails to decrypt;

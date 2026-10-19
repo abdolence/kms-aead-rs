@@ -260,6 +260,7 @@ staged, with the encrypted DEKs shortened:
       "algorithm": "aes-256-gcm",
       "state": "decrypt_only",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
@@ -269,6 +270,7 @@ staged, with the encrypted DEKs shortened:
       "algorithm": "aes-256-siv",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
@@ -278,6 +280,7 @@ staged, with the encrypted DEKs shortened:
       "algorithm": "hmac-sha256",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
@@ -287,6 +290,7 @@ staged, with the encrypted DEKs shortened:
       "algorithm": "aes-256-gcm",
       "state": "active",
       "compromised": null,
+      "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
@@ -296,6 +300,7 @@ staged, with the encrypted DEKs shortened:
       "algorithm": "aes-256-gcm",
       "state": "pending",
       "compromised": null,
+      "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
       "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
@@ -317,6 +322,10 @@ staged, with the encrypted DEKs shortened:
 - `state` is `pending`, `active`, `decrypt_only`, `retired` or `destroyed`. For a pending version,
   `state_changed_at` is the time it was staged;
 - `compromised` is `null`, or `{"at": "<time>", "note": "<the operator's note, or null>"}`;
+- `seal_epochs` is the version's seal range as epochs, `{"start": <epoch>, "end": <epoch or
+  null>}`: the epoch of the write that made it active, and the epoch of the first write after it
+  stopped being active that moved the epoch on, `null` until then. It is `null` for a version that
+  was never active, see [Seal markers](#seal-markers);
 - `encrypted_dek` is the standard base64 of the [encrypted DEK](#encrypted-deks), the bytes the
   provider returned, here the local KMS layout. It is `null` for a destroyed version;
 - the times are RFC 3339, in UTC.
@@ -327,12 +336,14 @@ fails with `RecordInvalid` on a document that breaks any of:
 - at most one active and one pending version per purpose, neither of them compromised;
 - an encrypted DEK on every version but the destroyed ones;
 - unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;
-- a `seal_epoch` of 1 or more.
+- a `seal_epoch` of 1 or more;
+- `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
+  the active version, starting at 1 or more and below its end, and within the `seal_epoch`.
 
 ## Seal markers
 
-A seal marker is the seal epoch of a keyring when a record's fields were sealed, which the
-application stores beside them:
+A seal marker is the seal epoch of the keyring record a write sealed a record's fields under,
+which the application stores beside them:
 
 ```text
 [0x01][seal epoch: u32 BE]
@@ -344,6 +355,12 @@ marker of a record of envelope values. `SealMarker::try_from` fails with `Invali
 bytes of any other length or first byte. The `serde` feature stores a marker as bytes, an array of
 numbers in serde_json, and the `postgres` and `sqlx` features as `BYTEA`. See
 [Sweeps](./operations.md#sweeps) for the query it serves.
+
+`KeyVersion::seal_range()` returns the markers of a version's `seal_epochs` as a `SealRange`:
+`start()`, and `end()`, `None` while the range is open. A record whose fields were sealed through
+one `Sealer`, and which stores the marker of the sealer's record, lies in the range of every
+version its fields are under. See
+[Records under a version](./operations.md#records-under-a-version) for the query it serves.
 
 ## Telling layouts apart
 

@@ -12,7 +12,9 @@ A keyring record holds:
 - the algorithms new versions use, one per purpose;
 - the seal epoch, which every write that makes a version active moves on by one, and which the
   application stores beside its records as a `SealMarker`, see [Sweeps](../operations.md#sweeps);
-- every key version ever created, in creation order, each with its encrypted DEK and its state.
+- every key version ever created, in creation order, each with its encrypted DEK, its state and,
+  once it was active, its seal range: the markers of the records sealed under it, see
+  [Records under a version](../operations.md#records-under-a-version).
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
