@@ -14,14 +14,14 @@
 //! # Applications and administration
 //!
 //! A [`Keyring`] is the application's handle. It decrypts, and its [`Sealer`] encrypts, computes
-//! beacons and re-seals, with the KMS's decrypt right and read access to the store, and it has no call that
-//! encrypts a DEK or writes the record. Those calls, the creation of a keyring, its lifecycle and
-//! the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds together with the
-//! registry's `create`, `open_or_create` and `admin`. An application builds without the feature
-//! and runs under a principal without the rights those calls need; infrastructure automation, or
-//! a service that provisions keyrings on purpose, builds with it. A keyring is created before an
-//! application opens it: [`open`](KeyringRegistry::open) on a keyring the store does not hold
-//! fails with [`KeyringError::RecordMissing`].
+//! beacons and re-seals, with the KMS's decrypt right and read access to the store, and it has no
+//! call that encrypts a DEK or writes the record. Those calls, the creation of a keyring, its
+//! lifecycle and the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds together
+//! with the registry's `create`, `open_or_create` and `admin`. An application builds without the
+//! feature and runs under a principal without the rights those calls need; infrastructure
+//! automation, or a service that provisions keyrings on purpose, builds with it. A keyring is
+//! created before an application opens it: [`open`](KeyringRegistry::open) on a keyring the store
+//! does not hold fails with [`KeyringError::RecordMissing`].
 //!
 //! # Values
 //!

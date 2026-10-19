@@ -392,8 +392,9 @@ where
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
     /// store-less, so that a sweep can seal it again as a keyring value with
-    /// [`Sealer::encrypt`]; a keyring never writes envelope values. The `aad` is the one the application gave it and the
-    /// `algorithm` that of the envelope that wrote it: the read of a record whose
+    /// [`Sealer::encrypt`]; a keyring never writes envelope values. The `aad` is the one the
+    /// application gave it and the `algorithm` that of the envelope that wrote it: the read of a
+    /// record whose
     /// [`SealMarker`](crate::sweep::SealMarker) is
     /// [`SealMarker::ENVELOPE`](crate::sweep::SealMarker::ENVELOPE), until a sweep re-seals it. A
     /// value stored as hex is read with `Encrypted::try_from_hex_string`.
