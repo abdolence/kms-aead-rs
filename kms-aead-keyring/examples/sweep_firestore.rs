@@ -5,20 +5,15 @@
 //! previous version once the query of its seal range finds no document. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#firestore) in the book.
 //!
-//! Every read and write is sized for millions of documents, and memory holds a few pages at most.
-//! The sweep reads its candidates in pages, each one `RunQuery` of at most `PAGE_SIZE` documents
-//! that starts after the marker and the name of the last document of the page before. One query
-//! over the whole range would keep its stream open for as long as the sweep runs, while Google's
-//! client libraries give a `RunQuery` call
-//! [a deadline of 300 seconds](https://docs.cloud.google.com/dotnet/docs/reference/Google.Cloud.Firestore.V1/latest/Google.Cloud.Firestore.V1.FirestoreSettings),
-//! and firestore-rs retries a query only until its stream opens, so an error midway ends it. A
-//! partitioned query does not fit either: `PartitionQuery` takes no filter, so its workers would
-//! read every document, the current ones included. The existence check before `retire` reads one
-//! document, and the cleanup lists the documents a page at a time and deletes them in batches.
-//!
-//! A sweep stopped part-way, or one that failed on some documents, resumes when it runs again:
-//! the query of the markers below the current one returns exactly the documents it did not write,
-//! so nothing else needs to record how far it got.
+//! Every read and write is sized for millions of documents, and memory holds the batches in flight
+//! only. The sweep's candidates are one streamed query, which `sweep::run_batched` cuts into
+//! batches as they arrive. A stream can end early, on a deadline or an error midway, and the sweep
+//! then resumes when it runs again: every document it re-sealed has left `seal < current`, so the
+//! query returns exactly the documents it did not write, and nothing else needs to record how far
+//! it got. The same holds for a sweep stopped part-way or one that failed on some documents. A
+//! partitioned query does not fit the sweep: `PartitionQuery` takes no filter, so its workers would
+//! read every document, the current ones included. The check before `retire` reads one document at
+//! most, and the cleanup streams the ids into batches of deletes the same way.
 //!
 //! The example runs on the emulator that `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
 //! application default credentials when it is unset, in the project `PROJECT_ID`. It writes the
@@ -33,9 +28,7 @@
 //!   cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,serde,firestore -- 1000
 //! ```
 //!
-//! The argument is the number of users, 100 by default. The emulator scans the whole collection
-//! for every query, so there each page of the sweep and of the cleanup costs as much as the first
-//! reading all of them; Firestore serves a page from the index.
+//! The argument is the number of users, 100 by default.
 
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
@@ -44,13 +37,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use firestore::errors::FirestoreError;
-use firestore::gcloud_sdk::google::firestore::v1::Document;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreQueryCursor,
-    FirestoreReference, FirestoreResult, FirestoreSimpleBatchWriter, FirestoreTimestamp,
-    FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb,
+    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
 };
+use futures_util::stream::TryChunksError;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -81,9 +73,6 @@ const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 /// The batches in flight at once. On a new collection of a real database, raise the write rate
 /// step by step, as Firestore's 500/50/5 rule for ramping up traffic advises.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// The documents of a page of the sweep's query, `BATCH_SIZE` times `CONCURRENCY`: one page fills
-/// every batch in flight, and reads in well under a second.
-const PAGE_SIZE: u16 = 8000;
 /// The users between two progress lines.
 const PROGRESS_EVERY: usize = 100_000;
 const DEFAULT_USERS: u32 = 100;
@@ -119,21 +108,11 @@ struct UserFields {
     seal: SealMarker,
 }
 
-/// The id and the full name of any document, for the cleanup and the check before `retire`.
+/// The id of any document, for the cleanup and the check before `retire`.
 #[derive(Deserialize)]
 struct DocId {
     #[serde(rename = "_firestore_id")]
     id: String,
-    #[serde(rename = "_firestore_full_id")]
-    name: String,
-}
-
-/// The last document of a page of the sweep's query, which the next page starts after.
-#[derive(Deserialize)]
-struct PageEnd {
-    #[serde(rename = "_firestore_full_id")]
-    name: String,
-    seal: SealMarker,
 }
 
 /// Why the sweep failed on a document or a batch: an error of the keyring or of the users
@@ -183,47 +162,6 @@ impl Display for UserDoc {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "users/{}", self.id)
     }
-}
-
-/// The next page of the documents whose marker is below `current`, in the order of the `seal`
-/// index: at most [`PAGE_SIZE`] of them from the cursor `from`, with the fields the sweep reads,
-/// and the cursor after the last of them to read the next page from. `None` once a page came back
-/// short.
-///
-/// Each page starts after the last document of the one before, whatever the sweep wrote
-/// meanwhile: a re-sealed document moves to the current marker, out of the range the pages walk,
-/// so a page read while earlier pages are still being written neither repeats nor skips one.
-async fn next_page(
-    db: &FirestoreDb,
-    users: &FirestoreCollectionId,
-    current: SealMarker,
-    from: Option<FirestoreQueryCursor>,
-) -> FirestoreResult<Option<(Vec<Document>, Option<FirestoreQueryCursor>)>> {
-    let Some(from) = from else {
-        return Ok(None);
-    };
-    let page: Vec<Document> = db
-        .fluent()
-        .select()
-        .fields(paths!(UserFields::{email, seal}))
-        .from(users.as_str())
-        .filter(|q| q.field("seal").less_than(current))
-        .order(|o| o.fields([o.field("seal").asc(), o.field("__name__").asc()]))
-        .start_at(from)
-        .limit(u32::from(PAGE_SIZE))
-        .query()
-        .await?;
-    let next: Option<FirestoreQueryCursor> = match page.last() {
-        Some(last) if page.len() == usize::from(PAGE_SIZE) => {
-            let end: PageEnd = FirestoreDb::deserialize_doc_to(last)?;
-            Some(FirestoreQueryCursor::AfterValue(vec![
-                end.seal.into(),
-                FirestoreReference(end.name).into(),
-            ]))
-        }
-        _ => None,
-    };
-    Ok(Some((page, next)))
 }
 
 /// Adds `count` users to `done`, and prints the total each time it passes a multiple of
@@ -323,59 +261,43 @@ fn every_write_succeeded(response: &FirestoreBatchWriteResponse) -> Result<(), B
     }
 }
 
-/// Deletes every document of `collection` a page at a time, each page in batches of
-/// [`BATCH_SIZE`], and returns how many there were.
-///
-/// Each page starts after the name of the last document of the one before, so no query scans
-/// past the documents the cleanup already deleted.
+/// Deletes every document of `collection` in batches of [`BATCH_SIZE`], and returns how many
+/// there were.
 async fn delete_all(
     writer: &FirestoreSimpleBatchWriter,
     collection: &FirestoreCollectionId,
 ) -> Result<usize, Box<dyn Error>> {
-    let mut deleted: usize = 0;
-    let mut after: Option<FirestoreQueryCursor> = None;
-    loop {
-        let query = writer
-            .db
-            .fluent()
-            .select()
-            .from(collection.as_str())
-            .order(|o| o.fields([o.field("__name__").asc()]))
-            .limit(u32::from(PAGE_SIZE));
-        let page: Vec<DocId> = match after {
-            Some(after) => query.start_at(after),
-            None => query,
-        }
-        .obj()
-        .query()
-        .await?;
-        stream::iter(page.chunks(BATCH_SIZE.get()))
-            .map(Ok)
-            .try_for_each_concurrent(CONCURRENCY.get(), |docs: &[DocId]| async move {
-                let mut batch = writer.new_batch();
-                for doc in docs {
-                    writer
-                        .db
-                        .fluent()
-                        .delete()
-                        .from(collection.as_str())
-                        .document_id(&doc.id)
-                        .add_to_batch(&mut batch)?;
-                }
-                every_write_succeeded(&batch.write().await?)
-            })
-            .await?;
-        deleted += page.len();
-        match page.last() {
-            Some(last) if page.len() == usize::from(PAGE_SIZE) => {
-                after = Some(FirestoreQueryCursor::AfterValue(vec![FirestoreReference(
-                    last.name.clone(),
-                )
-                .into()]));
+    writer
+        .db
+        .fluent()
+        .select()
+        .from(collection.as_str())
+        .obj::<DocId>()
+        .stream_query_with_errors()
+        .await?
+        .try_chunks(BATCH_SIZE.get())
+        .map_err(
+            |error: TryChunksError<DocId, FirestoreError>| -> Box<dyn Error> { error.1.into() },
+        )
+        .map_ok(|docs: Vec<DocId>| async move {
+            let mut batch = writer.new_batch();
+            for doc in &docs {
+                writer
+                    .db
+                    .fluent()
+                    .delete()
+                    .from(collection.as_str())
+                    .document_id(&doc.id)
+                    .add_to_batch(&mut batch)?;
             }
-            _ => return Ok(deleted),
-        }
-    }
+            every_write_succeeded(&batch.write().await?)?;
+            Ok::<usize, Box<dyn Error>>(docs.len())
+        })
+        .try_buffer_unordered(CONCURRENCY.get())
+        .try_fold(0, |deleted: usize, count: usize| async move {
+            Ok(deleted + count)
+        })
+        .await
 }
 
 /// Writes `count` users, rotates, sweeps, and retires the previous version.
@@ -451,18 +373,18 @@ async fn run(
 
     let started = Instant::now();
     let current: SealMarker = keyring.record().seal_marker();
-    // The first page starts at the lowest marker. A page query that fails returns its error,
-    // which the sweep counts as failed, and ends the stream; a document that does not read is a
-    // failed candidate of its own.
-    let first_page = FirestoreQueryCursor::BeforeValue(vec![SealMarker::ENVELOPE.into()]);
-    let candidates = stream::try_unfold(Some(first_page), |from: Option<FirestoreQueryCursor>| {
-        next_page(db, users, current, from)
-    })
-    .map_ok(|page: Vec<Document>| {
-        stream::iter(page).map(|doc: Document| FirestoreDb::deserialize_doc_to::<UserDoc>(&doc))
-    })
-    .try_flatten()
-    .err_into::<SweepError>();
+    // One query, streamed in the order of the `seal` index with the fields the sweep reads. A
+    // document that does not read is a failed candidate, and the sweep goes on.
+    let candidates = db
+        .fluent()
+        .select()
+        .fields(paths!(UserFields::{email, seal}))
+        .from(users.as_str())
+        .filter(|q| q.field("seal").less_than(current))
+        .obj::<UserDoc>()
+        .stream_query_with_errors()
+        .await?
+        .err_into::<SweepError>();
     let swept = AtomicUsize::new(0);
     let report: SweepReport = sweep::run_batched(
         keyring.id(),

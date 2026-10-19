@@ -814,10 +814,10 @@ The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/ma
 runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator. It runs on
 `sweep::run_batched`, which cuts the candidates into batches and counts what each returns, in place
 of `sweep::run`: each batch of 500 documents is re-sealed through one sealer and written back in one
-`BatchWrite`, one precondition per document, instead of one write per document. It reads the
-candidates in pages rather than in one stream, each page a query of at most 8000 documents that
-starts after the marker and the name of the last document of the page before, so that a sweep of
-millions of documents needs no stream that stays open for as long as it runs.
+`BatchWrite`, one precondition per document, instead of one write per document. Its memory holds
+the batches in flight only, so it runs the same over millions of documents. A stream that ends
+early, on a deadline or an error, leaves the documents it did not reach below the current marker,
+and the next run of the sweep finds them.
 
 #### PostgreSQL
 
