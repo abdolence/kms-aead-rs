@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a480e0a.js";
+            window.path_to_searchindex_js = "../searchindex-c4e57fee.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -224,8 +224,8 @@ shares the same records. It keeps each record as its JSON document, as the other
 signals a watch on every write.</p>
 <h2 id="firestore"><a class="header" href="#firestore">Firestore</a></h2>
 <p>The record of a keyring is the document <code>kms_keyrings/&lt;keyring id&gt;</code>, whose fields are those of the
-record’s JSON. <code>with_collection</code> names another collection than
-<code>FirestoreKeyringStore::DEFAULT_COLLECTION</code>. A create fails when the document exists, and an
+record’s JSON. <code>with_collection</code> takes another collection than
+<code>FirestoreKeyringStore::DEFAULT_COLLECTION</code>, as firestore-rs’s <code>FirestoreCollectionId</code>. A create fails when the document exists, and an
 update carries the update time it read as its precondition.</p>
 <pre><code class="language-rust no_run">use firestore::FirestoreDb;
 use kms_aead::backends::Ring;
@@ -254,7 +254,7 @@ let keyring: Keyring&lt;FirestoreKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
 <p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
 project, database and credentials it chooses. The version of the <code>firestore</code> crate is part of
 this crate’s API under the <code>firestore</code> feature.</p>
-<p>Each keyring holds one listen stream, on its document. Firestore’s point-in-time recovery
+<p>Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore’s point-in-time recovery
 restores an earlier record. Be aware the <code>firestore</code> crate logs every listen event at <code>trace</code> level on its
 <code>firestore</code> target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administration’s reach.</p>
