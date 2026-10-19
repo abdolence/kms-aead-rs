@@ -224,13 +224,12 @@ let first_level_keyset: EncryptedDataEncryptionKey = provider
 ```
 
 BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the encrypted keyset, passed as a `BYTES`
-query parameter:
+query parameter, beside the key's Tink URI as a `STRING` one,
+`gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key`:
 
 ```sql
 SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(
-    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
-    @first_level_keyset),
+  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
   u.email,
   CONCAT('users/', CAST(u.id AS STRING), '/email'))
 FROM users u;

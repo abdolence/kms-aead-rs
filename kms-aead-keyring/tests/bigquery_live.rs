@@ -98,40 +98,30 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let deterministic_keyset = admin
         .export_bigquery_keyset(KeysetSelection::Single(deterministic.key_id()))
         .await?;
-    let randomized_chain = format!(
-        "KEYS.KEYSET_CHAIN('{}', {})",
-        randomized_keyset.key_uri(),
-        randomized_keyset.to_sql_literal()
-    );
-    let deterministic_chain = format!(
-        "KEYS.KEYSET_CHAIN('{}', {})",
-        deterministic_keyset.key_uri(),
-        deterministic_keyset.to_sql_literal()
-    );
+    let bytes = BigQueryFieldType::Bytes { max_length: None };
 
     let db = BigQueryDb::new(&project).await?;
     let rows: Vec<Row> = db
         .fluent()
-        .query(format!(
+        .query(
             "WITH users AS (
                SELECT '42' AS id, @first AS email_first, @second AS email_second,
                  @relabelled AS email_relabelled, @deterministic AS email_det
              )
              SELECT
-               AEAD.DECRYPT_STRING({randomized_chain}, u.email_first, CONCAT('user/', u.id, '/email')) AS first,
-               AEAD.DECRYPT_STRING({randomized_chain}, u.email_second, CONCAT('user/', u.id, '/email')) AS second,
-               SAFE.AEAD.DECRYPT_STRING({randomized_chain}, u.email_relabelled, CONCAT('user/', u.id, '/email')) AS relabelled,
-               DETERMINISTIC_DECRYPT_STRING({deterministic_chain}, u.email_det, 'user/email') AS deterministic,
-               TO_HEX(DETERMINISTIC_ENCRYPT({deterministic_chain}, @alice, 'user/email')) AS deterministic_hex
-             FROM users u"
-        ))
+               AEAD.DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @randomized_keyset), u.email_first, CONCAT('user/', u.id, '/email')) AS first,
+               AEAD.DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @randomized_keyset), u.email_second, CONCAT('user/', u.id, '/email')) AS second,
+               SAFE.AEAD.DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @randomized_keyset), u.email_relabelled, CONCAT('user/', u.id, '/email')) AS relabelled,
+               DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @deterministic_keyset), u.email_det, 'user/email') AS deterministic,
+               TO_HEX(DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @deterministic_keyset), @alice, 'user/email')) AS deterministic_hex
+             FROM users u",
+        )
+        .param("kms_key", randomized_keyset.key_uri())
+        .param_as("randomized_keyset", bytes.clone(), randomized_keyset.value())
+        .param_as("deterministic_keyset", bytes.clone(), deterministic_keyset.value())
         .param("first", &first)
         .param("second", &second)
-        .param_as(
-            "relabelled",
-            BigQueryFieldType::Bytes { max_length: None },
-            relabelled,
-        )
+        .param_as("relabelled", bytes, relabelled)
         .param("deterministic", &deterministic)
         .param("alice", ALICE)
         .location(BigQueryLocation::new(location)?)
@@ -140,6 +130,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .await?;
 
     assert_eq!(randomized_keyset.key_ids(), [KeyId::new(1), KeyId::new(2)]);
+    assert_eq!(deterministic_keyset.key_uri(), randomized_keyset.key_uri());
     assert_eq!(
         rows,
         [Row {

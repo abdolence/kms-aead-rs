@@ -25,7 +25,7 @@ use std::time::Instant;
 
 use bigquery::{
     BigQueryDatasetId, BigQueryDb, BigQueryFieldType, BigQueryLocation, BigQueryQueryOutcome,
-    BigQueryTableId, BigQueryTableRef,
+    BigQueryTableId,
 };
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
@@ -51,12 +51,12 @@ const EMAIL: FieldSpec = FieldSpec::new(
     FieldName::from_static("email"),
 )
 .with_interop(Interop::BigQuery);
+/// The users table, which the statements name as `users` in the example's default dataset: a
+/// table name cannot be a query parameter.
 const USERS: BigQueryTableId = BigQueryTableId::from_static("users");
 /// The rows of one `INSERT`, each statement sealed by one sealer.
 const INSERT_ROWS: usize = 1000;
 const DEFAULT_USERS: u32 = 100;
-/// The AAD of a user's email in SQL, the UTF-8 of the text `EMAIL.aad` binds.
-const EMAIL_AAD: &str = "CAST(CONCAT('user/', id, '/email') AS BYTES)";
 
 /// The application's email type, sealed as the UTF-8 of the address, which BigQuery reads as a
 /// `STRING`.
@@ -90,7 +90,7 @@ struct Count {
 /// Writes `count` users, rotates, sweeps, and retires the previous version.
 async fn run(
     db: &BigQueryDb,
-    users: &BigQueryTableRef,
+    dataset: &BigQueryDatasetId,
     key_ref: &GcpKmsKeyRef,
     count: u32,
 ) -> Result<(), Box<dyn Error>> {
@@ -126,9 +126,8 @@ async fn run(
             rows.push(User { id, email, seal });
         }
         db.fluent()
-            .query(format!(
-                "INSERT INTO `{users}` (id, email, seal) SELECT id, email, seal FROM UNNEST(@rows)"
-            ))
+            .query("INSERT INTO users (id, email, seal) SELECT id, email, seal FROM UNNEST(@rows)")
+            .default_dataset(dataset.clone())
             .param("rows", rows)
             .execute()
             .await?;
@@ -154,16 +153,25 @@ async fn run(
     let keyset: EncryptedKeyset<BigQuery> = admin
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
-    let chain = format!("KEYS.KEYSET_CHAIN('{}', @keyset)", keyset.key_uri());
     let keyset_bytes = BigQueryFieldType::Bytes { max_length: None };
     let swept: BigQueryQueryOutcome = db
         .fluent()
-        .query(format!(
-            "UPDATE `{users}`
-             SET email = AEAD.ENCRYPT({chain}, AEAD.DECRYPT_BYTES({chain}, email, {EMAIL_AAD}), {EMAIL_AAD}),
+        .query(
+            "UPDATE users
+             SET email = AEAD.ENCRYPT(
+                   KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                   AEAD.DECRYPT_BYTES(
+                     KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                     email,
+                     CAST(CONCAT('user/', id, '/email') AS BYTES)
+                   ),
+                   CAST(CONCAT('user/', id, '/email') AS BYTES)
+                 ),
                  seal = @seal
-             WHERE seal < @seal AND seal > @envelope"
-        ))
+             WHERE seal < @seal AND seal > @envelope",
+        )
+        .default_dataset(dataset.clone())
+        .param("kms_key", keyset.key_uri())
         .param_as("keyset", keyset_bytes.clone(), keyset.value())
         .param("seal", keyset.seal_marker())
         .param("envelope", SealMarker::ENVELOPE)
@@ -186,10 +194,11 @@ async fn run(
         .ok_or("a replaced version has a seal range")?;
     let under_previous: u64 = db
         .fluent()
-        .query(format!(
-            "SELECT COUNT(*) AS count FROM `{users}`
-             WHERE seal >= @start AND (@end IS NULL OR seal < @end)"
-        ))
+        .query(
+            "SELECT COUNT(*) AS count FROM users
+             WHERE seal >= @start AND (@end IS NULL OR seal < @end)",
+        )
+        .default_dataset(dataset.clone())
         .param("start", range.start())
         .param_as("end", keyset_bytes.clone(), range.end())
         .obj::<Count>()
@@ -214,10 +223,14 @@ async fn run(
 
     let readable: u64 = db
         .fluent()
-        .query(format!(
-            "SELECT COUNTIF(AEAD.DECRYPT_STRING({chain}, email, CONCAT('user/', id, '/email'))
-               = CONCAT('user-', id, '@example.com')) AS count FROM `{users}`"
-        ))
+        .query(
+            "SELECT COUNTIF(
+               AEAD.DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), email, CONCAT('user/', id, '/email'))
+                 = CONCAT('user-', id, '@example.com')
+             ) AS count FROM users",
+        )
+        .default_dataset(dataset.clone())
+        .param("kms_key", keyset.key_uri())
         .param_as("keyset", keyset_bytes, keyset.value())
         .obj::<Count>()
         .query()
@@ -257,11 +270,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .location(BigQueryLocation::new(location)?)
         .execute()
         .await?;
-    let users: BigQueryTableRef = dataset.table(USERS);
     let outcome = async {
         db.fluent()
             .schema()
-            .table(users.clone())
+            .table(dataset.table(USERS))
             .columns(|columns| {
                 columns.fields([
                     columns.field("id").string().required(),
@@ -271,7 +283,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
             .sync()
             .await?;
-        run(&db, &users, &key_ref, count).await
+        run(&db, &dataset, &key_ref, count).await
     }
     .await;
     db.fluent()

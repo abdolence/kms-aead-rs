@@ -1093,17 +1093,19 @@ UPDATE users SET seal = b'\x01\x00\x00\x00\x00' WHERE seal IS NULL;
 ```
 
 A field BigQuery reads, declared with `Interop::BigQuery`, is re-sealed by one `UPDATE` in SQL,
-with no Rust loop and no value leaving BigQuery. With `keyset` standing for the
-`KEYS.KEYSET_CHAIN(…)` expression of a `Readable(Purpose::Randomized)` export, see
-[Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery), and
-`@seal` for the bytes of the export's marker, `keyset.seal_marker().value()`:
+with no Rust loop and no value leaving BigQuery. Its parameters come from a
+`Readable(Purpose::Randomized)` export, see
+[Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery): `@kms_key`
+is the export's `key_uri()`, `@keyset` its `value()`, and `@seal` the bytes of its marker,
+`keyset.seal_marker().value()`:
 
 ```sql
 UPDATE users
 SET
   email = AEAD.ENCRYPT(
-    keyset,
-    AEAD.DECRYPT_BYTES(keyset, email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
+    KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+    AEAD.DECRYPT_BYTES(
+      KEYS.KEYSET_CHAIN(@kms_key, @keyset), email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
     CAST(CONCAT('user/', id, '/email') AS BYTES)),
   seal = @seal
 WHERE seal < @seal AND seal > b'\x01\x00\x00\x00\x00';

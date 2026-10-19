@@ -27,7 +27,7 @@ AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
 DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
 ```
 
-`keyset` is a `KEYS.KEYSET_CHAIN` of the keyring's versions, see
+`keyset` is `KEYS.KEYSET_CHAIN(@kms_key, @keyset)` over an export of the keyring's versions, see
 [Exporting a keyset to BigQuery](#exporting-a-keyset-to-bigquery). SQL cannot rebuild an AAD of
 the application's own bytes, so `FieldSpec::custom_aad` fails on a field declared with
 `Interop::BigQuery`, see [Why the AAD is structured](./fields.md#why-the-aad-is-structured).
@@ -171,9 +171,10 @@ let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
 let keyset: EncryptedKeyset<encodings::BigQuery> = admin
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-let literal: String = keyset.to_sql_literal();
-let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
-# let _ = chain;
+// The query parameters of `KEYS.KEYSET_CHAIN(@kms_key, @keyset)`: a `STRING` and a `BYTES`
+let kms_key: &str = keyset.key_uri();
+let keyset_bytes: &[u8] = keyset.value();
+# let _ = (kms_key, keyset_bytes);
 registry.shutdown().await?;
 # Ok(())
 # }
@@ -204,7 +205,7 @@ the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export 
   `EncryptedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
   `EncryptedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
-  first argument of `KEYS.KEYSET_CHAIN`;
+  first argument of `KEYS.KEYSET_CHAIN`, as a `STRING` query parameter;
 - `key_ids()`: the key ids of the versions inside, in ascending order.
 
 The export selects its versions from the record in the store, read at the time of the call, not
@@ -228,23 +229,25 @@ the old bytes in every query and column that holds them before the old version i
 
 ### Queries
 
-With `keyset` standing for the `KEYS.KEYSET_CHAIN(…)` expression of each export:
+Every value reaches the query as a parameter: `@kms_key` is the export's `key_uri()`, each
+keyset parameter its `value()`, and `@email` the address an equality query looks for:
 
 ```sql
 -- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
 FROM users u;
 
 -- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
+SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
 FROM users u;
 
 -- An equality query: one probe per deterministic version, each with its Single keyset
 SELECT u.id
 FROM users u
 WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(keyset_d2, 'alice@example.com', 'user/email'),
-  DETERMINISTIC_ENCRYPT(keyset_d1, 'alice@example.com', 'user/email')
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
 );
 ```
 
