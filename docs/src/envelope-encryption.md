@@ -350,9 +350,13 @@ reading and writing:
 
 1. rotate the KEK in the KMS, as the page of each provider describes;
 2. re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
-   values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`;
-3. disable the old version, then check that the KMS decrypts every stored DEK. A DEK it refuses is
-   one the sweep missed: enable the old version again, sweep again and check again;
+   values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`. Then
+   export the keyrings' keysets again and re-encrypt the application's own encrypted keysets, see
+   [Encrypted keysets](#encrypted-keysets);
+3. once no process holds an encrypted DEK from before step 2, disable the old version, then check
+   that the KMS decrypts every stored DEK and every encrypted keyset. A DEK or a keyset it refuses
+   is one the sweep missed: enable the old version again, sweep again and check again. When to
+   disable, and how the local KMS checks before it, are in [The check](#the-check);
 4. keep the old version disabled for as long as the backups of the stored values are kept, check
    once more, then destroy it.
 
@@ -474,6 +478,72 @@ The DEK cache plays no part: the sweep decrypts through the provider and leaves 
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
 current version. The sweep needs KMS encrypt and decrypt on the KEK.
 
+### Encrypted keysets
+
+An encrypted keyset is a KMS ciphertext as well, under the KEK version that encrypted it, and
+`reencrypt_encrypted_dek` refuses one with `INVALID_KEY_FORMAT`, since what the KMS decrypts from
+it is a serialised keyset. A sweep of the DEKs leaves every keyset under the old version, so a
+query or a reader that opens one fails once the old version is disabled:
+
+- a keyring's `export_bigquery_keyset` and `export_tink_keyset`: export each keyset again, with the
+  same selection, after `reencrypt_deks` and, under Cloud KMS, after the new primary version has
+  propagated. The new export holds the same keys, encrypted under the KEK's current version. Write
+  its bytes wherever the old ones are kept: the query parameter or the literal of each
+  `KEYS.KEYSET_CHAIN`, a column or a setting that holds the keyset, and the file or the setting a
+  Tink reader opens. See [BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery);
+- the application's own encrypted keyset, such as `first_level_keyset` in
+  [One fixed key](#one-fixed-key): the provider decrypts it and encrypts it again, and the new bytes
+  replace the old ones wherever they are kept:
+
+```rust
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEncryptionProvider, KmsAeadResult};
+
+/// `first_level_keyset` encrypted again under the KEK version the provider encrypts with now.
+async fn reencrypt_keyset<P: KmsAeadEncryptionProvider>(
+    provider: &P,
+    first_level_keyset: &EncryptedDataEncryptionKey,
+) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+    let keyset = provider.decrypt_data_encryption_key(first_level_keyset).await?;
+    provider.encrypt_data_encryption_key(&keyset).await
+}
+# use std::num::NonZeroU32;
+# use kms_aead::backends::Ring;
+# use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+# use kms_aead::DataEncryptionKey;
+# use secret_vault_value::SecretValue;
+# #[tokio::main(flavor = "current_thread")]
+# async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+# let kek_id = LocalKekId::try_from("orders".to_string())?;
+# let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+# let keyset = DataEncryptionKey::from(SecretValue::new(vec![0x0a; 16]));
+# let first_level_keyset = LocalKmsProvider::<Ring>::new(
+#     kek_id.clone(),
+#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+# )?
+# .encrypt_data_encryption_key(&keyset)
+# .await?;
+# let rotated = LocalKmsProvider::<Ring>::new(
+#     kek_id.clone(),
+#     vec![
+#         LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
+#         LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+#     ],
+# )?;
+# let reencrypted = reencrypt_keyset(&rotated, &first_level_keyset).await?;
+# let disabled = LocalKmsProvider::<Ring>::new(
+#     kek_id,
+#     vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+# )?;
+# assert_eq!(disabled.decrypt_data_encryption_key(&reencrypted).await?, keyset);
+# Ok(())
+# }
+```
+
+The check decrypts the bytes of a BigQuery keyset and of the application's own keyset through the
+provider, as it does an encrypted DEK, with `EncryptedDataEncryptionKey::from` of the bytes. A
+Tink keyset is a `google.crypto.tink.EncryptedKeyset` around the KMS ciphertext, and its check is
+an open with the Tink reader that uses it.
+
 ### Pacing
 
 The sweep makes two KMS calls per distinct encrypted DEK, and the check one, on top of the calls
@@ -554,15 +624,30 @@ A keyring's record is checked by running `KeyringAdmin::reencrypt_deks` again wi
 disabled: it decrypts every DEK in the record through the provider, and fails on one still under
 the old version.
 
-Two things keep using the old version after a rotation, and each sets when to check:
+Under the local KMS the check needs no disable. A provider that lists the new version alone, as
+the sample above builds it, refuses every DEK under the old version, so the check runs before the
+deploy that drops the old version from the list, and a missed DEK costs no outage and no redeploy.
+
+Three things keep using the old version after a rotation, and each sets when to sweep or to
+disable:
 
 - a store-less writer keeps sealing under its current DEK, encrypted under the old version, until
   its reuse policy renews the DEK or the DEK leaves its cache, at the cache's TTL of 15 minutes by
-  default. Start the sweep once every writer has renewed, or the check finds the values written
-  meanwhile;
+  default. Start the sweep once every writer has renewed its DEK after the rotation took effect,
+  under Cloud KMS once the new primary version had propagated, or the check finds the values
+  written meanwhile;
 - every DEK cache serves the DEKs it holds, without a KMS call, until their entries expire. A value
   the sweep missed fails to decrypt in the application only once its entry has expired, see
-  [DEK caching](./dek-caching.md). The check does not wait for that, since it never reads a cache.
+  [DEK caching](./dek-caching.md). The check does not wait for that, since it never reads a cache;
+- a process keeps the encrypted DEKs it read before the sweep. A keyring's cached record holds the
+  ones it had before `reencrypt_deks` until it is refreshed, at a change signal of the store or
+  once it is older than `record_ttl`, 5 minutes by default, and Cloud Storage and S3 send no
+  signal, see [Record cache](./keyring/record-cache.md#how-late-a-change-is-seen). An encrypted DEK
+  the application read from its settings at startup, as in [One fixed key](#one-fixed-key), stays
+  as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
+  decrypts the old bytes again and fails under a disabled old version, with no reload. Disable the
+  old version no sooner than one `record_ttl` after the last `reencrypt_deks`, and only once every
+  process has read its DEKs stored apart from their values again.
 
 A KMS whose changes take time to propagate, such as Cloud KMS, can keep encrypting under the old
 version for a while after the rotation and keep decrypting under it for a while after it is
@@ -570,8 +655,18 @@ disabled. Wait before the sweep and again before trusting the check, see the pag
 
 ### Rolling back a rotation
 
-A swept value's DEK is under the new version only. Rolling back a rotation, by making the old
-version encrypt again, keeps the new version enabled: disabling it makes every swept value and
-every value written since the rotation unreadable, until it is enabled again. Rolling back to the
-old version needs no new sweep. To retire the new version afterwards, run the procedure above with
-the old version as the current one.
+A swept value's DEK is under the new version only, so a rollback keeps the new version enabled:
+disabling it makes every swept value and every value written since the rotation unreadable, until
+it is enabled again. Three providers make the old version encrypt again:
+
+- Cloud KMS: make the old version the primary version again;
+- Azure Key Vault: pin the old version in `AzureKmsKeyRef`;
+- the local KMS: point `with_encrypting_version` at the old version.
+
+Rolling back to the old version needs no new sweep. To retire the new version afterwards, run the
+procedure above with the old version as the current one.
+
+The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
+of the key, since the provider names no version in its request, and no older version becomes the
+latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS keeps every
+earlier key material decrypting and none can be disabled, so a rotation needs no rollback there.

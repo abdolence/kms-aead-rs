@@ -18,8 +18,9 @@ the key of the [DEK cache](../dek-caching.md), so one id must name one set of KE
 providers with the same id and different keys share cache entries.
 
 A provider holds one or more `LocalKek` versions of 32 bytes each. The highest version encrypts new
-DEKs, and every version it holds decrypts. Each encrypted DEK records its version, so adding a new
-version keeps the DEKs encrypted under older ones readable.
+DEKs unless `with_encrypting_version` names another, and every version it holds decrypts. Each
+encrypted DEK records its version, so adding a new version keeps the DEKs encrypted under older
+ones readable.
 
 A KEK comes from one of:
 
@@ -163,9 +164,11 @@ let provider = LocalKmsProvider::<Ring>::new(
 A version that is not in the list fails `with_encrypting_version` with `LOCAL_KEK_VERSIONS`.
 
 Then sweep, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
-Dropping the old version from the list disables it, and listing it again restores it. Destroying it
-means destroying every copy of its material, backups included.
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+and check with a provider that lists the new version alone, before the deploy that drops the old
+version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
+the old version from the list disables it, and listing it again restores it. Destroying it means
+destroying every copy of its material, backups included.
 
 ## Limits
 
