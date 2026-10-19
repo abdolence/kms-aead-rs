@@ -201,9 +201,6 @@ the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export 
 
 - `value()` and `into_value()`: the encrypted keyset, as a `BYTES` column or query parameter holds
   it;
-- `to_sql_literal()`: the same bytes as a GoogleSQL bytes literal, `b'\x0a\x24…'`. Only a
-  `EncryptedKeyset<encodings::BigQuery>` has it: `export_tink_keyset` returns a
-  `EncryptedKeyset<encodings::Tink>`, which `KEYS.KEYSET_CHAIN` does not read;
 - `key_uri()`: Tink's key URI of the Cloud KMS key, `gcp-kms://projects/…/cryptoKeys/…`, the
   first argument of `KEYS.KEYSET_CHAIN`, as a `STRING` query parameter;
 - `key_ids()`: the key ids of the versions inside, in ascending order.
