@@ -248,7 +248,8 @@ Firestore takes both bounds on the one field and serves them from its ascending 
 and an open range is one filter:
 
 ```rust,no_run
-use firestore::FirestoreDb;
+use firestore::{FirestoreDb, FirestoreResult};
+use futures_util::stream::{self, BoxStream, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead_keyring::store::FirestoreKeyringStore;
@@ -264,12 +265,12 @@ struct UserDoc {
     seal: SealMarker,
 }
 
-/// The users that can hold a value under `key_id`.
-async fn users_under(
-    db: &FirestoreDb,
+/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
+async fn users_under<'a>(
+    db: &'a FirestoreDb,
     keyring: &Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>,
     key_id: KeyId,
-) -> Result<Vec<UserDoc>, Box<dyn std::error::Error>> {
+) -> Result<BoxStream<'a, FirestoreResult<UserDoc>>, Box<dyn std::error::Error>> {
     // The store's record: a compromise or promotion in another process is in it
     let range: Option<SealRange> = keyring
         .reload()
@@ -278,9 +279,9 @@ async fn users_under(
         .and_then(KeyVersion::seal_range);
     let Some(range) = range else {
         // Never active: no record holds a value under it
-        return Ok(Vec::new());
+        return Ok(stream::empty().boxed());
     };
-    let users: Vec<UserDoc> = db
+    let users: BoxStream<'a, FirestoreResult<UserDoc>> = db
         .fluent()
         .select()
         .from("users")
@@ -291,7 +292,7 @@ async fn users_under(
             ])
         })
         .obj()
-        .query()
+        .stream_query_with_errors()
         .await?;
     Ok(users)
 }
@@ -309,7 +310,8 @@ The range serves two decisions:
   of the last of them. A version flagged compromised after it stopped being active moves no epoch,
   and keeps the range it had;
 - before `retire`, and again before `destroy`, the query of the version returning nothing shows
-  that no record holds a value under it.
+  that no record holds a value under it. That check needs one record at most: `limit(1)` in
+  Firestore, `EXISTS` in SQL.
 
 One epoch counts the activations of every purpose of the keyring, so a range can match a record
 with no field of the version's purpose, such as a record without beacons in the range of a beacon
@@ -812,7 +814,10 @@ The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/ma
 runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator. It runs on
 `sweep::run_batched`, which cuts the candidates into batches and counts what each returns, in place
 of `sweep::run`: each batch of 500 documents is re-sealed through one sealer and written back in one
-`BatchWrite`, one precondition per document, instead of one write per document.
+`BatchWrite`, one precondition per document, instead of one write per document. It reads the
+candidates in pages rather than in one stream, each page a query of at most 8000 documents that
+starts after the marker and the name of the last document of the page before, so that a sweep of
+millions of documents needs no stream that stays open for as long as it runs.
 
 #### PostgreSQL
 

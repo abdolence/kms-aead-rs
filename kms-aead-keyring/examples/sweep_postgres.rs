@@ -5,6 +5,16 @@
 //! retires the previous version once the query of its seal range finds no row. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#postgresql) in the book.
 //!
+//! Every read and write is sized for millions of rows, and memory holds a few pages at most. The
+//! sweep reads its candidates by keyset pagination on the primary key, each page one short query,
+//! rather than through one cursor: a cursor lives in a transaction, and one open for the whole
+//! sweep keeps `VACUUM` from reclaiming the old versions of every row the sweep updates. The check
+//! before `retire` asks whether any row is left, and stops at the first.
+//!
+//! A sweep stopped part-way, or one that failed on some rows, resumes when it runs again: the
+//! query of the markers below the current one returns exactly the rows it did not write, so
+//! nothing else needs to record how far it got.
+//!
 //! The example creates a schema of its own, with the keyring table and the users table in it, and
 //! drops it at the end. The keyring is under an ephemeral local KEK, so no cloud KMS is needed.
 //!
@@ -20,6 +30,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -46,12 +57,18 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-/// The rows of a page of the sweep's query, and of an `INSERT` of the seeding.
+/// The rows of a page of the sweep's query, one batch: the next page is read while the batches
+/// before it are written.
 const PAGE_SIZE: u16 = 1000;
-/// The rows of a batch of the sweep: one sealer re-seals them, and one `UPDATE` of three arrays
-/// of this length, some 0.2 MB of parameters at the example's row size, writes them back.
+/// The rows of a batch of the sweep and of an `INSERT` of the seeding: one sealer seals them, and
+/// one statement of arrays of this length, some 0.2 MB of parameters at the example's row size,
+/// writes them.
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+/// The batches in flight at once. On the example's one connection they queue up behind each
+/// other; a pool of connections runs them in parallel.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+/// The users between two progress lines.
+const PROGRESS_EVERY: usize = 100_000;
 const DEFAULT_USERS: i64 = 100;
 
 #[derive(Clone)]
@@ -148,6 +165,16 @@ async fn next_page(
     Ok(Some((page, next)))
 }
 
+/// Adds `count` users to `done`, and prints the total each time it passes a multiple of
+/// [`PROGRESS_EVERY`].
+fn count_progress(done: &AtomicUsize, count: usize, what: &str) {
+    let before: usize = done.fetch_add(count, Ordering::Relaxed);
+    let after: usize = before + count;
+    if before / PROGRESS_EVERY != after / PROGRESS_EVERY {
+        println!("{what} {after} users");
+    }
+}
+
 /// Re-seals a batch of rows through one sealer, and writes it back in one `UPDATE` that stamps
 /// the sealer's marker and is conditional, row by row, on the bytes the query read.
 ///
@@ -238,32 +265,38 @@ async fn run(
     let keyring: &UsersKeyring = admin.keyring();
 
     let started = Instant::now();
-    // Each page of users is sealed through one sealer and written in one `INSERT`.
+    let written = AtomicUsize::new(0);
+    // Only the batches in flight are in memory: each is sealed through one sealer and
+    // written in one `INSERT`.
     stream::iter(1..=count)
-        .chunks(usize::from(PAGE_SIZE))
+        .chunks(BATCH_SIZE.get())
         .map(Ok)
-        .try_for_each_concurrent(CONCURRENCY.get(), |ids: Vec<i64>| async move {
-            let sealer = keyring.sealer().await;
-            let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(ids.len());
-            for id in &ids {
-                emails.push(
-                    sealer
-                        .encrypt(
-                            &EMAIL.aad(&EntityId::try_from(id.to_string())?),
-                            &Email(format!("user-{id}@example.com")),
-                        )
-                        .await?,
-                );
+        .try_for_each_concurrent(CONCURRENCY.get(), |ids: Vec<i64>| {
+            let written = &written;
+            async move {
+                let sealer = keyring.sealer().await;
+                let mut emails: Vec<Encrypted<Email, Randomized>> = Vec::with_capacity(ids.len());
+                for id in &ids {
+                    emails.push(
+                        sealer
+                            .encrypt(
+                                &EMAIL.aad(&EntityId::try_from(id.to_string())?),
+                                &Email(format!("user-{id}@example.com")),
+                            )
+                            .await?,
+                    );
+                }
+                let seal: SealMarker = sealer.record().seal_marker();
+                client
+                    .execute(
+                        "INSERT INTO users (id, email, seal)
+                         SELECT id, email, $3 FROM unnest($1::BIGINT[], $2::BYTEA[]) AS batch(id, email)",
+                        &[&ids, &emails, &seal],
+                    )
+                    .await?;
+                count_progress(written, ids.len(), "wrote");
+                Ok::<(), Box<dyn Error>>(())
             }
-            let seal: SealMarker = sealer.record().seal_marker();
-            client
-                .execute(
-                    "INSERT INTO users (id, email, seal)
-                     SELECT id, email, $3 FROM unnest($1::BIGINT[], $2::BYTEA[]) AS page(id, email)",
-                    &[&ids, &emails, &seal],
-                )
-                .await?;
-            Ok::<(), Box<dyn Error>>(())
         })
         .await?;
     println!(
@@ -290,13 +323,22 @@ async fn run(
     })
     .map_ok(|page: Vec<UserRow>| stream::iter(page).map(Ok))
     .try_flatten();
+    let swept = AtomicUsize::new(0);
     let report: SweepReport = sweep::run_batched(
         keyring.id(),
         candidates,
         BatchedSweepOptions::new()
             .with_batch_size(BATCH_SIZE)
             .with_concurrency(CONCURRENCY),
-        |batch: Vec<UserRow>| reseal_batch(keyring, client, batch),
+        |batch: Vec<UserRow>| {
+            let swept = &swept;
+            async move {
+                let batch_count = batch.len();
+                let outcomes = reseal_batch(keyring, client, batch).await;
+                count_progress(swept, batch_count, "swept");
+                outcomes
+            }
+        },
     )
     .await;
     println!(
@@ -314,19 +356,15 @@ async fn run(
         .version(previous)
         .and_then(KeyVersion::seal_range)
         .ok_or("a replaced version has a seal range")?;
-    let under_previous: i64 = client
+    let under_previous: bool = client
         .query_one(
-            "SELECT count(*) FROM users WHERE seal >= $1 AND ($2::BYTEA IS NULL OR seal < $2)",
+            "SELECT EXISTS (SELECT FROM users WHERE seal >= $1 AND ($2::BYTEA IS NULL OR seal < $2))",
             &[&range.start(), &range.end()],
         )
         .await?
         .try_get(0)?;
-    if report.failed > 0 || under_previous > 0 {
-        return Err(format!(
-            "{under_previous} users are left under key version {}",
-            previous.as_u32()
-        )
-        .into());
+    if report.failed > 0 || under_previous {
+        return Err(format!("users are left under key version {}", previous.as_u32()).into());
     }
     admin.retire(previous).await?;
     println!(
