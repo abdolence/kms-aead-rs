@@ -338,8 +338,24 @@ staged, with the encrypted DEKs shortened:
   none, such as AWS KMS;
 - the times are RFC 3339, in UTC.
 
-A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
-fails with `RecordInvalid` on a document that breaks any of:
+A reader parses at most 1 MiB of JSON. The size of a version is mostly its encrypted DEK, so the
+number of versions that fit depends on the KMS:
+
+| KEK | Bytes per version | Versions in 1 MiB |
+|---|---|---|
+| local KMS | 359 | about 2,900 |
+| Vault Transit | 380 | about 2,750 |
+| GCP Cloud KMS | 412 | about 2,550 |
+| AWS KMS | 504 | about 2,050 |
+| Azure, RSA 2048-bit key | 674 | about 1,550 |
+| Azure, RSA 4096-bit key | 1,014 | about 1,050 |
+
+The local KMS row was measured on a record the crate wrote after 500 randomised rotations, each
+version AES-256-GCM, decrypt-only with a seal range. The other rows are the same record with each
+encrypted DEK replaced by one of that KMS's length, and a KEK version of that KMS's form: none for
+AWS, two digits for GCP and Vault, 32 hex digits for Azure.
+
+A reader fails with `RecordInvalid` on a document that breaks any of:
 
 - at most one active and one pending version per purpose, neither of them compromised;
 - an encrypted DEK on every version but the destroyed ones, and a `kek_version`, when there is

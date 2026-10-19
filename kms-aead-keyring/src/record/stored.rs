@@ -20,8 +20,9 @@ use crate::purpose::is_reserved;
 use crate::sweep::{SealMarker, SealRange};
 use crate::{KeyId, Purpose};
 
-/// The largest document a reader parses. A record the crate writes takes under 400 bytes per
-/// version, so this holds a few thousand versions.
+/// The largest document a reader parses. A record the crate writes takes from about 360 bytes per
+/// version under the local KMS to about 1,000 under an Azure RSA 4096-bit key, so this holds
+/// a thousand versions or more.
 pub(crate) const MAX_RECORD_DOCUMENT_LEN: usize = 1 << 20;
 const RECORD_SCHEMA_VERSION: u32 = 1;
 

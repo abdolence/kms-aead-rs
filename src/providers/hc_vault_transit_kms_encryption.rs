@@ -1070,15 +1070,21 @@ mod tests {
         let key_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
             let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
-            transit_key_version(&ciphertext).unwrap().to_string()
+            transit_key_version(&ciphertext).unwrap()
         };
 
         let before_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
         provider.post(&rotate_uri, Vec::new()).await.unwrap();
         let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
-        assert_eq!(key_version(&before_rotation), "1");
-        assert_eq!(key_version(&after_rotation), "2");
+        assert_eq!(
+            key_version(&before_rotation),
+            KekVersion::try_from("1".to_string()).unwrap()
+        );
+        assert_eq!(
+            key_version(&after_rotation),
+            KekVersion::try_from("2".to_string()).unwrap()
+        );
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
                 encryption

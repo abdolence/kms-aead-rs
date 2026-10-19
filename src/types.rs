@@ -120,7 +120,7 @@ impl EncryptedDataEncryptionKey {
     }
 
     /// The version of the KEK that encrypted the key, where it is known, see the type docs. Always
-    /// `None` under AWS KMS, whose responses name no key material.
+    /// `None` under AWS KMS, whose Encrypt response names no key material.
     pub fn kek_version(&self) -> Option<&KekVersion> {
         self.kek_version.as_ref()
     }

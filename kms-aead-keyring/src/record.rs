@@ -510,8 +510,8 @@ struct RetainedDek {
 /// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
 /// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
 /// order, a seal epoch of 1 or more, a seal range on every version that was active, open-ended on
-/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: at about
-/// 400 bytes per version with its encrypted DEK, about 2,600 versions.
+/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: from
+/// about 1,050 versions under an Azure RSA 4096-bit key to about 2,900 under the local KMS.
 ///
 /// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]

@@ -338,14 +338,18 @@ assert_eq!(read_back_encrypted_dek, read_back_hex_encrypted_dek);
 let stored_kek_version: Option<String> = encrypted_dek.kek_version().map(KekVersion::to_string);
 let read_back_kek_version: Option<KekVersion> =
     stored_kek_version.map(KekVersion::try_from).transpose()?;
-# assert!(read_back_kek_version.is_some());
+let read_back_encrypted_dek = match read_back_kek_version {
+    Some(kek_version) => read_back_encrypted_dek.with_kek_version(kek_version),
+    None => read_back_encrypted_dek,
+};
+# assert_eq!(read_back_encrypted_dek.kek_version(), encrypted_dek.kek_version());
 # Ok(())
 # }
 ```
 
 An encrypted DEK that the provider has just returned carries in `kek_version()` the version of the
-KEK that encrypted it, as the KMS reported it. It is `None` under AWS KMS, whose responses name no
-key material, and wherever the KMS reported no version. Decryption never needs it, and neither
+KEK that encrypted it, as the KMS reported it. It is `None` under AWS KMS, whose Encrypt response
+names no key material, and wherever the KMS reported no version. Decryption never needs it, and neither
 `value()` nor `to_hex_string()` holds it, so an encrypted DEK read back from them has none. Stored
 beside the encrypted DEK, it shows without a KMS call which DEKs are still under an old KEK
 version, see [The check](#the-check). `with_kek_version` puts it back on the encrypted DEK read
