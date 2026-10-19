@@ -153,8 +153,8 @@ impl Display for MigrateError {
 }
 
 /// Re-seals the row of `user` under the active version, from an envelope value or a keyring value
-/// under an older version, and writes the current seal marker beside it. A keyring value that is
-/// current already gets the marker alone.
+/// under an older version, and writes the seal marker of the sealer's record beside it. A keyring
+/// value that is current already gets the marker alone.
 async fn reseal(
     keyring: &UsersKeyring,
     table: &Table,
@@ -168,9 +168,7 @@ async fn reseal(
     let Some(row) = row else {
         return Ok(ResealOutcome::Skipped);
     };
-    // Read before the email is sealed, so that it never names an epoch newer than the version
-    // the email is sealed under.
-    let seal: SealMarker = keyring.record().seal_marker();
+    let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
     let (email, outcome) = if row.seal == SealMarker::ENVELOPE {
         let email: Email = keyring
@@ -184,10 +182,10 @@ async fn reseal(
         let resealed = ResealOutcome::Resealed {
             from_compromised: false,
         };
-        (keyring.encrypt(&aad, &email).await?, resealed)
+        (sealer.encrypt(&aad, &email).await?, resealed)
     } else {
         let email = Encrypted::<Email, Randomized>::try_from(row.email)?;
-        let resealed: Option<Resealed<Email, Randomized>> = keyring.reseal(&aad, &email).await?;
+        let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &email).await?;
         match resealed {
             Some(resealed) => {
                 let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
@@ -197,7 +195,7 @@ async fn reseal(
         }
     };
     let row = UserRow {
-        seal,
+        seal: sealer.record().seal_marker(),
         email: email.into_value(),
     };
     table

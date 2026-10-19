@@ -30,7 +30,7 @@ const ENCRYPTED_DEK: &str = "/wEAd3JhcHBlZA==";
 const MARKED_ENCRYPTED_DEK: &str = "/wEAcmVjb3JkLWJ5dGVzLW1hcmtlcg==";
 
 /// The record of `id` after `rotations` rotations: randomised versions 1 to `rotations`
-/// decrypt only, and the next one is active.
+/// decrypt only, and the next one is active, each version from the epoch of its own key id.
 fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
     record_holding(id, rotations, ENCRYPTED_DEK)
 }
@@ -48,6 +48,10 @@ fn record_holding(
                 "algorithm": "aes-256-gcm",
                 "state": if key_id > rotations { "active" } else { "decrypt_only" },
                 "compromised": null,
+                "seal_epochs": {
+                    "start": key_id,
+                    "end": if key_id > rotations { None } else { Some(key_id + 1) },
+                },
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
                 "encrypted_dek": encrypted_dek,

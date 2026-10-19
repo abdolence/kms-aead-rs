@@ -14,7 +14,9 @@ pub(super) const ENCRYPTED_DEK: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
 /// [`ENCRYPTED_DEK`] in standard base64, as the record stores it.
 const ENCRYPTED_DEK_BASE64: &str = "wP/uwP/u";
 
-/// A version as the stored form writes it, with an encrypted DEK unless it is destroyed.
+/// A version as the stored form writes it, with an encrypted DEK unless it is destroyed, and a
+/// seal range that fits its state in a [`document`] at epoch 2: open from 2 while active, from 1
+/// to 2 once decrypt-only or retired, and none while pending or once destroyed.
 pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> {
     let algorithm = if key_id >> 31 == 1 {
         "aes-256-siv"
@@ -29,11 +31,17 @@ pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringRes
         true => json!({ "at": COMPROMISED, "note": "laptop lost" }),
         false => Value::Null,
     };
+    let seal_epochs = match state {
+        "active" => json!({ "start": 2, "end": null }),
+        "decrypt_only" | "retired" => json!({ "start": 1, "end": 2 }),
+        _ => Value::Null,
+    };
     Ok(json!({
         "key_id": key_id,
         "algorithm": algorithm,
         "state": state,
         "compromised": compromised,
+        "seal_epochs": seal_epochs,
         "created_at": CREATED,
         "state_changed_at": ROTATED,
         "encrypted_dek": encrypted_dek,
@@ -271,6 +279,34 @@ fn a_seal_epoch_of_zero_is_rejected() -> KeyringResult<()> {
 }
 
 #[test]
+fn a_seal_range_that_does_not_fit_its_state_or_the_epoch_is_rejected() -> KeyringResult<()> {
+    let open_from_one = json!({ "start": 1, "end": null });
+    for (state, seal_epochs) in [
+        ("pending", open_from_one.clone()),
+        ("active", Value::Null),
+        ("active", json!({ "start": 1, "end": 2 })),
+        ("decrypt_only", Value::Null),
+        ("retired", Value::Null),
+        ("decrypt_only", json!({ "start": 0, "end": 2 })),
+        ("decrypt_only", json!({ "start": 2, "end": 2 })),
+        ("decrypt_only", json!({ "start": 1, "end": 3 })),
+        ("active", json!({ "start": 3, "end": null })),
+    ] {
+        let mut stored = version(1, state, false)?;
+        stored["seal_epochs"] = seal_epochs.clone();
+        assert_eq!(
+            refusal(&document(vec![stored])),
+            Some(RecordInvalidReason::SealRangeInvalid(KeyId::new(1))),
+            "{state} with {seal_epochs}"
+        );
+    }
+    let mut destroyed = version(1, "destroyed", false)?;
+    destroyed["seal_epochs"] = open_from_one;
+    assert_eq!(refusal(&document(vec![destroyed])), None);
+    Ok(())
+}
+
+#[test]
 fn a_record_of_another_keyring_is_rejected() -> KeyringResult<()> {
     let mut other = rotated()?;
     other["id"] = json!("tenant-43");
@@ -341,22 +377,24 @@ fn record_debug_carries_no_encrypted_dek() -> TestResult {
     Ok(())
 }
 
-/// The held record of the regression cases: randomised 1 compromised and decrypt-only, 2
-/// active, 3 retired, 4 destroyed, 5 pending.
+/// The held record of the regression cases, at epoch 3: randomised 1 compromised and
+/// decrypt-only, 2 active, 3 retired, 4 destroyed, 5 pending.
 fn held() -> KeyringResult<Value> {
-    Ok(document(vec![
+    let mut held = document(vec![
         version(1, "decrypt_only", true)?,
         version(2, "active", false)?,
         version(3, "retired", false)?,
         version(4, "destroyed", false)?,
         version(5, "pending", false)?,
-    ]))
+    ]);
+    held["seal_epoch"] = json!(3);
+    Ok(held)
 }
 
 #[test]
 fn a_regressed_record_is_refused() -> TestResult {
     type Change = fn(&mut Value);
-    let cases: [(Change, RegressionRule); 9] = [
+    let cases: [(Change, RegressionRule); 14] = [
         (
             |next| {
                 if let Some(versions) = next["versions"].as_array_mut() {
@@ -381,12 +419,14 @@ fn a_regressed_record_is_refused() -> TestResult {
             |next| {
                 next["versions"][1]["state"] = json!("decrypt_only");
                 next["versions"][2]["state"] = json!("active");
+                next["versions"][2]["seal_epochs"]["end"] = Value::Null;
             },
             RegressionRule::StateReverted(KeyId::new(3)),
         ),
         (
             |next| {
                 next["versions"][3]["state"] = json!("retired");
+                next["versions"][3]["seal_epochs"] = json!({ "start": 1, "end": 2 });
                 next["versions"][3]["encrypted_dek"] =
                     json!(STANDARD.encode([0xFF, 0x01, 0x00, 0x2A]));
             },
@@ -395,7 +435,9 @@ fn a_regressed_record_is_refused() -> TestResult {
         (
             |next| {
                 next["versions"][1]["state"] = json!("pending");
+                next["versions"][1]["seal_epochs"] = Value::Null;
                 next["versions"][4]["state"] = json!("active");
+                next["versions"][4]["seal_epochs"] = json!({ "start": 3, "end": null });
             },
             RegressionRule::StateReverted(KeyId::new(2)),
         ),
@@ -403,12 +445,47 @@ fn a_regressed_record_is_refused() -> TestResult {
             |next| {
                 next["versions"][1]["state"] = json!("decrypt_only");
                 next["versions"][4]["state"] = json!("active");
+                next["versions"][4]["seal_epochs"] = json!({ "start": 3, "end": null });
                 next["versions"][2]["state"] = json!("pending");
+                next["versions"][2]["seal_epochs"] = Value::Null;
             },
             RegressionRule::StateReverted(KeyId::new(3)),
         ),
         (
-            |next| next["seal_epoch"] = json!(1),
+            |next| next["versions"][1]["seal_epochs"]["start"] = json!(1),
+            RegressionRule::SealRangeReverted(KeyId::new(2)),
+        ),
+        (
+            |next| next["versions"][0]["seal_epochs"]["end"] = json!(3),
+            RegressionRule::SealRangeReverted(KeyId::new(1)),
+        ),
+        (
+            |next| {
+                next["versions"][2]["state"] = json!("destroyed");
+                next["versions"][2]["seal_epochs"] = Value::Null;
+                next["versions"][2]["encrypted_dek"] = Value::Null;
+            },
+            RegressionRule::SealRangeReverted(KeyId::new(3)),
+        ),
+        (
+            |next| {
+                next["versions"][1]["state"] = json!("decrypt_only");
+                next["versions"][1]["seal_epochs"]["end"] = json!(3);
+            },
+            RegressionRule::SealRangeReverted(KeyId::new(2)),
+        ),
+        (
+            |next| {
+                next["seal_epoch"] = json!(4);
+                next["versions"][1]["state"] = json!("decrypt_only");
+                next["versions"][1]["seal_epochs"]["end"] = json!(4);
+                next["versions"][4]["state"] = json!("active");
+                next["versions"][4]["seal_epochs"] = json!({ "start": 3, "end": null });
+            },
+            RegressionRule::SealRangeReverted(KeyId::new(5)),
+        ),
+        (
+            |next| next["seal_epoch"] = json!(2),
             RegressionRule::SealEpochReverted,
         ),
     ];
@@ -426,13 +503,15 @@ fn a_regressed_record_is_refused() -> TestResult {
 fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     let held_record = parse(&held()?)?;
     let mut next = held()?;
+    next["seal_epoch"] = json!(4);
     next["versions"][0]["state"] = json!("destroyed");
     next["versions"][0]["encrypted_dek"] = Value::Null;
     next["versions"][1]["state"] = json!("retired");
+    next["versions"][1]["seal_epochs"]["end"] = json!(4);
     next["versions"][2]["state"] = json!("decrypt_only");
     next["versions"][2]["compromised"] = json!({ "at": COMPROMISED, "note": null });
     next["versions"][4]["state"] = json!("active");
-    next["seal_epoch"] = json!(3);
+    next["versions"][4]["seal_epochs"] = json!({ "start": 4, "end": null });
     if let Some(versions) = next["versions"].as_array_mut() {
         versions.push(version(6, "pending", false)?);
     }
@@ -444,8 +523,11 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     destroyed["versions"][4]["encrypted_dek"] = Value::Null;
     assert_eq!(check_successor(&held_record, &parse(&destroyed)?), Ok(()));
     let mut retired = held()?;
+    retired["seal_epoch"] = json!(5);
     retired["versions"][1]["state"] = json!("decrypt_only");
+    retired["versions"][1]["seal_epochs"]["end"] = json!(4);
     retired["versions"][4]["state"] = json!("retired");
+    retired["versions"][4]["seal_epochs"] = json!({ "start": 4, "end": 5 });
     assert_eq!(check_successor(&held_record, &parse(&retired)?), Ok(()));
     Ok(())
 }

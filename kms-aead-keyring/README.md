@@ -21,8 +21,9 @@ The library provides:
   support, and an AAD that binds a value to its row;
 - deterministic fields for equality queries, across rotations;
 - beacons, blind indexes for lookups of randomised fields;
-- sweeps that re-seal stored values, finding the records to visit with one range query on a
-  5-byte seal marker, and the migration from kms-aead's envelope values.
+- sweeps that re-seal stored values, finding the records to visit, and the records under any one
+  key version, such as a compromised one, with one range query on a 5-byte seal marker, and the
+  migration from kms-aead's envelope values.
 
 Documentation: the [keyring chapters](https://kms-aead-rust.abdolence.dev/keyring.html) of the
 book, and the [API docs](https://docs.rs/kms-aead-keyring).
@@ -91,7 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The AAD binds the value to user 42's email
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let alice = Email("alice@example.com".to_string());
-    let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+    // One sealer per write of a record, for every encrypted field it holds
+    let value: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 
     // A rotation is staged, then promoted; the previous version keeps decrypting
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;

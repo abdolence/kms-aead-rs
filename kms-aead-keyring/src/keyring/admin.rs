@@ -171,7 +171,7 @@ where
     /// version yet reload their record when they read a value under it. A pending version of the
     /// purpose stays pending. When the KMS cannot encrypt the new key, during an outage or without
     /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
-    /// `Ok(None)`: the purpose then has no active version, and `encrypt` fails with
+    /// `Ok(None)`: the purpose then has no active version, and a sealer's `encrypt` fails with
     /// `NoActiveVersion` until a version is promoted. For any other version it returns
     /// `Ok(None)`.
     ///

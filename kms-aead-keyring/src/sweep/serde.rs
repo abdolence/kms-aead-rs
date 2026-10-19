@@ -61,6 +61,7 @@ mod tests {
         use serde::Serialize;
 
         use super::*;
+        use crate::sweep::SealRange;
 
         /// The epochs the documents are written with, out of order.
         const EPOCHS: [u32; 7] = [65_536, 3, 0, u32::MAX, 255, 256, 1];
@@ -151,6 +152,40 @@ mod tests {
                     .collect::<Vec<&str>>(),
                 ["epoch-0", "epoch-1", "epoch-3", "epoch-255"]
             );
+
+            // The range query of a version: Firestore takes two inequality filters on one field.
+            for (range, expected) in [
+                (
+                    SealRange::new(SealMarker::of_epoch(3), Some(SealMarker::of_epoch(256))),
+                    vec!["epoch-3", "epoch-255"],
+                ),
+                (
+                    SealRange::new(SealMarker::of_epoch(256), None),
+                    vec!["epoch-256", "epoch-65536", "epoch-4294967295"],
+                ),
+            ] {
+                let within: Vec<UserDoc> = db
+                    .fluent()
+                    .select()
+                    .from(collection)
+                    .filter(|q| {
+                        q.for_all([
+                            q.field("seal").greater_than_or_equal(range.start()),
+                            range.end().and_then(|end| q.field("seal").less_than(end)),
+                        ])
+                    })
+                    .order(|order| order.fields([order.field("seal").asc()]))
+                    .obj()
+                    .query()
+                    .await?;
+                assert_eq!(
+                    within
+                        .iter()
+                        .map(|doc| doc.id.as_str())
+                        .collect::<Vec<&str>>(),
+                    expected
+                );
+            }
             Ok(())
         }
 

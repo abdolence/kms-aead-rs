@@ -1,5 +1,5 @@
-//! The in-process copy of one keyring record, [`RecordCache`]: what `encrypt` and `decrypt`
-//! read instead of the store, and the rules by which it is refreshed.
+//! The in-process copy of one keyring record, [`RecordCache`]: what sealers and `decrypt` read
+//! instead of the store, and the rules by which it is refreshed.
 //!
 //! - A record older than the TTL is revalidated with a conditional read by the first call that
 //!   finds it so, while the other calls keep using it. A failed revalidation keeps it, and is

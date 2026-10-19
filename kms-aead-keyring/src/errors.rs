@@ -509,6 +509,11 @@ pub enum RecordInvalidReason {
     /// The seal epoch is 0, the epoch of records sealed before the keyring, or a version would
     /// become active past the last one, 2^32 - 1.
     SealEpochOutOfRange,
+    /// The version's seal range does not fit its state: a pending version with one, an active
+    /// version without one or with an end, or a decrypt-only or retired version without one; or
+    /// it starts at epoch 0, ends where or before it starts, or lies past the record's seal
+    /// epoch.
+    SealRangeInvalid(KeyId),
 }
 
 impl Display for RecordInvalidReason {
@@ -611,6 +616,11 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::SealEpochOutOfRange => {
                 f.write_str("the seal epoch is 0 or cannot count up any more")
             }
+            RecordInvalidReason::SealRangeInvalid(key_id) => write!(
+                f,
+                "the seal range of key version {key_id} does not fit its state or the seal epoch",
+                key_id = key_id.as_u32()
+            ),
         }
     }
 }
@@ -659,6 +669,10 @@ pub enum RegressionRule {
     /// The record's seal epoch is below the held one, so that records sealed under different
     /// active versions would carry the same [`SealMarker`](crate::sweep::SealMarker).
     SealEpochReverted,
+    /// The version's [`SealRange`](crate::sweep::SealRange) lost its start or its end, one of
+    /// them moved, or one was set at or below the held seal epoch, so that records the held
+    /// record sealed under the version could fall outside it.
+    SealRangeReverted(KeyId),
 }
 
 impl Display for RegressionRule {
@@ -694,6 +708,11 @@ impl Display for RegressionRule {
                 )
             }
             RegressionRule::SealEpochReverted => f.write_str("the seal epoch moved back"),
+            RegressionRule::SealRangeReverted(key_id) => write!(
+                f,
+                "the seal range of key version {key_id} moved back",
+                key_id = key_id.as_u32()
+            ),
         }
     }
 }

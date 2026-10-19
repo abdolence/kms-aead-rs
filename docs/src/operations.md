@@ -88,12 +88,17 @@ alike. `SealMarker::ENVELOPE` is epoch 0, `01 00 00 00 00`, the marker of a reco
 values, below the marker of every keyring.
 
 Each record of the application keeps the marker in one field beside its encrypted fields. A write
-that touches any encrypted field of a record re-seals all of them under the active versions,
-computes its beacons again, and stores the marker in the same write. It reads the marker before it
-seals the first field, as `write_user` does in [Running a sweep](#running-a-sweep): the cached
-record only moves forward, so such a marker never names a newer epoch than the versions the fields
-are sealed under. A marker read after them can, if the record refreshes in between, and the record
-then drops out of every sweep.
+that touches any encrypted field of a record takes one `Sealer` from `keyring.sealer()`, seals all
+of the record's encrypted fields again through it, computes its beacons again, and stores
+`sealer.record().seal_marker()` in the same write, as `write_user` does in
+[Running a sweep](#running-a-sweep). The sealer keeps the record it took from the cache, so the
+marker names the epoch whose active versions the fields are under, also when the cache refreshes
+during the write.
+
+A marker read from `keyring.record()` names whichever record the cache held when it was read. Read
+before the sealing, it can name an older epoch than the versions the fields are under, which puts
+the record outside the [range](#records-under-a-version) of those versions. Read after, it can name
+a newer one, and the record then drops out of every sweep.
 
 ### Finding records behind
 
@@ -105,7 +110,7 @@ The records a sweep still has to visit are those whose marker is below the curre
 
 The query also matches a record with nothing to re-seal: after a rotation of a purpose the record
 holds no value of, such as a beacon rotation for a record without beacons, its marker is below the
-current one all the same. The re-seal then writes the current marker alone, without decrypting
+current one all the same. The re-seal then writes the sealer's marker alone, without decrypting
 anything or calling the KMS, and the record matches once.
 
 Each process stamps the epoch of the record it caches. A process that has not refreshed its record
@@ -117,11 +122,105 @@ since the promotion.
 The marker comes from the cached record, so a job that starts right after a promotion in another
 process calls `reload()` first.
 
+### Records under a version
+
+`KeyVersion::seal_range()` returns the markers of the records that can hold a value under the
+version, as a `SealRange`:
+
+- `start()`, the epoch of the write that made the version active;
+- `end()`, the epoch of the first write after it stopped being active that moved the epoch on, or
+  `None` while there was none: the active version, and a version flagged compromised while it was
+  active, until a version is next made active.
+
+A version that was never active, pending or destroyed while pending, has no range, and neither has
+an unknown key id: `record.version(key_id)` is `None`. The queries:
+
+| Store | Query |
+|---|---|
+| Firestore | two range filters on `seal`, as below |
+| PostgreSQL | `WHERE seal >= $1 AND ($2::BYTEA IS NULL OR seal < $2)` with `&range.start()` and `&range.end()` |
+| BigQuery | `WHERE seal >= @start AND (@end IS NULL OR seal < @end)`, with `@end` a `NULL` of type `BYTES` for an open range |
+| Rust | `range.contains(row.seal)` |
+
+Firestore takes both bounds on the one field and serves them from its ascending index on `seal`,
+and an open range is one filter:
+
+```rust,no_run
+use firestore::FirestoreDb;
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{SealMarker, SealRange};
+use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(default)]
+    seal: SealMarker,
+}
+
+/// The users that can hold a value under `key_id`.
+async fn users_under(
+    db: &FirestoreDb,
+    keyring: &Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>,
+    key_id: KeyId,
+) -> Result<Vec<UserDoc>, Box<dyn std::error::Error>> {
+    // The store's record: a compromise or promotion in another process is in it
+    let range: Option<SealRange> = keyring
+        .reload()
+        .await?
+        .version(key_id)
+        .and_then(KeyVersion::seal_range);
+    let Some(range) = range else {
+        // Never active: no record holds a value under it
+        return Ok(Vec::new());
+    };
+    let users: Vec<UserDoc> = db
+        .fluent()
+        .select()
+        .from("users")
+        .filter(|q| {
+            q.for_all([
+                q.field("seal").greater_than_or_equal(range.start()),
+                range.end().and_then(|end| q.field("seal").less_than(end)),
+            ])
+        })
+        .obj()
+        .query()
+        .await?;
+    Ok(users)
+}
+#
+# fn main() {}
+```
+
+The range serves two decisions:
+
+- after `mark_compromised`, the range of the compromised version returns every record to re-seal
+  and decide on, see [The trust of re-sealed values](#the-trust-of-re-sealed-values). The writes
+  of processes that have not seen the compromise yet are in it too: they seal under the version and
+  stamp an epoch below the range's end. Run the query again once the longest time any process may
+  run without a successful refresh of its record has passed since the compromise, for the writes
+  of the last of them. A version flagged compromised after it stopped being active moves no epoch,
+  and keeps the range it had;
+- before `retire`, and again before `destroy`, the query of the version returning nothing shows
+  that no record holds a value under it.
+
+One epoch counts the activations of every purpose of the keyring, so a range can match a record
+with no field of the version's purpose, such as a record without beacons in the range of a beacon
+version. Its re-seal finds every value current and writes the marker alone. No range holds
+`SealMarker::ENVELOPE`, since every range starts at epoch 1 or later. Records of several keyrings
+in one table add the keyring's id to the query, as the sweep's query does, see
+[Sweeps by store](#sweeps-by-store).
+
 ### Re-sealing a value
 
-`Keyring::reseal(aad, value)` returns `None` for a value under the active randomised version,
-without decrypting it or calling the KMS, and otherwise reads it with `decrypt_with_trust` and seals
-it again under the active version. Every other version is re-sealed, a decrypt-only version with a
+`Sealer::reseal(aad, value)` returns `None` for a value under the active randomised version of the
+sealer's record, without decrypting it or calling the KMS, and otherwise reads it with
+`decrypt_with_trust` and seals it again under that version. Every other version is re-sealed, a decrypt-only version with a
 higher key id than the active one included, and a key id the cached record lacks reloads the record
 first, as `decrypt` does. The `Resealed` it returns holds the new `value` and the `trust` of
 the version the old value was read under, so the compromised-value decision stays with the caller,
@@ -129,12 +228,12 @@ see [The trust of re-sealed values](#the-trust-of-re-sealed-values). `reseal_det
 the same for deterministic values, under the `deterministic` feature.
 
 A beacon cannot be re-sealed: it is a MAC of the plaintext. A beacon whose `key_id()` is the active
-beacon version, `keyring.record().active(Purpose::Beacon)`, stays as it is. Otherwise its field is
-read with `decrypt_with_trust`, and the plaintext gives both the value under the active version,
-through `encrypt`, and the beacon under the active beacon version, through `beacon(field,
-&plaintext)`.
+beacon version of the sealer's record, `sealer.record().active(Purpose::Beacon)`, stays as it is.
+Otherwise its field is read with `decrypt_with_trust`, and the plaintext gives both the value under
+the active version, through the sealer's `encrypt`, and the beacon under the active beacon version,
+through its `beacon(field, &plaintext)`.
 
-When nothing needs a re-seal, the write still stores the current marker, conditional on the record
+When nothing needs a re-seal, the write still stores the sealer's marker, conditional on the record
 as the sweep read it, and the re-seal returns `ResealOutcome::Skipped`.
 
 ### Running a sweep
@@ -155,12 +254,12 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealRange, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
-    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
-    Purpose, Resealed, Rotation,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
+    KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeyringResult, Plaintext, Purpose, Resealed, Rotation,
 };
 use secret_vault_value::SecretValue;
 
@@ -194,17 +293,19 @@ struct UserRow {
 /// The users table, by user id.
 type Table = Mutex<BTreeMap<String, UserRow>>;
 
-/// The application's write of a user: the marker first, then the fields it seals.
+/// The application's write of a user: every field sealed through one sealer, and the marker of
+/// the sealer's record.
 async fn write_user(
     keyring: &UsersKeyring,
     table: &Table,
     user: &str,
     email: &Email,
 ) -> KeyringResult<()> {
-    let seal: SealMarker = keyring.record().seal_marker();
-    let email = keyring
+    let sealer = keyring.sealer().await;
+    let email = sealer
         .encrypt(&EMAIL.aad(&EntityId::try_from(user)?), email)
         .await?;
+    let seal: SealMarker = sealer.record().seal_marker();
     table
         .lock()
         .unwrap()
@@ -212,19 +313,14 @@ async fn write_user(
     Ok(())
 }
 
-/// Re-seals the row of `user` under the active version, with `seal`, the marker the sweep read
-/// before it started.
-async fn reseal(
-    keyring: &UsersKeyring,
-    table: &Table,
-    seal: SealMarker,
-    user: &str,
-) -> KeyringResult<ResealOutcome> {
+/// Re-seals the row of `user` under the active version, with the marker of the sealer's record.
+async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
         return Ok(ResealOutcome::Skipped);
     };
+    let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let resealed: Option<Resealed<Email, Randomized>> = keyring.reseal(&aad, &row.email).await?;
+    let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &row.email).await?;
     let (email, outcome) = match resealed {
         Some(resealed) => {
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
@@ -233,6 +329,7 @@ async fn reseal(
         // The value is current: the rotation was of a purpose this row holds no value of
         None => (row.email, ResealOutcome::Skipped),
     };
+    let seal: SealMarker = sealer.record().seal_marker();
     table
         .lock()
         .unwrap()
@@ -278,15 +375,20 @@ let report: SweepReport = sweep::run(
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
         let table = &table;
-        async move { reseal(keyring, table, current, &candidate).await }
+        async move { reseal(keyring, table, &candidate).await }
     },
 )
 .await;
 
-// Nothing left below the marker: the administrative job retires the old version
-let behind = table.lock().unwrap().values().any(|row| row.seal < current);
-if report.failed == 0 && !behind {
-    if let Some(previous) = rotation.previous {
+// Nothing left in the old version's range: the administrative job retires it
+if let Some(previous) = rotation.previous {
+    let range: SealRange = keyring
+        .record()
+        .version(previous)
+        .and_then(KeyVersion::seal_range)
+        .ok_or("a replaced version was active")?;
+    let left = table.lock().unwrap().values().any(|row| range.contains(row.seal));
+    if report.failed == 0 && !left {
         admin.retire(previous).await?;
     }
 }
@@ -311,14 +413,14 @@ above. The error's `Display` is the application's text and goes to the log as it
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.
 
-Once a sweep reports `failed == 0` and the query returns nothing, `retire` the old version. Keep it
-retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
+Once a sweep reports `failed == 0` and the range query of the old version returns nothing, `retire`
+it. Keep it retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
 turned up after all, while a destroyed one is gone.
 
 ### Sweeps by store
 
 At millions of records a sweep streams its candidates from the store and never holds the result
-of its query in memory. Every example below has the same four properties:
+of its query in memory. Every example below has the same five properties:
 
 - it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
   matches it, so a cancelled or failed run is started again over the same query;
@@ -329,8 +431,10 @@ of its query in memory. Every example below has the same four properties:
   KMS. The DEK cache keeps each version's key, so a sweep makes one KMS decrypt per key version
   and cache TTL, never one per record. The keys of a compromised version are the exception: they are decrypted
   for every value and never cached;
-- it ends with `retire`, then later `destroy`, once a run reports `failed == 0` and the query
-  returns nothing.
+- each write stores the marker of the sealer that re-sealed the record, so the record lies in the
+  range of every version it is under;
+- it ends with `retire`, then later `destroy`, once a run reports `failed == 0` and the range query
+  of the old version returns nothing.
 
 The examples keep one keyring's records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring's id beside the marker, and
@@ -369,12 +473,13 @@ use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 
 type UsersKeyring = Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>;
+type UsersSealer<'k> = Sealer<'k, FirestoreKeyringStore, GcpKmsProvider, Ring>;
 
 const USERS: &str = "users";
 const EMAIL: FieldSpec = FieldSpec::new(
@@ -464,11 +569,12 @@ fn envelope_aad(id: &str) -> Vec<u8> {
     format!("users:{id}:email").into_bytes()
 }
 
-/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version, and
-/// the outcome of its re-seal. A keyring value under the active version comes back as it is, with
-/// `ResealOutcome::Skipped`.
+/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version of
+/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
+/// is, with `ResealOutcome::Skipped`.
 async fn reseal_email(
     keyring: &UsersKeyring,
+    sealer: &UsersSealer<'_>,
     id: &str,
     seal: SealMarker,
     email: &[u8],
@@ -483,10 +589,10 @@ async fn reseal_email(
         let resealed = ResealOutcome::Resealed {
             from_compromised: false,
         };
-        return Ok((keyring.encrypt(&aad, &opened).await?, resealed));
+        return Ok((sealer.encrypt(&aad, &opened).await?, resealed));
     }
     let email = Encrypted::<Email, Randomized>::try_from(email.to_vec())?;
-    let resealed: Option<Resealed<Email, Randomized>> = keyring.reseal(&aad, &email).await?;
+    let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &email).await?;
     Ok(match resealed {
         Some(resealed) => {
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
@@ -497,19 +603,18 @@ async fn reseal_email(
     })
 }
 
-/// Re-seals a document under the active version and writes `seal`, the marker the sweep read
-/// before it started.
+/// Re-seals a document under the active version and writes the marker of the sealer's record.
 async fn reseal(
     keyring: &UsersKeyring,
     db: &FirestoreDb,
-    seal: SealMarker,
     candidate: Candidate,
 ) -> Result<ResealOutcome, SweepError> {
     let doc = candidate.0?;
-    let (email, outcome) = reseal_email(keyring, &doc.id, doc.seal, &doc.email).await?;
+    let sealer: UsersSealer<'_> = keyring.sealer().await;
+    let (email, outcome) = reseal_email(keyring, &sealer, &doc.id, doc.seal, &doc.email).await?;
     let update = UserDoc {
         email: email.into_value(),
-        seal,
+        seal: sealer.record().seal_marker(),
         ..doc
     };
     let written: FirestoreResult<UserDoc> = db
@@ -561,7 +666,7 @@ let candidates = db
     .map(Candidate);
 let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |candidate| {
     let (keyring, db) = (&keyring, &db);
-    async move { reseal(keyring, db, current, candidate).await }
+    async move { reseal(keyring, db, candidate).await }
 })
 .await;
 println!("{report:?}");
@@ -614,12 +719,13 @@ use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed,
+    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
 use tokio_postgres::{Client, Config, NoTls, Row};
 
 type UsersKeyring = Keyring<PostgresKeyringStore<NoTls>, GcpKmsProvider, Ring>;
+type UsersSealer<'k> = Sealer<'k, PostgresKeyringStore<NoTls>, GcpKmsProvider, Ring>;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -743,11 +849,12 @@ fn envelope_aad(id: i64) -> Vec<u8> {
     format!("users:{id}:email").into_bytes()
 }
 
-/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version, and
-/// the outcome of its re-seal. A keyring value under the active version comes back as it is, with
-/// `ResealOutcome::Skipped`.
+/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version of
+/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
+/// is, with `ResealOutcome::Skipped`.
 async fn reseal_email(
     keyring: &UsersKeyring,
+    sealer: &UsersSealer<'_>,
     id: i64,
     seal: SealMarker,
     email: &[u8],
@@ -762,10 +869,10 @@ async fn reseal_email(
         let resealed = ResealOutcome::Resealed {
             from_compromised: false,
         };
-        return Ok((keyring.encrypt(&aad, &opened).await?, resealed));
+        return Ok((sealer.encrypt(&aad, &opened).await?, resealed));
     }
     let email = Encrypted::<Email, Randomized>::try_from(email.to_vec())?;
-    let resealed: Option<Resealed<Email, Randomized>> = keyring.reseal(&aad, &email).await?;
+    let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &email).await?;
     Ok(match resealed {
         Some(resealed) => {
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
@@ -776,19 +883,19 @@ async fn reseal_email(
     })
 }
 
-/// Re-seals a row under the active version and writes `seal`, the marker the sweep read before it
-/// started.
+/// Re-seals a row under the active version and writes the marker of the sealer's record.
 async fn reseal(
     keyring: &UsersKeyring,
     client: &Client,
-    seal: SealMarker,
     candidate: Candidate,
 ) -> Result<ResealOutcome, SweepError> {
     let (id, email, row_seal) = match candidate {
         Candidate::Row { id, email, seal } => (id, email, seal),
         Candidate::Unread(error) => return Err(SweepError::Users(error)),
     };
-    let (new_email, outcome) = reseal_email(keyring, id, row_seal, &email).await?;
+    let sealer: UsersSealer<'_> = keyring.sealer().await;
+    let (new_email, outcome) = reseal_email(keyring, &sealer, id, row_seal, &email).await?;
+    let seal: SealMarker = sealer.record().seal_marker();
     let updated: u64 = client
         .execute(
             "UPDATE users SET email = $2, seal = $3 WHERE id = $1 AND email = $4",
@@ -828,7 +935,7 @@ let report: SweepReport = sweep::run(
     CONCURRENCY,
     |candidate| {
         let (keyring, client) = (&keyring, &client);
-        async move { reseal(keyring, client, current, candidate).await }
+        async move { reseal(keyring, client, candidate).await }
     },
 )
 .await;
@@ -870,7 +977,7 @@ A field BigQuery reads, declared with `Interop::BigQuery`, is re-sealed by one `
 with no Rust loop and no value leaving BigQuery. With `keyset` standing for the
 `KEYS.KEYSET_CHAIN(…)` expression of a `Readable(Purpose::Randomized)` export, see
 [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery), and
-`@seal` for the bytes of the current marker:
+`@seal` for the bytes of the export's marker, `keyset.seal_marker().value()`:
 
 ```sql
 UPDATE users
@@ -885,18 +992,19 @@ WHERE seal < @seal AND seal > b'\x01\x00\x00\x00\x00';
 
 `AEAD.DECRYPT_BYTES`, and `AEAD.ENCRYPT` of bytes, take the AAD as `BYTES`, the UTF-8 of the
 same text. `AEAD.ENCRYPT` seals under the keyset's primary, which a `Readable` export sets to the
-active version. A keyset exported before the promotion has the previous version as its primary, so
-the sweep exports its keyset after the promotion. It takes `@seal` before the export, as a write
-reads its marker before it seals, from `admin.keyring().reload().await?.seal_marker().value()`. The
-export reads the record from the store again, so its primary is never older than the version
-`@seal` names: a promotion in between gives a newer primary, and the rows keep an older marker and
-stay in the next sweep's query. A marker read after the export can name a newer epoch than the
-keyset's primary, and the rows it stamps then drop out of every sweep. The export is a
-`KeyringAdmin` call of the administrative job. The statement re-seals every encrypted field of
-the row, since the marker it writes covers all of them. A row with a beacon, which SQL does not
-compute, goes through the Rust path below, and so does a row under `SealMarker::ENVELOPE`, the
-lowest marker, which the statement leaves out: an envelope value does not open under a keyring's
-keyset.
+active version of the record it reads from the store, and `EncryptedKeyset::seal_marker()` is that
+record's marker. So every row the statement re-seals lies in the
+[range](#records-under-a-version) of the primary, as a row written through a `Sealer` does. A
+keyset exported before a promotion has the previous version as its primary and the previous
+epoch's marker, and the rows it re-seals stay in the next sweep's query, so the sweep exports its
+keyset after the promotion. The export is a `KeyringAdmin` call of the administrative job.
+
+The statement re-seals every encrypted field of the row, since the marker it writes covers all of
+them. Fields of several purposes are sealed under one `Readable` keyset each, and the statement
+stamps the marker only when their `seal_marker()` is the same; otherwise it exports them again. A
+row with a beacon, which SQL does not compute, goes through the Rust path below, and so does a row
+under `SealMarker::ENVELOPE`, the lowest marker, which the statement leaves out: an envelope value
+does not open under a keyring's keyset.
 
 This sweep:
 
@@ -905,12 +1013,12 @@ This sweep:
   statements on the same rows one fails and runs again, and its `WHERE` then sees the other's
   marker;
 - makes no KMS call per record: BigQuery opens the keyset through Cloud KMS for the statement;
-- ends with `retire`, then later `destroy`, once `SELECT COUNT(*) FROM users WHERE seal < @seal`
-  returns 0.
+- ends with `retire`, then later `destroy`, once the range query of the old version,
+  `SELECT COUNT(*) FROM users WHERE seal >= @start AND (@end IS NULL OR seal < @end)`, returns 0.
 
 A `Readable` keyset leaves a compromised version out, so the values under it fail
 `AEAD.DECRYPT_BYTES` and the whole statement with them. After a compromise those rows go through
-the Rust path below, where `reseal` reports their trust.
+the Rust path below, where the sealer's `reseal` reports their trust.
 
 Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-sealed in
 Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one `MERGE`
@@ -924,9 +1032,10 @@ WHEN MATCHED THEN UPDATE SET phone = p.phone, seal = @seal;
 ```
 
 The pages stream from the application's BigQuery client, a query of `SELECT id, phone, seal FROM
-users WHERE seal < @seal` read a page at a time, and the client runs the `MERGE`. Every row of a page goes
-into `@pages`, the current ones with their bytes as they are, so that each gets the marker. The
-candidate is then a page, and the report counts pages:
+users WHERE seal < @current` with the current marker, read a page at a time. Each page is re-sealed
+through one sealer, and the client runs the `MERGE` with `@seal` bound to the marker of the
+sealer's record. Every row of a page goes into `@pages`, the current ones with their bytes as they
+are, so that each gets the marker. The candidate is then a page, and the report counts pages:
 
 ```rust
 use std::fmt::{self, Display, Formatter};
@@ -942,11 +1051,12 @@ use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringResult, Plaintext, Resealed,
+    KeyringResult, Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
 
 type UsersKeyring = Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>;
+type UsersSealer<'k> = Sealer<'k, FirestoreKeyringStore, GcpKmsProvider, Ring>;
 
 const PHONE: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -969,7 +1079,7 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 #     }
 # }
 #
-/// A row of `SELECT id, phone, seal FROM users WHERE seal < @seal`.
+/// A row of `SELECT id, phone, seal FROM users WHERE seal < @current`.
 struct UserRow {
     id: String,
     /// An envelope value under `SealMarker::ENVELOPE`, a keyring value under any other marker.
@@ -1002,11 +1112,12 @@ fn envelope_aad(id: &str) -> Vec<u8> {
     format!("users:{id}:phone").into_bytes()
 }
 
-/// `phone`, the stored bytes of user `id` under the marker `seal`, under the active version, and
-/// the outcome of its re-seal. A keyring value under the active version comes back as it is, with
-/// `ResealOutcome::Skipped`.
+/// `phone`, the stored bytes of user `id` under the marker `seal`, under the active version of
+/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
+/// is, with `ResealOutcome::Skipped`.
 async fn reseal_phone(
     keyring: &UsersKeyring,
+    sealer: &UsersSealer<'_>,
     id: &str,
     seal: SealMarker,
     phone: &[u8],
@@ -1021,10 +1132,10 @@ async fn reseal_phone(
         let resealed = ResealOutcome::Resealed {
             from_compromised: false,
         };
-        return Ok((keyring.encrypt(&aad, &opened).await?, resealed));
+        return Ok((sealer.encrypt(&aad, &opened).await?, resealed));
     }
     let phone = Encrypted::<Phone, Randomized>::try_from(phone.to_vec())?;
-    let resealed: Option<Resealed<Phone, Randomized>> = keyring.reseal(&aad, &phone).await?;
+    let resealed: Option<Resealed<Phone, Randomized>> = sealer.reseal(&aad, &phone).await?;
     Ok(match resealed {
         Some(resealed) => {
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
@@ -1035,9 +1146,9 @@ async fn reseal_phone(
     })
 }
 
-/// Re-seals the `pages` of the query, and writes each through `merge`, which runs the `MERGE`
-/// with `@seal` bound to the marker the sweep read before it started, and returns its number of
-/// affected rows. `ClientError` is the error of the application's BigQuery client, which a
+/// Re-seals the `pages` of the query, one sealer per page, and writes each through `merge`, which
+/// runs the `MERGE` with `@seal` bound to the marker it is given, the marker of the page's
+/// sealer, and returns its number of affected rows. `ClientError` is the error of the application's BigQuery client, which a
 /// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failed page.
 async fn sweep_phones<Pages, Merge, Merged, ClientError>(
     keyring: &UsersKeyring,
@@ -1046,19 +1157,20 @@ async fn sweep_phones<Pages, Merge, Merged, ClientError>(
 ) -> SweepReport
 where
     Pages: Stream<Item = UsersPage>,
-    Merge: Fn(Vec<PhoneUpdate>) -> Merged,
+    Merge: Fn(Vec<PhoneUpdate>, SealMarker) -> Merged,
     Merged: Future<Output = Result<u64, ClientError>>,
     ClientError: From<KeyringError> + Display,
 {
     sweep::run(keyring.id(), pages, CONCURRENCY, |page| {
         let merge = &merge;
         async move {
+            let sealer: UsersSealer<'_> = keyring.sealer().await;
             let mut updates = Vec::with_capacity(page.rows.len());
             let mut resealed_any = false;
             let mut from_compromised = false;
             for row in page.rows {
                 let (phone, outcome) =
-                    reseal_phone(keyring, &row.id, row.seal, &row.phone).await?;
+                    reseal_phone(keyring, &sealer, &row.id, row.seal, &row.phone).await?;
                 if let ResealOutcome::Resealed {
                     from_compromised: compromised,
                 } = outcome
@@ -1072,7 +1184,7 @@ where
                     phone,
                 });
             }
-            let merged: u64 = merge(updates).await?;
+            let merged: u64 = merge(updates, sealer.record().seal_marker()).await?;
             Ok::<ResealOutcome, ClientError>(if merged > 0 && resealed_any {
                 ResealOutcome::Resealed { from_compromised }
             } else {
@@ -1087,7 +1199,7 @@ where
 ```
 
 A page is re-sealed sequentially inside its re-seal, and `concurrency` bounds the pages in flight,
-which BigQuery's limit on concurrent DML per table sets low. The four properties hold per page: a
+which BigQuery's limit on concurrent DML per table sets low. The five properties hold per page: a
 row that a concurrent writer changed fails the `ON` condition and stays in the query for the next
 run.
 
@@ -1127,7 +1239,8 @@ five steps:
    with the AAD and the algorithm the application used for it, and `Keyring::decrypt` a keyring
    value;
 4. the sweep's query, `seal < $1` with the current marker, finds every envelope record too, and the
-   re-seal seals it as keyring values and writes the current marker;
+   re-seal seals it as keyring values through a sealer and writes the marker of the sealer's
+   record;
 5. once no record holds `ENVELOPE`, the read path drops its envelope branch.
 
 A range query never matches a record whose marker is missing: Firestore skips a document without the
@@ -1173,11 +1286,15 @@ Or is suspected to have.
    the DEK cache. With the default `Block` policy values under the version stop decrypting
    through `decrypt`. Set `Allow` for the time of the sweep if availability matters more, and be
    aware the leaked DEK can forge values under its id meanwhile;
-3. sweep with `decrypt_with_trust`, and decide per record on the values read through the
-   compromised version, see [The trust of re-sealed values](#the-trust-of-re-sealed-values);
+3. sweep the records in the compromised version's range, see
+   [Records under a version](#records-under-a-version), reading them with `decrypt_with_trust`,
+   and decide per record on the values read through the compromised version, see
+   [The trust of re-sealed values](#the-trust-of-re-sealed-values). Run the range query again once
+   every process has had time to refresh its record, for the writes of processes that had not seen
+   the flag yet;
 4. export the BigQuery keysets again: a `Readable` keyset leaves the compromised version out.
    Delete the `Single` keyset of the compromised version once the sweep is done;
-5. `retire` the version once the sweep is done.
+5. `retire` the version once the sweep is done and its range query returns nothing.
 
 Rotation protects nothing already copied: backups, point-in-time recovery and data exports still
 hold values the leaked DEK opens. Treat them as exposed and revoke the secrets inside them.

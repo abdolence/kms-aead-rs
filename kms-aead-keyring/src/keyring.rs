@@ -35,17 +35,21 @@ mod beacon;
 #[cfg(feature = "deterministic")]
 mod deterministic;
 
+mod sealer;
+pub use sealer::Sealer;
+
 /// A handle on one keyring of a [`KeyringRegistry`](crate::KeyringRegistry), for field
 /// encryption under the keyring's key versions: its record lives in the store `S` and is cached
 /// in the process, its keys are encrypted by the provider `P`, and AEAD runs on the backend `B`.
 ///
-/// `encrypt` seals under the active version of the purpose, and `decrypt` opens under the
-/// version the value names, without a call to the store while the cached record is younger than
+/// A [`Sealer`] from [`sealer`](Self::sealer) seals the fields of one write under the active
+/// versions of one record, and `decrypt` opens under the version the value names, without a call
+/// to the store while the cached record is younger than
 /// [`record_ttl`](crate::KeyringRegistryOptions::record_ttl), and without a call to the KMS while
-/// the version's key is in the [`DekCache`]. Every decryption of `encrypt` and `decrypt` goes
-/// through that cache, which drops expired keys only when it is called: a process that can sit
-/// idle while it holds keys, and needs the cache's TTL to bound their time in memory, calls
-/// [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
+/// the version's key is in the [`DekCache`]. Every decryption of a key for sealing or for
+/// `decrypt` goes through that cache, which drops expired keys only when it is called: a process
+/// that can sit idle while it holds keys, and needs the cache's TTL to bound their time in memory,
+/// calls [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
 ///
 /// The handles of one keyring share its cached record, so a write through a `KeyringAdmin` of the
 /// same registry is seen by all of them at once. Each handle has its own provider and
@@ -111,7 +115,9 @@ where
         self.cache.dek_cache()
     }
 
-    /// The cached record, as the keyring currently uses it.
+    /// The cached record, as the keyring currently uses it. Its
+    /// [`seal_marker`](KeyringRecord::seal_marker) is the bound of a sweep's query; a write
+    /// stores the marker of its [`Sealer`]'s record instead.
     pub fn record(&self) -> Arc<KeyringRecord> {
         self.cache.record()
     }
@@ -127,40 +133,6 @@ where
     /// every case.
     pub async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
         self.cache.reload(LoadReason::Forced).await
-    }
-
-    /// Seals `value` with `aad` under the active randomised version.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyringError::NoActiveVersion`] when the keyring has none, which follows a
-    /// `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`] when
-    /// sealing breaks the [`Interop`] requirement `aad` carries; [`KeyringError::KmsAead`] with
-    /// code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error when
-    /// the version's key is not in the [`DekCache`] and cannot be decrypted.
-    pub async fn encrypt<T: Plaintext>(
-        &self,
-        aad: &FieldAad,
-        value: &T,
-    ) -> KeyringResult<Encrypted<T, Randomized>> {
-        let span = spans::encrypt(self.id(), Purpose::Randomized, Some(B::NAME));
-        spans::in_span(span, async {
-            let record = self.cache.current().await;
-            let (version, encrypted_dek) = record
-                .active_dek(Purpose::Randomized)
-                .ok_or_else(|| KeyringError::no_active_version(self.id(), Purpose::Randomized))?;
-            spans::record_sealing_version(version);
-            self.check_interop(aad.interop, version)?;
-            let cipher = self.cipher(version)?;
-            let (sealed, outcome) = self
-                .with_cached_dek(&record, version.id(), encrypted_dek, |dek| {
-                    cipher.encrypt(version.id(), &aad.bytes, value, dek)
-                })
-                .await?;
-            spans::record_dek_cache(outcome);
-            Ok(sealed?)
-        })
-        .await
     }
 
     /// Opens `value` with `aad`, under the version it names, applying the
@@ -239,64 +211,6 @@ where
             },
         )
         .await
-    }
-
-    /// `value` sealed again with `aad` under the active randomised version, with the trust of
-    /// the version it was read under, or `None` when it is under the active version already.
-    ///
-    /// Any other version is re-sealed, whatever its key id: a version that a rotation left
-    /// behind, a decrypt-only version above the active one, which `KeyringAdmin::promote` of an
-    /// older pending version leaves after `KeyringAdmin::mark_compromised`, and a version still
-    /// pending in the cached record, which a process with a fresher record promoted and sealed
-    /// under. In the last case the record keeps the older marker the caller read before the
-    /// re-seal, so the next sweep visits it again. A key id the cached record lacks reloads the
-    /// record, as [`decrypt`](Self::decrypt) does, and is compared with the reloaded record's
-    /// active version.
-    ///
-    /// The value is read with [`decrypt_with_trust`](Self::decrypt_with_trust), so a value under
-    /// a compromised version is re-sealed too, and [`Resealed::trust`] says so: the caller
-    /// decides whether to keep it, see [`ResealOutcome`](crate::sweep::ResealOutcome).
-    ///
-    /// [`Resealed`] holds no plaintext, and a value under the active version is not opened, so a
-    /// field with a beacon is read with `decrypt_with_trust` instead: its plaintext gives both
-    /// the value under the active version, through [`encrypt`](Self::encrypt), and the beacon
-    /// under the active beacon version, through [`beacon`](Self::beacon), since a beacon rotation
-    /// leaves the value itself current.
-    ///
-    /// # Errors
-    ///
-    /// [`KeyringError::ReservedKeyId`] and [`KeyringError::KeyPurposeMismatch`] for the value's
-    /// key id, before any store or KMS call; [`KeyringError::NoActiveVersion`] before any
-    /// decryption; [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks the key id
-    /// too; and the errors of `decrypt_with_trust` and [`encrypt`](Self::encrypt).
-    pub async fn reseal<T: Plaintext>(
-        &self,
-        aad: &FieldAad,
-        value: &Encrypted<T, Randomized>,
-    ) -> KeyringResult<Option<Resealed<T, Randomized>>> {
-        let key_id = Purpose::Randomized.check(value.key_id())?;
-        if self.is_active(Purpose::Randomized, key_id).await? {
-            return Ok(None);
-        }
-        let decrypted = self.decrypt_with_trust(aad, value).await?;
-        Ok(Some(Resealed {
-            value: self.encrypt(aad, &decrypted.value).await?,
-            trust: decrypted.trust,
-        }))
-    }
-
-    /// Whether `key_id` is the active version of `purpose`, in the cached record or, when that
-    /// lacks it, in the record reloaded for it; [`KeyringError::NoActiveVersion`] when the purpose
-    /// has none, and [`KeyringError::KeyVersionUnknown`] when the reloaded record lacks `key_id`.
-    async fn is_active(&self, purpose: Purpose, key_id: KeyId) -> KeyringResult<bool> {
-        let (record, _) = self.cache.find(key_id).await;
-        let active = record
-            .active(purpose)
-            .ok_or_else(|| KeyringError::no_active_version(self.id(), purpose))?;
-        if record.version(key_id).is_none() {
-            return Err(KeyringError::key_version_unknown(self.id(), key_id));
-        }
-        Ok(active.id() == key_id)
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error
@@ -477,8 +391,8 @@ where
     }
 
     /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
-    /// store-less, so that a sweep can seal it again as a keyring value with `encrypt`; a keyring
-    /// never writes envelope values. The `aad` is the one the application gave it and the
+    /// store-less, so that a sweep can seal it again as a keyring value with
+    /// [`Sealer::encrypt`]; a keyring never writes envelope values. The `aad` is the one the application gave it and the
     /// `algorithm` that of the envelope that wrote it: the read of a record whose
     /// [`SealMarker`](crate::sweep::SealMarker) is
     /// [`SealMarker::ENVELOPE`](crate::sweep::SealMarker::ENVELOPE), until a sweep re-seals it. A
@@ -566,8 +480,8 @@ pub struct Decrypted<T> {
     pub trust: KeyTrust,
 }
 
-/// A value sealed again under the active version of its purpose, by [`Keyring::reseal`] or
-/// `reseal_deterministic`, with the trust of the version the old value was read under.
+/// A value sealed again under the active version of its purpose, by [`Sealer::reseal`] or
+/// `Sealer::reseal_deterministic`, with the trust of the version the old value was read under.
 pub struct Resealed<T, F: Format> {
     /// The value under the active version, to write in place of the old one.
     pub value: Encrypted<T, F>,

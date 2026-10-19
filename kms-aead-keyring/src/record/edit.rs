@@ -12,7 +12,7 @@ use crate::errors::{
     InvalidTransitionError, KeyringError, KeyringResult, PurposeError, RecordInvalidReason,
 };
 use crate::purpose::next_key_id;
-use crate::sweep::SealMarker;
+use crate::sweep::{SealMarker, SealRange};
 use crate::{
     Compromise, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, Purpose, Rotation, Transition,
@@ -165,25 +165,25 @@ impl RetainedDek {
         self.compromised.is_none().then(|| Self {
             encrypted_dek: self.encrypted_dek.clone(),
             compromised: Some(compromise.clone()),
+            seal_range: self.seal_range,
         })
     }
 }
 
 /// A record that an administrative write is changing: the lifecycle transitions apply to it,
 /// and [`finish`](Self::finish) checks the result as a reader would, before it is written.
+///
+/// A version that a transition makes active starts its seal range at the epoch after the
+/// record's, and a version that stops being active keeps an open range: `finish` moves the
+/// epoch on to that start and closes every open range of a version that is not active, in the
+/// same record, so that one compare-and-swap writes the epoch and the ranges together.
 pub(crate) struct RecordEdit {
     record: KeyringRecord,
-    /// Whether a transition made a version active, which moves the seal epoch on once per write
-    /// however many versions it activates.
-    activated: bool,
 }
 
 impl From<KeyringRecord> for RecordEdit {
     fn from(record: KeyringRecord) -> Self {
-        Self {
-            record,
-            activated: false,
-        }
+        Self { record }
     }
 }
 
@@ -193,22 +193,53 @@ impl RecordEdit {
         &self.record
     }
 
-    /// The changed record as a reader parses it from the store, with the seal epoch moved on
-    /// when a version became active, so that a record that would fail its invariants or caps
-    /// there is never written.
+    /// The changed record as a reader parses it from the store, so that a record that would fail
+    /// its invariants or caps there is never written. When a version became active, the seal
+    /// epoch moves on once, however many versions became active, and the seal range of every
+    /// version that is not active and still open ends at the new epoch: no process seals under
+    /// such a version once it holds the new record.
     ///
     /// # Errors
     ///
-    /// `RecordInvalid` with `SealEpochOutOfRange` when the epoch cannot count up any more, and
-    /// the errors of a read.
+    /// The errors of a read.
     pub(crate) fn finish(self) -> KeyringResult<KeyringRecord> {
         let mut record = self.record;
-        if self.activated {
-            record.seal_marker = record.seal_marker.next().ok_or_else(|| {
-                KeyringError::record_invalid(&record.id, RecordInvalidReason::SealEpochOutOfRange)
-            })?;
+        let held = record.seal_marker;
+        let activated = record
+            .versions
+            .iter()
+            .find_map(|version| match version.state {
+                VersionState::Active { seal_start, .. } if seal_start > held => Some(seal_start),
+                _ => None,
+            });
+        if let Some(epoch) = activated {
+            record.seal_marker = epoch;
+            for version in &mut record.versions {
+                let open = match &mut version.state {
+                    VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
+                        Some(&mut kept.seal_range)
+                    }
+                    VersionState::Destroyed { seal_range, .. } => seal_range.as_mut(),
+                    VersionState::Pending(_) | VersionState::Active { .. } => None,
+                };
+                if let Some(range) = open.filter(|range| range.end().is_none()) {
+                    *range = SealRange::new(range.start(), Some(epoch));
+                }
+            }
         }
         KeyringRecord::from_json(&record.id, &record.to_json()?)
+    }
+
+    /// The marker of the epoch the versions this write makes active start their seal range at:
+    /// the one after the record's.
+    ///
+    /// # Errors
+    ///
+    /// `RecordInvalid` with `SealEpochOutOfRange` when the epoch cannot count up any more.
+    fn activation_marker(&self) -> KeyringResult<SealMarker> {
+        self.record.seal_marker.next().ok_or_else(|| {
+            KeyringError::record_invalid(&self.record.id, RecordInvalidReason::SealEpochOutOfRange)
+        })
     }
 
     /// Adds `new` as the pending version of its purpose, under the purpose's next key id, and
@@ -232,27 +263,35 @@ impl RecordEdit {
 
     /// Makes the pending version `key_id` the active version of its purpose; the active version
     /// it replaces decrypts only.
+    ///
+    /// # Errors
+    ///
+    /// `KeyVersionUnknown`, `RecordInvalid` with `SealEpochOutOfRange` when the seal epoch cannot
+    /// count up any more, and `InvalidTransition` for a version that is not pending.
     pub(crate) fn promote(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<Rotation> {
         let purpose = self.version_mut(key_id)?.algorithm.purpose();
         let previous = self.record.active(purpose).map(KeyVersion::id);
+        let seal_start = self.activation_marker()?;
         self.change_state(key_id, Transition::Promote, now, |state| match state {
-            VersionState::Pending(encrypted_dek) => {
-                Some(VersionState::Active(encrypted_dek.clone()))
-            }
+            VersionState::Pending(encrypted_dek) => Some(VersionState::Active {
+                encrypted_dek: encrypted_dek.clone(),
+                seal_start,
+            }),
             _ => None,
         })?;
         if let Some(previous) = previous {
             self.change_state(previous, Transition::Promote, now, |state| match state {
-                VersionState::Active(encrypted_dek) => {
-                    Some(VersionState::DecryptOnly(RetainedDek {
-                        encrypted_dek: encrypted_dek.clone(),
-                        compromised: None,
-                    }))
-                }
+                VersionState::Active {
+                    encrypted_dek,
+                    seal_start,
+                } => Some(VersionState::DecryptOnly(RetainedDek {
+                    encrypted_dek: encrypted_dek.clone(),
+                    compromised: None,
+                    seal_range: SealRange::new(*seal_start, None),
+                })),
                 _ => None,
             })?;
         }
-        self.activated = true;
         Ok(Rotation {
             purpose,
             previous,
@@ -280,24 +319,33 @@ impl RecordEdit {
             now,
             |state| match state {
                 VersionState::Pending(_) => None,
-                VersionState::Active(encrypted_dek) => {
-                    Some(VersionState::DecryptOnly(RetainedDek {
-                        encrypted_dek: encrypted_dek.clone(),
-                        compromised: Some(compromise.clone()),
-                    }))
-                }
+                VersionState::Active {
+                    encrypted_dek,
+                    seal_start,
+                } => Some(VersionState::DecryptOnly(RetainedDek {
+                    encrypted_dek: encrypted_dek.clone(),
+                    compromised: Some(compromise.clone()),
+                    seal_range: SealRange::new(*seal_start, None),
+                })),
                 VersionState::DecryptOnly(kept) => {
                     kept.flagged(&compromise).map(VersionState::DecryptOnly)
                 }
                 VersionState::Retired(kept) => kept.flagged(&compromise).map(VersionState::Retired),
-                VersionState::Destroyed(_) => None,
+                VersionState::Destroyed { .. } => None,
             },
         )?;
         match replacement {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
-                let current = self.push(new, VersionState::Active, now)?;
-                self.activated = true;
+                let seal_start = self.activation_marker()?;
+                let current = self.push(
+                    new,
+                    |encrypted_dek| VersionState::Active {
+                        encrypted_dek,
+                        seal_start,
+                    },
+                    now,
+                )?;
                 Ok(Some(Rotation {
                     purpose,
                     previous: Some(key_id),
@@ -324,18 +372,28 @@ impl RecordEdit {
 
     pub(crate) fn destroy(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<()> {
         self.change_state(key_id, Transition::Destroy, now, |state| match state {
-            VersionState::Pending(_) => Some(VersionState::Destroyed(None)),
-            VersionState::Retired(kept) => Some(VersionState::Destroyed(kept.compromised.clone())),
+            VersionState::Pending(_) => Some(VersionState::Destroyed {
+                compromised: None,
+                seal_range: None,
+            }),
+            VersionState::Retired(kept) => Some(VersionState::Destroyed {
+                compromised: kept.compromised.clone(),
+                seal_range: Some(kept.seal_range),
+            }),
             _ => None,
         })
     }
 
-    /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag.
+    /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag
+    /// and its seal range.
     pub(crate) fn destroy_all(&mut self, now: Timestamp) {
         let record = &mut self.record;
         for version in &mut record.versions {
-            if !matches!(version.state, VersionState::Destroyed(_)) {
-                version.state = VersionState::Destroyed(version.state.compromised().cloned());
+            if !matches!(version.state, VersionState::Destroyed { .. }) {
+                version.state = VersionState::Destroyed {
+                    compromised: version.compromised().cloned(),
+                    seal_range: version.seal_range(),
+                };
                 version.state_changed_at = now;
             }
         }
@@ -352,11 +410,14 @@ impl RecordEdit {
     ) -> KeyringResult<()> {
         match &mut self.version_mut(key_id)?.state {
             VersionState::Pending(held_encrypted_dek)
-            | VersionState::Active(held_encrypted_dek) => *held_encrypted_dek = encrypted_dek,
+            | VersionState::Active {
+                encrypted_dek: held_encrypted_dek,
+                ..
+            } => *held_encrypted_dek = encrypted_dek,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
                 kept.encrypted_dek = encrypted_dek
             }
-            VersionState::Destroyed(_) => {
+            VersionState::Destroyed { .. } => {
                 return Err(KeyringError::record_invalid(
                     &self.record.id,
                     RecordInvalidReason::MissingMaterial(key_id),
@@ -382,7 +443,7 @@ impl RecordEdit {
     fn push(
         &mut self,
         new: NewVersion,
-        state: fn(EncryptedDataEncryptionKey) -> VersionState,
+        state: impl FnOnce(EncryptedDataEncryptionKey) -> VersionState,
         now: Timestamp,
     ) -> KeyringResult<KeyId> {
         let key_id = self.record.next_key_id(new.algorithm.purpose())?;

@@ -77,7 +77,11 @@ async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
     let admin = default_keyring().await?;
     let keyring = admin.keyring();
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
-    let value: Encrypted<String, Randomized> = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value: Encrypted<String, Randomized> = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(value.value()[..5], [0x01, 0, 0, 0, 1]);
     assert_eq!(value.value().len(), 5 + 12 + ALICE.len() + 16);
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
@@ -97,7 +101,11 @@ async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
         EMAIL.aad(&EntityId::try_from("42")?),
         EMAIL.custom_aad(&[0xFF; 3])?,
     ] {
-        let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+        let value = keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
     }
     Ok(())

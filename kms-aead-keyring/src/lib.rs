@@ -3,9 +3,9 @@
 //! A keyring is the record of one scope's key versions, such as a tenant's, held in a
 //! [`KeyringStore`](store::KeyringStore). Each version is a data encryption key (DEK) encrypted by
 //! a key encryption key (KEK) in a KMS, with a lifecycle state. A [`Keyring`] encrypts fields
-//! under the active version and decrypts them under the version each value names, without a
-//! call to the store or the KMS on the hot path: the record is cached in the process, and the
-//! decrypted keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
+//! under the active versions, through a [`Sealer`] per write, and decrypts them under the version
+//! each value names, without a call to the store or the KMS on the hot path: the record is cached
+//! in the process, and the decrypted keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
 //!
 //! An application opens its keyrings through one [`KeyringRegistry`] per store, which loads and
 //! watches each keyring once, however many parts of the application open it, and whose
@@ -13,8 +13,8 @@
 //!
 //! # Applications and administration
 //!
-//! A [`Keyring`] is the application's handle. It encrypts, decrypts, computes beacons and
-//! re-seals, with the KMS's decrypt right and read access to the store, and it has no call that
+//! A [`Keyring`] is the application's handle. It decrypts, and its [`Sealer`] encrypts, computes
+//! beacons and re-seals, with the KMS's decrypt right and read access to the store, and it has no call that
 //! encrypts a DEK or writes the record. Those calls, the creation of a keyring, its lifecycle and
 //! the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds together with the
 //! registry's `create`, `open_or_create` and `admin`. An application builds without the feature
@@ -36,6 +36,12 @@
 //! decrypts to a `T` and is checked when it is read from stored bytes. [`Plaintext`] fixes how
 //! each `T` encodes, so that other readers decode it, and an application newtype such as `Email`
 //! implements it to name what a field holds.
+//!
+//! A write seals every encrypted field of a record through one [`Sealer`], and stores the
+//! [`SealMarker`](sweep::SealMarker) of the sealer's record beside them. The marker names the
+//! versions the fields are under: a sweep finds the records behind the active versions by it, and
+//! the records that can hold a value under one version by that version's
+//! [`seal_range`](KeyVersion::seal_range), see [`sweep`].
 //!
 //! # Associated data
 //!
@@ -60,7 +66,7 @@
 //! such as emails and external ids, and never low-cardinality fields such as a status or a
 //! country.
 //!
-//! With the `deterministic` feature, `Keyring::encrypt_deterministic` seals a value under the
+//! With the `deterministic` feature, `Sealer::encrypt_deterministic` seals a value under the
 //! active AES-SIV version, so that equal plaintexts give equal [`Encrypted<T,
 //! Deterministic>`](formats::Deterministic) values, and `Keyring::deterministic_probes` seals a plaintext
 //! under every version that still decrypts, for the `IN` list of an equality query across a
@@ -74,7 +80,7 @@
 //! version, stored beside the field's randomised value so that a data store finds rows by
 //! equality. A keyring created with a [`beacon`](KeyringAlgorithms::beacon) algorithm has beacon
 //! versions:
-//! [`Keyring::beacon`] computes the beacon of a value under the active one, and
+//! [`Sealer::beacon`] computes the beacon of a value under the active one, and
 //! [`Keyring::beacon_probes`] under every version a lookup matches across a rotation. A beacon
 //! column leaks which rows are likely to hold equal values; [`FieldSpec::with_beacon_bits`] sets
 //! how much of the HMAC it keeps, and so how many rows a lookup returns to decrypt and filter.
@@ -123,7 +129,7 @@
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
 //! | `admin` | `KeyringAdmin`, and the registry's `create`, `open_or_create` and `admin`: the calls that encrypt DEKs, write the record or export keysets |
-//! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`; the deterministic types are in every build |
+//! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic` and `reseal_deterministic` on a `Sealer`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes` on a `Keyring`; the deterministic types are in every build |
 //! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker), as bytes |
 //! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
 //! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
@@ -186,7 +192,7 @@
 //!
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
 //! let alice = Email("alice@example.com".to_string());
-//! let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+//! let value: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 //! let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 //! admin.promote(staged).await?;
 //!

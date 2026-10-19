@@ -24,8 +24,9 @@ the envelope modes of kms-aead.
 
 A keyring has two sides, each with its own handle and its own rights:
 
-- the application encrypts, decrypts, computes beacons and runs sweeps, on a `Keyring`, which
-  `KeyringRegistry::open` returns in every build;
+- the application decrypts and runs sweeps on a `Keyring`, which `KeyringRegistry::open` returns
+  in every build, and encrypts, computes beacons and re-seals on the `Sealer` the `Keyring`
+  hands out for each write;
 - the administration creates keyrings, rotates, promotes, retires and destroys versions, flags
   compromised ones, re-encrypts DEKs and exports keysets, on a `KeyringAdmin`, which
   `KeyringRegistry::create`, `open_or_create` and `admin` return with the `admin` feature.
@@ -93,8 +94,9 @@ The crate has no default features, and the backend features are those of kms-aea
 - `admin`: `KeyringAdmin`, the registry's `create`, `open_or_create` and `admin`, and the types
   of the administrative calls, `Rotation`, `EncryptedKeyset`, `KeysetSelection` and the
   `encodings` module, see [Applications and administration](#applications-and-administration);
-- `deterministic`: deterministic key versions and every call on them, `encrypt_deterministic`,
-  `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes`, see
+- `deterministic`: deterministic key versions and every call on them, `encrypt_deterministic`
+  and `reseal_deterministic` on a `Sealer`, and `decrypt_deterministic`,
+  `decrypt_deterministic_with_trust` and `deterministic_probes` on a `Keyring`, see
   [Deterministic fields](./keyring/deterministic.md). The deterministic types exist in every
   build, so a process without the feature keeps a record's deterministic versions intact;
 - `serde`: `Serialize` and `Deserialize` for `Encrypted` and `SealMarker`, as bytes;
@@ -124,6 +126,7 @@ use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Sealer,
 };
 use secret_vault_value::SecretValue;
 
@@ -163,7 +166,9 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 // The AAD ties the value to user 42's email: `user/42/email`
 let aad: FieldAad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-let value: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+// One sealer per write of a record, for every encrypted field it holds
+let sealer: Sealer<'_, MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = keyring.sealer().await;
+let value: Encrypted<Email, Randomized> = sealer.encrypt(&aad, &alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
 // A staged rotation keeps the previous version decrypting
@@ -219,7 +224,10 @@ and sweeps inside an administrative job. The example takes its `Keyring` there t
 ephemeral local KEK has no second copy to `open` the keyring with: `LocalKmsProvider` is not
 `Clone`.
 
-`encrypt` seals under the active version, and `decrypt` opens under the version the value names.
+`Keyring::sealer` takes the cached record, and the `Sealer` seals under that record's active
+versions; `decrypt` opens under the version the value names. A write takes one sealer and seals
+every encrypted field of the record through it, so that the seal marker it stores beside them
+names the versions they are under, see [The seal marker](./operations.md#the-seal-marker).
 Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is
 in the DEK cache, see [Record cache](./keyring/record-cache.md).
 

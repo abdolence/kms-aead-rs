@@ -16,7 +16,7 @@ use super::{
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::purpose::is_reserved;
-use crate::sweep::SealMarker;
+use crate::sweep::{SealMarker, SealRange};
 use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes under 400 bytes per
@@ -57,6 +57,8 @@ struct StoredVersion {
     algorithm: String,
     state: String,
     compromised: Option<StoredCompromise>,
+    /// The epochs of the version's seal range, `None` for a version that was never active.
+    seal_epochs: Option<StoredSealEpochs>,
     created_at: Timestamp,
     state_changed_at: Timestamp,
     /// The standard base64 of the encrypted DEK's bytes, as the provider returned them; `None`
@@ -68,6 +70,13 @@ struct StoredVersion {
 struct StoredCompromise {
     at: Timestamp,
     note: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredSealEpochs {
+    start: u32,
+    /// `None` while the range is open-ended.
+    end: Option<u32>,
 }
 
 impl From<&KeyringRecord> for StoredRecord {
@@ -82,6 +91,10 @@ impl From<&KeyringRecord> for StoredRecord {
                 compromised: version.compromised().map(|compromise| StoredCompromise {
                     at: compromise.at,
                     note: compromise.note.clone(),
+                }),
+                seal_epochs: version.seal_range().map(|range| StoredSealEpochs {
+                    start: range.start().epoch(),
+                    end: range.end().map(SealMarker::epoch),
                 }),
                 created_at: version.created_at,
                 state_changed_at: version.state_changed_at,
@@ -176,6 +189,21 @@ impl KeyringRecord {
         if stored.seal_epoch == 0 {
             return Err(invalid(RecordInvalidReason::SealEpochOutOfRange));
         }
+        let seal_marker = SealMarker::of_epoch(stored.seal_epoch);
+        if let Some(version) = versions.iter().find(|version| {
+            version.seal_range().is_some_and(|range| {
+                let start = range.start();
+                start == SealMarker::ENVELOPE
+                    || start > seal_marker
+                    || range
+                        .end()
+                        .is_some_and(|end| end <= start || end > seal_marker)
+            })
+        }) {
+            return Err(invalid(RecordInvalidReason::SealRangeInvalid(
+                version.key_id,
+            )));
+        }
         let record = Self {
             id: id.clone(),
             kek: KekRef::new(
@@ -183,7 +211,7 @@ impl KeyringRecord {
                 stored.kek.key,
             ),
             algorithms,
-            seal_marker: SealMarker::of_epoch(stored.seal_epoch),
+            seal_marker,
             versions,
             created_at: stored.created_at,
             updated_at: stored.updated_at,
@@ -265,12 +293,21 @@ impl TryFrom<StoredVersion> for KeyVersion {
         let compromised = stored
             .compromised
             .map(|compromise| Compromise::new(compromise.at, compromise.note));
+        let seal_range = stored.seal_epochs.map(|epochs| {
+            SealRange::new(
+                SealMarker::of_epoch(epochs.start),
+                epochs.end.map(SealMarker::of_epoch),
+            )
+        });
         let kind: KeyVersionState = stored
             .state
             .parse()
             .map_err(|_| RecordInvalidReason::UnknownState(key_id))?;
         let state = match (kind, encrypted_dek) {
-            (KeyVersionState::Destroyed, None) => VersionState::Destroyed(compromised),
+            (KeyVersionState::Destroyed, None) => VersionState::Destroyed {
+                compromised,
+                seal_range,
+            },
             (KeyVersionState::Destroyed, Some(_)) => {
                 return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
             }
@@ -278,20 +315,31 @@ impl TryFrom<StoredVersion> for KeyVersion {
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedActive(key_id))
             }
-            (KeyVersionState::Active, Some(encrypted_dek)) => VersionState::Active(encrypted_dek),
+            (KeyVersionState::Active, Some(encrypted_dek)) => match seal_range {
+                Some(range) if range.end().is_none() => VersionState::Active {
+                    encrypted_dek,
+                    seal_start: range.start(),
+                },
+                _ => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
+            },
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedPending(key_id))
             }
-            (KeyVersionState::Pending, Some(encrypted_dek)) => VersionState::Pending(encrypted_dek),
+            (KeyVersionState::Pending, Some(encrypted_dek)) => match seal_range {
+                None => VersionState::Pending(encrypted_dek),
+                Some(_) => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
+            },
             (KeyVersionState::DecryptOnly, Some(encrypted_dek)) => {
                 VersionState::DecryptOnly(RetainedDek {
                     encrypted_dek,
                     compromised,
+                    seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
                 })
             }
             (KeyVersionState::Retired, Some(encrypted_dek)) => VersionState::Retired(RetainedDek {
                 encrypted_dek,
                 compromised,
+                seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
             }),
         };
         Ok(Self {

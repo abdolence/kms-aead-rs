@@ -675,6 +675,8 @@ mod tests {
         let value = fixture
             .admin
             .keyring()
+            .sealer()
+            .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;
         assert_eq!(first.decrypt(&aad, &value).await?, ALICE);
@@ -883,8 +885,17 @@ mod tests {
             )
             .await?;
         let aad = email_of("42")?;
-        let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-        let other_value = other.keyring().encrypt(&aad, &ALICE.to_string()).await?;
+        let value = keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
+        let other_value = other
+            .keyring()
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
         let decryptions = &fixture.provider.calls.decryptions;
         let before = decryptions.load(Ordering::SeqCst);
 
@@ -917,6 +928,8 @@ mod tests {
 
         tokio::time::advance(KeyringRegistryOptions::DEFAULT_RECORD_TTL).await;
         let value = keyring
+            .sealer()
+            .await
             .encrypt(&email_of("42")?, &ALICE.to_string())
             .await?;
 
@@ -934,11 +947,19 @@ mod tests {
             .open(fixture.provider.clone(), TENANT)
             .await?;
         let aad = email_of("42")?;
-        let before = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+        let before = keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
 
         fixture.registry.shutdown().await?;
 
-        let after = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+        let after = keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?;
         assert_eq!(keyring.decrypt(&aad, &before).await?, ALICE);
         assert_eq!(keyring.decrypt(&aad, &after).await?, ALICE);
         Ok(())

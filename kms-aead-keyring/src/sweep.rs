@@ -14,18 +14,18 @@
 //! [`KeyringRecord::seal_marker`](crate::KeyringRecord::seal_marker) returns it as a
 //! [`SealMarker`], 5 bytes that order as the epochs do.
 //!
-//! A write that touches any encrypted field of a record re-seals all of them under the active
-//! versions and stores the marker beside them, in the same write. It reads the marker before it
-//! seals the first field, so that the marker never names a newer epoch than the versions the
-//! fields are under. The records a sweep still has to visit are then those whose marker is below
-//! the current one: `seal < $1` on one indexed field, in Firestore, PostgreSQL and BigQuery
-//! alike, and `<` on a [`SealMarker`] in Rust.
+//! A write that touches any encrypted field of a record seals all of them again through one
+//! [`Sealer`](crate::Sealer), and stores the marker of the sealer's record beside them, in the
+//! same write. The marker then names the epoch of the versions every field is under. The records
+//! a sweep still has to visit are those whose marker is below the current one: `seal < $1` on one
+//! indexed field, in Firestore, PostgreSQL and BigQuery alike, and `<` on a [`SealMarker`] in
+//! Rust.
 //!
 //! The query also matches a record with nothing to re-seal: after a rotation of a purpose the
 //! record holds no value of, such as a beacon rotation for a record without beacons, its marker
-//! is below the current one all the same. [`Keyring::reseal`](crate::Keyring::reseal) returns
+//! is below the current one all the same. [`Sealer::reseal`](crate::Sealer::reseal) returns
 //! `None` for a value under the active version without decrypting it or calling the KMS, so the
-//! re-seal writes the current marker alone, conditional on the record as it read it, and
+//! re-seal writes the sealer's marker alone, conditional on the record as it read it, and
 //! returns [`ResealOutcome::Skipped`]. Such a record matches once.
 //!
 //! Each process stamps the epoch of the record it caches. A process that has not refreshed its
@@ -35,13 +35,36 @@
 //! record, the administrative job can retire the old version with `KeyringAdmin::retire`.
 //!
 //! The re-seal reads every field with [`decrypt_with_trust`](crate::Keyring::decrypt_with_trust),
-//! as `reseal` does, and reports in [`ResealOutcome::Resealed`] whether the
-//! [`KeyTrust`](crate::KeyTrust) of any of them is compromised. A value read under a compromised
+//! as [`Sealer::reseal`](crate::Sealer::reseal) does, and reports in
+//! [`ResealOutcome::Resealed`] whether the [`KeyTrust`](crate::KeyTrust) of any of them is
+//! compromised. A value read under a compromised
 //! version is untrusted data, since whoever holds the leaked key can have forged it, and
 //! re-sealing makes it read as trusted everywhere. The application decides per record before it
 //! re-seals, with a quarantine field beside the marker, a comparison against a backup taken
 //! before the compromise, or acceptance; [`SweepReport::resealed_from_compromised`] counts the
 //! records that went through that decision.
+//!
+//! # The records under a version
+//!
+//! [`KeyVersion::seal_range`](crate::KeyVersion::seal_range) returns the [`SealRange`] of a
+//! version: the markers from the epoch at which it became active up to the first epoch at which
+//! no process seals under it, open-ended while one still may. The records that can hold a value
+//! under the version are those whose marker lies in it: `seal >= $1 AND seal < $2`, or
+//! `seal >= $1` for an open range, on the same indexed field, and [`SealRange::contains`] in Rust.
+//!
+//! - After `KeyringAdmin::mark_compromised`, the range of the compromised version finds every
+//!   record to re-seal and decide on, those of processes that had not seen the flag yet included:
+//!   they seal under the version and stamp an epoch below the range's end. The query runs again
+//!   once every process has had time to refresh its record, for the writes of the last of them. A
+//!   version flagged compromised after it stopped being active moves no epoch, and keeps the
+//!   range it had.
+//! - Before `KeyringAdmin::retire` or `KeyringAdmin::destroy`, the same query returning nothing
+//!   shows that no record holds a value under the version.
+//!
+//! One epoch counts the activations of every purpose of the keyring, so a range can also match a
+//! record with no field of the version's purpose, such as a record without beacons in the range of
+//! a beacon version. Its re-seal finds every value current and writes the marker alone. No range holds
+//! [`SealMarker::ENVELOPE`], since every range starts at epoch 1 or later.
 //!
 //! # Migration from envelope values
 //!
@@ -57,7 +80,7 @@
 //!    opens an envelope value, with the AAD the application used for it, and
 //!    [`Keyring::decrypt`](crate::Keyring::decrypt) a keyring value;
 //! 4. the sweep's query, `seal < $1`, finds every envelope record too, and the re-seal seals it
-//!    as keyring values and writes the current marker;
+//!    as keyring values through a sealer and writes the marker of the sealer's record;
 //! 5. once no record holds `ENVELOPE`, the read path drops its envelope branch.
 //!
 //! A query never matches a record whose marker is missing: an inequality filter of Firestore
@@ -79,8 +102,8 @@
 //!
 //! It leaves no half-written record, provided the re-seal writes a record's fields and its
 //! [`SealMarker`] in one conditional write: a cancelled write either committed, and the marker
-//! moved, or did not, and the record is as it was. The keyring calls of a re-seal, `encrypt`
-//! and `decrypt`, cache keys and write nothing to the store. The marker is the sweep's progress:
+//! moved, or did not, and the record is as it was. The keyring calls of a re-seal, those of its
+//! sealer and `decrypt`, cache keys and write nothing to the store. The marker is the sweep's progress:
 //! the records re-sealed before the cancellation no longer match the query, and the next run
 //! visits the rest.
 
@@ -109,7 +132,8 @@ mod sqlx;
 /// compares bytes as unsigned and from the first: a Firestore `bytes` value, a PostgreSQL `BYTEA`
 /// and a BigQuery `BYTES`. The records a sweep still has to visit are then one range of one
 /// indexed field, the markers below
-/// [`KeyringRecord::seal_marker`](crate::KeyringRecord::seal_marker).
+/// [`KeyringRecord::seal_marker`](crate::KeyringRecord::seal_marker), and so are the records that
+/// can hold a value under one version, the markers of its [`SealRange`].
 ///
 /// Epoch 0 is [`ENVELOPE`](Self::ENVELOPE), the marker of a record of envelope values, below the
 /// marker of every keyring, whose epochs start at 1.
@@ -199,6 +223,42 @@ impl Display for SealMarker {
     }
 }
 
+/// The markers of the records that can hold values under one key version, from
+/// [`KeyVersion::seal_range`](crate::KeyVersion::seal_range): from [`start`](Self::start), the
+/// epoch at which the version became active, up to and without [`end`](Self::end), the first
+/// epoch at which no process seals under it any more, or open-ended while it may still be
+/// sealed under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealRange {
+    start: SealMarker,
+    end: Option<SealMarker>,
+}
+
+impl SealRange {
+    pub(crate) fn new(start: SealMarker, end: Option<SealMarker>) -> Self {
+        Self { start, end }
+    }
+
+    /// The marker of the epoch at which the version became active: the lowest marker of a
+    /// record that holds a value under it.
+    pub fn start(&self) -> SealMarker {
+        self.start
+    }
+
+    /// The marker of the first epoch at which no process seals under the version, the epoch of
+    /// the first write after it stopped being active that moved the epoch on, or `None` while
+    /// no such write has happened: the active version, and a compromised one that nothing
+    /// replaced yet.
+    pub fn end(&self) -> Option<SealMarker> {
+        self.end
+    }
+
+    /// Whether a record stamped with `marker` can hold a value under the version.
+    pub fn contains(&self, marker: SealMarker) -> bool {
+        self.start <= marker && self.end.is_none_or(|end| marker < end)
+    }
+}
+
 /// What the re-seal of one candidate did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResealOutcome {
@@ -236,7 +296,7 @@ pub struct SweepReport {
 ///
 /// A re-seal returns the application's own error type `E`, so that an error of its table is
 /// returned as it is. The keyring's calls inside it, such as
-/// [`Keyring::reseal`](crate::Keyring::reseal), return a
+/// [`Sealer::reseal`](crate::Sealer::reseal), return a
 /// [`KeyringError`], which `?` converts into `E` through a `From` impl the
 /// application gives its error; `E` is `KeyringError` itself for a re-seal that has no other
 /// errors.
@@ -410,8 +470,8 @@ mod tests {
         };
         use crate::testing::MemoryKeyringStore;
         use crate::{
-            Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, KeyringAlgorithms,
-            KeyringRegistryOptions, Purpose,
+            Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion,
+            KeyringAlgorithms, KeyringRegistryOptions, Purpose,
         };
 
         const ALICE: &str = "alice@example.com";
@@ -448,22 +508,29 @@ mod tests {
             seal: SealMarker,
         }
 
-        /// Writes `user` as an application does: the marker read first, then the email sealed
-        /// under the active version.
+        /// Writes `user` as an application does: the email sealed by one sealer, and the marker
+        /// of the sealer's record.
         async fn write_user(
             keyring: &TestKeyring<MemoryKeyringStore>,
             users: &Users,
             user: &'static str,
         ) -> KeyringResult<()> {
-            let seal = keyring.record().seal_marker();
-            let email = keyring
-                .encrypt(&email_of(user)?, &ALICE.to_string())
-                .await?;
+            let sealer = keyring.sealer().await;
+            let email = sealer.encrypt(&email_of(user)?, &ALICE.to_string()).await?;
+            let seal = sealer.record().seal_marker();
             users
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(user, UserRow { email, seal });
             Ok(())
+        }
+
+        fn row_of(users: &Users, user: &str) -> Option<UserRow> {
+            users
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .get(user)
+                .cloned()
         }
 
         /// The users whose marker is below the keyring's: the sweep's query.
@@ -479,7 +546,7 @@ mod tests {
         }
 
         /// One sweep over the users [`behind`] finds, re-sealing each email as an application
-        /// does and writing the marker read before the re-seal.
+        /// does, with one sealer per user, and writing the marker of the sealer's record.
         async fn sweep(keyring: &TestKeyring<MemoryKeyringStore>, users: &Users) -> SweepReport {
             let candidates = behind(keyring, users);
             run(
@@ -487,28 +554,24 @@ mod tests {
                 stream::iter(candidates),
                 NonZeroUsize::MIN,
                 |user| async move {
-                    let row = users
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .get(user)
-                        .cloned();
-                    let Some(row) = row else {
+                    let Some(row) = row_of(users, user) else {
                         return Ok(ResealOutcome::Skipped);
                     };
-                    let seal = keyring.record().seal_marker();
-                    let (email, outcome) =
-                        match keyring.reseal(&email_of(user)?, &row.email).await? {
-                            Some(resealed) => (
-                                resealed.value,
-                                ResealOutcome::Resealed {
-                                    from_compromised: matches!(
-                                        resealed.trust,
-                                        KeyTrust::Compromised(_)
-                                    ),
-                                },
-                            ),
-                            None => (row.email, ResealOutcome::Skipped),
-                        };
+                    let sealer = keyring.sealer().await;
+                    let seal = sealer.record().seal_marker();
+                    let (email, outcome) = match sealer.reseal(&email_of(user)?, &row.email).await?
+                    {
+                        Some(resealed) => (
+                            resealed.value,
+                            ResealOutcome::Resealed {
+                                from_compromised: matches!(
+                                    resealed.trust,
+                                    KeyTrust::Compromised(_)
+                                ),
+                            },
+                        ),
+                        None => (row.email, ResealOutcome::Skipped),
+                    };
                     users
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
@@ -517,14 +580,6 @@ mod tests {
                 },
             )
             .await
-        }
-
-        fn email_in(users: &Users, user: &str) -> Option<Encrypted<String, Randomized>> {
-            users
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .get(user)
-                .map(|row| row.email.clone())
         }
 
         #[tokio::test]
@@ -543,7 +598,7 @@ mod tests {
             let keyring = admin.keyring();
             let users = Users::default();
             write_user(keyring, &users, "42").await?;
-            let email = email_in(&users, "42").ok_or("the user is written")?;
+            let email = row_of(&users, "42").ok_or("the user is written")?.email;
             admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
 
             let report = sweep(keyring, &users).await;
@@ -559,7 +614,9 @@ mod tests {
                 }
             );
             assert!(behind(keyring, &users).is_empty());
-            let kept = email_in(&users, "42").ok_or("the sweep keeps the user")?;
+            let kept = row_of(&users, "42")
+                .ok_or("the sweep keeps the user")?
+                .email;
             assert_eq!(kept.value(), email.value());
             Ok(())
         }
@@ -599,9 +656,165 @@ mod tests {
             );
             assert!(behind(keyring, &users).is_empty());
             admin.retire(replacement).await?;
-            let email = email_in(&users, "42").ok_or("the sweep keeps the user")?;
+            let email = row_of(&users, "42")
+                .ok_or("the sweep keeps the user")?
+                .email;
             assert_eq!(email.key_id(), pending);
             assert_eq!(keyring.decrypt(&email_of("42")?, &email).await?, ALICE);
+            Ok(())
+        }
+
+        /// The users whose marker `range` contains, and the users whose email is under `key_id`.
+        fn found_and_under(
+            users: &Users,
+            range: SealRange,
+            key_id: KeyId,
+        ) -> (Vec<&'static str>, Vec<&'static str>) {
+            let users = users.lock().unwrap_or_else(PoisonError::into_inner);
+            let found = users
+                .iter()
+                .filter(|(_, row)| range.contains(row.seal))
+                .map(|(user, _)| *user)
+                .collect();
+            let under = users
+                .iter()
+                .filter(|(_, row)| row.email.key_id() == key_id)
+                .map(|(user, _)| *user)
+                .collect();
+            (found, under)
+        }
+
+        #[tokio::test]
+        async fn a_seal_range_finds_exactly_the_records_under_its_version() -> TestResult {
+            let admin = TestRegistry::new(
+                MemoryKeyringStore::new(),
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(
+                TestProvider::new("tenant-42-kek")?,
+                TENANT,
+                KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+            )
+            .await?;
+            let keyring = admin.keyring();
+            let users = Users::default();
+            let first = keyring
+                .record()
+                .active(Purpose::Randomized)
+                .map(KeyVersion::id)
+                .ok_or("a new keyring has an active randomised version")?;
+            write_user(keyring, &users, "41").await?;
+            let second = admin
+                .promote(admin.rotate(Purpose::Randomized).await?)
+                .await?
+                .current;
+            write_user(keyring, &users, "42").await?;
+            let third = admin
+                .mark_compromised(second, None)
+                .await?
+                .ok_or("the compromised active version is replaced")?
+                .current;
+            write_user(keyring, &users, "43").await?;
+            admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
+            write_user(keyring, &users, "44").await?;
+
+            let record = keyring.record();
+            for (key_id, expected) in [
+                (first, vec!["41"]),
+                (second, vec!["42"]),
+                (third, vec!["43", "44"]),
+            ] {
+                let range = record
+                    .version(key_id)
+                    .and_then(KeyVersion::seal_range)
+                    .ok_or("a version that was active has a range")?;
+                assert_eq!(
+                    found_and_under(&users, range, key_id),
+                    (expected.clone(), expected),
+                    "the range of key version {}",
+                    key_id.as_u32()
+                );
+            }
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn a_process_that_has_not_seen_a_compromise_writes_inside_its_range() -> TestResult {
+            let memory = MemoryKeyringStore::new();
+            let provider = TestProvider::new("tenant-42-kek")?;
+            let admin = TestRegistry::new(
+                memory.clone(),
+                KeyringRegistryOptions::new().with_watch(false),
+            )?
+            .create(provider.clone(), TENANT, KeyringAlgorithms::new())
+            .await?;
+            // The application's process, which revalidates only once the default TTL is over.
+            let stale = TestRegistry::new(memory, KeyringRegistryOptions::new().with_watch(false))?
+                .open(provider, TENANT)
+                .await?;
+            let compromised = admin
+                .keyring()
+                .record()
+                .active(Purpose::Randomized)
+                .map(KeyVersion::id)
+                .ok_or("a new keyring has an active randomised version")?;
+            admin
+                .mark_compromised(compromised, None)
+                .await?
+                .ok_or("the compromised active version is replaced")?;
+            let users = Users::default();
+
+            write_user(&stale, &users, "42").await?;
+
+            let record = admin.keyring().record();
+            let range = record
+                .version(compromised)
+                .and_then(KeyVersion::seal_range)
+                .ok_or("the compromised version has a range")?;
+            let row = row_of(&users, "42").ok_or("the user is written")?;
+            assert_eq!(row.email.key_id(), compromised);
+            assert!(range.contains(row.seal));
+            assert_eq!(range.end(), Some(record.seal_marker()));
+
+            stale.reload().await?;
+            write_user(&stale, &users, "43").await?;
+            let row = row_of(&users, "43").ok_or("the user is written")?;
+            assert_ne!(row.email.key_id(), compromised);
+            assert!(!range.contains(row.seal));
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn a_full_sweep_empties_the_old_range_and_retire_keeps_every_value_readable(
+        ) -> TestResult {
+            let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
+            let keyring = admin.keyring();
+            let users = Users::default();
+            for user in ["41", "42"] {
+                write_user(keyring, &users, user).await?;
+            }
+            let rotation = admin
+                .promote(admin.rotate(Purpose::Randomized).await?)
+                .await?;
+            let previous = rotation
+                .previous
+                .ok_or("the promotion replaced a version")?;
+            let range = keyring
+                .record()
+                .version(previous)
+                .and_then(KeyVersion::seal_range)
+                .ok_or("the replaced version has a range")?;
+            assert_eq!(found_and_under(&users, range, previous).0, ["41", "42"]);
+
+            let report = sweep(keyring, &users).await;
+
+            assert_eq!((report.resealed, report.failed), (2, 0));
+            assert_eq!(found_and_under(&users, range, previous), (vec![], vec![]));
+            admin.retire(previous).await?;
+            for user in ["41", "42"] {
+                let row = row_of(&users, user).ok_or("the sweep keeps the user")?;
+                assert_eq!(keyring.decrypt(&email_of(user)?, &row.email).await?, ALICE);
+            }
             Ok(())
         }
 
@@ -611,9 +824,15 @@ mod tests {
             let keyring = admin.keyring();
             let email_aad = email_of("42")?;
             let phone_aad = PHONE.aad(&EntityId::try_from("42")?);
-            let email = keyring.encrypt(&email_aad, &ALICE.to_string()).await?;
+            let email = keyring
+                .sealer()
+                .await
+                .encrypt(&email_aad, &ALICE.to_string())
+                .await?;
             admin.mark_compromised(email.key_id(), None).await?;
             let phone = keyring
+                .sealer()
+                .await
                 .encrypt(&phone_aad, &ALICE_PHONE.to_string())
                 .await?;
             let seen = Mutex::new(Vec::new());
@@ -653,13 +872,19 @@ mod tests {
             let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
             let keyring = admin.keyring();
             let aad = email_of("42")?;
-            let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
-            assert!(keyring.reseal(&aad, &old).await?.is_none());
+            let old = keyring
+                .sealer()
+                .await
+                .encrypt(&aad, &ALICE.to_string())
+                .await?;
+            assert!(keyring.sealer().await.reseal(&aad, &old).await?.is_none());
 
             let rotation = admin
                 .promote(admin.rotate(Purpose::Randomized).await?)
                 .await?;
             let resealed = keyring
+                .sealer()
+                .await
                 .reseal(&aad, &old)
                 .await?
                 .ok_or("a value under the previous version is re-sealed")?;
@@ -667,7 +892,12 @@ mod tests {
             assert_eq!(resealed.value.key_id(), rotation.current);
             assert_eq!(resealed.trust, KeyTrust::Trusted);
             assert_eq!(keyring.decrypt(&aad, &resealed.value).await?, ALICE);
-            assert!(keyring.reseal(&aad, &resealed.value).await?.is_none());
+            assert!(keyring
+                .sealer()
+                .await
+                .reseal(&aad, &resealed.value)
+                .await?
+                .is_none());
             Ok(())
         }
 
@@ -676,13 +906,19 @@ mod tests {
             let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
             let keyring = admin.keyring();
             let aad = email_of("42")?;
-            let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+            let old = keyring
+                .sealer()
+                .await
+                .encrypt(&aad, &ALICE.to_string())
+                .await?;
             let rotation = admin
                 .mark_compromised(old.key_id(), None)
                 .await?
                 .ok_or("the compromised active version is replaced")?;
 
             let resealed = keyring
+                .sealer()
+                .await
                 .reseal(&aad, &old)
                 .await?
                 .ok_or("a value under the compromised version is re-sealed")?;
@@ -708,14 +944,23 @@ mod tests {
             let keyring = admin.keyring();
             let aad = EMAIL.deterministic_aad();
             let old = keyring
+                .sealer()
+                .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?;
-            assert!(keyring.reseal_deterministic(&aad, &old).await?.is_none());
+            assert!(keyring
+                .sealer()
+                .await
+                .reseal_deterministic(&aad, &old)
+                .await?
+                .is_none());
 
             let rotation = admin
                 .promote(admin.rotate(Purpose::Deterministic).await?)
                 .await?;
             let resealed = keyring
+                .sealer()
+                .await
                 .reseal_deterministic(&aad, &old)
                 .await?
                 .ok_or("a value under the previous version is re-sealed")?;
@@ -724,6 +969,8 @@ mod tests {
             assert_eq!(
                 resealed.value,
                 keyring
+                    .sealer()
+                    .await
                     .encrypt_deterministic(&aad, &ALICE.to_string())
                     .await?
             );

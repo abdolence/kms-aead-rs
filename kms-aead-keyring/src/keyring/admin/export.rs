@@ -18,6 +18,7 @@ use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringRe
 use crate::purpose::unreserved;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
+use crate::sweep::SealMarker;
 use crate::{Interop, KeyId, KeyVersionState, KeyringAdmin, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
@@ -62,8 +63,9 @@ pub struct EncryptedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
     key_ids: Vec<KeyId>,
+    seal_marker: SealMarker,
     /// Tags the bytes with the encoding of the export that made them; holds no `E`.
-    marker: PhantomData<E>,
+    encoding: PhantomData<E>,
 }
 
 impl<E: KeysetEncoding> EncryptedKeyset<E> {
@@ -80,6 +82,14 @@ impl<E: KeysetEncoding> EncryptedKeyset<E> {
     /// The key ids of the versions in the keyset, in ascending order.
     pub fn key_ids(&self) -> &[KeyId] {
         &self.key_ids
+    }
+
+    /// The seal marker of the record the keyset was exported from. The primary of a `Readable`
+    /// keyset is that record's active version of the purpose, so a statement that seals values
+    /// under the keyset, such as a sweep's `AEAD.ENCRYPT` in BigQuery, stores this marker beside
+    /// them, as a write stores the marker of its [`Sealer`](crate::Sealer)'s record.
+    pub fn seal_marker(&self) -> SealMarker {
+        self.seal_marker
     }
 
     /// Tink's key URI of the KMS key that encrypts the keyset, such as
@@ -111,6 +121,7 @@ impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
             .field("encoding", &E::INTEROP)
             .field("key_uri", &self.key_uri)
             .field("key_ids", &self.key_ids)
+            .field("seal_marker", &self.seal_marker)
             .finish_non_exhaustive()
     }
 }
@@ -236,7 +247,8 @@ where
                 bytes,
                 key_uri,
                 key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
-                marker: PhantomData,
+                seal_marker: record.seal_marker(),
+                encoding: PhantomData,
             })
         })
         .await
@@ -426,7 +438,8 @@ mod tests {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
             key_ids: vec![KeyId::new(1)],
-            marker: PhantomData,
+            seal_marker: SealMarker::of_epoch(1),
+            encoding: PhantomData,
         };
 
         let debug = format!("{keyset:?}");
@@ -463,6 +476,10 @@ mod tests {
             *keyset.value(),
             keyset_of(exporter.keyring(), &provider, 2, &[2]).await?
         );
+        assert_eq!(
+            exported.seal_marker(),
+            administrator.keyring().record().seal_marker()
+        );
         Ok(())
     }
 
@@ -478,6 +495,8 @@ mod tests {
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         keyring
+            .sealer()
+            .await
             .encrypt(&aad, &"alice@example.com".to_string())
             .await?;
         admin
