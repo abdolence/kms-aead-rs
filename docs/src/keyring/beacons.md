@@ -32,8 +32,9 @@ one field never matches a beacon of another.
 ## Usage
 
 A keyring with beacon versions names their algorithm in its `KeyringAlgorithms`: HMAC-SHA256, the
-one `BeaconAlgorithm` has. `beacon` computes the beacon of a value under the active beacon version, and
-`beacon_probes` the beacons of a value under every beacon version a lookup matches:
+one `BeaconAlgorithm` has. A sealer's `beacon` computes the beacon of a value under the active
+beacon version, in the same write as the field's value, and `Keyring::beacon_probes` the beacons of
+a value under every beacon version a lookup matches:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -90,11 +91,12 @@ let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = regi
     .await?;
 let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 
-// On every write: the field and its beacon
+// On every write: the field and its beacon, through one sealer
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let email = Email::new("Alice@Example.com");
-let encrypted: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &email).await?;
-let beacon: Beacon<Email> = keyring.beacon(&EMAIL, &email).await?;
+let sealer = keyring.sealer().await;
+let encrypted: Encrypted<Email, Randomized> = sealer.encrypt(&aad, &email).await?;
+let beacon: Beacon<Email> = sealer.beacon(&EMAIL, &email).await?;
 
 // A lookup: the probes of the value looked for, then a decryption of each matching row
 let probes: Vec<Beacon<Email>> = keyring
@@ -159,14 +161,13 @@ is re-indexed:
 2. after the wait, `promote` it. Writes compute beacons under it from each process's next refresh;
 3. lookups use `beacon_probes` throughout: one probe per pending, active or decrypt-only beacon
    version, compromised ones included, newest first;
-4. a re-index sweep computes each row's beacon again under the active version, and writes the
-   row's `SealMarker` with the key ids of its values and beacons, see
-   [Sweeps](../operations.md#sweeps). `SealMarker::beacon` is the oldest beacon version among the
-   row's beacons, so the rows still to visit are those whose `seal.beacon` is below the new
-   version's key id;
+4. the promotion moved the keyring's seal epoch on, so every row written before it has a
+   `SealMarker` below the current one, and a re-index sweep visits them, see
+   [Sweeps](../operations.md#sweeps). It computes each row's beacon again under the active version
+   of its sealer and writes the sealer's marker; a row without a beacon gets the marker alone;
 5. once the sweep reports no failure and that query returns nothing, `retire` the old version, and
    its probe drops out of every lookup.
 
-`beacon.key_id()` reads the key id of a stored beacon, for the marker. Beacon
-versions are rotated by policy and on compromise only: each one adds a probe to every lookup until
-the re-index is done.
+`beacon.key_id()` reads the key id of a stored beacon, so that the sweep recomputes only the beacons
+under an older version. Beacon versions are rotated by policy and on compromise only: each one adds
+a probe to every lookup until the re-index is done.

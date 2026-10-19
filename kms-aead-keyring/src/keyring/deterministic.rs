@@ -1,5 +1,5 @@
-//! The deterministic calls of [`Keyring`], which run AES-SIV and so need the `deterministic`
-//! feature.
+//! The deterministic calls of [`Sealer`] and [`Keyring`], which run AES-SIV and so need the
+//! `deterministic` feature.
 
 use std::cmp::Reverse;
 
@@ -12,11 +12,12 @@ use kms_aead::{
 };
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
+use crate::record_cache::VersionLookup;
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{
     Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
-    Purpose, Resealed,
+    Purpose, Resealed, Sealer,
 };
 
 /// Deterministic fields: equal plaintexts under one version give equal values, so that a data
@@ -29,19 +30,19 @@ use crate::{
 /// as a status or a country, whose values the frequencies give away. A value opens in any row of
 /// the same kind and field (see [`DeterministicAad`]), so a deterministic field never decides
 /// identity or authorisation on its own.
-impl<S, P, B> Keyring<S, P, B>
+impl<S, P, B> Sealer<'_, S, P, B>
 where
     S: KeyringStore,
     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
     B: AeadBackend,
 {
-    /// Seals `value` with `aad` under the active deterministic version: the same `value` and
-    /// `aad` give the same bytes until that version is rotated. The column it goes into leaks
+    /// Seals `value` with `aad` under the record's active deterministic version: the same `value`
+    /// and `aad` give the same bytes until that version is rotated. The column it goes into leaks
     /// equality and frequency; see the leaks above.
     ///
     /// # Errors
     ///
-    /// [`KeyringError::NoActiveVersion`] when the keyring has no deterministic version, or lost
+    /// [`KeyringError::NoActiveVersion`] when the record has no deterministic version, or lost
     /// it to a `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`]
     /// when sealing breaks the [`Interop`](crate::Interop) requirement `aad` carries;
     /// [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the value does not encode; and
@@ -52,17 +53,19 @@ where
         aad: &DeterministicAad,
         value: &T,
     ) -> KeyringResult<Encrypted<T, Deterministic>> {
-        let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
+        let keyring = self.keyring;
+        let span = spans::encrypt(keyring.id(), Purpose::Deterministic, None);
         spans::in_span(span, async {
-            let record = self.cache.current().await;
-            let (version, encrypted_dek) =
-                record.active_dek(Purpose::Deterministic).ok_or_else(|| {
-                    KeyringError::no_active_version(self.id(), Purpose::Deterministic)
+            let (version, encrypted_dek) = self
+                .record
+                .active_dek(Purpose::Deterministic)
+                .ok_or_else(|| {
+                    KeyringError::no_active_version(keyring.id(), Purpose::Deterministic)
                 })?;
             spans::record_sealing_version(version);
-            self.check_interop(aad.interop, version)?;
-            let (sealed, outcome) = self
-                .seal_cached(&record, version, encrypted_dek, aad, value)
+            keyring.check_interop(aad.interop, version)?;
+            let (sealed, outcome) = keyring
+                .seal_cached(&self.record, version, encrypted_dek, aad, value)
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(sealed)
@@ -70,6 +73,47 @@ where
         .await
     }
 
+    /// `value` sealed again with `aad` under the record's active deterministic version, with the
+    /// trust of the version it was read under, or `None` when it is under that version already,
+    /// by the rule [`reseal`](Self::reseal) follows for randomised values: only a version older
+    /// than the sealer's is sealed again, and a version pending in the sealer's record or missing
+    /// from it fails with [`KeyringError::SealerOutdated`]. Once no value is left under the old
+    /// version, it is retired, and the equality queries of [`Keyring::deterministic_probes`] drop
+    /// its probe.
+    ///
+    /// # Errors
+    ///
+    /// As `reseal`, with the errors of
+    /// [`Keyring::decrypt_deterministic_with_trust`] and
+    /// [`encrypt_deterministic`](Self::encrypt_deterministic).
+    pub async fn reseal_deterministic<T: Plaintext>(
+        &self,
+        aad: &DeterministicAad,
+        value: &Encrypted<T, Deterministic>,
+    ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
+        let key_id = Purpose::Deterministic.check(value.key_id())?;
+        if self.is_current(key_id).await? {
+            return Ok(None);
+        }
+        let decrypted = self
+            .keyring
+            .decrypt_deterministic_with_trust(aad, value)
+            .await?;
+        Ok(Some(Resealed {
+            value: self.encrypt_deterministic(aad, &decrypted.value).await?,
+            trust: decrypted.trust,
+        }))
+    }
+}
+
+/// The reads and probes of deterministic fields; see [`Sealer::encrypt_deterministic`] for what
+/// a deterministic column leaks.
+impl<S, P, B> Keyring<S, P, B>
+where
+    S: KeyringStore,
+    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    B: AeadBackend,
+{
     /// Opens `value` with `aad`, under the version it names, applying the
     /// [`compromised_reads`](crate::KeyringOptions::compromised_reads) policy.
     ///
@@ -86,7 +130,7 @@ where
         spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
-                let (record, reload) = self.cache.find(key_id).await;
+                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 self.apply_read_policy(version, compromise)?;
@@ -122,7 +166,7 @@ where
         spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
-                let (record, reload) = self.cache.find(key_id).await;
+                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                 let cipher = self.deterministic_cipher(version)?;
@@ -148,36 +192,6 @@ where
             },
         )
         .await
-    }
-
-    /// `value` sealed again with `aad` under the active deterministic version, with the trust of
-    /// the version it was read under, or `None` when it is under the active version already, or
-    /// a newer one, as [`reseal`](Self::reseal) does for randomised values. Once no value is left
-    /// under the old version, it is retired, and the equality queries of
-    /// [`deterministic_probes`](Self::deterministic_probes) drop its probe.
-    ///
-    /// # Errors
-    ///
-    /// As `reseal`, with the errors of
-    /// [`decrypt_deterministic_with_trust`](Self::decrypt_deterministic_with_trust) and
-    /// [`encrypt_deterministic`](Self::encrypt_deterministic).
-    pub async fn reseal_deterministic<T: Plaintext>(
-        &self,
-        aad: &DeterministicAad,
-        value: &Encrypted<T, Deterministic>,
-    ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
-        let key_id = Purpose::Deterministic.check(value.key_id())?;
-        if !self
-            .is_behind_active(Purpose::Deterministic, key_id)
-            .await?
-        {
-            return Ok(None);
-        }
-        let decrypted = self.decrypt_deterministic_with_trust(aad, value).await?;
-        Ok(Some(Resealed {
-            value: self.encrypt_deterministic(aad, &decrypted.value).await?,
-            trust: decrypted.trust,
-        }))
     }
 
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
@@ -322,17 +336,23 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let alice = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
 
         assert_eq!(
             keyring
+                .sealer()
+                .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?,
             alice
         );
         assert_ne!(
             keyring
+                .sealer()
+                .await
                 .encrypt_deterministic(&aad, &"bob@example.com".to_string())
                 .await?,
             alice
@@ -350,6 +370,8 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         admin
@@ -370,6 +392,8 @@ mod tests {
         assert_eq!(
             probes[1],
             keyring
+                .sealer()
+                .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?
         );
@@ -450,6 +474,8 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         admin.mark_compromised(first.key_id(), None).await?;
@@ -485,6 +511,8 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let value = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         let key_id = value.key_id();
@@ -510,9 +538,13 @@ mod tests {
         let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
         let keyring = admin.keyring();
         let deterministic = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&EMAIL.deterministic_aad(), &ALICE.to_string())
             .await?;
         let randomized = keyring
+            .sealer()
+            .await
             .encrypt(&email_of("42")?, &ALICE.to_string())
             .await?;
 

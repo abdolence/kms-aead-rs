@@ -6,7 +6,8 @@ use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::{Bare, Randomized};
 use kms_aead::{
-    AeadAlgorithm, AeadCipher, DeterministicAlgorithm, KekProvider, KmsAeadResult, Plaintext,
+    AeadAlgorithm, AeadCipher, BeaconAlgorithm, DeterministicAlgorithm, KekProvider, KmsAeadResult,
+    Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde_json::Value;
@@ -14,6 +15,7 @@ use serde_json::Value;
 use super::*;
 use crate::errors::{RecordConflictError, RecordRegressedError, RegressionRule};
 use crate::store::KeyringStore;
+use crate::sweep::SealMarker;
 use crate::test_support::{
     email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
     TestStore, EMAIL, TENANT,
@@ -82,7 +84,12 @@ fn relabelled<T>(
 async fn a_value_is_the_key_id_prefix_and_the_aead_cipher_output() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let bytes = value.value();
     assert_eq!(bytes[..5], [0x01, 0, 0, 0, 1]);
     assert_eq!(bytes.len(), 5 + 12 + ALICE.len() + 16);
@@ -109,17 +116,21 @@ async fn values_round_trip_through_their_plaintext_types() -> TestResult {
     let keyring = &fixture.keyring;
     let aad = email_of("42")?;
 
-    let text = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let text = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(keyring.decrypt(&aad, &text).await?, ALICE);
 
     let bytes = vec![0u8, 0xFF, 0x07];
-    let sealed = keyring.encrypt(&aad, &bytes).await?;
+    let sealed = keyring.sealer().await.encrypt(&aad, &bytes).await?;
     assert_eq!(keyring.decrypt(&aad, &sealed).await?, bytes);
 
     #[cfg(feature = "serde-json")]
     {
         let json = crate::Json(vec![("plan".to_string(), 3u32)]);
-        let sealed = keyring.encrypt(&aad, &json).await?;
+        let sealed = keyring.sealer().await.encrypt(&aad, &json).await?;
         assert_eq!(keyring.decrypt(&aad, &sealed).await?, json);
     }
     Ok(())
@@ -147,7 +158,8 @@ async fn a_newtype_field_is_sealed_as_its_string() -> TestResult {
     let aad = email_of("42")?;
     let alice = Email(ALICE.to_string());
 
-    let sealed: Encrypted<Email, Randomized> = fixture.keyring.encrypt(&aad, &alice).await?;
+    let sealed: Encrypted<Email, Randomized> =
+        fixture.keyring.sealer().await.encrypt(&aad, &alice).await?;
     let as_string = Encrypted::<String, Randomized>::try_from(sealed.value().to_vec())?;
 
     assert_eq!(fixture.keyring.decrypt(&aad, &sealed).await?, alice);
@@ -160,6 +172,8 @@ async fn a_value_opens_only_with_its_aad() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let value = keyring
+        .sealer()
+        .await
         .encrypt(&email_of("42")?, &ALICE.to_string())
         .await?;
 
@@ -184,11 +198,19 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
     let keyring = &fixture.keyring;
     let admin = &fixture.admin;
     let aad = email_of("42")?;
-    let first = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let first = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     admin
         .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
-    let second = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let second = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(
         (first.key_id(), second.key_id()),
         (KeyId::new(1), KeyId::new(2))
@@ -210,7 +232,12 @@ async fn a_relabelled_prefix_fails_under_the_other_version() -> TestResult {
 async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let store_calls = || {
         (
             fixture.store.calls.loads.load(Ordering::SeqCst),
@@ -290,7 +317,12 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
         .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
     let aad = Arc::new(email_of("42")?);
-    let value = admin.keyring().encrypt(&aad, &ALICE.to_string()).await?;
+    let value = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
 
     let mut reads = tokio::task::JoinSet::new();
     for _ in 0..16 {
@@ -308,7 +340,15 @@ async fn unknown_key_id_reloads_once_under_concurrency() -> TestResult {
 async fn reload_is_rate_limited() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    let unknown = relabelled(&fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?, 9)?;
+    let unknown = relabelled(
+        &fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?,
+        9,
+    )?;
 
     for _ in 0..3 {
         assert!(matches!(
@@ -323,6 +363,28 @@ async fn reload_is_rate_limited() -> TestResult {
     Ok(())
 }
 
+#[tokio::test]
+async fn reseal_of_a_key_id_the_record_lacks_reloads_and_fails() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let unknown = relabelled(
+        &fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?,
+        9,
+    )?;
+
+    assert!(matches!(
+        fixture.keyring.sealer().await.reseal(&aad, &unknown).await,
+        Err(KeyringError::KeyVersionUnknown(error)) if error.key_id == KeyId::new(9)
+    ));
+    assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
+    Ok(())
+}
+
 #[tokio::test(start_paused = true)]
 async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
@@ -332,7 +394,12 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
         .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
 
-    let cached = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let cached = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(cached.key_id(), KeyId::new(1));
     assert_eq!(
         (
@@ -343,9 +410,19 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
     );
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
-    let refreshed = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let refreshed = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(refreshed.key_id(), KeyId::new(2));
-    fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(
         (
             fixture.store.calls.loads.load(Ordering::SeqCst),
@@ -355,7 +432,12 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
     );
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
-    let unchanged = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let unchanged = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(unchanged.key_id(), KeyId::new(2));
     assert_eq!(
         (
@@ -371,12 +453,23 @@ async fn record_ttl_revalidates_with_a_conditional_read() -> TestResult {
 async fn a_missing_record_keeps_the_cached_one() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     fixture.store.calls.missing.store(true, Ordering::SeqCst);
 
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     assert_eq!(
-        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        (fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?)
+            .key_id(),
         KeyId::new(1)
     );
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
@@ -405,7 +498,12 @@ async fn a_record_ttl_of_duration_max_opens() -> TestResult {
         .with_reload_min_interval(Duration::MAX);
     let fixture = Fixture::new(options).await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let unknown = relabelled(&value, 9)?;
     for _ in 0..2 {
         assert!(matches!(
@@ -481,7 +579,12 @@ async fn mark_compromised_evicts_the_dek() -> TestResult {
     )
     .await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     fixture.keyring.decrypt(&aad, &value).await?;
     assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 1);
 
@@ -540,7 +643,12 @@ async fn a_key_decrypted_under_a_superseded_record_is_evicted() -> TestResult {
 async fn block_refuses_before_decrypting() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     fixture.admin.mark_compromised(KeyId::new(1), None).await?;
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
@@ -612,7 +720,12 @@ async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> T
     )
     .await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     fixture.admin.mark_compromised(KeyId::new(1), None).await?;
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
 
@@ -631,7 +744,12 @@ async fn decrypt_with_trust_decrypts_a_compromised_version_past_the_cache() -> T
         "the reads above cached nothing"
     );
 
-    let trusted = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let trusted = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let status = fixture.keyring.decrypt_with_trust(&aad, &trusted).await?;
     assert_eq!(
         (status.key_id, status.trust),
@@ -685,7 +803,7 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
         assert!(record.active(Purpose::Randomized).is_none());
     }
     assert!(matches!(
-        fixture.keyring.encrypt(&aad, &ALICE.to_string()).await,
+        fixture.keyring.sealer().await.encrypt(&aad, &ALICE.to_string()).await,
         Err(KeyringError::NoActiveVersion(error)) if error.purpose == Purpose::Randomized
     ));
     assert!(matches!(
@@ -700,13 +818,24 @@ async fn mark_compromised_writes_the_flag_when_the_encryption_fails() -> TestRes
         .store(false, Ordering::SeqCst);
     let staged = fixture.admin.rotate(Purpose::Randomized).await?;
     assert!(matches!(
-        fixture.keyring.encrypt(&aad, &ALICE.to_string()).await,
+        fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await,
         Err(KeyringError::NoActiveVersion(_))
     ));
     let rotation = fixture.admin.promote(staged).await?;
     assert_eq!((rotation.previous, rotation.current), (None, KeyId::new(2)));
     assert_eq!(
-        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        (fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?)
+            .key_id(),
         KeyId::new(2)
     );
     Ok(())
@@ -718,7 +847,11 @@ async fn retired_and_destroyed_versions_refuse_reads() -> TestResult {
     let keyring = &fixture.keyring;
     let admin = &fixture.admin;
     let aad = email_of("42")?;
-    let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let old = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     admin
         .promote(admin.rotate(Purpose::Randomized).await?)
         .await?;
@@ -760,7 +893,11 @@ async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_w
     let keyring = &fixture.keyring;
     let admin = &fixture.admin;
     let aad = email_of("42")?;
-    let sealed = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let sealed = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let promoted = admin.rotate(Purpose::Randomized).await?;
     admin.promote(promoted).await?;
     admin.rotate(Purpose::Randomized).await?;
@@ -777,7 +914,11 @@ async fn dangerously_destroy_all_versions_leaves_nothing_to_encrypt_or_decrypt_w
             .all(|version| version.state() == KeyVersionState::Destroyed));
     }
     assert!(matches!(
-        keyring.encrypt(&aad, &ALICE.to_string()).await,
+        keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await,
         Err(KeyringError::NoActiveVersion(_))
     ));
     assert!(matches!(
@@ -840,7 +981,11 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
     let keyring = &fixture.keyring;
     let admin = &fixture.admin;
     let aad = email_of("42")?;
-    let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let old = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     admin.rotate(Purpose::Randomized).await?;
     let previous_encrypted_deks = keyring.record().encrypted_deks();
     let decryptions = fixture.provider.calls.decryptions.load(Ordering::SeqCst);
@@ -862,12 +1007,355 @@ async fn reencrypt_deks_encrypts_every_version_again_and_values_still_open() -> 
 }
 
 #[tokio::test]
+async fn the_seal_epoch_moves_on_once_per_write_that_activates_a_version() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let (admin, keyring) = (&fixture.admin, &fixture.keyring);
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(1));
+
+    let second = admin.rotate(Purpose::Randomized).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(1));
+    admin.promote(second).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(2));
+    let third = admin
+        .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
+        .await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(2));
+    admin.promote(third).await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(3));
+
+    admin.mark_compromised(KeyId::new(1), None).await?;
+    admin.retire(second).await?;
+    admin.reinstate(second).await?;
+    admin.retire(second).await?;
+    admin.destroy(second).await?;
+    admin.reencrypt_deks().await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(3));
+
+    let replacement = admin
+        .mark_compromised(third, None)
+        .await?
+        .ok_or("the compromised active version is replaced")?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(4));
+    fixture
+        .provider
+        .calls
+        .fail_encryptions
+        .store(true, Ordering::SeqCst);
+    assert_eq!(
+        admin.mark_compromised(replacement.current, None).await?,
+        None
+    );
+    fixture
+        .provider
+        .calls
+        .fail_encryptions
+        .store(false, Ordering::SeqCst);
+    admin
+        .destroy(admin.rotate(Purpose::Randomized).await?)
+        .await?;
+    admin.dangerously_destroy_all_versions().await?;
+    assert_eq!(keyring.record().seal_marker(), SealMarker::of_epoch(4));
+    assert_eq!(
+        fixture
+            .other_process()
+            .await?
+            .keyring()
+            .record()
+            .seal_marker(),
+        SealMarker::of_epoch(4)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_promotions_move_the_seal_epoch_on_once_each() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let options = KeyringRegistryOptions::new().with_watch(false);
+    let creator = TestRegistry::new(memory.clone(), options.clone())?
+        .create(
+            provider.clone(),
+            TENANT,
+            KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+        )
+        .await?;
+    let randomized = creator.rotate(Purpose::Randomized).await?;
+    let beacon = creator.rotate(Purpose::Beacon).await?;
+    // Two processes whose loads take long enough that both writes read the same record, so that
+    // one of them loses its compare-and-swap and applies its promotion again on the other's.
+    let stores = [
+        TestStore::new(&memory, Duration::from_millis(50)),
+        TestStore::new(&memory, Duration::from_millis(50)),
+    ];
+    let first = TestRegistry::new(stores[0].clone(), options.clone())?
+        .admin(provider.clone(), TENANT)
+        .await?;
+    let second = TestRegistry::new(stores[1].clone(), options)?
+        .admin(provider, TENANT)
+        .await?;
+
+    let (first_rotation, second_rotation) =
+        tokio::join!(first.promote(randomized), second.promote(beacon));
+
+    first_rotation?;
+    second_rotation?;
+    let loads: usize = stores
+        .iter()
+        .map(|store| store.calls.loads.load(Ordering::SeqCst))
+        .sum();
+    assert_eq!(loads, 5, "two opens, two writes and one retry");
+    let record = memory
+        .load(&TENANT)
+        .await?
+        .ok_or("the record is gone")?
+        .record;
+    assert_eq!(record.seal_marker(), SealMarker::of_epoch(3));
+    let mut starts = Vec::new();
+    for (replaced, promoted) in [
+        (Purpose::Randomized.first_key_id(), randomized),
+        (Purpose::Beacon.first_key_id(), beacon),
+    ] {
+        let range = record
+            .version(promoted)
+            .and_then(KeyVersion::seal_range)
+            .ok_or("a promoted version has a range")?;
+        assert_eq!(
+            record
+                .version(replaced)
+                .and_then(KeyVersion::seal_range)
+                .and_then(|replaced| replaced.end()),
+            Some(range.start()),
+            "the replaced version's range ends where the promoted one's starts"
+        );
+        starts.push(range.start());
+    }
+    starts.sort();
+    assert_eq!(starts, [SealMarker::of_epoch(2), SealMarker::of_epoch(3)]);
+    Ok(())
+}
+
+/// A write that reads a value before it seals: the read revalidates the cache, whose TTL is zero,
+/// after another process promoted a version of every purpose.
+#[tokio::test]
+async fn a_sealer_seals_every_field_under_the_record_its_marker_names() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let options = KeyringRegistryOptions::new().with_watch(false);
+    let algorithms = KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256);
+    #[cfg(feature = "deterministic")]
+    let algorithms = algorithms.with_deterministic(DeterministicAlgorithm::Aes256Siv);
+    let admin = TestRegistry::new(memory.clone(), options.clone())?
+        .create(provider.clone(), TENANT, algorithms)
+        .await?;
+    let store = TestStore::new(&memory, Duration::ZERO);
+    let keyring = TestRegistry::new(store.clone(), options.with_record_ttl(Duration::ZERO))?
+        .open(provider, TENANT)
+        .await?;
+    let aad = email_of("42")?;
+    let alice = ALICE.to_string();
+    let stored = keyring.sealer().await.encrypt(&aad, &alice).await?;
+    let mut staged = Vec::new();
+    for purpose in Purpose::ALL {
+        if admin.keyring().record().active(purpose).is_some() {
+            staged.push(admin.rotate(purpose).await?);
+        }
+    }
+
+    let sealer = keyring.sealer().await;
+    for key_id in staged {
+        admin.promote(key_id).await?;
+    }
+    let revalidations = store.calls.revalidations.load(Ordering::SeqCst);
+    assert_eq!(keyring.decrypt(&aad, &stored).await?, ALICE);
+    assert!(store.calls.revalidations.load(Ordering::SeqCst) > revalidations);
+    let sealed = [
+        (
+            Purpose::Randomized,
+            sealer.encrypt(&aad, &alice).await?.key_id(),
+        ),
+        (
+            Purpose::Beacon,
+            sealer.beacon(&EMAIL, &alice).await?.key_id(),
+        ),
+        #[cfg(feature = "deterministic")]
+        (
+            Purpose::Deterministic,
+            sealer
+                .encrypt_deterministic(&EMAIL.deterministic_aad(), &alice)
+                .await?
+                .key_id(),
+        ),
+    ];
+
+    let marker = sealer.record().seal_marker();
+    let current = keyring.record();
+    assert!(
+        current.seal_marker() > marker,
+        "the cache moved on mid-write"
+    );
+    for (purpose, key_id) in sealed {
+        assert_eq!(
+            sealer.record().active(purpose).map(KeyVersion::id),
+            Some(key_id),
+            "the {purpose} field is under the sealer's record"
+        );
+        let range = current
+            .version(key_id)
+            .and_then(KeyVersion::seal_range)
+            .ok_or("a version sealed under has a range")?;
+        assert!(range.contains(marker), "the range of the {purpose} version");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_sealer_older_than_a_value_refuses_to_reseal_it_under_its_own_versions() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let admin = fixture.other_process().await?;
+    let aad = email_of("42")?;
+    let alice = ALICE.to_string();
+    let stale = fixture.keyring.sealer().await;
+    let compromised = stale
+        .record()
+        .active(Purpose::Randomized)
+        .map(KeyVersion::id)
+        .ok_or("a new keyring has an active randomised version")?;
+    let old = stale.encrypt(&aad, &alice).await?;
+    let replacement = admin
+        .mark_compromised(compromised, None)
+        .await?
+        .ok_or("the compromised active version is replaced")?
+        .current;
+    let newer = admin.keyring().sealer().await.encrypt(&aad, &alice).await?;
+
+    let refused = stale.reseal(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == replacement
+        ),
+        "a re-seal back under the compromised version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
+    );
+    let sealer = fixture.keyring.sealer().await;
+    assert!(sealer.reseal(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal(&aad, &old)
+        .await?
+        .ok_or("a value under the compromised version is re-sealed")?;
+    assert_eq!(resealed.value.key_id(), replacement);
+    assert!(matches!(resealed.trust, KeyTrust::Compromised(_)));
+    Ok(())
+}
+
+#[tokio::test]
+async fn reseal_under_a_version_the_cache_holds_as_pending_reloads_the_cache() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let aad = email_of("42")?;
+    let alice = ALICE.to_string();
+    let old = fixture.keyring.sealer().await.encrypt(&aad, &alice).await?;
+    let pending = fixture.admin.rotate(Purpose::Randomized).await?;
+    let stale = fixture.keyring.sealer().await;
+    let admin = fixture.other_process().await?;
+    admin.promote(pending).await?;
+    let newer = admin.keyring().sealer().await.encrypt(&aad, &alice).await?;
+    let revalidations = fixture.store.calls.revalidations.load(Ordering::SeqCst);
+
+    let refused = stale.reseal(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == pending
+        ),
+        "a re-seal back under the previous version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
+    );
+    let sealer = fixture.keyring.sealer().await;
+    assert!(sealer.reseal(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal(&aad, &old)
+        .await?
+        .ok_or("a value under the previous version is re-sealed")?;
+    assert_eq!(resealed.value.key_id(), pending);
+    assert!(matches!(
+        stale.reseal(&aad, &newer).await,
+        Err(KeyringError::SealerOutdated(_))
+    ));
+    assert_eq!(
+        fixture.store.calls.revalidations.load(Ordering::SeqCst),
+        revalidations + 1
+    );
+    Ok(())
+}
+
+#[cfg(feature = "deterministic")]
+#[tokio::test]
+async fn a_sealer_that_holds_a_values_version_as_pending_refuses_to_reseal_it() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let options = KeyringRegistryOptions::new().with_watch(false);
+    let admin = TestRegistry::new(memory.clone(), options.clone())?
+        .create(
+            provider.clone(),
+            TENANT,
+            KeyringAlgorithms::new().with_deterministic(DeterministicAlgorithm::Aes256Siv),
+        )
+        .await?;
+    let aad = EMAIL.deterministic_aad();
+    let alice = ALICE.to_string();
+    let old = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt_deterministic(&aad, &alice)
+        .await?;
+    let pending = admin.rotate(Purpose::Deterministic).await?;
+    let keyring = TestRegistry::new(memory, options)?
+        .open(provider, TENANT)
+        .await?;
+    let stale = keyring.sealer().await;
+    admin.promote(pending).await?;
+    let newer = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt_deterministic(&aad, &alice)
+        .await?;
+
+    let refused = stale.reseal_deterministic(&aad, &newer).await;
+
+    assert!(
+        matches!(
+            &refused,
+            Err(KeyringError::SealerOutdated(error)) if error.key_id == pending
+        ),
+        "a re-seal back under the previous version: {:?}",
+        refused.map(|resealed| resealed.map(|resealed| resealed.value.key_id()))
+    );
+    let sealer = keyring.sealer().await;
+    assert!(sealer.reseal_deterministic(&aad, &newer).await?.is_none());
+    let resealed = sealer
+        .reseal_deterministic(&aad, &old)
+        .await?
+        .ok_or("a value under the previous version is re-sealed")?;
+    assert_eq!(resealed.value, newer);
+    assert_eq!(resealed.trust, KeyTrust::Trusted);
+    Ok(())
+}
+
+#[tokio::test]
 async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
     let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
     let keyring = &fixture.keyring;
     let admin = &fixture.admin;
     let aad = email_of("42")?;
-    let old = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let old = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
 
     let staged = admin.change_algorithm(chacha).await?;
@@ -882,7 +1370,11 @@ async fn change_algorithm_rotates_to_the_new_algorithm() -> TestResult {
         (chacha, KeyVersionState::Pending)
     );
     admin.promote(staged).await?;
-    let new = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let new = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(new.key_id(), staged);
     assert_eq!(keyring.decrypt(&aad, &new).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &old).await?, ALICE);
@@ -975,6 +1467,8 @@ async fn a_regressed_record_is_refused() -> TestResult {
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     let value = fixture
         .keyring
+        .sealer()
+        .await
         .encrypt(&email_of("42")?, &ALICE.to_string())
         .await?;
     assert_eq!(value.key_id(), KeyId::new(2));
@@ -1002,7 +1496,12 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
     )
     .await?;
     let aad = email_of("42")?;
-    let value = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 1);
 
     fixture
@@ -1012,7 +1511,13 @@ async fn a_refreshed_record_evicts_the_keys_it_withdraws() -> TestResult {
         .await?;
     tokio::time::advance(Duration::from_secs(5 * 60)).await;
     assert_eq!(
-        (fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?).key_id(),
+        (fixture
+            .keyring
+            .sealer()
+            .await
+            .encrypt(&aad, &ALICE.to_string())
+            .await?)
+            .key_id(),
         KeyId::new(2)
     );
     assert_eq!(fixture.provider.calls.decryptions.load(Ordering::SeqCst), 2);
@@ -1103,12 +1608,20 @@ async fn a_staged_version_decrypts_and_never_encrypts() -> TestResult {
     let version = record.version(staged).ok_or("the staged version is gone")?;
     assert_eq!(version.state(), KeyVersionState::Pending);
     assert_eq!(version.staged_at(), Some(version.created_at()));
-    let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(value.key_id(), first);
 
     let rotation = admin.promote(staged).await?;
     assert_eq!((rotation.previous, rotation.current), (Some(first), staged));
-    let promoted = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let promoted = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(promoted.key_id(), staged);
     assert_eq!(keyring.decrypt(&aad, &promoted).await?, ALICE);
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
@@ -1125,7 +1638,12 @@ async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestRes
 
     let staged = admin.rotate(Purpose::Randomized).await?;
     tokio::time::advance(KeyringRegistryOptions::DEFAULT_RECORD_TTL).await;
-    let sealed_before = fixture.keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let sealed_before = fixture
+        .keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(sealed_before.key_id(), KeyId::new(1));
     assert_eq!(
         fixture
@@ -1141,7 +1659,12 @@ async fn a_promoted_version_opens_on_an_instance_that_saw_it_staged() -> TestRes
     );
 
     admin.promote(staged).await?;
-    let promoted = admin.keyring().encrypt(&aad, &ALICE.to_string()).await?;
+    let promoted = admin
+        .keyring()
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(promoted.key_id(), staged);
 
     assert_eq!(fixture.keyring.decrypt(&aad, &promoted).await?, ALICE);
@@ -1221,12 +1744,18 @@ async fn interop_bigquery_seals_under_its_algorithms_and_a_cloud_kms_kek() -> Te
     let admin = bigquery_keyring(TestProvider::cloud_kms()?).await?;
     let keyring = admin.keyring();
     let aad = BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?);
-    let value = keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    let value = keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, ALICE);
     #[cfg(feature = "deterministic")]
     {
         let aad = BIGQUERY_EMAIL.deterministic_aad();
         let value = keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         assert_eq!(keyring.decrypt_deterministic(&aad, &value).await?, ALICE);
@@ -1243,12 +1772,16 @@ async fn interop_bigquery_refuses_a_non_gcm_version() -> TestResult {
 
     assert!(matches!(
         keyring
+            .sealer()
+            .await
             .encrypt(&BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?), &ALICE.to_string())
             .await,
         Err(KeyringError::Interop(error))
             if error.requirement == InteropRequirement::Algorithm(chacha)
     ));
     keyring
+        .sealer()
+        .await
         .encrypt(&email_of("42")?, &ALICE.to_string())
         .await?;
     Ok(())
@@ -1265,19 +1798,23 @@ async fn interop_tink_seals_under_the_algorithms_and_keks_every_tink_reads() -> 
     let chacha = KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305);
 
     assert!(matches!(
-        local.encrypt(&aad, &ALICE.to_string()).await,
+        local.sealer().await.encrypt(&aad, &ALICE.to_string()).await,
         Err(KeyringError::Interop(error))
             if error.requirement == InteropRequirement::Kek(KekProvider::Local)
     ));
     cloud_kms
         .promote(cloud_kms.change_algorithm(aes_128_gcm).await?)
         .await?;
-    cloud_kms_keyring.encrypt(&aad, &ALICE.to_string()).await?;
+    cloud_kms_keyring
+        .sealer()
+        .await
+        .encrypt(&aad, &ALICE.to_string())
+        .await?;
     cloud_kms
         .promote(cloud_kms.change_algorithm(chacha).await?)
         .await?;
     assert!(matches!(
-        cloud_kms_keyring.encrypt(&aad, &ALICE.to_string()).await,
+        cloud_kms_keyring.sealer().await.encrypt(&aad, &ALICE.to_string()).await,
         Err(KeyringError::Interop(error))
             if error.requirement == InteropRequirement::Algorithm(chacha)
     ));
@@ -1295,7 +1832,7 @@ async fn interop_tink_checks_a_custom_aad_too() -> TestResult {
     admin.promote(admin.change_algorithm(chacha).await?).await?;
 
     assert!(matches!(
-        keyring.encrypt(&aad, &ALICE.to_string()).await,
+        keyring.sealer().await.encrypt(&aad, &ALICE.to_string()).await,
         Err(KeyringError::Interop(error))
             if error.requirement == InteropRequirement::Algorithm(chacha)
     ));
@@ -1309,6 +1846,8 @@ async fn interop_bigquery_refuses_a_non_gcp_kek() -> TestResult {
 
     assert!(matches!(
         keyring
+            .sealer()
+            .await
             .encrypt(&BIGQUERY_EMAIL.aad(&EntityId::try_from("42")?), &ALICE.to_string())
             .await,
         Err(KeyringError::Interop(error))
@@ -1317,6 +1856,8 @@ async fn interop_bigquery_refuses_a_non_gcp_kek() -> TestResult {
     #[cfg(feature = "deterministic")]
     assert!(matches!(
         keyring
+            .sealer()
+            .await
             .encrypt_deterministic(&BIGQUERY_EMAIL.deterministic_aad(), &ALICE.to_string())
             .await,
         Err(KeyringError::Interop(error))

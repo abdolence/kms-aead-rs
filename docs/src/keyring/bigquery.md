@@ -47,7 +47,7 @@ decrypts with Cloud KMS only. A field BigQuery also decrypts is declared with
 - a deterministic value is sealed under an AES-SIV version;
 - the KEK is in Google Cloud KMS.
 
-The check runs on `encrypt` and `encrypt_deterministic`, before sealing, and fails with
+The check runs on a sealer's `encrypt` and `encrypt_deterministic`, before sealing, and fails with
 `KeyringError::Interop` naming the first requirement broken. Values already written always
 decrypt: only sealing checks. So a `change_algorithm` away from AES-256-GCM, or a keyring on
 another KMS, fails the next write of the field instead of silently writing values BigQuery
@@ -102,7 +102,8 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-let refused: KeyringResult<Encrypted<Email, Randomized>> = keyring.encrypt(&aad, &alice).await;
+let refused: KeyringResult<Encrypted<Email, Randomized>> =
+    keyring.sealer().await.encrypt(&aad, &alice).await;
 assert!(matches!(
     refused,
     Err(KeyringError::Interop(InteropError {

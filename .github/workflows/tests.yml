@@ -127,9 +127,9 @@ jobs:
       # to the administrative items.
       - name: cargo doc of the keyring
         run: |
-          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
           cargo doc --no-deps -p kms-aead-keyring
-          cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3"
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3"
   # The book's code compiles as doctests only with each crate's docs.rs feature set, which no build
   # row has.
   book:
@@ -143,7 +143,7 @@ jobs:
         with:
           mdbook-version: '0.5.4'
       - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
       - run: cd docs && mdbook build
   # `rust-version` in the workspace's Cargo.toml: each crate's docs.rs feature set builds on it, on
   # dependencies resolved for it.
@@ -157,7 +157,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
       - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export"
+      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -237,7 +237,7 @@ jobs:
           --health-timeout 5s
           --health-retries 15
     env:
-      FEATURES: ring,admin,deterministic,serde,postgres
+      FEATURES: ring,admin,deterministic,serde,postgres,sqlx
       KMS_AEAD_KEYRING_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v7
@@ -353,7 +353,7 @@ jobs:
           - aws-lc,admin
           - rustcrypto,admin
           - ring,admin,deterministic,serde-json
-          - ring,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3
+          - ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -374,7 +374,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
-      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,gcs-tls-roots,s3,bigquery-export
+      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export
       KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
       ABSENT: firestore sqlx tokio-postgres aws-sdk-s3
     steps:

@@ -13,7 +13,7 @@ constant of the type that holds the option:
 | Option | Default | What it does |
 |---|---|---|
 | `record_ttl` | `DEFAULT_RECORD_TTL`, 5 minutes | how long the cached record serves without a store call |
-| `reload_min_interval` | `DEFAULT_RELOAD_MIN_INTERVAL`, 5 seconds | the least time between two store reads that an unknown key id or a change signal causes |
+| `reload_min_interval` | `DEFAULT_RELOAD_MIN_INTERVAL`, 5 seconds | the least time between two store reads that an unknown key id, a re-seal under a pending version or a change signal causes |
 | `watch` | `DEFAULT_WATCH`, `true` | whether to follow the store's change signals, where it has them |
 | `dek_cache` | `None`, a new cache | the cache of decrypted DEKs; a new one has kms-aead's `DekCacheOptions::DEFAULT_TTL` and `DekCacheOptions::DEFAULT_MAX_ENTRIES` |
 | `keyring.cas_retries` | `KeyringOptions::DEFAULT_CAS_RETRIES`, 5 | the conflicts a write of a `KeyringAdmin` retries before `RecordConflict` |
@@ -46,7 +46,9 @@ A `DekCache` may be shared with other keyrings and envelopes.
   `reload_min_interval`. Signals inside the interval collapse into the next one;
 - **Unknown key ids**: a value with a key id the record does not have causes one reload, which
   concurrent misses share, at most once per `reload_min_interval`. Values with random key ids then
-  cost at most one store read per interval;
+  cost at most one store read per interval. A re-seal of a value under a version the record holds
+  as pending reloads the same way, and shares the same interval: another process sealed it, so it
+  saw the version active;
 - **Own writes**: a `KeyringAdmin` call takes the record it wrote. Every `Keyring` of the same
   keyring in the registry shares that cached record, so the process that promotes a version seals
   under it at once.
@@ -79,10 +81,13 @@ is `DecryptOnly`.
 - a record that went missing from the store keeps the cached one in use, with a `WARN`. New
   processes fail at `open` with `RecordMissing`;
 - a refreshed record is taken only if it moves every version forward from the cached one: no
-  version missing, no changed algorithm or creation time, no compromised flag cleared, and no state
-  moved back against the lifecycle, such as a version back to `Pending`. Otherwise the process
-  keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a write of a
-  `KeyringAdmin` return `RecordRegressed` in that case.
+  version missing, no changed algorithm or creation time, no compromised flag cleared, no state
+  moved back against the lifecycle, such as a version back to `Pending`, no seal epoch below
+  the cached one, which would give records sealed under different versions one marker, and no
+  seal range moved back or started or ended at or below the cached epoch, which would leave the
+  records this process sealed under a version outside its range. Otherwise
+  the process keeps its record and logs an `ERROR` naming the first rule broken. `reload` and a
+  write of a `KeyringAdmin` return `RecordRegressed` in that case.
 
 The last rule is the detection of a rewritten or restored record in a running process. A process
 that starts after such a write has no record to compare with and takes it.

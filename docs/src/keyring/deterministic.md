@@ -85,8 +85,10 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
-let first: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
-let second: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
+let first: Encrypted<Email, Deterministic> =
+    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
+let second: Encrypted<Email, Deterministic> =
+    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
 
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
@@ -160,7 +162,8 @@ So an equality query matches against every version that still decrypts, with
 # let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.keyring();
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
-let before: Encrypted<Email, Deterministic> = keyring.encrypt_deterministic(&aad, &alice).await?;
+let before: Encrypted<Email, Deterministic> =
+    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
 admin.promote(staged).await?;

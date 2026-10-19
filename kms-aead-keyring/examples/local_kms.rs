@@ -56,11 +56,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let alice = Email("alice@example.com".to_string());
 
-    let before: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+    let before: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
     println!("staged key version {}", staged.as_u32());
     let rotation: Rotation = admin.promote(staged).await?;
-    let after: Encrypted<Email, Randomized> = keyring.encrypt(&aad, &alice).await?;
+    let after: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
         Some(previous) => println!(

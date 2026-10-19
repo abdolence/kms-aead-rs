@@ -12,6 +12,7 @@ use kms_aead::{
 use rsb_derive::Builder;
 
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, RegressionRule};
+use crate::sweep::{SealMarker, SealRange};
 use crate::{KeyId, Purpose};
 
 #[cfg(feature = "admin")]
@@ -370,6 +371,23 @@ impl KeyVersion {
         self.state_changed_at
     }
 
+    /// The markers of the records that can hold values under this version, or `None` for a
+    /// version that was never active, which no value is sealed under. A record stamped with a
+    /// marker outside the range holds no value under the version, provided every write seals its
+    /// fields and takes its marker from one [`Sealer`](crate::Sealer).
+    ///
+    /// The range of the active version is open-ended, and so is the range of a version flagged
+    /// compromised while it was active and not replaced yet, until the next write that makes a
+    /// version active.
+    pub fn seal_range(&self) -> Option<SealRange> {
+        match &self.state {
+            VersionState::Pending(_) => None,
+            VersionState::Active { seal_start, .. } => Some(SealRange::new(*seal_start, None)),
+            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => Some(kept.seal_range),
+            VersionState::Destroyed { seal_range, .. } => *seal_range,
+        }
+    }
+
     /// When the version was staged, while it is pending: the time from which a promotion waits
     /// out the longest any process may run without a successful refresh of its record.
     pub fn staged_at(&self) -> Option<Timestamp> {
@@ -386,13 +404,13 @@ impl KeyVersion {
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
         match &self.state {
-            VersionState::Pending(encrypted_dek) | VersionState::Active(encrypted_dek) => {
+            VersionState::Pending(encrypted_dek) | VersionState::Active { encrypted_dek, .. } => {
                 Some((encrypted_dek, None))
             }
             VersionState::DecryptOnly(kept) => {
                 Some((&kept.encrypted_dek, kept.compromised.as_ref()))
             }
-            VersionState::Retired(_) | VersionState::Destroyed(_) => None,
+            VersionState::Retired(_) | VersionState::Destroyed { .. } => None,
         }
     }
 }
@@ -404,73 +422,86 @@ impl Debug for KeyVersion {
             .field("algorithm", &self.algorithm)
             .field("state", &self.state())
             .field("compromised", &self.compromised())
+            .field("seal_range", &self.seal_range())
             .field("created_at", &self.created_at)
             .field("state_changed_at", &self.state_changed_at)
             .finish()
     }
 }
 
-/// A state with what it holds, so that a destroyed version without its key, and a pending or
-/// active one without a compromised flag, are the only shapes there are.
+/// A state with what it holds, so that a destroyed version without its key, a pending or active
+/// one without a compromised flag, a pending one without a seal range and an active one with an
+/// open one are the only shapes there are.
 #[derive(Clone)]
 enum VersionState {
     Pending(EncryptedDataEncryptionKey),
-    Active(EncryptedDataEncryptionKey),
+    Active {
+        encrypted_dek: EncryptedDataEncryptionKey,
+        /// The marker of the epoch the version became active at.
+        seal_start: SealMarker,
+    },
     DecryptOnly(RetainedDek),
     Retired(RetainedDek),
-    Destroyed(Option<Compromise>),
+    Destroyed {
+        compromised: Option<Compromise>,
+        /// `None` for a version destroyed while it was pending.
+        seal_range: Option<SealRange>,
+    },
 }
 
 impl VersionState {
     fn kind(&self) -> KeyVersionState {
         match self {
             VersionState::Pending(_) => KeyVersionState::Pending,
-            VersionState::Active(_) => KeyVersionState::Active,
+            VersionState::Active { .. } => KeyVersionState::Active,
             VersionState::DecryptOnly(_) => KeyVersionState::DecryptOnly,
             VersionState::Retired(_) => KeyVersionState::Retired,
-            VersionState::Destroyed(_) => KeyVersionState::Destroyed,
+            VersionState::Destroyed { .. } => KeyVersionState::Destroyed,
         }
     }
 
     fn compromised(&self) -> Option<&Compromise> {
         match self {
-            VersionState::Pending(_) | VersionState::Active(_) => None,
+            VersionState::Pending(_) | VersionState::Active { .. } => None,
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
                 kept.compromised.as_ref()
             }
-            VersionState::Destroyed(compromised) => compromised.as_ref(),
+            VersionState::Destroyed { compromised, .. } => compromised.as_ref(),
         }
     }
 
     fn dek(&self) -> Option<&EncryptedDataEncryptionKey> {
         match self {
-            VersionState::Pending(encrypted_dek) | VersionState::Active(encrypted_dek) => {
+            VersionState::Pending(encrypted_dek) | VersionState::Active { encrypted_dek, .. } => {
                 Some(encrypted_dek)
             }
             VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
                 Some(&kept.encrypted_dek)
             }
-            VersionState::Destroyed(_) => None,
+            VersionState::Destroyed { .. } => None,
         }
     }
 }
 
-/// The encrypted DEK of a version past `Active`, which may be compromised.
+/// The encrypted DEK of a version past `Active`, which may be compromised, and the markers of the
+/// records sealed under it while it was active.
 #[derive(Clone)]
 struct RetainedDek {
     encrypted_dek: EncryptedDataEncryptionKey,
     compromised: Option<Compromise>,
+    seal_range: SealRange,
 }
 
 /// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new
-/// versions, and every version ever created, in creation order. It is stored as one JSON
-/// document, the same in every store; see [`to_json`](Self::to_json).
+/// versions, the seal epoch, and every version ever created, in creation order. It is stored as
+/// one JSON document, the same in every store; see [`to_json`](Self::to_json).
 ///
 /// Every record that exists holds its invariants: at most one active and one pending version
 /// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
 /// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
-/// order, and at most 1 MiB of JSON: at about 400 bytes per version with its encrypted DEK, about
-/// 2,600 versions.
+/// order, a seal epoch of 1 or more, a seal range on every version that was active, open-ended on
+/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: at about
+/// 400 bytes per version with its encrypted DEK, about 2,600 versions.
 ///
 /// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]
@@ -478,6 +509,7 @@ pub struct KeyringRecord {
     id: KeyringId,
     kek: KekRef,
     algorithms: KeyringAlgorithms,
+    seal_marker: SealMarker,
     versions: Vec<KeyVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
@@ -500,6 +532,24 @@ impl KeyringRecord {
     /// The algorithms new versions use.
     pub fn algorithms(&self) -> &KeyringAlgorithms {
         &self.algorithms
+    }
+
+    /// The marker of the record's seal epoch, which every administrative write that makes a
+    /// version active moves on by one: the keyring's creation, at epoch 1, `promote`, and the
+    /// replacement of a compromised active version by `mark_compromised`.
+    ///
+    /// It names the active versions of this record. A write of an application record seals its
+    /// fields through one [`Sealer`](crate::Sealer) and stores the marker of the sealer's record
+    /// beside them, which then lies inside the [`seal_range`](KeyVersion::seal_range) of every
+    /// version the fields are under. The marker of any other record, such as
+    /// [`Keyring::record`](crate::Keyring::record) read before or after the sealing, names that
+    /// record's epoch instead: when the cached record refreshes in between, it is older or newer
+    /// than the versions the fields are under, and the record falls outside their ranges.
+    ///
+    /// The current record's marker is the bound of a sweep's query, which visits the records
+    /// whose marker is below it, see [`sweep`](crate::sweep).
+    pub fn seal_marker(&self) -> SealMarker {
+        self.seal_marker
     }
 
     /// Every version ever created, in creation order.
@@ -535,7 +585,9 @@ impl KeyringRecord {
         self.versions
             .iter()
             .find_map(|version| match &version.state {
-                VersionState::Active(encrypted_dek) if version.algorithm.purpose() == purpose => {
+                VersionState::Active { encrypted_dek, .. }
+                    if version.algorithm.purpose() == purpose =>
+                {
                     Some((version, encrypted_dek))
                 }
                 _ => None,
@@ -563,14 +615,21 @@ impl KeyringRecord {
 
 /// Whether `next`, a record read from the store, moves forward from `held`: every version of
 /// `held` is still there, with the same algorithm and creation time, its compromised flag kept
-/// with its time, and its state moved along the lifecycle. New versions are free.
+/// with its time, its state moved along the lifecycle and its seal range kept, and the seal epoch
+/// is not below `held`'s. New versions are free.
+///
+/// A seal range is kept when its start, and its end once set, stay as they are, and a start or
+/// an end set since lies past `held`'s epoch: a process that holds `held` stamps that epoch on
+/// the records it seals, under every version active in `held`, so such a range still holds
+/// them.
 ///
 /// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
 pub(crate) fn check_successor(
-    held: &KeyringRecord,
+    held_record: &KeyringRecord,
     next: &KeyringRecord,
 ) -> Result<(), RegressionRule> {
-    for held in &held.versions {
+    let held_marker = held_record.seal_marker;
+    for held in &held_record.versions {
         let key_id = held.key_id;
         let Some(version) = next.version(key_id) else {
             return Err(RegressionRule::VersionMissing(key_id));
@@ -588,6 +647,24 @@ pub(crate) fn check_successor(
         if !held.state().reaches(version.state()) {
             return Err(RegressionRule::StateReverted(key_id));
         }
+        let seal_range_kept = match (held.seal_range(), version.seal_range()) {
+            (None, None) => true,
+            (None, Some(range)) => range.start() > held_marker,
+            (Some(_), None) => false,
+            (Some(kept), Some(range)) => {
+                kept.start() == range.start()
+                    && match kept.end() {
+                        Some(end) => range.end() == Some(end),
+                        None => range.end().is_none_or(|end| end > held_marker),
+                    }
+            }
+        };
+        if !seal_range_kept {
+            return Err(RegressionRule::SealRangeReverted(key_id));
+        }
+    }
+    if next.seal_marker < held_marker {
+        return Err(RegressionRule::SealEpochReverted);
     }
     Ok(())
 }
