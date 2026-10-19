@@ -811,7 +811,7 @@ name, of the field name and of the value, plus 32 bytes, by Firestore's storage 
 of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.
 
 The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs)
-runs this sweep end to end, from the writes to the `retire`, on the Firestore emulator. It runs on
+runs this sweep end to end, from the writes to the report, on the Firestore emulator. It runs on
 `sweep::run_batched`, which cuts the candidates into batches and counts what each returns, in place
 of `sweep::run`: each batch of 500 documents is re-sealed through one sealer and written back in one
 `BatchWrite`, one precondition per document, instead of one write per document. Its memory holds
@@ -1081,7 +1081,7 @@ PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row a
 10 million rows hold about 130 MB of markers and index.
 
 The [`sweep_postgres` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs)
-runs this sweep end to end, from the writes to the `retire`, on a local PostgreSQL. It runs on
+runs this sweep end to end, from the writes to the report, on a local PostgreSQL. It runs on
 `sweep::run_batched` in place of `sweep::run`: each batch of 1000 rows is re-sealed through one
 sealer and written back in one `UPDATE` over arrays of the ids, the new values and the values it
 read, instead of one statement per row.
@@ -1337,7 +1337,8 @@ reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query 
 on demand, and its storage about $0.0013 a month at $0.02 per GiB.
 
 The [`sweep_bigquery` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs)
-runs the `UPDATE` above end to end, from the writes to the `retire`, against Cloud KMS and BigQuery.
+runs the `UPDATE` above end to end, from the writes to the count of re-sealed rows, against Cloud
+KMS and BigQuery.
 
 ### The trust of re-sealed values
 

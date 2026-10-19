@@ -1,9 +1,13 @@
 //! A sweep on Firestore: writes users a batch at a time, each batch through a `Sealer` and in one
 //! `BatchWrite`, rotates and promotes the randomised version, re-seals every document whose marker
 //! is below the current one with `sweep::run_batched`, each batch through one sealer and written
-//! back in one `BatchWrite` conditional on the update time of each document, and retires the
-//! previous version once the query of its seal range finds no document. The re-seal is the one of
+//! back in one `BatchWrite` conditional on the update time of each document, and prints the
+//! sweep's report. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#firestore) in the book.
+//!
+//! A sweep is a job that runs on a schedule, and again until its report shows nothing scanned.
+//! Retiring the previous version is a separate administrative step, see
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
 //!
 //! Every read and write is sized for millions of documents, and memory holds the batches in flight
 //! only. The sweep's candidates are one streamed query, which `sweep::run_batched` cuts into
@@ -12,8 +16,8 @@
 //! query returns exactly the documents it did not write, and nothing else needs to record how far
 //! it got. The same holds for a sweep stopped part-way or one that failed on some documents. A
 //! partitioned query does not fit the sweep: `PartitionQuery` takes no filter, so its workers would
-//! read every document, the current ones included. The check before `retire` reads one document at
-//! most, and the cleanup streams the ids into batches of deletes the same way.
+//! read every document, the current ones included. The cleanup streams the ids into batches of
+//! deletes the same way.
 //!
 //! The example runs on the emulator that `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
 //! application default credentials when it is unset, in the project `PROJECT_ID`. It writes the
@@ -49,13 +53,11 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{
-    self, BatchedSweepOptions, ResealOutcome, SealMarker, SealRange, SweepReport,
-};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
-    KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
-    KeyringRegistryOptions, Plaintext, Purpose, Resealed, Rotation,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
+    Purpose, Resealed,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -108,7 +110,7 @@ struct UserFields {
     seal: SealMarker,
 }
 
-/// The id of any document, for the cleanup and the check before `retire`.
+/// The id of any document, for the cleanup.
 #[derive(Deserialize)]
 struct DocId {
     #[serde(rename = "_firestore_id")]
@@ -300,7 +302,7 @@ async fn delete_all(
         .await
 }
 
-/// Writes `count` users, rotates, sweeps, and retires the previous version.
+/// Writes `count` users, rotates, and sweeps.
 async fn run(
     registry: &KeyringRegistry<FirestoreKeyringStore, Ring>,
     writer: &FirestoreSimpleBatchWriter,
@@ -364,12 +366,9 @@ async fn run(
 
     // One process rotates and sweeps, so the promotion need not wait for other processes'
     // records to revalidate.
-    let rotation: Rotation = admin
+    admin
         .promote_now(admin.rotate(Purpose::Randomized).await?)
         .await?;
-    let previous: KeyId = rotation
-        .previous
-        .ok_or("the keyring had an active version")?;
 
     let started = Instant::now();
     let current: SealMarker = keyring.record().seal_marker();
@@ -404,44 +403,18 @@ async fn run(
     )
     .await;
     println!(
-        "swept to seal marker {current} in {:.2?}: scanned {}, resealed {}, skipped {}, failed {}",
+        "swept to seal marker {current} in {:.2?}: scanned {}, resealed {} ({} from a compromised \
+         version), skipped {}, failed {}",
         started.elapsed(),
         report.scanned,
         report.resealed,
+        report.resealed_from_compromised,
         report.skipped,
         report.failed
     );
-
-    let started = Instant::now();
-    let range: SealRange = keyring
-        .record()
-        .version(previous)
-        .and_then(KeyVersion::seal_range)
-        .ok_or("a replaced version has a seal range")?;
-    // One document is enough to refuse the retire.
-    let under_previous: Vec<DocId> = db
-        .fluent()
-        .select()
-        .from(users.as_str())
-        .filter(|q| {
-            q.for_all([
-                q.field("seal").greater_than_or_equal(range.start()),
-                range.end().and_then(|end| q.field("seal").less_than(end)),
-            ])
-        })
-        .limit(1)
-        .obj()
-        .query()
-        .await?;
-    if report.failed > 0 || !under_previous.is_empty() {
-        return Err(format!("users are left under key version {}", previous.as_u32()).into());
+    if report.failed > 0 {
+        return Err(format!("{} users failed; the next run retries them", report.failed).into());
     }
-    admin.retire(previous).await?;
-    println!(
-        "no user under key version {}, retired it in {:.2?}",
-        previous.as_u32(),
-        started.elapsed()
-    );
     Ok(())
 }
 

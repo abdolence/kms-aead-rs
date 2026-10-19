@@ -1,10 +1,14 @@
 //! A sweep on BigQuery: writes users through a `Sealer`, each with its seal marker, rotates and
 //! promotes the randomised version, re-seals every row whose marker is below the current one with
-//! one `UPDATE` in SQL through an exported keyset, and retires the previous version once the query
-//! of its seal range finds no row. The statement is the one of
+//! one `UPDATE` in SQL through an exported keyset, and prints the rows it re-sealed. The statement
+//! is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#bigquery) in the book: a
 //! field BigQuery reads is re-sealed without a Rust loop and without a value leaving BigQuery, so
 //! the sweep is that statement rather than `sweep::run`.
+//!
+//! A sweep is a job that runs on a schedule, and again until it re-seals no row. Retiring the
+//! previous version is a separate administrative step, see
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
 //!
 //! The example runs against the Cloud KMS key that `PROJECT_ID`, `PROJECT_LOCATION`,
 //! `KMS_KEY_RING` and `KMS_KEY` name, under the application default credentials, which need the
@@ -32,12 +36,12 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::encodings::BigQuery;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{SealMarker, SealRange};
+use kms_aead_keyring::sweep::SealMarker;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyId,
-    KeyVersion, Keyring, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry,
-    KeyringRegistryOptions, KeysetSelection, Plaintext, Purpose, Rotation,
+    Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
+    KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeysetSelection, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -87,7 +91,7 @@ struct Count {
     count: u64,
 }
 
-/// Writes `count` users, rotates, sweeps, and retires the previous version.
+/// Writes `count` users, rotates, and sweeps.
 async fn run(
     db: &BigQueryDb,
     dataset: &BigQueryDatasetId,
@@ -140,12 +144,9 @@ async fn run(
 
     // One process rotates and sweeps, so the promotion need not wait for other processes'
     // records to revalidate.
-    let rotation: Rotation = admin
+    admin
         .promote_now(admin.rotate(Purpose::Randomized).await?)
         .await?;
-    let previous: KeyId = rotation
-        .previous
-        .ok_or("the keyring had an active version")?;
 
     // Exported after the promotion: the keyset's primary is the active version, and its marker
     // is the one the statement stores beside the values it seals.
@@ -184,41 +185,6 @@ async fn run(
         swept
             .num_dml_affected_rows
             .map_or_else(|| "unknown".to_string(), |rows| rows.to_string())
-    );
-
-    let started = Instant::now();
-    let range: SealRange = keyring
-        .record()
-        .version(previous)
-        .and_then(KeyVersion::seal_range)
-        .ok_or("a replaced version has a seal range")?;
-    let under_previous: u64 = db
-        .fluent()
-        .query(
-            "SELECT COUNT(*) AS count FROM users
-             WHERE seal >= @start AND (@end IS NULL OR seal < @end)",
-        )
-        .default_dataset(dataset.clone())
-        .param("start", range.start())
-        .param_as("end", keyset_bytes.clone(), range.end())
-        .obj::<Count>()
-        .query()
-        .await?
-        .pop()
-        .ok_or("the count returned no row")?
-        .count;
-    if under_previous > 0 {
-        return Err(format!(
-            "{under_previous} users are left under key version {}",
-            previous.as_u32()
-        )
-        .into());
-    }
-    admin.retire(previous).await?;
-    println!(
-        "no user under key version {}, retired it in {:.2?}",
-        previous.as_u32(),
-        started.elapsed()
     );
 
     let readable: u64 = db

@@ -1,19 +1,26 @@
-//! A sweep on PostgreSQL: writes users a page at a time, each page through a `Sealer` and in one
+//! A sweep on PostgreSQL: writes users a batch at a time, each batch through a `Sealer` and in one
 //! `INSERT`, rotates and promotes the randomised version, re-seals every row whose marker is below
-//! the current one with `sweep::run_batched`, read in pages ordered by `id`, each batch through
-//! one sealer and written back in one `UPDATE` conditional on the bytes it read of each row, and
-//! retires the previous version once the query of its seal range finds no row. The re-seal is the one of
+//! the current one with `sweep::run_batched`, read in one streamed query, each batch through one
+//! sealer and written back in one `UPDATE` conditional on the bytes it read of each row, and
+//! prints the sweep's report. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#postgresql) in the book.
 //!
-//! Every read and write is sized for millions of rows, and memory holds a few pages at most. The
-//! sweep reads its candidates by keyset pagination on the primary key, each page one short query,
-//! rather than through one cursor: a cursor lives in a transaction, and one open for the whole
-//! sweep keeps `VACUUM` from reclaiming the old versions of every row the sweep updates. The check
-//! before `retire` asks whether any row is left, and stops at the first.
+//! A sweep is a job that runs on a schedule, and again until its report shows nothing scanned.
+//! Retiring the previous version is a separate administrative step, see
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
 //!
-//! A sweep stopped part-way, or one that failed on some rows, resumes when it runs again: the
-//! query of the markers below the current one returns exactly the rows it did not write, so
-//! nothing else needs to record how far it got.
+//! Every read and write is sized for millions of rows, and memory holds the batches in flight
+//! only. The candidates are one query, `seal < $1` with no `ORDER BY`, so the planner is free to
+//! read them from the index on `seal`, and `query_raw` streams its rows: the connection reads the
+//! next rows off the socket only once the sweep has taken the ones before, so the server waits
+//! rather than the client buffering. The stream holds its connection for as long as it runs, so
+//! the `UPDATE`s go through a second one.
+//!
+//! The query holds one snapshot for as long as it streams, and while it is open `VACUUM` cannot
+//! reclaim the old versions of the rows the sweep updates. A sweep stopped part-way, or one that
+//! failed on some rows, resumes when it runs again: the query of the markers below the current one
+//! returns exactly the rows it did not write, so a scheduled job that ends and runs again keeps
+//! each snapshot short, and nothing else needs to record how far it got.
 //!
 //! The example creates a schema of its own, with the keyring table and the users table in it, and
 //! drops it at the end. The keyring is under an ephemeral local KEK, so no cloud KMS is needed.
@@ -39,13 +46,11 @@ use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::sweep::{
-    self, BatchedSweepOptions, ResealOutcome, SealMarker, SealRange, SweepReport,
-};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
-    KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
-    KeyringRegistryOptions, Plaintext, Purpose, Resealed, Rotation,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
+    Purpose, Resealed,
 };
 use secret_vault_value::SecretValue;
 use tokio_postgres::{Client, Config, NoTls, Row};
@@ -57,15 +62,12 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-/// The rows of a page of the sweep's query, one batch: the next page is read while the batches
-/// before it are written.
-const PAGE_SIZE: u16 = 1000;
 /// The rows of a batch of the sweep and of an `INSERT` of the seeding: one sealer seals them, and
 /// one statement of arrays of this length, some 0.2 MB of parameters at the example's row size,
 /// writes them.
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
-/// The batches in flight at once. On the example's one connection they queue up behind each
-/// other; a pool of connections runs them in parallel.
+/// The batches in flight at once. On the example's one writing connection they queue up behind
+/// each other; a pool of connections runs them in parallel.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 /// The users between two progress lines.
 const PROGRESS_EVERY: usize = 100_000;
@@ -127,42 +129,6 @@ impl Display for UserRow {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "users/{}", self.id)
     }
-}
-
-/// The next page of the rows whose marker is below `current`, in the order of `id`: the rows
-/// after the id `after`, at most `PAGE_SIZE` of them, and the id to read the page after them
-/// from. `None` once a page came back short.
-///
-/// Each page starts after the last id of the one before, whatever the sweep wrote meanwhile: a
-/// re-sealed row leaves the query but not the order, so a page read while earlier pages are still
-/// being written neither repeats nor skips a row.
-async fn next_page(
-    client: &Client,
-    current: SealMarker,
-    after: Option<i64>,
-) -> Result<Option<(Vec<UserRow>, Option<i64>)>, SweepError> {
-    let Some(after) = after else {
-        return Ok(None);
-    };
-    let page: Vec<UserRow> = client
-        .query(
-            "SELECT id, email FROM users WHERE seal < $1 AND id > $2 ORDER BY id LIMIT $3",
-            &[&current, &after, &i64::from(PAGE_SIZE)],
-        )
-        .await?
-        .into_iter()
-        .map(|row| {
-            Ok(UserRow {
-                id: row.try_get("id")?,
-                row,
-            })
-        })
-        .collect::<Result<Vec<UserRow>, tokio_postgres::Error>>()?;
-    let next: Option<i64> = match page.last() {
-        Some(last) if page.len() == usize::from(PAGE_SIZE) => Some(last.id),
-        _ => None,
-    };
-    Ok(Some((page, next)))
 }
 
 /// Adds `count` users to `done`, and prints the total each time it passes a multiple of
@@ -249,10 +215,11 @@ async fn reseal_batch(
     Ok(done)
 }
 
-/// Writes `count` users, rotates, sweeps, and retires the previous version.
+/// Writes `count` users, rotates, and sweeps.
 async fn run(
     registry: &KeyringRegistry<PostgresKeyringStore<NoTls>, Ring>,
-    client: &Client,
+    reader: &Client,
+    writer: &Client,
     count: i64,
 ) -> Result<(), Box<dyn Error>> {
     let admin: KeyringAdmin<PostgresKeyringStore<NoTls>, LocalKmsProvider<Ring>, Ring> = registry
@@ -287,7 +254,7 @@ async fn run(
                     );
                 }
                 let seal: SealMarker = sealer.record().seal_marker();
-                client
+                writer
                     .execute(
                         "INSERT INTO users (id, email, seal)
                          SELECT id, email, $3 FROM unnest($1::BIGINT[], $2::BYTEA[]) AS batch(id, email)",
@@ -307,22 +274,23 @@ async fn run(
 
     // One process rotates and sweeps, so the promotion need not wait for other processes'
     // records to revalidate.
-    let rotation: Rotation = admin
+    admin
         .promote_now(admin.rotate(Purpose::Randomized).await?)
         .await?;
-    let previous: KeyId = rotation
-        .previous
-        .ok_or("the keyring had an active version")?;
 
     let started = Instant::now();
     let current: SealMarker = keyring.record().seal_marker();
-    // A page query that fails returns its error, which the sweep counts as failed, and ends the
-    // stream.
-    let candidates = stream::try_unfold(Some(i64::MIN), |after: Option<i64>| {
-        next_page(client, current, after)
-    })
-    .map_ok(|page: Vec<UserRow>| stream::iter(page).map(Ok))
-    .try_flatten();
+    // A row whose id does not read is a failed candidate; an error of the stream itself ends it.
+    let candidates = reader
+        .query_raw("SELECT id, email FROM users WHERE seal < $1", [current])
+        .await?
+        .map(|row: Result<Row, tokio_postgres::Error>| {
+            let row: Row = row?;
+            Ok::<UserRow, SweepError>(UserRow {
+                id: row.try_get("id")?,
+                row,
+            })
+        });
     let swept = AtomicUsize::new(0);
     let report: SweepReport = sweep::run_batched(
         keyring.id(),
@@ -334,7 +302,7 @@ async fn run(
             let swept = &swept;
             async move {
                 let batch_count = batch.len();
-                let outcomes = reseal_batch(keyring, client, batch).await;
+                let outcomes = reseal_batch(keyring, writer, batch).await;
                 count_progress(swept, batch_count, "swept");
                 outcomes
             }
@@ -342,36 +310,18 @@ async fn run(
     )
     .await;
     println!(
-        "swept to seal marker {current} in {:.2?}: scanned {}, resealed {}, skipped {}, failed {}",
+        "swept to seal marker {current} in {:.2?}: scanned {}, resealed {} ({} from a compromised \
+         version), skipped {}, failed {}",
         started.elapsed(),
         report.scanned,
         report.resealed,
+        report.resealed_from_compromised,
         report.skipped,
         report.failed
     );
-
-    let started = Instant::now();
-    let range: SealRange = keyring
-        .record()
-        .version(previous)
-        .and_then(KeyVersion::seal_range)
-        .ok_or("a replaced version has a seal range")?;
-    let under_previous: bool = client
-        .query_one(
-            "SELECT EXISTS (SELECT FROM users WHERE seal >= $1 AND ($2::BYTEA IS NULL OR seal < $2))",
-            &[&range.start(), &range.end()],
-        )
-        .await?
-        .try_get(0)?;
-    if report.failed > 0 || under_previous {
-        return Err(format!("users are left under key version {}", previous.as_u32()).into());
+    if report.failed > 0 {
+        return Err(format!("{} users failed; the next run retries them", report.failed).into());
     }
-    admin.retire(previous).await?;
-    println!(
-        "no user under key version {}, retired it in {:.2?}",
-        previous.as_u32(),
-        started.elapsed()
-    );
     Ok(())
 }
 
@@ -387,6 +337,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut config: Config = std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?;
     config.options(format!("-c search_path={schema}"));
     let (client, connection) = config.connect(NoTls).await?;
+    tokio::spawn(connection);
+    let (reader, connection) = config.connect(NoTls).await?;
     tokio::spawn(connection);
     client
         .batch_execute(&format!(
@@ -410,7 +362,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         PostgresKeyringStore::new(config, NoTls),
         KeyringRegistryOptions::new(),
     )?;
-    let outcome = run(&registry, &client, count).await;
+    let outcome = run(&registry, &reader, &client, count).await;
     registry.shutdown().await?;
     let started = Instant::now();
     client
