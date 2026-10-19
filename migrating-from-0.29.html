@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -231,11 +231,12 @@ backend</a>.</p>
 <tr><td><code>CipherTextWithEncryptedKey::new(&amp;cipher_text, &amp;encrypted_dek)</code></td><td><code>Encrypted::&lt;SecretValue, Envelope&gt;::join(&amp;bare, &amp;encrypted_dek)?</code>, in Tink’s KMS envelope format</td></tr>
 <tr><td><code>cipher_text.to_hex_string()</code></td><td><code>value.to_hex_string()</code>, read back with <code>Encrypted::try_from_hex_string</code></td></tr>
 <tr><td><code>cipher_text == other</code></td><td><code>value.value() == other.value()</code></td></tr>
-<tr><td><code>EncryptedDataEncryptionKey::new(encrypted, key_version)</code></td><td><code>EncryptedDataEncryptionKey::new(bytes)</code>: the provider’s bytes, which carry the key version where the KMS needs one</td></tr>
+<tr><td><code>EncryptedDataEncryptionKey::new(encrypted, key_version)</code></td><td><code>EncryptedDataEncryptionKey::new(bytes)</code>: the provider’s bytes, which carry the key version where the KMS needs one; a provider adds the KEK version the KMS reported with <code>with_kek_version</code></td></tr>
 <tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code> and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
 <tr><td><code>encrypted_dek.to_hex_string()?</code></td><td><code>encrypted_dek.to_hex_string()</code>, infallible</td></tr>
-<tr><td><code>encrypted_dek.key_version()</code></td><td>removed; the <code>key_version</code> field of the KMS spans</td></tr>
-<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KmsKeyVersion</code>, the type of <code>AzureKmsKeyRef::key_version</code></td></tr>
+<tr><td><code>encrypted_dek.key_version()</code></td><td><code>encrypted_dek.kek_version()</code>, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and <code>None</code> on one read back from the bytes; the <code>kek_version</code> field of the KMS spans</td></tr>
+<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
+<tr><td><code>AzureKmsKeyRef::with_key_version</code></td><td><code>AzureKmsKeyRef::with_kek_version</code></td></tr>
 <tr><td><code>DataEncryptionKey(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
 <tr><td><code>errors::BoxedError</code></td><td>removed</td></tr>
 </tbody>
@@ -279,9 +280,8 @@ calls that make no KMS call are not <code>async</code>:</p>
 </table>
 </div>
 <p>Every cipher text is an <code>Encrypted&lt;T, F&gt;</code>, see <a href="./formats.html#formats-of-encrypted">Formats</a>. It
-has its own <code>value()</code> and <code>into_value()</code>. Those of <code>EncryptedDataEncryptionKey</code> come from
-<code>ValueStruct</code>, which the crate re-exports: <code>use kms_aead::ValueStruct</code>. <code>DataEncryptionKey</code> no
-longer implements <code>ValueStruct</code>, and has its own <code>value()</code>.</p>
+has its own <code>value()</code> and <code>into_value()</code>, and so has <code>EncryptedDataEncryptionKey</code>.
+<code>DataEncryptionKey</code> no longer implements <code>ValueStruct</code>, and has its own <code>value()</code>.</p>
 <h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
 <p>An application’s own implementation of the provider trait:</p>
 <ul>
@@ -291,8 +291,9 @@ key;</li>
 <li>deletes <code>generate_encryption_key</code> when it returned the backend’s key. The replacement,
 <code>generate_key_material(&amp;self, len)</code>, has a default implementation that lets the backend generate
 the key, and is implemented only for a KMS generator;</li>
-<li>returns <code>EncryptedDataEncryptionKey::new(bytes)</code>. A KMS that needs the key version to decrypt
-gets it from those bytes, as the Azure provider’s do.</li>
+<li>returns <code>EncryptedDataEncryptionKey::new(bytes)</code> from <code>encrypt_data_encryption_key</code>, with the
+KEK version the KMS reported added by <code>with_kek_version</code>. A KMS that needs the key version to
+decrypt gets it from those bytes, as the Azure provider’s do.</li>
 </ul>
 <p>The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 <a href="./formats.html#serialised-deks">Formats</a>. The library never inspects the provider’s own bytes.</p>

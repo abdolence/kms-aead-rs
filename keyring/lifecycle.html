@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "../searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -255,7 +255,7 @@ at once.</p>
 <tr><td><code>reinstate(key_id)</code></td><td><code>Retired</code> back to <code>DecryptOnly</code>, for a value that turned up after all; a compromised flag stays</td></tr>
 <tr><td><code>destroy(key_id)</code></td><td><code>Retired</code> or <code>Pending</code> to <code>Destroyed</code></td></tr>
 <tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write: the keyring encrypts and decrypts nothing from then on</td></tr>
-<tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes</td></tr>
+<tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes. Returns a <code>DekReencryption</code> per version, with the KEK version its DEK moved from and to</td></tr>
 </tbody>
 </table>
 </div>

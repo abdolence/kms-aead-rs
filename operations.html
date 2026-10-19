@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -225,6 +225,94 @@ DEK in the record and encrypts it again under the KEK’s current version. No va
 that is not re-encrypted keeps working as long as the old KEK versions stay enabled in the KMS.</p>
 <p><code>reencrypt_deks</code> is a <code>KeyringAdmin</code> call and runs in the administrative job, like every call that
 encrypts a DEK.</p>
+<p>The record keeps the KEK version of each encrypted DEK, as the KMS reported it when it encrypted the
+DEK: <code>KeyVersion::kek_version</code>. <code>reencrypt_deks</code> returns one <code>DekReencryption</code> per version, with the
+KEK version its DEK was under and the one the KMS encrypted it with now, and <code>kek_versions_in_use</code>
+of the record lists every KEK version the record’s DEKs are under. Before the old KEK version is
+disabled, the record that <code>Keyring::reload</code> returns must list the new version alone, which needs no
+KMS call. Once the old version is disabled, <code>reencrypt_deks</code> runs again: it decrypts every DEK
+through the KMS and fails on one the KMS no longer decrypts. Here with the local KMS, rotated from
+version 1 to version 2, where dropping version 1 from the provider stands for disabling it:</p>
+<pre><code class="language-rust">use std::num::NonZeroU32;
+
+use kms_aead::backends::Ring;
+use kms_aead::providers::{
+    KekVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
+};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    DekReencryption, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+};
+use secret_vault_value::SecretValue;
+
+const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>let kek_id = LocalKekId::try_from("tenant-kek".to_string())?;
+let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+    MemoryKeyringStore::new(),
+    KeyringRegistryOptions::new(),
+)?;
+<span class="boring">let before_rotation = LocalKmsProvider::&lt;Ring&gt;::new(
+</span><span class="boring">    kek_id.clone(),
+</span><span class="boring">    vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+</span><span class="boring">)?;
+</span><span class="boring">registry
+</span><span class="boring">    .create(before_rotation, TENANT, KeyringAlgorithms::new())
+</span><span class="boring">    .await?;
+</span>
+// The administrative job after the rotation, with the new version encrypting
+let rotated = LocalKmsProvider::&lt;Ring&gt;::new(
+    kek_id.clone(),
+    vec![
+        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
+        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+    ],
+)?;
+let admin = registry.admin(rotated, TENANT).await?;
+
+// One entry per version: the KEK version its DEK was under, and the one it is under now
+let moved: Vec&lt;DekReencryption&gt; = admin.reencrypt_deks().await?;
+let new_kek_version = KekVersion::from(v2);
+assert!(moved
+    .iter()
+    .all(|reencryption| reencryption.kek_version.as_ref() == Some(&amp;new_kek_version)));
+
+// The check before the old version is disabled: every DEK is under the new version
+let record = admin.keyring().reload().await?;
+assert_eq!(record.kek_versions_in_use(), [Some(&amp;new_kek_version)]);
+
+// The check once the old version is disabled: every DEK still decrypts
+let disabled = LocalKmsProvider::&lt;Ring&gt;::new(
+    kek_id,
+    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+)?;
+registry.admin(disabled, TENANT).await?.reencrypt_deks().await?;
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Under Cloud KMS, a <code>reencrypt_deks</code> that ran before the new primary version had propagated reports
+the old version as the one the DEK is under now, and the record keeps listing it: run
+<code>reencrypt_deks</code> again once the rotation has propagated. Under Vault Transit,
+<code>min_decryption_version</code> disables every version below it at once, which is why the check asks for
+the new version alone.</p>
+<p>The whole procedure, with the application’s own DEKs and keysets, is in
+<a href="./envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>.</p>
+<h3 id="a-kek-version-the-kms-did-not-report"><a class="header" href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></h3>
+<p>A <code>None</code> among the versions in use stands for the DEKs whose KMS reported no version: every DEK
+under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application’s
+own provider that returns none. <code>reencrypt_deks</code> keeps such a DEK at <code>None</code>, so the check before the
+disable never passes, and the check once the old version is disabled is the only one:</p>
+<ol>
+<li>run <code>reencrypt_deks</code> after the rotation;</li>
+<li>disable the old version in the KMS;</li>
+<li>run <code>reencrypt_deks</code> again. It decrypts every DEK through the KMS, so an error is a DEK the KMS
+no longer decrypts: enable the old version again, and go back to step 1.</li>
+</ol>
+<p>Between steps 2 and 3, a DEK still under the old version fails in the application too, once its
+DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
+<a href="./providers/aws.html#key-versions-and-rotation">AWS KMS</a>.</p>
 <h2 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h2>
 <p>A sweep re-seals stored values under the active versions: after a rotation, to retire the old
 version, after a compromise, and to migrate envelope values. It is a job the application runs, a

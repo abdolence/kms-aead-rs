@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -233,6 +233,9 @@ around another provider. The implementation:</p>
 <li>returns from <code>kek()</code> a <code>KekRef</code> with <code>KekProvider::Other</code> and a key name that identifies the
 key across every KMS instance it may address. A wrapper returns the inner provider’s <code>kek()</code>;</li>
 <li>names that KEK to the KMS on every decryption;</li>
+<li>adds to the encrypted DEK that <code>encrypt_data_encryption_key</code> returns, with <code>with_kek_version</code>,
+the KEK version the KMS’s response names, never the one it expects, and none when the response
+names none;</li>
 <li>keeps key material, plaintext or encrypted, out of its errors’ <code>Display</code> and <code>Debug</code>.</li>
 </ul>
 <p><code>generate_key_material</code> has a default implementation that returns <code>Ok(None)</code>, so the backend

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -228,14 +228,14 @@ let decrypted: SecretValue = envelope.decrypt(aad, &amp;encrypted).await?;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The decrypt prints, without timestamps:</p>
-<pre><code class="language-text">DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/key_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+<pre><code class="language-text">DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/kek_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
 DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
 </code></pre>
 <p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/tracing.rs">here</a>,
 run it with <code>cargo run --example tracing --features ring</code>.</p>
 <h2 id="opentelemetry"><a class="header" href="#opentelemetry">OpenTelemetry</a></h2>
 <p>With <a href="https://github.com/tokio-rs/tracing-opentelemetry">tracing-opentelemetry</a> every span field
-becomes a span attribute with the same name, such as <code>/kms_aead/key_version</code>, so the KMS calls and
+becomes a span attribute with the same name, such as <code>/kms_aead/kek_version</code>, so the KMS calls and
 cache hits show up next to the latency of a request in Cloud Trace, Jaeger, etc.</p>
 <p>The fields are declared empty when the span opens and recorded once their value is known, which
 <code>tracing-opentelemetry</code> exports the same way as fields given at the start. Add its layer to the
@@ -309,7 +309,7 @@ under the current one.</p>
 <tbody>
 <tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
 <tr><td><code>key</code></td><td>the KEK, see below; for <code>KMS random</code> the GCP location, and unrecorded on AWS</td></tr>
-<tr><td><code>key_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, from the encrypted DEK’s bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption</td></tr>
+<tr><td><code>kek_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, from the encrypted DEK’s bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption</td></tr>
 <tr><td><code>len</code></td><td>random only: the bytes requested from the KMS generator</td></tr>
 <tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
 <tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
@@ -334,7 +334,7 @@ when none is set;</li>
 <li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
 CA certificate that cannot be loaded;</li>
 <li><code>INFO</code>, when a local KMS provider is created: its KEK id and versions, each with where it came
-from, in the <code>key</code> and <code>key_versions</code> fields.</li>
+from, in the <code>key</code> and <code>kek_versions</code> fields.</li>
 </ul>
 <p>The library retries nothing itself, so there is no retry field.</p>
 <h2 id="keyring-spans"><a class="header" href="#keyring-spans">Keyring spans</a></h2>

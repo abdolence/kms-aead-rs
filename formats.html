@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -233,7 +233,7 @@ ciphertext of the <a href="#serialised-deks">serialised DEK</a>, or of the raw D
 Tink’s AWS client sends no encryption context and its GCP client no additional authenticated data;</li>
 <li>the rest is a <a href="#formats-of-encrypted"><code>Bare</code> value</a>.</li>
 </ul>
-<p>The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+<p>The envelope records neither the algorithm nor the KEK version, so the writer and the reader,
 kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:</p>
 <div class="table-wrapper">
 <table>
@@ -265,7 +265,7 @@ AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.2
 the Cloud KMS key. <code>tests/tink_interop.py</code> and <code>examples/tink_interop.rs</code> repeat the Python check.</p>
 <h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
 <p><code>EncryptedDataEncryptionKey</code> is the bytes the provider returned from an encryption, which are also
-the bytes to store and the bytes it decrypts. Each provider’s bytes name the KMS key version that
+the bytes to store and the bytes it decrypts. Each provider’s bytes name the KEK version that
 encrypted the DEK where the KMS needs one to decrypt:</p>
 <div class="table-wrapper">
 <table>
@@ -289,7 +289,7 @@ wrap, <code>A128KW</code> to <code>A256KW</code>, takes only multiples of 8 byte
 KMS seals the DEK with AES-256-GCM under the KEK version, with its header up to the version as the
 AAD, so neither the id nor the version can be changed without the decryption failing.</p>
 <p>Store <code>value()</code> or <code>to_hex_string()</code>, and read them back with <code>EncryptedDataEncryptionKey::from</code>
-or <code>try_from_hex_string</code>, see
+or <code>try_from_hex_string</code>. Neither holds the KEK version of <code>kek_version()</code>, see
 <a href="./envelope-encryption.html#storing-encrypted-deks">Storing encrypted DEKs</a>.</p>
 <h2 id="serialised-deks"><a class="header" href="#serialised-deks">Serialised DEKs</a></h2>
 <p>The plaintext a provider encrypts is the DEK serialised as Tink serialises a key, the message of its
@@ -435,7 +435,8 @@ staged, with the encrypted DEKs shortened:</p>
       "seal_epochs": { "start": 1, "end": 2 },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAV6OYLYtnCqk...",
+      "kek_version": "1"
     },
     {
       "key_id": 2147483649,
@@ -445,7 +446,8 @@ staged, with the encrypted DEKs shortened:</p>
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAeY4U51ScBd+...",
+      "kek_version": "1"
     },
     {
       "key_id": 1073741825,
@@ -455,7 +457,8 @@ staged, with the encrypted DEKs shortened:</p>
       "seal_epochs": { "start": 1, "end": null },
       "created_at": "2026-10-18T12:18:31.053483320Z",
       "state_changed_at": "2026-10-18T12:18:31.053483320Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWYRS+ENPZF7...",
+      "kek_version": "1"
     },
     {
       "key_id": 2,
@@ -465,7 +468,8 @@ staged, with the encrypted DEKs shortened:</p>
       "seal_epochs": { "start": 2, "end": null },
       "created_at": "2026-10-18T12:18:31.053897100Z",
       "state_changed_at": "2026-10-18T12:18:31.054258061Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAASNGwiIu93uT...",
+      "kek_version": "1"
     },
     {
       "key_id": 3,
@@ -475,7 +479,8 @@ staged, with the encrypted DEKs shortened:</p>
       "seal_epochs": null,
       "created_at": "2026-10-18T12:18:31.054603074Z",
       "state_changed_at": "2026-10-18T12:18:31.054603074Z",
-      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay..."
+      "encrypted_dek": "AQp0ZW5hbnQta2VrAAAAAWVYn2R7AWay...",
+      "kek_version": "1"
     }
   ],
   "created_at": "2026-10-18T12:18:31.053483320Z",
@@ -499,13 +504,37 @@ stopped being active that moved the epoch on, <code>null</code> until then. It i
 was never active, see <a href="#seal-markers">Seal markers</a>;</li>
 <li><code>encrypted_dek</code> is the standard base64 of the <a href="#encrypted-deks">encrypted DEK</a>, the bytes the
 provider returned, here the local KMS layout. It is <code>null</code> for a destroyed version;</li>
+<li><code>kek_version</code> is the version of the KEK that encrypted <code>encrypted_dek</code>, as the KMS reported it,
+here the local KEK version. It is <code>null</code> for a destroyed version, and under a KMS that reports
+none, such as AWS KMS;</li>
 <li>the times are RFC 3339, in UTC.</li>
 </ul>
-<p>A reader parses at most 1 MiB of JSON, about 2,600 versions at about 400 bytes per version, and
-fails with <code>RecordInvalid</code> on a document that breaks any of:</p>
+<p>A reader parses at most 1 MiB of JSON. The size of a version is mostly its encrypted DEK, so the
+number of versions that fit depends on the KMS:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KEK</th><th>Bytes per version</th><th>Versions in 1 MiB</th></tr>
+</thead>
+<tbody>
+<tr><td>local KMS</td><td>359</td><td>about 2,900</td></tr>
+<tr><td>Vault Transit</td><td>380</td><td>about 2,750</td></tr>
+<tr><td>GCP Cloud KMS</td><td>412</td><td>about 2,550</td></tr>
+<tr><td>AWS KMS</td><td>504</td><td>about 2,050</td></tr>
+<tr><td>Azure, RSA 2048-bit key</td><td>674</td><td>about 1,550</td></tr>
+<tr><td>Azure, RSA 4096-bit key</td><td>1,014</td><td>about 1,050</td></tr>
+</tbody>
+</table>
+</div>
+<p>The local KMS row was measured on a record the crate wrote after 500 randomised rotations, each
+version AES-256-GCM, decrypt-only with a seal range. The other rows are the same record with each
+encrypted DEK replaced by one of that KMS’s length, and a KEK version of that KMS’s form: none for
+AWS, two digits for GCP and Vault, 32 hex digits for Azure.</p>
+<p>A reader fails with <code>RecordInvalid</code> on a document that breaks any of:</p>
 <ul>
 <li>at most one active and one pending version per purpose, neither of them compromised;</li>
-<li>an encrypted DEK on every version but the destroyed ones;</li>
+<li>an encrypted DEK on every version but the destroyed ones, and a <code>kek_version</code>, when there is
+one, of 1 to 255 ASCII alphanumerics beside it;</li>
 <li>unique key ids of the purpose of their algorithm, increasing within a purpose in creation order;</li>
 <li>a <code>seal_epoch</code> of 1 or more;</li>
 <li><code>seal_epochs</code> on every active, decrypt-only and retired version and on no pending one, open on
@@ -639,7 +668,7 @@ where
 }
 <span class="boring">use kms_aead::backends::Ring;
 </span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions, ValueStruct};
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEnvelopeOptions};
 </span><span class="boring">#[tokio::main(flavor = "current_thread")]
 </span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
 </span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;

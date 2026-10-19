@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "../searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -251,7 +251,9 @@ network unencrypted.</p>
 <p>The token needs <code>update</code> on <code>&lt;mount&gt;/encrypt/&lt;key&gt;</code> and <code>&lt;mount&gt;/decrypt/&lt;key&gt;</code>.</p>
 <h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
 <p>The encrypted DEK is the Transit ciphertext, such as <code>vault:v1:...</code>. It names the key version, so
-it still decrypts after the key is rotated. The KMS spans record that version as <code>key_version</code>.</p>
+it still decrypts after the key is rotated. The KMS spans record that version as <code>kek_version</code>, and
+so does the <code>kek_version()</code> of the encrypted DEK an encryption returns: the <code>N</code> of <code>vault:vN:</code>, as
+<code>min_decryption_version</code> counts it.</p>
 <p>The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.</p>
 <p>A rotation is <code>&lt;mount&gt;/keys/&lt;key&gt;/rotate</code>, and the new version encrypts every DEK after it. Once
 the sweep has reached every value, see

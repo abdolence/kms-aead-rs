@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "../searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -275,8 +275,9 @@ let provider = LocalKmsProvider::&lt;AwsLc&gt;::new(
 <p>To rotate, add <code>kek-v2</code> the same way and list both versions, as the next section describes.</p>
 <h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
 <p>Every version in the provider’s list decrypts, and the highest one encrypts unless
-<code>with_encrypting_version</code> names another. A process that does not list a version fails on a DEK
-under it with <code>LOCAL_KEK_UNKNOWN_VERSION</code>, so a rotation without downtime takes two deploys:</p>
+<code>with_encrypting_version</code> names another. The <code>kek_version()</code> of the encrypted DEK an encryption
+returns is the version that encrypted, in decimal. A process that does not list a version fails on
+a DEK under it with <code>LOCAL_KEK_UNKNOWN_VERSION</code>, so a rotation without downtime takes two deploys:</p>
 <ol>
 <li>list the new version in every process, with <code>with_encrypting_version</code> keeping the current one
 encrypting;</li>

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-c85788a6.js";
+            window.path_to_searchindex_js = "../searchindex-0a480e0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -236,7 +236,8 @@ which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 <p>A rotation adds a version to the key, by hand or by the key’s rotation policy. Without a key version
 in <code>AzureKmsKeyRef</code>, the latest version encrypts new DEKs; with one, that version does, so move it
 to the new version before a sweep. A sweep with a provider pinned to the old version re-encrypts
-under the old version.</p>
+under the old version. The <code>kek_version()</code> of the encrypted DEK an encryption returns is the
+version Key Vault encrypted with, read from the <code>kid</code> of its response.</p>
 <p>Once the sweep has reached every value, see
 <a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
 disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
