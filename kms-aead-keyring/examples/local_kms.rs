@@ -59,7 +59,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let before: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
     println!("staged key version {}", staged.as_u32());
-    let rotation: Rotation = admin.promote(staged).await?;
+    // One process, so no other has to see the staged version first; a fleet waits out the
+    // record TTL and calls `promote`
+    let rotation: Rotation = admin.promote_now(staged).await?;
     let after: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 
     match rotation.previous {

@@ -7,6 +7,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
+use std::time::Duration;
 
 use kms_aead::errors::KmsAeadError;
 use kms_aead::{KekProvider, KekRef};
@@ -84,6 +85,12 @@ pub enum KeyringError {
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
     InvalidTransition(InvalidTransitionError),
+    /// A promotion of a pending version before the registry's
+    /// [`record_ttl`](crate::KeyringRegistryOptions::record_ttl) has passed since it was staged,
+    /// so a process may not have seen the version yet. The promotion succeeds once
+    /// [`remaining`](PromotionTooEarlyError::remaining) has passed, and
+    /// `KeyringAdmin::promote_now` makes it without the wait.
+    PromotionTooEarly(PromotionTooEarlyError),
     /// A key id that a value or beacon carries, or that an operation names, is reserved: its
     /// ordinal is zero, or it sets both purpose bits, so no version has it.
     ReservedKeyId,
@@ -132,6 +139,7 @@ impl KeyringError {
             KeyringError::SealerOutdated(_) => "SEALER_OUTDATED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
+            KeyringError::PromotionTooEarly(_) => "PROMOTION_TOO_EARLY",
             KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
@@ -350,6 +358,14 @@ impl Display for KeyringError {
                 f,
                 "The key version {} of the keyring {} is {}: {} does not apply",
                 error.key_id.as_u32(), error.keyring, error.from, error.transition
+            ),
+            KeyringError::PromotionTooEarly(error) => write!(
+                f,
+                "The key version {} of the keyring {} was staged less than the record TTL ago: \
+                 promote it in {} ms",
+                error.key_id.as_u32(),
+                error.keyring,
+                error.remaining.as_millis()
             ),
             KeyringError::ReservedKeyId => f.write_str("The key id is reserved"),
             KeyringError::DeterministicDisabled => {
@@ -834,6 +850,18 @@ pub struct InvalidTransitionError {
     pub from: KeyVersionState,
     /// The operation.
     pub transition: Transition,
+}
+
+/// See [`KeyringError::PromotionTooEarly`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct PromotionTooEarlyError {
+    /// The keyring.
+    pub keyring: KeyringId,
+    /// The pending version the promotion named.
+    pub key_id: KeyId,
+    /// How much longer the promotion waits, at most the record TTL.
+    pub remaining: Duration,
 }
 
 /// See [`KeyringError::Interop`].

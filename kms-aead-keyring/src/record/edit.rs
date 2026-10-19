@@ -1,6 +1,8 @@
 //! [`RecordEdit`]: the lifecycle transitions of an administrative write, applied to the record
 //! as the store holds it, and the record a new keyring starts from.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
 use kms_aead::{
@@ -9,7 +11,8 @@ use kms_aead::{
 
 use super::{RetainedDek, VersionState};
 use crate::errors::{
-    InvalidTransitionError, KeyringError, KeyringResult, PurposeError, RecordInvalidReason,
+    InvalidTransitionError, KeyringError, KeyringResult, PromotionTooEarlyError, PurposeError,
+    RecordInvalidReason,
 };
 use crate::purpose::next_key_id;
 use crate::sweep::{SealMarker, SealRange};
@@ -259,6 +262,32 @@ impl RecordEdit {
             }));
         }
         self.push(new, VersionState::Pending, now)
+    }
+
+    /// Refuses with `PromotionTooEarly` while less than `wait` has passed between the staging of
+    /// the pending version `key_id` and `now`, and lets any other version through, for
+    /// [`promote`](Self::promote) to accept or refuse. A staging time after `now`, from a clock
+    /// behind the writer's that staged it, counts as no time passed.
+    pub(crate) fn ensure_staged_for(
+        &self,
+        key_id: KeyId,
+        wait: Duration,
+        now: Timestamp,
+    ) -> KeyringResult<()> {
+        let Some(staged_at) = self.record.version(key_id).and_then(KeyVersion::staged_at) else {
+            return Ok(());
+        };
+        let elapsed = Duration::try_from(now.duration_since(staged_at)).unwrap_or(Duration::ZERO);
+        match wait.checked_sub(elapsed) {
+            Some(remaining) if !remaining.is_zero() => {
+                Err(KeyringError::PromotionTooEarly(PromotionTooEarlyError {
+                    keyring: self.record.id.clone(),
+                    key_id,
+                    remaining,
+                }))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Makes the pending version `key_id` the active version of its purpose; the active version

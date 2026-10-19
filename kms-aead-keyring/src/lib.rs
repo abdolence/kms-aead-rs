@@ -92,7 +92,8 @@
 //! `Active` may be compromised; see [`KeyVersionState`]. A rotation is staged:
 //! `KeyringAdmin::rotate` adds a pending version, which every process decrypts under once its
 //! record refreshes, and `KeyringAdmin::promote` makes it active, after the longest time any
-//! process may run without a successful refresh; the old version keeps decrypting.
+//! process may run without a successful refresh and never before the record TTL; the old version
+//! keeps decrypting.
 //! `KeyringAdmin::mark_compromised` flags a version for good, and replaces an active one with a
 //! version that is active at once. Under the default [`CompromisedReadPolicy::Block`] values
 //! under a compromised version stop decrypting through [`Keyring::decrypt`];
@@ -194,7 +195,7 @@
 //! let alice = Email("alice@example.com".to_string());
 //! let value: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 //! let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-//! admin.promote(staged).await?;
+//! admin.promote_now(staged).await?;
 //!
 //! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 //! registry.shutdown().await?;

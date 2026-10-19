@@ -147,6 +147,11 @@ path = "examples/migrate.rs"
 required-features = ["ring", "admin", "serde"]
 
 [[example]]
+name = "rotate"
+path = "examples/rotate.rs"
+required-features = ["ring", "admin"]
+
+[[example]]
 name = "tink_export"
 path = "examples/tink_export.rs"
 required-features = ["ci-tink", "aws-lc"]

@@ -166,7 +166,7 @@ let before: Encrypted<Email, Deterministic> =
     keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 
 // One probe per version that still decrypts, newest first
 let probes: Vec<Encrypted<Email, Deterministic>> = keyring.deterministic_probes(&aad, &alice).await?;

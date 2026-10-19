@@ -19,7 +19,13 @@ The administrative job runs a rotation in steps, on its `KeyringAdmin`, see
 3. wait the longest time any process may run without a successful refresh of its record, counted
    from `staged_at()`, and check that no process logged "The keyring record could not be
    revalidated" meanwhile;
-4. `promote(key_id)`.
+4. `promote(key_id)`. Until `record_ttl` has passed since `staged_at()` it fails with
+   `PromotionTooEarly`, whose `remaining` is the time left. `promote_now(key_id)` skips that
+   guard, for a fleet known to have refreshed since the rotation or a compromise that cannot wait.
+
+The [`rotate` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/rotate.rs)
+runs the whole cycle, and a KEK re-encryption after it, on the memory store and the local KMS:
+`cargo run -p kms-aead-keyring --example rotate --features ring,admin`.
 
 How often:
 
@@ -467,9 +473,9 @@ for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
 }
 
 // The administrative job stages a version, and promotes it after the wait for every process to
-// see it
+// see it; `promote_now` stands in for the wait here
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-let rotation: Rotation = admin.promote(staged).await?;
+let rotation: Rotation = admin.promote_now(staged).await?;
 
 // The sweep, on the data-plane handle: every row whose marker is below the keyring's
 let current: SealMarker = keyring.record().seal_marker();

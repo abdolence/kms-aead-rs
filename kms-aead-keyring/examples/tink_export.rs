@@ -85,7 +85,7 @@ where
         .encrypt(&aad, &plain_text)
         .await?;
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-    admin.promote(staged).await?;
+    admin.promote_now(staged).await?;
     let keyset: EncryptedKeyset<encodings::Tink> = admin
         .export_tink_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;

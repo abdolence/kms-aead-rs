@@ -95,9 +95,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One sealer per write of a record, for every encrypted field it holds
     let value: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
 
-    // A rotation is staged, then promoted; the previous version keeps decrypting
+    // A rotation is staged, then promoted, here at once, since no other process has to see it
+    // first; the previous version keeps decrypting
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-    admin.promote(staged).await?;
+    admin.promote_now(staged).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
     registry.shutdown().await?;

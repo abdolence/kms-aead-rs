@@ -1,6 +1,8 @@
 //! [`KeyringAdmin`]: the calls that change a keyring's record or export its keys, behind the
 //! `admin` feature.
 
+use std::time::Duration;
+
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
 use kms_aead::providers::KekVersion;
@@ -110,14 +112,48 @@ where
     /// replaces decrypts only. Processes on the old record keep sealing under the previous
     /// version until their record refreshes, and those values decrypt.
     ///
+    /// It refuses until the registry's [`record_ttl`](crate::KeyringRegistryOptions::record_ttl)
+    /// has passed since the version was [staged](KeyVersion::staged_at): a process whose record
+    /// revalidates sees the version within that time, while one that has not seen it reads a
+    /// value under it as an unknown key id and reloads its record first. A process whose
+    /// revalidations fail keeps its cached record for longer, so the wait is the least a
+    /// promotion needs, not a proof that every process has the version.
+    /// [`promote_now`](Self::promote_now) skips the wait.
+    ///
     /// # Errors
     ///
     /// [`KeyringError::ReservedKeyId`](crate::KeyringError::ReservedKeyId), before any store call,
     /// for a reserved key id; the store's errors,
     /// [`KeyringError::KeyVersionUnknown`](crate::KeyringError::KeyVersionUnknown),
     /// [`KeyringError::InvalidTransition`](crate::KeyringError::InvalidTransition) for a version
-    /// that is not pending, and the errors of a write as for [`rotate`](Self::rotate).
+    /// that is not pending,
+    /// [`KeyringError::PromotionTooEarly`](crate::KeyringError::PromotionTooEarly) with the time
+    /// left before the record TTL has passed, checked against the record as the store holds it,
+    /// and the errors of a write as for [`rotate`](Self::rotate).
     pub async fn promote(&self, key_id: KeyId) -> KeyringResult<Rotation> {
+        self.promote_after(key_id, self.keyring.cache.record_ttl())
+            .await
+    }
+
+    /// Promotes the pending version `key_id` as [`promote`](Self::promote) does, without waiting
+    /// for the record TTL to pass since it was staged.
+    ///
+    /// It is safe when every process is known to have refreshed its record since the version was
+    /// staged, such as a single process or a fleet restarted since, and it is the call when a
+    /// compromise forces the rotation and values must stop going under the old version at once.
+    /// A process that has not seen the version yet reloads its record when it reads a value under
+    /// it, and fails the read with `KeyVersionUnknown` when the store does not answer.
+    ///
+    /// # Errors
+    ///
+    /// As [`promote`](Self::promote), without
+    /// [`KeyringError::PromotionTooEarly`](crate::KeyringError::PromotionTooEarly).
+    pub async fn promote_now(&self, key_id: KeyId) -> KeyringResult<Rotation> {
+        self.promote_after(key_id, Duration::ZERO).await
+    }
+
+    /// Promotes `key_id`, refusing while less than `wait` has passed since it was staged.
+    async fn promote_after(&self, key_id: KeyId, wait: Duration) -> KeyringResult<Rotation> {
         unreserved(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::promote(keyring.id(), key_id), async {
@@ -125,7 +161,11 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
-                    async |edit: &mut RecordEdit| edit.promote(key_id, Timestamp::now()),
+                    async |edit: &mut RecordEdit| {
+                        let now = Timestamp::now();
+                        edit.ensure_staged_for(key_id, wait, now)?;
+                        edit.promote(key_id, now)
+                    },
                 )
                 .await?;
             spans::record_rotation(rotation.previous, rotation.current);
@@ -169,8 +209,10 @@ where
     /// For the active version, it also adds a new version in the same write, active at once
     /// rather than pending, and returns the rotation: every encryption under the compromised key
     /// stops as soon as each process refreshes, and the processes that have not seen the new
-    /// version yet reload their record when they read a value under it. A pending version of the
-    /// purpose stays pending. When the KMS cannot encrypt the new key, during an outage or without
+    /// version yet reload their record when they read a value under it. The replacement does not
+    /// wait for the record TTL as [`promote`](Self::promote) does, since a wait would leave the
+    /// compromised key sealing new values for that long. A pending version of the purpose stays
+    /// pending, and [`promote_now`](Self::promote_now) makes it active without the wait. When the KMS cannot encrypt the new key, during an outage or without
     /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
     /// `Ok(None)`: the purpose then has no active version, and a sealer's `encrypt` fails with
     /// `NoActiveVersion` until a version is promoted. For any other version it returns

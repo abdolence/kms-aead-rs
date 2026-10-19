@@ -179,9 +179,11 @@ version.
   [Deterministic fields](./keyring/deterministic.md#what-they-leak);
 - **beacons leak likely equality and frequency**, as far as their bits tell values apart, see
   [Beacons](./keyring/beacons.md#what-a-beacon-leaks);
-- **a promotion has no guard.** A process that has not seen a promoted version reloads its record
-  when it meets a value under it, and fails the read when it cannot reach the store, so the wait
-  before `promote` is the operator's, see [Staged rotation](./keyring/lifecycle.md#staged-rotation).
+- **a promotion's guard covers healthy processes only.** `promote` refuses until `record_ttl` has
+  passed since the rotation, and `promote_now` skips that. A process whose revalidations fail
+  keeps an older record for longer: when it meets a value under a version it has not seen, it
+  reloads its record, and fails the read when it cannot reach the store. So the wait beyond the
+  record TTL is the operator's, see [Staged rotation](./keyring/lifecycle.md#staged-rotation).
 
 ## OSS
 
