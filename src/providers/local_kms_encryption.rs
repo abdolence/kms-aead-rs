@@ -71,7 +71,7 @@ impl From<NonZeroU32> for LocalKekVersion {
     }
 }
 
-/// The version in decimal, as the `key_version` span field records it.
+/// The version in decimal, as the `kek_version` span field records it.
 impl Display for LocalKekVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)

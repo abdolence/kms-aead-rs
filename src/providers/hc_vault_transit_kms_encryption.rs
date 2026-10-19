@@ -422,8 +422,8 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
                     "The encrypted data encryption key is not a Vault Transit ciphertext",
                 )
             })?;
-            if let Ok(key_version) = transit_key_version(ciphertext) {
-                kms::record_kek_version(key_version.as_str());
+            if let Ok(kek_version) = transit_key_version(ciphertext) {
+                kms::record_kek_version(kek_version.as_str());
             }
             let request = serde_json::to_vec(&DecryptRequest { ciphertext })
                 .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
@@ -1067,7 +1067,7 @@ mod tests {
         let aad = "orders-aad".to_string();
         let secret = SecretValue::from("order-secret");
 
-        let key_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
+        let kek_version = |cipher_text: &Encrypted<SecretValue, Envelope>| {
             let (_, encrypted_dek) = cipher_text.separate().unwrap();
             let ciphertext = String::from_utf8(encrypted_dek.into_value()).unwrap();
             transit_key_version(&ciphertext).unwrap()
@@ -1078,11 +1078,11 @@ mod tests {
         let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
         assert_eq!(
-            key_version(&before_rotation),
+            kek_version(&before_rotation),
             KekVersion::try_from("1".to_string()).unwrap()
         );
         assert_eq!(
-            key_version(&after_rotation),
+            kek_version(&after_rotation),
             KekVersion::try_from("2".to_string()).unwrap()
         );
         for cipher_text in [before_rotation, after_rotation] {

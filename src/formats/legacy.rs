@@ -26,24 +26,24 @@ struct LegacyEncryptedDek<'w> {
             reason = "only the Azure provider's bytes carry the key version"
         )
     )]
-    key_version: Option<KekVersion>,
+    kek_version: Option<KekVersion>,
     encrypted_dek_bytes: &'w [u8],
 }
 
 impl<'w> LegacyEncryptedDek<'w> {
-    /// `encrypted_dek_bytes` with the key version whose bytes are `key_version`: none when they are
+    /// `encrypted_dek_bytes` with the key version whose bytes are `kek_version`: none when they are
     /// empty, as for `k = 0`.
     ///
     /// # Errors
     ///
     /// `INVALID_KEY_VERSION` when the key version is not ASCII alphanumeric.
-    fn new(key_version: &[u8], encrypted_dek_bytes: &'w [u8]) -> KmsAeadResult<Self> {
-        let key_version = match key_version {
+    fn new(kek_version: &[u8], encrypted_dek_bytes: &'w [u8]) -> KmsAeadResult<Self> {
+        let kek_version = match kek_version {
             [] => None,
-            key_version => Some(read_kek_version(key_version)?),
+            kek_version => Some(read_kek_version(kek_version)?),
         };
         Ok(Self {
-            key_version,
+            kek_version,
             encrypted_dek_bytes,
         })
     }
@@ -54,14 +54,14 @@ impl<'w> LegacyEncryptedDek<'w> {
         match kek {
             #[cfg(feature = "azure-kms-encryption-base")]
             KekProvider::Azure => {
-                let key_version = self.key_version.ok_or_else(|| {
+                let kek_version = self.kek_version.ok_or_else(|| {
                     KmsAeadEncryptionError::create(
                         "AZURE_KEY_VERSION_MISSING",
                         "The encrypted data encryption key records no Azure Key Vault key version",
                     )
                 })?;
                 let wrapped_key = super::azure::AzureWrappedKey {
-                    key_version,
+                    kek_version,
                     wrapped: self.encrypted_dek_bytes,
                 };
                 wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
@@ -82,7 +82,7 @@ impl<'w> LegacyEncryptedDek<'w> {
 pub(crate) struct StoredEnvelope<'v> {
     layout: EnvelopeLayout,
     /// Empty in every layout but the envelope layout v1.
-    key_version: &'v [u8],
+    kek_version: &'v [u8],
     encrypted_dek_bytes: &'v [u8],
     pub(crate) bare: &'v [u8],
 }
@@ -102,11 +102,11 @@ impl<'v> StoredEnvelope<'v> {
                 Some((&[][..], encrypted_dek_bytes, bare))
             }
             EnvelopeLayout::V1 => value.split_first().and_then(|(_, header)| {
-                let (key_version, rest) = super::split_key_version_field(header)?;
+                let (kek_version, rest) = super::split_kek_version_field(header)?;
                 let (encrypted_dek_len, rest) = rest.split_first_chunk::<2>()?;
                 let encrypted_dek_len = usize::from(u16::from_be_bytes(*encrypted_dek_len));
                 let (encrypted_dek_bytes, bare) = rest.split_at_checked(encrypted_dek_len)?;
-                Some((key_version, encrypted_dek_bytes, bare))
+                Some((kek_version, encrypted_dek_bytes, bare))
             }),
             EnvelopeLayout::LengthPrefixed => {
                 value
@@ -120,7 +120,7 @@ impl<'v> StoredEnvelope<'v> {
                     })
             }
         };
-        let (key_version, encrypted_dek_bytes, bare) = fields.ok_or_else(|| {
+        let (kek_version, encrypted_dek_bytes, bare) = fields.ok_or_else(|| {
             KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 "A length in the cipher text header runs past the end of the buffer",
@@ -128,7 +128,7 @@ impl<'v> StoredEnvelope<'v> {
         })?;
         Ok(Self {
             layout,
-            key_version,
+            kek_version,
             encrypted_dek_bytes,
             bare,
         })
@@ -154,7 +154,7 @@ impl<'v> StoredEnvelope<'v> {
             EnvelopeLayout::V1 => KmsAeadLegacyFormat::EnvelopeV1,
             EnvelopeLayout::LengthPrefixed => KmsAeadLegacyFormat::LengthPrefixedEnvelope,
         };
-        let encrypted_dek = LegacyEncryptedDek::new(self.key_version, self.encrypted_dek_bytes)?;
+        let encrypted_dek = LegacyEncryptedDek::new(self.kek_version, self.encrypted_dek_bytes)?;
         warn_once(format);
         encrypted_dek.into_encrypted_dek(kek)
     }
@@ -172,14 +172,14 @@ pub(super) fn encrypted_dek_from_layout_v1(
     after_header: &[u8],
     kek: &KekProvider,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-    let (key_version, encrypted_dek_bytes) = super::split_key_version_field(after_header)
+    let (kek_version, encrypted_dek_bytes) = super::split_kek_version_field(after_header)
         .ok_or_else(|| {
             KmsAeadEncryptionError::create(
                 "INVALID_ENCRYPTED_KEY_FORMAT",
                 "The key version length runs past the end of the encrypted key",
             )
         })?;
-    LegacyEncryptedDek::new(key_version, encrypted_dek_bytes)?.into_encrypted_dek(kek)
+    LegacyEncryptedDek::new(kek_version, encrypted_dek_bytes)?.into_encrypted_dek(kek)
 }
 
 /// Logs one `WARN` event the first time a process reads a value in `format`.

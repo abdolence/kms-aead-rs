@@ -52,7 +52,8 @@ The crate declares `rust-version = "1.99"`.
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
-| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::key_version` |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
+| `AzureKmsKeyRef::with_key_version` | `AzureKmsKeyRef::with_kek_version` |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 

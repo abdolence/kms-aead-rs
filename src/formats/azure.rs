@@ -12,7 +12,7 @@ use crate::KmsAeadResult;
 /// ```
 #[derive(Debug, PartialEq)]
 pub(crate) struct AzureWrappedKey<'w> {
-    pub(crate) key_version: KekVersion,
+    pub(crate) kek_version: KekVersion,
     pub(crate) wrapped: &'w [u8],
 }
 
@@ -27,7 +27,7 @@ impl AzureWrappedKey<'_> {
     /// `INVALID_KEY_VERSION` when the key version is longer than 255 bytes, which a
     /// [`KekVersion`] never is.
     pub(crate) fn to_bytes(&self) -> KmsAeadResult<Vec<u8>> {
-        let version = self.key_version.as_str().as_bytes();
+        let version = self.kek_version.as_str().as_bytes();
         let version_len = u8::try_from(version.len()).map_err(|_| {
             KmsAeadEncryptionError::create(
                 "INVALID_KEY_VERSION",
@@ -54,11 +54,11 @@ impl<'w> TryFrom<&'w [u8]> for AzureWrappedKey<'w> {
         let [Self::LAYOUT, rest @ ..] = bytes else {
             return Err(Self::malformed());
         };
-        let (key_version, wrapped) = super::split_key_version_field(rest)
-            .filter(|(key_version, _)| !key_version.is_empty())
+        let (kek_version, wrapped) = super::split_kek_version_field(rest)
+            .filter(|(kek_version, _)| !kek_version.is_empty())
             .ok_or_else(Self::malformed)?;
         Ok(Self {
-            key_version: read_kek_version(key_version)?,
+            kek_version: read_kek_version(kek_version)?,
             wrapped,
         })
     }
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn the_layout_is_pinned() -> KmsAeadResult<()> {
         let wrapped_key = AzureWrappedKey {
-            key_version: KekVersion::try_from(KEY_VERSION.to_string())?,
+            kek_version: KekVersion::try_from(KEY_VERSION.to_string())?,
             wrapped: b"wrapped",
         };
 

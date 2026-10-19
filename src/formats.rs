@@ -236,7 +236,7 @@ fn key_from_decrypted(
 /// provider's encrypted DEKs and of the layouts of 0.29: the key version's bytes and the bytes
 /// after them, or `None` when `k` runs past the end.
 #[cfg(any(feature = "azure-kms-encryption-base", feature = "legacy-formats"))]
-fn split_key_version_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+fn split_kek_version_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let (&len, rest) = bytes.split_first()?;
     rest.split_at_checked(usize::from(len))
 }

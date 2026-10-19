@@ -104,12 +104,12 @@ fn provider_over(status: StatusCode, body: String) -> KmsAeadResult<AzureKmsProv
 /// `wrapped` in the layout of the provider's encrypted keys, after the key version `KEY_VERSION`:
 /// `[0x01][k: u8][key version: k][encrypted DEK]`.
 fn encrypted_key(wrapped: &[u8]) -> EncryptedDataEncryptionKey {
-    let key_version = KEY_VERSION.as_bytes();
+    let kek_version = KEY_VERSION.as_bytes();
     let header = [
         0x01,
-        u8::try_from(key_version.len()).expect("KEY_VERSION is 32 characters"),
+        u8::try_from(kek_version.len()).expect("KEY_VERSION is 32 characters"),
     ];
-    EncryptedDataEncryptionKey::new([&header[..], key_version, wrapped].concat())
+    EncryptedDataEncryptionKey::new([&header[..], kek_version, wrapped].concat())
 }
 
 fn data_encryption_key() -> DataEncryptionKey {
