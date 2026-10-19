@@ -270,7 +270,7 @@ pub struct LocalKmsProvider<B> {
     /// The material of each KEK version.
     keks: BTreeMap<LocalKekVersion, SecretValue>,
     /// Always a key of `keks`.
-    encrypting: LocalKekVersion,
+    encrypting_version: LocalKekVersion,
     cipher: AeadCipher<B>,
 }
 
@@ -296,7 +296,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
             }
             sources.push((kek.version, kek.source));
         }
-        let Some(&encrypting) = by_version.keys().next_back() else {
+        let Some(&encrypting_version) = by_version.keys().next_back() else {
             return Err(KmsAeadSystemError::create(
                 "LOCAL_KEK_VERSIONS",
                 &format!("The local KEK {id} has no version"),
@@ -314,7 +314,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
         Ok(Self {
             kek: KekRef::new(KekProvider::Local, id.to_string()),
             keks: by_version,
-            encrypting,
+            encrypting_version,
             cipher,
         })
     }
@@ -337,7 +337,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
                 ),
             ));
         }
-        self.encrypting = version;
+        self.encrypting_version = version;
         Ok(self)
     }
 
@@ -369,7 +369,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let version = self.encrypting;
+            let version = self.encrypting_version;
             let material = self.keks.get(&version).ok_or_else(|| {
                 KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
@@ -519,7 +519,11 @@ mod tests {
 
         let new_encrypted_dek = rotated.encrypt_data_encryption_key(&dek).await?;
 
-        assert_eq!(&new_encrypted_dek.value()[8..12], [0, 0, 0, 3]);
+        let version_at = 2 + ORDERS.len();
+        assert_eq!(
+            &new_encrypted_dek.value()[version_at..version_at + 4],
+            [0, 0, 0, 3]
+        );
         for encrypted_dek in [old_encrypted_dek, new_encrypted_dek] {
             assert_eq!(
                 rotated.decrypt_data_encryption_key(&encrypted_dek).await?,
