@@ -368,7 +368,7 @@ reading and writing:
    values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`. Then
    export the keyrings' keysets again and re-encrypt the application's own encrypted keysets, see
    [Encrypted keysets](#encrypted-keysets);
-3. check that the `kek_versions_in_use` of every keyring record list the new version alone. Then,
+3. check that the `kek_versions_in_use` of every keyring record lists the new version alone. Then,
    once no process holds an encrypted DEK from before step 2, disable the old version, and check
    that the KMS decrypts every stored DEK, every keyring's DEKs with `reencrypt_deks`, and every
    encrypted keyset. A DEK or a keyset it refuses is one the sweep missed: enable the old version

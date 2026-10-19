@@ -132,13 +132,24 @@ the old version as the one the DEK is under now, and the record keeps listing it
 `min_decryption_version` disables every version below it at once, which is why the check asks for
 the new version alone.
 
-A `None` among the versions in use stands for the DEKs whose KMS reported no version. Under a KMS
-with versions, `None` means the version is unknown, as with an application's own provider that
-returns none: the check before the disable fails on it, and only the check once the old version is
-disabled shows whether those DEKs still decrypt. Under AWS KMS every entry is `None`, see
-[AWS KMS](./providers/aws.md#key-versions-and-rotation) for key material that can be deleted. The
-whole procedure, with the application's own DEKs and keysets, is in
+The whole procedure, with the application's own DEKs and keysets, is in
 [Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+
+### A KEK version the KMS did not report
+
+A `None` among the versions in use stands for the DEKs whose KMS reported no version: every DEK
+under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application's
+own provider that returns none. `reencrypt_deks` keeps such a DEK at `None`, so the check before the
+disable never passes, and the check once the old version is disabled is the only one:
+
+1. run `reencrypt_deks` after the rotation;
+2. disable the old version in the KMS;
+3. run `reencrypt_deks` again. It decrypts every DEK through the KMS, so an error is a DEK the KMS
+   no longer decrypts: enable the old version again, and go back to step 1.
+
+Between steps 2 and 3, a DEK still under the old version fails in the application too, once its
+DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
+[AWS KMS](./providers/aws.md#key-versions-and-rotation).
 
 ## Sweeps
 

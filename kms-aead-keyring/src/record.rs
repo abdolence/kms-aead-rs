@@ -623,7 +623,10 @@ impl KeyringRecord {
     /// alone: it still lists an old version while `reencrypt_deks` has not run since the
     /// rotation, or ran while a KMS that propagates a rotation, such as Cloud KMS, still encrypted
     /// under it. A cached record can predate the last `reencrypt_deks`, so that check reads the
-    /// record [`Keyring::reload`](crate::Keyring::reload) returns.
+    /// record [`Keyring::reload`](crate::Keyring::reload) returns. Under a provider that reports
+    /// no version, a `None` stays in the list and the check never passes: the steps for that case
+    /// are in
+    /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations.html#a-kek-version-the-kms-did-not-report).
     pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
         let mut kek_versions = Vec::new();
         for dek_encryption in self.versions.iter().filter_map(KeyVersion::dek_encryption) {

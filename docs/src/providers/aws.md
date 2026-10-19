@@ -76,11 +76,21 @@ Key material that AWS KMS generated cannot be disabled or deleted on its own. Th
 is optional for it: it moves each DEK to the current key material, and with nothing to disable,
 the check and the destruction do not apply.
 
-Imported key material can be deleted on its own: `DeleteImportedKeyMaterial` with a
-`KeyMaterialId`, after which every DEK it encrypted fails to decrypt until the same material is
-imported again. With every `kek_version` `None`, neither a keyring record nor a stored
-`kek_version` shows which DEKs are under it. Before deleting one, run the sweep and
-`reencrypt_deks` after the rotation, and keep a copy of the material to import again.
+Imported key material is deleted in two ways: by `DeleteImportedKeyMaterial`, for the material a
+`KeyMaterialId` names or the current one without it, and at its expiry. `ExpirationModel` defaults
+to `KEY_MATERIAL_EXPIRES`, and at its `ValidTo`, at most 365 days after the import, AWS KMS deletes
+the material without any call. Either way the key moves to `PendingImport`, and AWS KMS refuses
+every operation with it, whichever material a DEK is under, until the same material is imported
+again. Import with `KEY_MATERIAL_DOES_NOT_EXPIRE`, or import again before `ValidTo`, and
+keep a copy of every material to import again.
+
+A sweep therefore retires no imported key material from a key in use, and with every
+`kek_version` `None`, neither a keyring record nor a stored `kek_version` shows which DEKs are under
+which material. After a deletion or an expiry, import the material again and decrypt every stored
+DEK: each keyring's with `reencrypt_deks`, the application's own as in
+[The check](../envelope-encryption.md#the-check). An error means the key is still in
+`PendingImport`: `ListKeyRotations` lists each material with its import state, and the one still
+missing is imported again.
 
 ## Errors
 

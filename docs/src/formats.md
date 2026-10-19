@@ -56,7 +56,7 @@ assert_eq!(joined.value(), encrypted.value());
   Tink's AWS client sends no encryption context and its GCP client no additional authenticated data;
 - the rest is a [`Bare` value](#formats-of-encrypted).
 
-The envelope records neither the algorithm nor the KMS key version, so the writer and the reader,
+The envelope records neither the algorithm nor the KEK version, so the writer and the reader,
 kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK template:
 
 | Algorithm | Tink key type | Tink for Java and Go | Tink for C++ and Python |
@@ -89,7 +89,7 @@ the Cloud KMS key. `tests/tink_interop.py` and `examples/tink_interop.rs` repeat
 ## Encrypted DEKs
 
 `EncryptedDataEncryptionKey` is the bytes the provider returned from an encryption, which are also
-the bytes to store and the bytes it decrypts. Each provider's bytes name the KMS key version that
+the bytes to store and the bytes it decrypts. Each provider's bytes name the KEK version that
 encrypted the DEK where the KMS needs one to decrypt:
 
 | Provider | Bytes | Key version |
