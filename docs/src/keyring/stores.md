@@ -77,7 +77,7 @@ registry.shutdown().await?;
 project, database and credentials it chooses. The version of the `firestore` crate is part of
 this crate's API under the `firestore` feature.
 
-Each keyring holds one listen stream, on its document. Firestore's point-in-time recovery
+Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore's point-in-time recovery
 restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
 `firestore` target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administration's reach.
