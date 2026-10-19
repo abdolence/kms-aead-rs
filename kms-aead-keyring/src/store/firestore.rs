@@ -7,7 +7,7 @@ use ::firestore::{FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition};
 use serde::Deserialize;
 use serde_json::Value;
 
-use self::listener::SharedListener;
+use self::listener::Watches;
 use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
 use crate::errors::{KeyringError, KeyringResult};
 use crate::{KeyringId, KeyringRecord};
@@ -38,7 +38,7 @@ mod listener;
 pub struct FirestoreKeyringStore {
     db: FirestoreDb,
     collection: String,
-    listener: Arc<SharedListener>,
+    watches: Arc<Watches>,
 }
 
 /// The update time of a document Firestore returns from a write.
@@ -58,7 +58,7 @@ impl FirestoreKeyringStore {
         Self {
             db,
             collection: Self::DEFAULT_COLLECTION.to_string(),
-            listener: Arc::default(),
+            watches: Arc::default(),
         }
     }
 
@@ -67,7 +67,7 @@ impl FirestoreKeyringStore {
     pub fn with_collection(self, collection: String) -> Self {
         Self {
             collection,
-            listener: Arc::default(),
+            watches: Arc::default(),
             ..self
         }
     }
@@ -162,7 +162,8 @@ impl KeyringStore for FirestoreKeyringStore {
     /// A watch on the document through the store's listener. It returns once Firestore has sent
     /// the document's current state, so that every write after it signals, and that state itself
     /// signals nothing. A signal is a change of the document's update time, or its creation or
-    /// deletion.
+    /// deletion. The watches of a keyring share its target, which leaves the stream at the first
+    /// listen event after the last of them is dropped.
     ///
     /// firestore-rs reconnects a lost stream on its own and resumes every target, and the update
     /// time covers what Firestore sends again, so a reconnect signals nothing. When Firestore
@@ -175,7 +176,7 @@ impl KeyringStore for FirestoreKeyringStore {
     ///
     /// firestore-rs reports a listener that stopped on its own only when a target is added. The
     /// first watch of a keyring the store does not watch yet then fails, every watch ends, and
-    /// every later watch fails with the error the listener stopped with.
+    /// every later watch fails too. firestore-rs logs the error the listener stopped with.
     ///
     /// # Errors
     ///
@@ -183,13 +184,13 @@ impl KeyringStore for FirestoreKeyringStore {
     /// of the document within 10 seconds or ends the target first, and once the listener has
     /// stopped on its own.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
-        self.listener.watch(&self.db, &self.collection, id).await
+        self.watches.watch(&self.db, &self.collection, id).await
     }
 
     /// Stops the listener, which closes its stream, and joins it: every watch ends, and a later
     /// watch is `None`. Loads and writes keep working.
     async fn shutdown(&self, timeout: Option<Duration>) {
-        self.listener.shutdown(timeout).await;
+        self.watches.shutdown(timeout).await;
     }
 }
 
