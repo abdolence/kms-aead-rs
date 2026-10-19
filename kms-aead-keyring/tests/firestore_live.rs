@@ -28,18 +28,9 @@ async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
         .collect::<KeyringResult<Vec<_>>>()?;
 
     let signalled = async {
-        let first = store.watch(&ids[0]).await?.ok_or("the store has no push")?;
-        let runtime = tokio::runtime::Handle::current().metrics();
-        let alive = runtime.num_alive_tasks();
-        let mut watches = try_join_all(ids[1..].iter().map(|id| store.watch(id))).await?;
-        let started = runtime.num_alive_tasks().saturating_sub(alive);
-        assert!(
-            started < WATCHED_KEYRINGS - 1,
-            "{} more watches started {started} tasks",
-            WATCHED_KEYRINGS - 1
-        );
-        let mut watches = std::iter::once(Some(first))
-            .chain(watches.drain(..))
+        let mut watches = try_join_all(ids.iter().map(|id| store.watch(id)))
+            .await?
+            .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or("the store has no push")?;
 

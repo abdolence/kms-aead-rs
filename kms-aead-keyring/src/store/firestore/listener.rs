@@ -61,7 +61,7 @@ struct Routes {
 
 /// One keyring's target on the stream, and the watches it signals.
 struct Route {
-    keyring: KeyringId,
+    id: KeyringId,
     watches: Vec<mpsc::Sender<WatchEvent>>,
     /// The document's update time as the listener last saw it, `None` while it is absent.
     /// Firestore sends a document's state again when it adds a target from scratch or resumes
@@ -116,7 +116,7 @@ impl Watches {
                     if let Err(error) = added {
                         // firestore-rs refuses every target once its loop has stopped on its own,
                         // so every watch ends with it.
-                        if let FirestoreError::SystemError(_) = error {
+                        if matches!(error, FirestoreError::SystemError(_)) {
                             routes.by_target.clear();
                         } else {
                             routes.by_target.remove(&target);
@@ -180,11 +180,14 @@ impl Watches {
                     routes.release_dropped()
                 };
                 let handle = handle.clone();
+                // The released targets' routes are gone, so each one left on the stream after an
+                // error would stay there: every target is tried, and the first error returned.
                 async move {
+                    let mut removed: FirestoreResult<()> = Ok(());
                     for target in released {
-                        handle.remove_target(&target).await?;
+                        removed = removed.and(handle.remove_target(&target).await.map(drop));
                     }
-                    Ok(())
+                    Ok(removed?)
                 }
             })
             .await?;
@@ -197,22 +200,16 @@ impl Routes {
         routes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Adds `events` to the route of `id`, and returns its `current` flag, or `None` when `id`
-    /// has no route.
     fn join(
         &mut self,
         id: &KeyringId,
         events: &mpsc::Sender<WatchEvent>,
     ) -> Option<watch::Receiver<bool>> {
-        let route = self
-            .by_target
-            .values_mut()
-            .find(|route| route.keyring == *id)?;
+        let route = self.by_target.values_mut().find(|route| route.id == *id)?;
         route.watches.push(events.clone());
         Some(route.current.subscribe())
     }
 
-    /// The route of `id` on a new target, signalling `events`, and its `current` flag.
     fn insert(
         &mut self,
         id: KeyringId,
@@ -226,7 +223,7 @@ impl Routes {
         self.by_target.insert(
             target.clone(),
             Route {
-                keyring: id,
+                id,
                 watches: vec![events],
                 update_time: None,
                 current,
@@ -342,7 +339,6 @@ impl Route {
         false
     }
 
-    /// Takes the document's update time from a change or deletion, and signals a change of it.
     fn document(&mut self, update_time: Option<Timestamp>) {
         if self.update_time != update_time {
             self.update_time = update_time;

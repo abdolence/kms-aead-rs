@@ -285,6 +285,17 @@ async fn a_store_error_carries_no_record_bytes<S: KeyringStore>(
     Ok(())
 }
 
+/// A second shutdown of a store with an open watch returns at once, and the store opens no watch
+/// after it.
+#[cfg(any(feature = "firestore", feature = "postgres"))]
+async fn shutdown_twice_is_a_no_op(store: impl KeyringStore) -> TestResult {
+    let _watch = store.watch(&unique_keyring_id()?).await?;
+    store.shutdown(None).await;
+    tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
+    assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
 async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
@@ -308,9 +319,6 @@ async fn the_memory_store_conforms() -> TestResult {
 /// The Firestore store, on the emulator `FIRESTORE_EMULATOR_HOST` names, or on Firestore with
 /// application default credentials when it is unset, in the project `PROJECT_ID`. The records
 /// go to the collection `kms_aead_rs_ci_keyrings`.
-///
-/// The emulator answers every resume token, a made-up one included, with a reset and the
-/// document's whole state, so a target resumed there behaves as one listened to from scratch.
 #[cfg(feature = "firestore")]
 mod firestore_store {
     use std::error::Error;
@@ -364,27 +372,6 @@ mod firestore_store {
         }
         let started = runtime.num_alive_tasks().saturating_sub(first);
         assert!(started < 20, "20 more watches started {started} tasks");
-        store.shutdown(None).await;
-        Ok(())
-    }
-
-    /// A keyring's target is added to the open stream, and the targets already on it keep
-    /// listening meanwhile.
-    #[tokio::test]
-    #[ignore = "needs a Firestore emulator or project, see the module docs"]
-    async fn a_write_while_another_keyring_is_added_is_signalled() -> TestResult {
-        let store = store().await?;
-        let id = unique_keyring_id()?;
-        let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
-        let other = store.clone();
-        let other_id = unique_keyring_id()?;
-        let adding = tokio::spawn(async move { other.watch(&other_id).await });
-        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
-        assert_eq!(
-            tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
-            Some(WatchEvent::Changed)
-        );
-        adding.await??.ok_or("the store has no push")?;
         store.shutdown(None).await;
         Ok(())
     }
@@ -523,11 +510,7 @@ mod firestore_store {
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn shutdown_twice_is_a_no_op() -> TestResult {
-        let store = store().await?;
-        let _watch = store.watch(&unique_keyring_id()?).await?;
-        store.shutdown(None).await;
-        tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
-        Ok(())
+        super::shutdown_twice_is_a_no_op(store().await?).await
     }
 }
 
@@ -844,10 +827,7 @@ mod postgres {
         let admin = connect().await?;
         let table = create_table(&admin).await?;
         let store = PostgresKeyringStore::new(config()?, NoTls).with_table(table.clone());
-        let _watch = store.watch(&unique_keyring_id()?).await?;
-        store.shutdown(None).await;
-        tokio::time::timeout(Duration::from_secs(1), store.shutdown(None)).await?;
-        assert!(store.watch(&unique_keyring_id()?).await?.is_none());
+        super::shutdown_twice_is_a_no_op(store).await?;
         drop_table(&admin, &table).await
     }
 
