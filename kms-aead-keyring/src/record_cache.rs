@@ -90,6 +90,11 @@ impl<S: KeyringStore> RecordCache<S> {
         &self.dek_cache
     }
 
+    #[cfg(feature = "admin")]
+    pub(crate) fn record_ttl(&self) -> Duration {
+        self.record_ttl
+    }
+
     pub(crate) fn record(&self) -> Arc<KeyringRecord> {
         Arc::clone(&self.lock().record)
     }

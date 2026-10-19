@@ -222,7 +222,7 @@ mod tests {
         let alice = ALICE.to_string();
         let first = keyring.sealer().await.beacon(&EMAIL, &alice).await?;
         let second = admin.rotate(Purpose::Beacon).await?;
-        admin.promote(second).await?;
+        admin.promote_now(second).await?;
         let pending = admin.rotate(Purpose::Beacon).await?;
 
         let probes = keyring.beacon_probes(&EMAIL, &alice).await?;

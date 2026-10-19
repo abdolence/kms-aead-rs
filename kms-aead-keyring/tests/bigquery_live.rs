@@ -121,7 +121,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .encrypt(&aad, &ALICE.to_string())
         .await?;
     admin
-        .promote(admin.rotate(Purpose::Randomized).await?)
+        .promote_now(admin.rotate(Purpose::Randomized).await?)
         .await?;
     let second = keyring
         .sealer()

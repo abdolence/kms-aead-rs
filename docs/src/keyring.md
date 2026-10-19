@@ -171,9 +171,10 @@ let sealer: Sealer<'_, MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = keyri
 let value: Encrypted<Email, Randomized> = sealer.encrypt(&aad, &alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
-// A staged rotation keeps the previous version decrypting
+// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
+// so it promotes at once
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-admin.promote(staged).await?;
+admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 registry.shutdown().await?;
 # Ok(())

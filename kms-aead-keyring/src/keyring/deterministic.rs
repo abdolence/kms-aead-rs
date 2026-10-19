@@ -375,7 +375,7 @@ mod tests {
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
         admin
-            .promote(admin.rotate(Purpose::Deterministic).await?)
+            .promote_now(admin.rotate(Purpose::Deterministic).await?)
             .await?;
         let pending = admin.rotate(Purpose::Deterministic).await?;
 
@@ -436,7 +436,7 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         admin
-            .promote(admin.rotate(Purpose::Deterministic).await?)
+            .promote_now(admin.rotate(Purpose::Deterministic).await?)
             .await?;
         let first = KeyId::new(0x8000_0001);
         let current = [KeyId::new(0x8000_0002)];

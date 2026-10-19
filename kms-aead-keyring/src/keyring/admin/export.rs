@@ -407,7 +407,7 @@ mod tests {
         let keyring = admin.keyring();
         for _ in 0..2 {
             admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
+                .promote_now(admin.rotate(Purpose::Randomized).await?)
                 .await?;
         }
         admin.mark_compromised(KeyId::new(2), None).await?;
@@ -592,7 +592,7 @@ mod tests {
             keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let first = KeyId::new(1);
         admin
-            .promote(admin.rotate(Purpose::Randomized).await?)
+            .promote_now(admin.rotate(Purpose::Randomized).await?)
             .await?;
         admin.retire(first).await?;
         admin.destroy(first).await?;
@@ -647,7 +647,7 @@ mod tests {
         let (admin, _) = keyring_admin(TestProvider::cloud_kms()?, algorithms).await?;
         for _ in 0..2 {
             admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
+                .promote_now(admin.rotate(Purpose::Randomized).await?)
                 .await?;
         }
         let compromised = KeyId::new(2);

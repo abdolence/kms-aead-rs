@@ -96,7 +96,7 @@ async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
     let staged = admin
         .change_algorithm(KeyAlgorithm::Randomized(AeadAlgorithm::ChaCha20Poly1305))
         .await?;
-    admin.promote(staged).await?;
+    admin.promote_now(staged).await?;
     for aad in [
         EMAIL.aad(&EntityId::try_from("42")?),
         EMAIL.custom_aad(&[0xFF; 3])?,

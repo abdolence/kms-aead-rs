@@ -78,7 +78,8 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | Call | Does |
 |---|---|
 | `rotate(purpose)` | stages a pending version with the record's algorithm for the purpose, and returns its key id |
-| `promote(key_id)` | makes the pending version active; the previous active one becomes `DecryptOnly`. Returns a `Rotation` with both ids |
+| `promote(key_id)` | makes the pending version active; the previous active one becomes `DecryptOnly`. Returns a `Rotation` with both ids. Refuses with `PromotionTooEarly` until `record_ttl` has passed since the version was staged |
+| `promote_now(key_id)` | as `promote`, without the wait |
 | `change_algorithm(algorithm)` | makes `algorithm` the one new versions of its purpose use, and stages a version of it as `rotate` does |
 | `mark_compromised(key_id, note)` | flags the version; for the active version also adds an active replacement in the same write |
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
@@ -118,8 +119,19 @@ record, counted from `KeyVersion::staged_at()`. For a healthy process that time 
 revalidations fail keeps its cached record for as long as they fail, and logs a `WARN` on each
 failure: "The keyring record could not be revalidated; the cached record stays in use". A
 deployment whose instances can take hours to update or to reach the store waits as long. Alert on
-that `WARN`: an instance that logs it is one a promotion can leave behind. The library has no
-guard that holds a promotion back.
+that `WARN`: an instance that logs it is one a promotion can leave behind.
+
+`promote` holds the promotion back for the registry's `record_ttl` from `staged_at()`: before
+that it fails with `PromotionTooEarly`, whose `remaining` is the time left, so the job can sleep
+that long and call it again. The guard covers healthy processes only. `promote_now` skips it, for a
+fleet known to have refreshed since the rotation, such as one restarted since, and for a
+compromise that cannot wait.
+
+The guard waits the `record_ttl` of the registry the `KeyringAdmin` was opened from. Nothing in the
+record carries the TTL the other processes run with, so the administrative job's registry needs
+the longest `record_ttl` in the fleet. The guard also compares this host's clock with the
+`staged_at()` the staging host's clock wrote, and a skew between the two clocks shortens or
+lengthens the wait by as much.
 
 An instance that has not seen the version when it reads a value under it treats the key id as
 unknown and reloads its record once, at most once per `reload_min_interval`. When the store
@@ -133,8 +145,8 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRecord,
-    KeyringRegistry, KeyringRegistryOptions, Purpose, Rotation,
+    KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId,
+    KeyringRecord, KeyringRegistry, KeyringRegistryOptions, Purpose, Rotation,
 };
 
 # #[tokio::main]
@@ -157,8 +169,15 @@ let pending = record
     .ok_or("no pending version")?;
 assert_eq!(pending.state(), KeyVersionState::Pending);
 
-// Once the wait from `pending.staged_at()` is over, the job promotes it
-let rotation: Rotation = admin.promote(staged).await?;
+// Inside the record TTL from `pending.staged_at()`, `promote` refuses and says how long is left
+assert!(matches!(
+    admin.promote(staged).await,
+    Err(KeyringError::PromotionTooEarly(error))
+        if error.remaining <= KeyringRegistryOptions::DEFAULT_RECORD_TTL
+));
+
+// The job waits that long and promotes it; `promote_now` stands in for the wait here
+let rotation: Rotation = admin.promote_now(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
 registry.shutdown().await?;
@@ -178,7 +197,9 @@ pending, to be promoted or destroyed as planned.
 The replacement needs a new DEK encrypted. When the KMS cannot encrypt it, in an outage or without
 the encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`:
 the purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version
-is promoted. A compromised flag is never held back by the KMS.
+is promoted. Once the KMS answers, `rotate` and `promote_now` restore one, or `promote_now` on the
+pending version if the purpose has one: `promote` would refuse with `PromotionTooEarly` for up to
+`record_ttl` from the staging. A compromised flag is never held back by the KMS.
 
 `destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
 backup of the record still holds them, and the KMS still decrypts them as long as the KEK version

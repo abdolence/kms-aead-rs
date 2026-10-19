@@ -276,9 +276,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     print_rows(&keyring, &table).await?;
 
     // A rotation later, by the administrative job: the same sweep moves the rows to the new
-    // version.
+    // version. One process, so it promotes without waiting out the record TTL.
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-    admin.promote(staged).await?;
+    admin.promote_now(staged).await?;
     sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
     registry.shutdown().await?;

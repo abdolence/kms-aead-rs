@@ -610,7 +610,9 @@ mod tests {
             let users = Users::default();
             write_user(keyring, &users, "42").await?;
             let email = row_of(&users, "42").ok_or("the user is written")?.email;
-            admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
+            admin
+                .promote_now(admin.rotate(Purpose::Beacon).await?)
+                .await?;
 
             let report = sweep(keyring, &users).await;
 
@@ -651,7 +653,7 @@ mod tests {
                 .current;
             assert!(replacement.as_u32() > pending.as_u32());
             write_user(keyring, &users, "42").await?;
-            admin.promote(pending).await?;
+            admin.promote_now(pending).await?;
 
             let report = sweep(keyring, &users).await;
 
@@ -716,7 +718,7 @@ mod tests {
                 .ok_or("a new keyring has an active randomised version")?;
             write_user(keyring, &users, "41").await?;
             let second = admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
+                .promote_now(admin.rotate(Purpose::Randomized).await?)
                 .await?
                 .current;
             write_user(keyring, &users, "42").await?;
@@ -726,7 +728,9 @@ mod tests {
                 .ok_or("the compromised active version is replaced")?
                 .current;
             write_user(keyring, &users, "43").await?;
-            admin.promote(admin.rotate(Purpose::Beacon).await?).await?;
+            admin
+                .promote_now(admin.rotate(Purpose::Beacon).await?)
+                .await?;
             write_user(keyring, &users, "44").await?;
 
             let record = keyring.record();
@@ -857,7 +861,7 @@ mod tests {
             assert!(keyring.sealer().await.reseal(&aad, &old).await?.is_none());
 
             let rotation = admin
-                .promote(admin.rotate(Purpose::Randomized).await?)
+                .promote_now(admin.rotate(Purpose::Randomized).await?)
                 .await?;
             let resealed = keyring
                 .sealer()
@@ -933,7 +937,7 @@ mod tests {
                 .is_none());
 
             let rotation = admin
-                .promote(admin.rotate(Purpose::Deterministic).await?)
+                .promote_now(admin.rotate(Purpose::Deterministic).await?)
                 .await?;
             let resealed = keyring
                 .sealer()

@@ -923,7 +923,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1)).await;
         let admin = &fixture.admin;
         admin
-            .promote(admin.rotate(Purpose::Randomized).await?)
+            .promote_now(admin.rotate(Purpose::Randomized).await?)
             .await?;
 
         tokio::time::advance(KeyringRegistryOptions::DEFAULT_RECORD_TTL).await;
