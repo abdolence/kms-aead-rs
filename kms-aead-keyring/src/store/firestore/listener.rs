@@ -659,17 +659,24 @@ mod tests {
     /// application default credentials when it is unset, in the project `PROJECT_ID`.
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the docs"]
-    async fn a_removed_target_firestore_rs_no_longer_has_ends_only_its_keyrings_watch_at_once(
-    ) -> TestResult {
+    async fn a_removed_target_ends_its_watch_only_once_firestore_rs_has_dropped_it() -> TestResult {
         let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
-        let routes = Arc::new(Mutex::new(Routes::default()));
-        let (report_removal, _removals) = mpsc::unbounded_channel();
-        let mut task = ListenerTask {
-            listener: ListenerTask::start(&db, Arc::downgrade(&routes), report_removal)
-                .await
-                .map_err(Arc::new),
-            routes,
-            collection: "kms_aead_rs_ci_keyrings".to_string(),
+        let collection = "kms_aead_rs_ci_keyrings".to_string();
+        let listener = db
+            .create_listener(FirestoreMemListenStateStorage::new())
+            .await?;
+        listener.add_target(FirestoreListenerTargetParams::new(
+            FirestoreListenerTarget::try_from(1)?,
+            FirestoreTargetType::Documents(FirestoreCollectionDocuments::new(
+                collection.clone(),
+                vec!["tenant-a".to_string()],
+            )),
+            HashMap::new(),
+        ))?;
+        let task = ListenerTask {
+            listener: Ok(listener),
+            routes: Arc::new(Mutex::new(Routes::default())),
+            collection,
             next_target: 3,
             releases: FuturesUnordered::new(),
         };
@@ -682,18 +689,16 @@ mod tests {
         };
         let removed = Routes::lock(&task.routes).route(target_change(
             FirestoreListenerTargetChangeType::Remove,
-            &[1],
-            Some(Code::InvalidArgument),
+            &[1, 2],
+            Some(Code::Unavailable),
         ));
         for target in &removed {
             task.settle_removal(target);
         }
         assert_eq!(tenant_a.try_recv(), Ok(WatchEvent::Disconnected));
-        assert_eq!(tenant_a.try_recv(), Err(TryRecvError::Disconnected));
-        assert_eq!(tenant_b.try_recv(), Err(TryRecvError::Empty));
-        if let Ok(listener) = &mut task.listener {
-            listener.shutdown().await?;
-        }
+        assert_eq!(tenant_a.try_recv(), Err(TryRecvError::Empty));
+        assert_eq!(tenant_b.try_recv(), Ok(WatchEvent::Disconnected));
+        assert_eq!(tenant_b.try_recv(), Err(TryRecvError::Disconnected));
         Ok(())
     }
 
