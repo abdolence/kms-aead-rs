@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use firestore::FirestoreDb;
+use firestore::{FirestoreCollectionId, FirestoreDb};
 use futures_util::future::try_join_all;
 use kms_aead_keyring::store::{FirestoreKeyringStore, KeyringStore, WatchEvent};
 use kms_aead_keyring::{KeyringId, KeyringResult};
@@ -13,7 +13,8 @@ use serde_json::{json, Value};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-const COLLECTION: &str = "kms_aead_rs_ci_keyrings";
+const COLLECTION: FirestoreCollectionId =
+    FirestoreCollectionId::from_static("kms_aead_rs_ci_keyrings");
 
 const WATCHED_KEYRINGS: usize = 500;
 
@@ -21,7 +22,7 @@ const WATCHED_KEYRINGS: usize = 500;
 #[ignore = "needs Firestore in PROJECT_ID with application default credentials"]
 async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
     let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
-    let store = FirestoreKeyringStore::new(db.clone()).with_collection(COLLECTION.to_string());
+    let store = FirestoreKeyringStore::new(db.clone()).with_collection(COLLECTION);
     let run = uuid::Uuid::now_v7().simple();
     let ids = (0..WATCHED_KEYRINGS)
         .map(|keyring| KeyringId::try_from(format!("live-{run}-{keyring}")))
@@ -38,7 +39,7 @@ async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
         try_join_all(ids.iter().map(|id| {
             db.fluent()
                 .insert()
-                .into(COLLECTION)
+                .into(COLLECTION.as_str())
                 .document_id(id.as_str())
                 .object(&document)
                 .execute::<Value>()
@@ -62,7 +63,7 @@ async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
     try_join_all(ids.iter().map(|id| {
         db.fluent()
             .delete()
-            .from(COLLECTION)
+            .from(COLLECTION.as_str())
             .document_id(id.as_str())
             .execute()
     }))

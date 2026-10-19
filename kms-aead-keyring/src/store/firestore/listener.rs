@@ -14,8 +14,9 @@ use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::TargetChange;
 use ::firestore::gcloud_sdk::prost_types::Timestamp;
 use ::firestore::{
-    FirestoreDb, FirestoreListenEvent, FirestoreListener, FirestoreListenerTarget,
-    FirestoreListenerTargetChangeType, FirestoreMemListenStateStorage, FirestoreResult,
+    FirestoreCollectionId, FirestoreDb, FirestoreListenEvent, FirestoreListener,
+    FirestoreListenerTarget, FirestoreListenerTargetChangeType, FirestoreMemListenStateStorage,
+    FirestoreResult,
 };
 use tokio::sync::{mpsc, watch};
 
@@ -80,7 +81,7 @@ impl Watches {
     pub(super) async fn watch(
         &self,
         db: &FirestoreDb,
-        collection: &str,
+        collection: &FirestoreCollectionId,
         id: &KeyringId,
     ) -> KeyringResult<Option<KeyringWatch>> {
         let failed = |error: FirestoreError| {
@@ -110,7 +111,7 @@ impl Watches {
                     let added = db
                         .fluent()
                         .select()
-                        .by_id_in(collection)
+                        .by_id_in(collection.as_str())
                         .batch_listen([id.as_str()])
                         .add_target(target.clone(), listener);
                     if let Err(error) = added {

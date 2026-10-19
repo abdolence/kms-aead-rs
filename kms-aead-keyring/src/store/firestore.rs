@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::Document;
-use ::firestore::{FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition};
+use ::firestore::{
+    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreWritePrecondition,
+};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -37,7 +39,7 @@ mod listener;
 #[derive(Clone)]
 pub struct FirestoreKeyringStore {
     db: FirestoreDb,
-    collection: String,
+    collection: FirestoreCollectionId,
     watches: Arc<Watches>,
 }
 
@@ -50,21 +52,22 @@ struct WrittenDocument {
 
 impl FirestoreKeyringStore {
     /// The collection of [`new`](Self::new).
-    pub const DEFAULT_COLLECTION: &'static str = "kms_keyrings";
+    pub const DEFAULT_COLLECTION: FirestoreCollectionId =
+        FirestoreCollectionId::from_static("kms_keyrings");
 
     /// The store in the collection [`DEFAULT_COLLECTION`](Self::DEFAULT_COLLECTION) of `db`'s
     /// database.
     pub fn new(db: FirestoreDb) -> Self {
         Self {
             db,
-            collection: Self::DEFAULT_COLLECTION.to_string(),
+            collection: Self::DEFAULT_COLLECTION,
             watches: Arc::default(),
         }
     }
 
-    /// The store in `collection` instead. Firestore's rules for a collection id apply, and
-    /// Firestore checks them on the first call.
-    pub fn with_collection(self, collection: String) -> Self {
+    /// The store in `collection` instead, validated by [`FirestoreCollectionId::new`] or
+    /// [`FirestoreCollectionId::from_static`].
+    pub fn with_collection(self, collection: FirestoreCollectionId) -> Self {
         Self {
             collection,
             watches: Arc::default(),
@@ -80,7 +83,7 @@ impl FirestoreKeyringStore {
         self.db
             .fluent()
             .select()
-            .by_id_in(&self.collection)
+            .by_id_in(self.collection.as_str())
             .one(id.as_str())
             .await
             .map_err(|error| {
@@ -135,7 +138,7 @@ impl KeyringStore for FirestoreKeyringStore {
                 self.db
                     .fluent()
                     .insert()
-                    .into(&self.collection)
+                    .into(self.collection.as_str())
                     .document_id(id.as_str())
                     .object(&fields)
                     .execute::<WrittenDocument>()
@@ -145,7 +148,7 @@ impl KeyringStore for FirestoreKeyringStore {
                 self.db
                     .fluent()
                     .update()
-                    .in_col(&self.collection)
+                    .in_col(self.collection.as_str())
                     .precondition(FirestoreWritePrecondition::UpdateTime((*revision).into()))
                     .document_id(id.as_str())
                     .object(&fields)

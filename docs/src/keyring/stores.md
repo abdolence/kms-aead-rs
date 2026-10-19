@@ -42,8 +42,8 @@ signals a watch on every write.
 ## Firestore
 
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
-record's JSON. `with_collection` names another collection than
-`FirestoreKeyringStore::DEFAULT_COLLECTION`. A create fails when the document exists, and an
+record's JSON. `with_collection` takes another collection than
+`FirestoreKeyringStore::DEFAULT_COLLECTION`, as firestore-rs's `FirestoreCollectionId`. A create fails when the document exists, and an
 update carries the update time it read as its precondition.
 
 ```rust,no_run

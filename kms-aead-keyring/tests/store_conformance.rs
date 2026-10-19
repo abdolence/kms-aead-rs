@@ -323,14 +323,18 @@ async fn the_memory_store_conforms() -> TestResult {
 mod firestore_store {
     use std::error::Error;
 
-    use firestore::{FirestoreDb, FirestoreTimestamp};
+    use firestore::{FirestoreCollectionId, FirestoreDb, FirestoreTimestamp};
     use kms_aead_keyring::store::FirestoreKeyringStore;
 
     use super::*;
 
     async fn store() -> Result<FirestoreKeyringStore, Box<dyn Error>> {
         let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
-        Ok(FirestoreKeyringStore::new(db).with_collection("kms_aead_rs_ci_keyrings".to_string()))
+        Ok(
+            FirestoreKeyringStore::new(db).with_collection(FirestoreCollectionId::from_static(
+                "kms_aead_rs_ci_keyrings",
+            )),
+        )
     }
 
     #[tokio::test]
