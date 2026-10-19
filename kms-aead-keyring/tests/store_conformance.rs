@@ -220,20 +220,32 @@ async fn records_are_kept_apart_by_id(store: impl KeyringStore) -> TestResult {
 }
 
 /// A store without push returns no watch; one with push signals a write of the record it
-/// watches, and only of that record.
+/// watches, and only of that record. A store may signal its first state of the record, so the
+/// update is the write checked.
 async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
     let Some(mut watch) = store.watch(&id).await? else {
         return Ok(());
     };
+    let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
+    assert_eq!(event, Some(WatchEvent::Changed));
+    while tokio::time::timeout(Duration::from_millis(500), watch.next())
+        .await
+        .is_ok()
+    {}
+    written(
+        store
+            .compare_and_swap(&record(&id, 1)?, Some(&created))
+            .await?,
+    )?;
+    let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
+    assert_eq!(event, Some(WatchEvent::Changed));
     written(
         store
             .compare_and_swap(&record(&unique_keyring_id()?, 0)?, None)
             .await?,
     )?;
-    written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
-    let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
-    assert_eq!(event, Some(WatchEvent::Changed));
     assert!(
         tokio::time::timeout(Duration::from_millis(200), watch.next())
             .await
@@ -446,22 +458,32 @@ mod firestore_store {
                 Some(WatchEvent::Changed)
             );
         }
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), unwritten.next()).await?,
+            Some(WatchEvent::Changed),
+            "the first state of a keyring nobody wrote was not signalled"
+        );
         assert!(
             tokio::time::timeout(Duration::from_millis(500), unwritten.next())
                 .await
                 .is_err(),
-            "a keyring nobody wrote was signalled"
+            "a keyring nobody wrote was signalled after its first state"
         );
         store.shutdown(None).await;
         Ok(())
     }
 
+    /// The second watch joins after the first state, which it is not signalled.
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn a_second_watch_of_a_keyring_shares_its_target() -> TestResult {
         let store = store().await?;
         let id = unique_keyring_id()?;
         let mut first = store.watch(&id).await?.ok_or("the store has no push")?;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(10), first.next()).await?,
+            Some(WatchEvent::Changed)
+        );
         let mut second = store.watch(&id).await?.ok_or("the store has no push")?;
         let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
         for watch in [&mut first, &mut second] {
@@ -478,6 +500,29 @@ mod firestore_store {
         )?;
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(10), second.next()).await?,
+            Some(WatchEvent::Changed)
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(500), second.next())
+                .await
+                .is_err(),
+            "the second watch was signalled more than once per write"
+        );
+        store.shutdown(None).await;
+        Ok(())
+    }
+
+    /// A write right after the watch returns, before Firestore could send the document's first
+    /// state, is signalled: the keyring that opened the watch revalidates after it.
+    #[tokio::test]
+    #[ignore = "needs a Firestore emulator or project, see the module docs"]
+    async fn a_write_right_after_the_watch_returns_is_signalled() -> TestResult {
+        let store = store().await?;
+        let id = unique_keyring_id()?;
+        let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
+        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), watch.next()).await?,
             Some(WatchEvent::Changed)
         );
         store.shutdown(None).await;
@@ -501,8 +546,17 @@ mod firestore_store {
         ];
         store.shutdown(None).await;
         for watch in &mut watches {
+            // The first state may have been signalled before the shutdown.
+            let last = async {
+                loop {
+                    match watch.next().await {
+                        Some(WatchEvent::Changed) => {}
+                        other => return other,
+                    }
+                }
+            };
             assert_eq!(
-                tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
+                tokio::time::timeout(Duration::from_secs(10), last).await?,
                 None
             );
         }

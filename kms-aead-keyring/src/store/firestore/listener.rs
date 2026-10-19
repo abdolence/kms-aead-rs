@@ -18,16 +18,12 @@ use ::firestore::{
     FirestoreListenerTarget, FirestoreListenerTargetChangeType, FirestoreMemListenStateStorage,
     FirestoreResult,
 };
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use super::FirestoreKeyringStore;
 use crate::errors::{KeyringError, KeyringResult};
 use crate::store::{KeyringStore, KeyringWatch, StoreOperation, WatchEvent};
 use crate::KeyringId;
-
-/// How long a watch waits for Firestore's first state of the document. The keyring awaits the
-/// watch when it opens, and the load just before it reached Firestore.
-const WATCH_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The watches of a store and its clones, and the firestore-rs listener that signals them.
 #[derive(Default)]
@@ -64,15 +60,22 @@ struct Routes {
 struct Route {
     id: KeyringId,
     watches: Vec<mpsc::Sender<WatchEvent>>,
-    /// The document's update time as the listener last saw it, `None` while it is absent.
     /// Firestore sends a document's state again when it adds a target from scratch or resumes
     /// one, so a change is signalled only when this changes.
-    update_time: Option<Timestamp>,
-    /// `true` once Firestore has sent the document's state on this target. A watch waits for it,
-    /// and the route signals nothing before it. Dropped with the route.
-    current: watch::Sender<bool>,
+    document: DocumentState,
     /// Firestore removed the target on its own, and firestore-rs has not added it back yet.
     removed: bool,
+}
+
+/// A document as a route last saw it.
+#[derive(Clone, PartialEq)]
+enum DocumentState {
+    /// Firestore has sent no state on the target yet. A write between the keyring's load and the
+    /// target's first state shows only in that state, never as a change of it, so the first state
+    /// always signals, and the keyring revalidates on it.
+    Unseen,
+    Absent,
+    UpdatedAt(Timestamp),
 }
 
 impl Watches {
@@ -92,62 +95,37 @@ impl Watches {
             )
         };
         let (events, receiver) = mpsc::channel(16);
-        let mut current = {
-            let mut state = self.listener.lock().await;
-            if let ListenerState::Unstarted = *state {
-                let listener = Self::start(db, Arc::clone(&self.routes))
-                    .await
-                    .map_err(failed)?;
-                *state = ListenerState::Running(listener);
-            }
-            let ListenerState::Running(listener) = &mut *state else {
-                return Ok(None);
-            };
-            let mut routes = Routes::lock(&self.routes);
-            match routes.join(id, &events) {
-                Some(current) => current,
-                None => {
-                    let (target, current) = routes.insert(id.clone(), events);
-                    let added = db
-                        .fluent()
-                        .select()
-                        .by_id_in(collection.as_str())
-                        .batch_listen([id.as_str()])
-                        .add_target(target.clone(), listener);
-                    if let Err(error) = added {
-                        // firestore-rs refuses every target once its loop has stopped on its own,
-                        // so every watch ends with it.
-                        if matches!(error, FirestoreError::SystemError(_)) {
-                            routes.by_target.clear();
-                        } else {
-                            routes.by_target.remove(&target);
-                        }
-                        return Err(failed(error));
-                    }
-                    current
-                }
-            }
-        };
-        let started =
-            tokio::time::timeout(WATCH_START_TIMEOUT, current.wait_for(|current| *current))
+        let mut state = self.listener.lock().await;
+        if let ListenerState::Unstarted = *state {
+            let listener = Self::start(db, Arc::clone(&self.routes))
                 .await
-                .map(|current| current.is_ok());
-        let message = match started {
-            Ok(true) => return Ok(Some(KeyringWatch::new(receiver))),
-            // The route ended, which drops its `current` sender, before its target was current.
-            Ok(false) => {
-                if let ListenerState::Stopped = *self.listener.lock().await {
-                    return Ok(None);
-                }
-                "Firestore stopped listening to the document"
-            }
-            Err(_) => "Firestore sent no state of the document",
+                .map_err(failed)?;
+            *state = ListenerState::Running(listener);
+        }
+        let ListenerState::Running(listener) = &mut *state else {
+            return Ok(None);
         };
-        Err(KeyringError::store(
-            FirestoreKeyringStore::KIND,
-            StoreOperation::Watch,
-            message,
-        ))
+        let mut routes = Routes::lock(&self.routes);
+        if !routes.join(id, &events) {
+            let target = routes.insert(id.clone(), events);
+            let added = db
+                .fluent()
+                .select()
+                .by_id_in(collection.as_str())
+                .batch_listen([id.as_str()])
+                .add_target(target.clone(), listener);
+            if let Err(error) = added {
+                // firestore-rs refuses every target once its loop has stopped on its own, so
+                // every watch ends with it.
+                if matches!(error, FirestoreError::SystemError(_)) {
+                    routes.by_target.clear();
+                } else {
+                    routes.by_target.remove(&target);
+                }
+                return Err(failed(error));
+            }
+        }
+        Ok(Some(KeyringWatch::new(receiver)))
     }
 
     /// Ends every watch and stops the listener, aborting it at `timeout`.
@@ -201,37 +179,35 @@ impl Routes {
         routes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn join(
-        &mut self,
-        id: &KeyringId,
-        events: &mpsc::Sender<WatchEvent>,
-    ) -> Option<watch::Receiver<bool>> {
-        let route = self.by_target.values_mut().find(|route| route.id == *id)?;
+    /// Adds `events` to the route of `id`, and returns whether there was one. The joining watch
+    /// gets no signal of the document's state, which its keyring's first revalidation covers.
+    fn join(&mut self, id: &KeyringId, events: &mpsc::Sender<WatchEvent>) -> bool {
+        let Some(route) = self.by_target.values_mut().find(|route| route.id == *id) else {
+            return false;
+        };
         route.watches.push(events.clone());
-        Some(route.current.subscribe())
+        true
     }
 
     fn insert(
         &mut self,
         id: KeyringId,
         events: mpsc::Sender<WatchEvent>,
-    ) -> (FirestoreListenerTarget, watch::Receiver<bool>) {
+    ) -> FirestoreListenerTarget {
         // firestore-rs refuses every target past `i32::MAX`, so a saturated count fails each later
         // watch rather than reusing a target.
         self.allocated = self.allocated.saturating_add(1);
         let target = FirestoreListenerTarget::new(self.allocated);
-        let (current, receiver) = watch::channel(false);
         self.by_target.insert(
             target.clone(),
             Route {
                 id,
                 watches: vec![events],
-                update_time: None,
-                current,
+                document: DocumentState::Unseen,
                 removed: false,
             },
         );
-        (target, receiver)
+        target
     }
 
     /// Applies one event of the listen stream. An event for a target without a route, such as
@@ -242,13 +218,20 @@ impl Routes {
         event: FirestoreListenEvent,
         has_target: impl Fn(&FirestoreListenerTarget) -> bool,
     ) {
-        let (targets, update_time) = match event {
+        let (targets, document) = match event {
             FirestoreListenEvent::DocumentChange(change) => (
                 change.target_ids,
-                change.document.and_then(|document| document.update_time),
+                change
+                    .document
+                    .and_then(|document| document.update_time)
+                    .map_or(DocumentState::Absent, DocumentState::UpdatedAt),
             ),
-            FirestoreListenEvent::DocumentDelete(delete) => (delete.removed_target_ids, None),
-            FirestoreListenEvent::DocumentRemove(remove) => (remove.removed_target_ids, None),
+            FirestoreListenEvent::DocumentDelete(delete) => {
+                (delete.removed_target_ids, DocumentState::Absent)
+            }
+            FirestoreListenEvent::DocumentRemove(remove) => {
+                (remove.removed_target_ids, DocumentState::Absent)
+            }
             FirestoreListenEvent::TargetChange(change) => {
                 self.target_change(change, has_target);
                 return;
@@ -262,7 +245,7 @@ impl Routes {
                 .ok()
                 .and_then(|target| self.by_target.get_mut(&target));
             if let Some(route) = route {
-                route.document(update_time);
+                route.document(document.clone());
             }
         }
     }
@@ -317,8 +300,12 @@ impl Route {
     /// and returns whether Firestore removed the target.
     fn target_change(&mut self, change_type: FirestoreListenerTargetChangeType) -> bool {
         match change_type {
+            // Firestore sends no document for a target whose document is absent: the target
+            // becoming current without one is that state.
             FirestoreListenerTargetChangeType::Current => {
-                self.current.send_replace(true);
+                if self.document == DocumentState::Unseen {
+                    self.document(DocumentState::Absent);
+                }
             }
             // A reconnected stream adds every target back with its resume state, and the update
             // time covers what Firestore sends again, so only a target Firestore removed is
@@ -340,21 +327,16 @@ impl Route {
         false
     }
 
-    fn document(&mut self, update_time: Option<Timestamp>) {
-        if self.update_time != update_time {
-            self.update_time = update_time;
+    fn document(&mut self, document: DocumentState) {
+        if self.document != document {
+            self.document = document;
             self.signal(WatchEvent::Changed);
         }
     }
 
-    /// Sends `event` to every watch of the route once its target is current. Before that the
-    /// keyring has not started following its watch, and its first revalidation covers what came
-    /// earlier. A full channel already holds a signal that covers this one, and a closed one is
-    /// released at the next event.
+    /// Sends `event` to every watch of the route. A full channel already holds a signal that
+    /// covers this one, and a closed one is released at the next event.
     fn signal(&self, event: WatchEvent) {
-        if !*self.current.borrow() {
-            return;
-        }
         for events in &self.watches {
             let _ = events.try_send(event);
         }
@@ -404,20 +386,15 @@ mod tests {
         })
     }
 
-    /// The wire id of the target of a current route of the keyring `name`, added to `routes`,
-    /// and the route's watch.
+    /// The wire id of the target of a route of the keyring `name`, added to `routes`, and the
+    /// route's watch.
     fn watched(
         routes: &mut Routes,
         name: &str,
     ) -> Result<(i32, mpsc::Receiver<WatchEvent>), Box<dyn Error>> {
         let (events, watch) = mpsc::channel(16);
-        let (target, _) = routes.insert(KeyringId::try_from(name.to_string())?, events);
-        let target = target.try_into()?;
-        routes.apply(
-            target_change(FirestoreListenerTargetChangeType::Current, &[target], None),
-            |_| true,
-        );
-        Ok((target, watch))
+        let target = routes.insert(KeyringId::try_from(name.to_string())?, events);
+        Ok((target.try_into()?, watch))
     }
 
     #[test]
@@ -476,9 +453,9 @@ mod tests {
         let mut routes = Routes::default();
         let tenant_a = KeyringId::try_from("tenant-a".to_string())?;
         let (events, first) = mpsc::channel(16);
-        let (target, _) = routes.insert(tenant_a.clone(), events);
+        let target = routes.insert(tenant_a.clone(), events);
         let (events, second) = mpsc::channel(16);
-        assert!(routes.join(&tenant_a, &events).is_some());
+        assert!(routes.join(&tenant_a, &events));
         let _tenant_b = watched(&mut routes, "tenant-b")?;
         drop(first);
         assert!(routes.release_dropped().is_empty());
@@ -488,9 +465,10 @@ mod tests {
     }
 
     #[test]
-    fn a_resent_document_state_signals_nothing() -> TestResult {
+    fn the_first_document_state_signals_and_a_resent_one_does_not() -> TestResult {
         let mut routes = Routes::default();
-        let (target, mut tenant_a) = watched(&mut routes, "tenant-a")?;
+        let (written, mut tenant_a) = watched(&mut routes, "tenant-a")?;
+        let (absent, mut tenant_b) = watched(&mut routes, "tenant-b")?;
         let created = Timestamp {
             seconds: 1,
             nanos: 0,
@@ -499,19 +477,27 @@ mod tests {
             seconds: 2,
             nanos: 0,
         };
+        let current =
+            |target| target_change(FirestoreListenerTargetChangeType::Current, &[target], None);
         let deleted = FirestoreListenEvent::DocumentDelete(DocumentDelete {
-            removed_target_ids: vec![target],
+            removed_target_ids: vec![written],
             ..DocumentDelete::default()
         });
         for (event, signal) in [
-            (document_change(target, created), Some(WatchEvent::Changed)),
-            (document_change(target, created), None),
-            (document_change(target, updated), Some(WatchEvent::Changed)),
+            (document_change(written, created), Some(WatchEvent::Changed)),
+            (document_change(written, created), None),
+            (current(written), None),
+            (document_change(written, updated), Some(WatchEvent::Changed)),
             (deleted.clone(), Some(WatchEvent::Changed)),
             (deleted, None),
         ] {
             routes.apply(event, |_| true);
             assert_eq!(tenant_a.try_recv().ok(), signal);
+        }
+        // Firestore sends no document for a target whose document is absent, only its CURRENT.
+        for signal in [Some(WatchEvent::Changed), None] {
+            routes.apply(current(absent), |_| true);
+            assert_eq!(tenant_b.try_recv().ok(), signal);
         }
         Ok(())
     }

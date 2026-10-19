@@ -34,6 +34,15 @@ async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
             .into_iter()
             .collect::<Option<Vec<_>>>()
             .ok_or("the store has no push")?;
+        let first_states = try_join_all(
+            watches
+                .iter_mut()
+                .map(|watch| tokio::time::timeout(Duration::from_secs(60), watch.next())),
+        )
+        .await?;
+        assert!(first_states
+            .iter()
+            .all(|event| *event == Some(WatchEvent::Changed)));
 
         let document = json!({ "written": true });
         try_join_all(ids.iter().map(|id| {

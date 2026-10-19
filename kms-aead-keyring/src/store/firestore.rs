@@ -162,11 +162,13 @@ impl KeyringStore for FirestoreKeyringStore {
         }
     }
 
-    /// A watch on the document through the store's listener. It returns once Firestore has sent
-    /// the document's current state, so that every write after it signals, and that state itself
-    /// signals nothing. A signal is a change of the document's update time, or its creation or
-    /// deletion. The watches of a keyring share its target, which leaves the stream at the first
-    /// listen event after the last of them is dropped.
+    /// A watch on the document through the store's listener. It returns without waiting for
+    /// Firestore's first state of the document, which signals once it arrives, whether the
+    /// document exists or not: a write before it shows only in that state. After it, a signal is
+    /// a change of the document's update time, or its creation or deletion. The watches of a
+    /// keyring share its target, which leaves the stream at the first listen event after the
+    /// last of them is dropped, and a watch that joins a keyring's target gets no signal of the
+    /// state Firestore has already sent.
     ///
     /// firestore-rs reconnects a lost stream on its own and resumes every target, and the update
     /// time covers what Firestore sends again, so a reconnect signals nothing. When Firestore
@@ -181,9 +183,8 @@ impl KeyringStore for FirestoreKeyringStore {
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Store`] when firestore-rs refuses the target, when Firestore sends no state
-    /// of the document within 10 seconds or ends the target first, and once the listener has
-    /// stopped on its own.
+    /// [`KeyringError::Store`] when firestore-rs refuses the target, as it refuses every one once
+    /// the listener has stopped on its own.
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
         self.watches.watch(&self.db, &self.collection, id).await
     }
