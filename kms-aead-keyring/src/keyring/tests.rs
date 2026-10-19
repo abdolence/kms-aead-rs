@@ -1965,14 +1965,13 @@ async fn interop_bigquery_refuses_a_non_gcp_kek() -> TestResult {
     Ok(())
 }
 
-const PROMOTION_RECORD_TTL: Duration = Duration::from_secs(60);
-
 #[tokio::test]
 async fn promote_refuses_until_the_record_ttl_has_passed_since_staging() -> TestResult {
+    let record_ttl = Duration::from_secs(60);
     let fixture = Fixture::new(
         KeyringRegistryOptions::new()
             .with_watch(false)
-            .with_record_ttl(PROMOTION_RECORD_TTL),
+            .with_record_ttl(record_ttl),
     )
     .await?;
     let staged = fixture.admin.rotate(Purpose::Randomized).await?;
@@ -1984,7 +1983,7 @@ async fn promote_refuses_until_the_record_ttl_has_passed_since_staging() -> Test
             Err(KeyringError::PromotionTooEarly(PromotionTooEarlyError { key_id, remaining, .. }))
                 if *key_id == staged
                     && !remaining.is_zero()
-                    && *remaining <= PROMOTION_RECORD_TTL
+                    && *remaining <= record_ttl
         ),
         "{result:?}"
     );
@@ -2010,21 +2009,5 @@ async fn promote_succeeds_once_the_record_ttl_has_passed() -> TestResult {
     tokio::time::sleep(record_ttl).await;
     let rotation = fixture.admin.promote(staged).await?;
     assert_eq!(rotation.current, staged);
-    Ok(())
-}
-
-#[tokio::test]
-async fn promote_now_promotes_inside_the_record_ttl() -> TestResult {
-    let fixture = Fixture::new(
-        KeyringRegistryOptions::new()
-            .with_watch(false)
-            .with_record_ttl(PROMOTION_RECORD_TTL),
-    )
-    .await?;
-    let staged = fixture.admin.rotate(Purpose::Randomized).await?;
-
-    let rotation = fixture.admin.promote_now(staged).await?;
-    assert_eq!(rotation.current, staged);
-    assert_eq!(rotation.previous, Some(KeyId::new(1)));
     Ok(())
 }

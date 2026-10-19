@@ -1401,9 +1401,10 @@ Or is suspected to have.
    under the leaked key stops at each process's next refresh, and a process that has not seen the
    replacement yet reloads its record once, rate-limited, when it meets a value under it. When the
    KMS cannot encrypt a new DEK, the flag lands alone and `encrypt` fails with `NoActiveVersion`;
-   once the KMS answers, `rotate` and `promote` at once, since nothing seals under the purpose
-   meanwhile, or `promote` the pending version if the purpose has one. A pending version itself
-   is never compromised: `destroy` it instead;
+   once the KMS answers, `rotate` and `promote_now` at once, since nothing seals under the purpose
+   meanwhile, or `promote_now` the pending version if the purpose has one. `promote` would refuse
+   with `PromotionTooEarly` for up to `record_ttl` from the staging. A pending version itself is
+   never compromised: `destroy` it instead;
 2. every process stops using the key within the bound of the
    [record cache](./keyring/record-cache.md#how-late-a-change-is-seen), and its DEK is evicted from
    the DEK cache. With the default `Block` policy values under the version stop decrypting

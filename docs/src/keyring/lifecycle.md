@@ -127,6 +127,12 @@ that long and call it again. The guard covers healthy processes only. `promote_n
 fleet known to have refreshed since the rotation, such as one restarted since, and for a
 compromise that cannot wait.
 
+The guard waits the `record_ttl` of the registry the `KeyringAdmin` was opened from. Nothing in the
+record carries the TTL the other processes run with, so the administrative job's registry needs
+the longest `record_ttl` in the fleet. The guard also compares this host's clock with the
+`staged_at()` the staging host's clock wrote, and a skew between the two clocks shortens or
+lengthens the wait by as much.
+
 An instance that has not seen the version when it reads a value under it treats the key id as
 unknown and reloads its record once, at most once per `reload_min_interval`. When the store
 answers, the read succeeds after the reload; when it does not, the read fails with
@@ -191,7 +197,9 @@ pending, to be promoted or destroyed as planned.
 The replacement needs a new DEK encrypted. When the KMS cannot encrypt it, in an outage or without
 the encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`:
 the purpose then has no active version, and `encrypt` fails with `NoActiveVersion` until a version
-is promoted. A compromised flag is never held back by the KMS.
+is promoted. Once the KMS answers, `rotate` and `promote_now` restore one, or `promote_now` on the
+pending version if the purpose has one: `promote` would refuse with `PromotionTooEarly` for up to
+`record_ttl` from the staging. A compromised flag is never held back by the KMS.
 
 `destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
 backup of the record still holds them, and the KMS still decrypts them as long as the KEK version

@@ -9,18 +9,20 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
+use futures_util::stream;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{KekVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::SealMarker;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    DekReencryption, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyVersion,
-    Keyring, KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
+    DekReencryption, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust,
+    KeyVersion, Keyring, KeyringAdmin, KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry,
     KeyringRegistryOptions, KeyringResult, Plaintext, Purpose, Resealed, Rotation,
 };
 use secret_vault_value::SecretValue;
@@ -51,36 +53,41 @@ impl Plaintext for Email {
     }
 }
 
+#[derive(Clone)]
 struct UserRow {
     email: Encrypted<Email, Randomized>,
     seal: SealMarker,
 }
 
 /// The users table, by user id.
-type Table = BTreeMap<String, UserRow>;
+type Table = Mutex<BTreeMap<String, UserRow>>;
 
-/// A version of the local KEK, with fixed key material standing in for the key a KMS holds.
-fn local_kek(version: LocalKekVersion, material: u8) -> KmsAeadResult<LocalKek> {
-    LocalKek::from_secret(version, SecretValue::new(vec![material; 32]))
-}
-
-/// Re-seals every row whose marker is below the keyring's, through one sealer per row, and
-/// returns how many values moved to the active version. `sweep::run` drives the same re-seal over
-/// a stream of candidates, with a concurrency limit and a report.
-async fn sweep(keyring: &UsersKeyring, table: &mut Table) -> KeyringResult<usize> {
-    let current: SealMarker = keyring.record().seal_marker();
-    let mut resealed = 0;
-    for (user, row) in table.iter_mut().filter(|(_, row)| row.seal < current) {
-        let sealer = keyring.sealer().await;
-        let aad = EMAIL.aad(&EntityId::try_from(user.as_str())?);
-        let moved: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &row.email).await?;
-        if let Some(moved) = moved {
-            row.email = moved.value;
-            resealed += 1;
+/// Re-seals the row of `user` under the active version, with the marker of the sealer's record.
+async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
+    let row = table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(user)
+        .cloned();
+    let Some(row) = row else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let sealer = keyring.sealer().await;
+    let aad = EMAIL.aad(&EntityId::try_from(user)?);
+    let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &row.email).await?;
+    let (email, outcome) = match resealed {
+        Some(resealed) => {
+            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+            (resealed.value, ResealOutcome::Resealed { from_compromised })
         }
-        row.seal = sealer.record().seal_marker();
-    }
-    Ok(resealed)
+        None => (row.email, ResealOutcome::Skipped),
+    };
+    let seal: SealMarker = sealer.record().seal_marker();
+    table
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(user.to_string(), UserRow { email, seal });
+    Ok(outcome)
 }
 
 #[tokio::main]
@@ -93,13 +100,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         MemoryKeyringStore::new(),
         KeyringRegistryOptions::new().with_record_ttl(RECORD_TTL),
     )?;
-    let provider = LocalKmsProvider::<Ring>::new(kek_id.clone(), vec![local_kek(kek_v1, 0x01)?])?;
+    let provider = LocalKmsProvider::<Ring>::new(
+        kek_id.clone(),
+        vec![LocalKek::from_secret(
+            kek_v1,
+            SecretValue::new(vec![0x01; 32]),
+        )?],
+    )?;
     let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
         .create(provider, TENANT, KeyringAlgorithms::new())
         .await?;
     let keyring: &UsersKeyring = admin.keyring();
 
-    let mut table = Table::new();
+    let mut rows = BTreeMap::new();
     for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
         let sealer = keyring.sealer().await;
         let email = sealer
@@ -109,11 +122,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .await?;
         let seal = sealer.record().seal_marker();
-        table.insert(user.to_string(), UserRow { email, seal });
+        rows.insert(user.to_string(), UserRow { email, seal });
     }
     println!(
         "wrote {} users at seal marker {}",
-        table.len(),
+        rows.len(),
         keyring.record().seal_marker()
     );
 
@@ -122,7 +135,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rotation: Rotation = match admin.promote(staged).await {
         Err(KeyringError::PromotionTooEarly(error)) => {
             println!(
-                "promotion refused for another {} ms, until every process has seen the version",
+                "promotion refused for another {} ms, until every process whose record \
+                 revalidates has seen the version",
                 error.remaining.as_millis()
             );
             tokio::time::sleep(error.remaining).await;
@@ -139,11 +153,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         previous.as_u32()
     );
 
-    let resealed = sweep(keyring, &mut table).await?;
+    let current: SealMarker = keyring.record().seal_marker();
+    let candidates: Vec<String> = rows
+        .iter()
+        .filter(|(_, row)| row.seal < current)
+        .map(|(user, _)| user.clone())
+        .collect();
+    let table = Table::new(rows);
+    let report: SweepReport = sweep::run(
+        keyring.id(),
+        stream::iter(candidates),
+        NonZeroUsize::MIN,
+        |candidate| {
+            let table = &table;
+            async move { reseal(keyring, table, &candidate).await }
+        },
+    )
+    .await;
     println!(
-        "re-sealed {resealed} values at seal marker {}",
+        "re-sealed {} values at seal marker {}",
+        report.resealed,
         keyring.record().seal_marker()
     );
+    let table = table.into_inner().unwrap_or_else(PoisonError::into_inner);
 
     let range = keyring
         .record()
@@ -157,12 +189,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     admin.destroy(previous).await?;
     println!("retired and destroyed key version {}", previous.as_u32());
 
-    // The KEK rotated in the KMS: every process lists version 2, and it encrypts from now on.
+    // The KEK rotated in the KMS, and the highest listed version, 2, encrypts. A fleet gets there
+    // in its second deploy, after one that lists version 2 and still encrypts under version 1.
     let kek_rotated = LocalKmsProvider::<Ring>::new(
         kek_id.clone(),
-        vec![local_kek(kek_v1, 0x01)?, local_kek(kek_v2, 0x02)?],
-    )?
-    .with_encrypting_version(kek_v2)?;
+        vec![
+            LocalKek::from_secret(kek_v1, SecretValue::new(vec![0x01; 32]))?,
+            LocalKek::from_secret(kek_v2, SecretValue::new(vec![0x02; 32]))?,
+        ],
+    )?;
     let admin = registry.admin(kek_rotated, TENANT).await?;
     let moved: Vec<DekReencryption> = admin.reencrypt_deks().await?;
     for reencryption in &moved {
@@ -186,7 +221,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("every DEK is under KEK version {new_kek_version}");
 
     // Once version 1 is disabled, every DEK still decrypts through the KMS.
-    let kek_v1_disabled = LocalKmsProvider::<Ring>::new(kek_id, vec![local_kek(kek_v2, 0x02)?])?;
+    let kek_v1_disabled = LocalKmsProvider::<Ring>::new(
+        kek_id,
+        vec![LocalKek::from_secret(
+            kek_v2,
+            SecretValue::new(vec![0x02; 32]),
+        )?],
+    )?;
     registry
         .admin(kek_v1_disabled, TENANT)
         .await?

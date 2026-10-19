@@ -278,15 +278,14 @@ impl RecordEdit {
             return Ok(());
         };
         let elapsed = Duration::try_from(now.duration_since(staged_at)).unwrap_or(Duration::ZERO);
-        match wait.checked_sub(elapsed) {
-            Some(remaining) if !remaining.is_zero() => {
-                Err(KeyringError::PromotionTooEarly(PromotionTooEarlyError {
-                    keyring: self.record.id.clone(),
-                    key_id,
-                    remaining,
-                }))
-            }
-            _ => Ok(()),
+        if elapsed < wait {
+            Err(KeyringError::PromotionTooEarly(PromotionTooEarlyError {
+                keyring: self.record.id.clone(),
+                key_id,
+                remaining: wait - elapsed,
+            }))
+        } else {
+            Ok(())
         }
     }
 

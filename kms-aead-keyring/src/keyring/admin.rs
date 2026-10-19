@@ -120,6 +120,12 @@ where
     /// promotion needs, not a proof that every process has the version.
     /// [`promote_now`](Self::promote_now) skips the wait.
     ///
+    /// The wait is the `record_ttl` of the registry this admin was opened from, since the record
+    /// does not carry the TTL of the processes that read it: the administrative job's registry
+    /// needs the longest `record_ttl` in the fleet. The wait is counted on this host's clock from
+    /// the `staged_at` the staging host's clock wrote, so a skew between the two shortens or
+    /// lengthens it.
+    ///
     /// # Errors
     ///
     /// [`KeyringError::ReservedKeyId`](crate::KeyringError::ReservedKeyId), before any store call,
@@ -212,11 +218,13 @@ where
     /// version yet reload their record when they read a value under it. The replacement does not
     /// wait for the record TTL as [`promote`](Self::promote) does, since a wait would leave the
     /// compromised key sealing new values for that long. A pending version of the purpose stays
-    /// pending, and [`promote_now`](Self::promote_now) makes it active without the wait. When the KMS cannot encrypt the new key, during an outage or without
-    /// the encrypt right, it writes the flag alone, logs a `WARN` naming the error and returns
-    /// `Ok(None)`: the purpose then has no active version, and a sealer's `encrypt` fails with
-    /// `NoActiveVersion` until a version is promoted. For any other version it returns
-    /// `Ok(None)`.
+    /// pending. When the KMS cannot encrypt the new key, during an outage or without the encrypt
+    /// right, it writes the flag alone, logs a `WARN` naming the error and returns `Ok(None)`:
+    /// the purpose then has no active version, and a sealer's `encrypt` fails with
+    /// `NoActiveVersion` until a version is promoted. Once the KMS answers,
+    /// [`rotate`](Self::rotate) and [`promote_now`](Self::promote_now), or `promote_now` on the
+    /// pending version, restore one without waiting out the record TTL. For any other version it
+    /// returns `Ok(None)`.
     ///
     /// # Errors
     ///
