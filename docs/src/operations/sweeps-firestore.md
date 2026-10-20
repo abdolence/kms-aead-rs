@@ -29,6 +29,12 @@ Firestore Admin API and `roles/datastore.indexAdmin`; the application that sweep
 The [index management chapter](https://firestore-rust.abdolence.dev/index-management.html) of
 firestore-rs covers `.plan()`, `.sync()` and running them from a deploy.
 
+A project that manages its indexes outside Rust sets the same override with `gcloud`:
+
+```sh
+gcloud firestore indexes fields update seal --collection-group=users --index=order=ASCENDING
+```
+
 The query streams with `stream_query_with_errors()`, so that a document that does not read is a
 failed candidate, and the sweep never ends early on it. `sweep::run_batched` cuts the documents into
 batches of 500, each re-sealed through one sealer and written back in one `BatchWrite`. Each write
