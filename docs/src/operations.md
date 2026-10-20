@@ -572,6 +572,7 @@ anything changed the document since the query read it:
 ```rust,no_run
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
@@ -607,6 +608,10 @@ const EMAIL: FieldSpec = FieldSpec::new(
 /// Firestore's limit of writes in one `BatchWrite`.
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
+/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
+/// never ends. A batch that runs out of it fails.
+const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -652,12 +657,13 @@ impl Display for UserDoc {
 }
 
 /// Why the sweep failed on a document or a batch: an error of the keyring or of the users
-/// collection, or the status of a document's write in a batch, `None` for a status the batch did
-/// not return.
+/// collection, the status of a document's write in a batch, `None` for a status the batch did not
+/// return, or a batch that ran out of [`BATCH_WRITE_TIMEOUT`].
 enum SweepError {
     Keyring(KeyringError),
     Users(FirestoreError),
     Write(Option<Code>),
+    WriteTimedOut,
 }
 
 impl From<KeyringError> for SweepError {
@@ -687,6 +693,10 @@ impl Display for SweepError {
             SweepError::Users(_) => f.write_str("the users collection failed"),
             SweepError::Write(Some(code)) => write!(f, "its write failed with {code:?}"),
             SweepError::Write(None) => f.write_str("its write returned no status"),
+            SweepError::WriteTimedOut => write!(
+                f,
+                "its batch was not written within {BATCH_WRITE_TIMEOUT:?}"
+            ),
         }
     }
 }
@@ -702,6 +712,7 @@ async fn sweep_users(
         .db
         .fluent()
         .select()
+        .fields(paths!(UserFields::{email, seal}))
         .from(USERS)
         .filter(|q| q.field("seal").less_than(current))
         .obj::<UserDoc>()
@@ -797,7 +808,10 @@ async fn reseal_batch(
     if queued.is_empty() {
         return Ok(done);
     }
-    let response: FirestoreBatchWriteResponse = batch.write().await?;
+    let response: FirestoreBatchWriteResponse =
+        tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write())
+            .await
+            .map_err(|_| SweepError::WriteTimedOut)??;
     done.extend(queued.into_iter().enumerate().map(|(index, (doc, outcome))| {
         let code: Option<Code> = response
             .statuses
@@ -882,7 +896,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 
-use futures_util::StreamExt;
+use futures_util::{future, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
@@ -979,10 +993,22 @@ async fn sweep_users(
     writer: &Client,
 ) -> Result<SweepReport, tokio_postgres::Error> {
     let current: SealMarker = keyring.record().seal_marker();
-    // A row whose id does not read is a failed candidate; an error of the stream itself ends it.
+    // A row whose id does not read is a failed candidate. An error of the stream itself is one
+    // failed candidate and ends the stream: once its connection drops, the stream returns that
+    // error on every poll and never its end.
     let candidates = reader
         .query_raw("SELECT id, email, seal FROM users WHERE seal < $1", [current])
         .await?
+        .scan(
+            false,
+            |ended: &mut bool, row: Result<Row, tokio_postgres::Error>| {
+                if *ended {
+                    return future::ready(None);
+                }
+                *ended = row.is_err();
+                future::ready(Some(row))
+            },
+        )
         .map(|row: Result<Row, tokio_postgres::Error>| {
             let row: Row = row?;
             Ok::<UserRow, SweepError>(UserRow {
@@ -1378,6 +1404,11 @@ which BigQuery's limit on concurrent DML per table sets low. The five properties
 row that a concurrent writer changed fails the `ON` condition and stays in the query for the next
 run.
 
+A `MERGE` returns a count, not the rows it changed, so a batch with one such row counts all its rows
+as `Skipped`, the ones it wrote included. Its re-seals from a compromised version then drop out of
+`SweepReport::resealed_from_compromised`, although they went through the trust decision below, so
+on this path that count is a lower bound.
+
 The marker takes 7 bytes of a row: its 5 bytes and the 2 BigQuery counts for every `BYTES` value.
 Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep's query processed
 700,000 bytes, the `seal` column alone. BigQuery does not cluster a `BYTES` column, so the query
@@ -1402,7 +1433,8 @@ So after a compromise the application decides per record before it re-seals:
 - a comparison against a backup taken before the compromise;
 - or acceptance, when forged values do no harm.
 
-`SweepReport::resealed_from_compromised` counts the records that went through that decision.
+`SweepReport::resealed_from_compromised` counts the records that went through that decision, or
+fewer on the [BigQuery `MERGE` path](#bigquery), whose batches with a conflict count as skipped.
 
 ## Migrating from envelope values
 

@@ -123,23 +123,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .execute()
         .await?;
 
-    let outcome = run(&db, &dataset, &key_ref, count).await;
-    delete_test_data(&db, &dataset).await?;
-    outcome
+    let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+        MemoryKeyringStore::new(),
+        KeyringRegistryOptions::new(),
+    )?;
+
+    let outcome = run(&registry, &db, &dataset, &key_ref, count).await;
+    let shutdown = registry.shutdown().await;
+    let cleanup = delete_test_data(&db, &dataset).await;
+    outcome?;
+    shutdown?;
+    cleanup?;
+    Ok(())
 }
 
 /// Seeds `count` users, rotates, sweeps, prints the rows the sweep re-sealed, and checks that
 /// BigQuery reads every user.
 async fn run(
+    registry: &KeyringRegistry<MemoryKeyringStore, Ring>,
     db: &BigQueryDb,
     dataset: &BigQueryDatasetId,
     key_ref: &GcpKmsKeyRef,
     count: u32,
 ) -> Result<(), Box<dyn Error>> {
-    let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
-        MemoryKeyringStore::new(),
-        KeyringRegistryOptions::new(),
-    )?;
     let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> = registry
         .create(
             GcpKmsProvider::new(key_ref).await?,
@@ -177,7 +183,6 @@ async fn run(
         return Err(format!("{readable} of {count} users read back in BigQuery").into());
     }
     println!("BigQuery reads all {readable} users");
-    registry.shutdown().await?;
     Ok(())
 }
 

@@ -26,8 +26,10 @@
 //! returns exactly the rows it did not write, so a scheduled job that ends and runs again keeps
 //! each snapshot short, and nothing else needs to record how far it got.
 //!
-//! The example creates a schema of its own, with the keyring table and the users table in it, and
-//! drops it at the end. The keyring is under an ephemeral local KEK, so no cloud KMS is needed.
+//! The example creates the schema `sweep_example`, with the keyring table and the users table in
+//! it, and drops it at the end. The schema's name is fixed, so that every statement of the example
+//! is a literal, and a run drops a schema of that name left over from a run that crashed before
+//! it starts. The keyring is under an ephemeral local KEK, so no cloud KMS is needed.
 //!
 //! ```sh
 //! docker run --rm -d --name kms-aead-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
@@ -44,7 +46,7 @@ use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{future, stream, StreamExt, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
@@ -141,25 +143,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Some(count) => count.parse()?,
         None => DEFAULT_USERS,
     };
-    let schema = format!("sweep_example_{}", uuid::Uuid::now_v7().simple());
     // Every session of the example, the keyring store's included, resolves `users` and
     // `kms_keyrings` in the example's own schema.
     let mut config: Config = std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?;
-    config.options(format!("-c search_path={schema}"));
+    config.options("-c search_path=sweep_example");
     let (client, connection) = config.connect(NoTls).await?;
     tokio::spawn(connection);
     let (reader, connection) = config.connect(NoTls).await?;
     tokio::spawn(connection);
-    create_test_schema(&client, &schema).await?;
+    create_test_schema(&client).await?;
     let registry = KeyringRegistry::<PostgresKeyringStore<NoTls>, Ring>::new(
         PostgresKeyringStore::new(config, NoTls),
         KeyringRegistryOptions::new(),
     )?;
 
     let outcome = run(&registry, &reader, &client, count).await;
-    registry.shutdown().await?;
-    delete_test_data(&client, &schema).await?;
-    outcome
+    let shutdown = registry.shutdown().await;
+    let cleanup = delete_test_data(&client).await;
+    outcome?;
+    shutdown?;
+    cleanup?;
+    Ok(())
 }
 
 /// Seeds `count` users, rotates, sweeps and prints the sweep's report.
@@ -213,10 +217,22 @@ async fn sweep_users(
     writer: &Client,
 ) -> Result<SweepReport, tokio_postgres::Error> {
     let current: SealMarker = keyring.record().seal_marker();
-    // A row whose id does not read is a failed candidate; an error of the stream itself ends it.
+    // A row whose id does not read is a failed candidate. An error of the stream itself is one
+    // failed candidate and ends the stream: once its connection drops, the stream returns that
+    // error on every poll and never its end.
     let candidates = reader
         .query_raw("SELECT id, email FROM users WHERE seal < $1", [current])
         .await?
+        .scan(
+            false,
+            |ended: &mut bool, row: Result<Row, tokio_postgres::Error>| {
+                if *ended {
+                    return future::ready(None);
+                }
+                *ended = row.is_err();
+                future::ready(Some(row))
+            },
+        )
         .map(|row: Result<Row, tokio_postgres::Error>| {
             let row: Row = row?;
             Ok::<UserRow, SweepError>(UserRow {
@@ -224,22 +240,13 @@ async fn sweep_users(
                 row,
             })
         });
-    let swept = AtomicUsize::new(0);
     let report: SweepReport = sweep::run_batched(
         keyring.id(),
         candidates,
         BatchedSweepOptions::new()
             .with_batch_size(BATCH_SIZE)
             .with_concurrency(CONCURRENCY),
-        |batch: Vec<UserRow>| {
-            let swept = &swept;
-            async move {
-                let batch_count = batch.len();
-                let outcomes = reseal_batch(keyring, writer, batch).await;
-                count_progress(swept, batch_count, "swept");
-                outcomes
-            }
-        },
+        |batch: Vec<UserRow>| reseal_batch(keyring, writer, batch),
     )
     .await;
     Ok(report)
@@ -332,24 +339,26 @@ fn count_progress(done: &AtomicUsize, count: usize, what: &str) {
 // The example's own data, not part of a sweep: its schema with the keyring table and the users
 // in it, created before the sweep and dropped after it.
 
-/// Creates `schema` with the keyring table and the users table, indexed on `seal`, in it.
-async fn create_test_schema(client: &Client, schema: &str) -> Result<(), tokio_postgres::Error> {
+/// Creates the schema `sweep_example`, dropping one left over from an earlier run first, with the
+/// keyring table and the users table, indexed on `seal`, in it.
+async fn create_test_schema(client: &Client) -> Result<(), tokio_postgres::Error> {
     client
-        .batch_execute(&format!(
-            "CREATE SCHEMA {schema};
-            CREATE TABLE {schema}.kms_keyrings (
+        .batch_execute(
+            "DROP SCHEMA IF EXISTS sweep_example CASCADE;
+            CREATE SCHEMA sweep_example;
+            CREATE TABLE sweep_example.kms_keyrings (
                 id         TEXT PRIMARY KEY,
                 record     JSONB NOT NULL,
                 revision   BIGINT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
-            CREATE TABLE {schema}.users (
+            CREATE TABLE sweep_example.users (
                 id    BIGINT PRIMARY KEY,
                 email BYTEA NOT NULL,
                 seal  BYTEA NOT NULL DEFAULT '\\x0100000000'
             );
-            CREATE INDEX users_seal ON {schema}.users (seal);"
-        ))
+            CREATE INDEX users_seal ON sweep_example.users (seal);",
+        )
         .await
 }
 
@@ -401,14 +410,14 @@ async fn seed_test_data(
     Ok(())
 }
 
-/// Drops `schema` with the keyring record and the users in it.
-async fn delete_test_data(client: &Client, schema: &str) -> Result<(), tokio_postgres::Error> {
+/// Drops the schema `sweep_example` with the keyring record and the users in it.
+async fn delete_test_data(client: &Client) -> Result<(), tokio_postgres::Error> {
     let started = Instant::now();
     client
-        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .batch_execute("DROP SCHEMA sweep_example CASCADE")
         .await?;
     println!(
-        "dropped the example's schema {schema} in {:.2?}",
+        "dropped the example's schema sweep_example in {:.2?}",
         started.elapsed()
     );
     Ok(())
