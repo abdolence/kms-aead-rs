@@ -30,7 +30,7 @@ The crate has no default features.
 | `serde-json` | `Json`, a typed field's plaintext of any serde type, stored as its JSON |
 | `postgres` | `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for tokio-postgres |
 | `sqlx` | sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS stack |
-| `opentelemetry` | OpenTelemetry metrics on the API crate: counters of the values and plaintext bytes sealed and opened, and histograms of the time each call, KMS request and keyring store read takes, see [Metrics](./observability.md#metrics) |
+| `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value sealed and opened, and the time each call, KMS request and keyring store read takes, see [Metrics](./observability.md#metrics) |
 
 The local KMS provider, `LocalKmsProvider`, is in every build and needs no feature.
 

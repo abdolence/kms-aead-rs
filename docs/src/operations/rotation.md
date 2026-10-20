@@ -48,26 +48,31 @@ step of the administrative job, once the sweep is done and the old version's
 
 ### Alerting on volume
 
-With the `opentelemetry` feature, the keyring counts the values and plaintext bytes it seals
-under each version, see [Metrics](../observability.md#metrics). Each process counts its own, and
-the alert sums them across the fleet. Here at half of 2^32 values and of 2^38 bytes per version,
-in PromQL over the Prometheus export, with the range covering the version's life:
+With the `opentelemetry` feature, the keyring records the plaintext size of each value it seals
+under each version, see [Metrics](../observability.md#metrics): the histogram's count is the
+values, and its sum their bytes. Each process records its own, and the alert sums them across the
+fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
+export, with the range covering the version's life:
 
 ```promql
-sum by (keyring, key_id) (
-  increase(kms_aead_values_total{mode="keyring", operation="encrypt", purpose="randomized"}[90d])
+sum by (kms_aead_keyring, kms_aead_key_id) (
+  increase(kms_aead_plaintext_size_bytes_count{
+    kms_aead_mode="keyring", kms_aead_operation="encrypt", kms_aead_purpose="randomized"
+  }[90d])
 ) > 0.5 * 2^32
 
-sum by (keyring, key_id) (
-  increase(kms_aead_plaintext_bytes_total{
-    mode="keyring", operation="encrypt", algorithm=~"aes-(128|256)-gcm"
+sum by (kms_aead_keyring, kms_aead_key_id) (
+  increase(kms_aead_plaintext_size_bytes_sum{
+    kms_aead_mode="keyring", kms_aead_operation="encrypt",
+    kms_aead_algorithm=~"aes-(128|256)-gcm"
   }[90d])
 ) > 0.5 * 2^38
 ```
 
-A counter starts at zero in every new process, and `increase()` counts across those restarts. The
-bytes alert keeps to AES-GCM versions, the only ones with a volume bound. Rotate the version the
-alert names, as above.
+A histogram starts at zero in every new process, and `increase()` counts across those restarts.
+The `[90d]` range needs 90 days of retention, or a recording rule that keeps the increase for that
+long: Prometheus keeps 15 days by default. The bytes alert keeps to AES-GCM versions, the only ones
+with a volume bound. Rotate the version the alert names, as above.
 
 ## Rotating the KEK
 
