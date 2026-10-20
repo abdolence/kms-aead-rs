@@ -22,8 +22,8 @@ use std::time::Duration;
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreSimpleBatchWriter, FirestoreTimestamp,
-    FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreDuration, FirestoreSimpleBatchWriteOptions,
+    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
 };
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
@@ -53,10 +53,13 @@ const EMAIL: FieldSpec = FieldSpec::new(
 /// Firestore's limit of writes in one `BatchWrite`.
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
-/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
-/// never ends. A batch that runs out of it fails.
-const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error:
+/// with no limit, a sweep against an unreachable Firestore never ends.
+const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
+/// How long one `BatchWrite` may take, its retries included: the retry limit starts no retry past
+/// it but does not end an attempt, and an attempt on a connection that never answers waits for
+/// minutes. A batch that runs out of it fails.
+const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -282,7 +285,12 @@ async fn reseal_batch(
 #     "my-key".to_string(),
 # );
 # let db = FirestoreDb::new("my-project").await?;
-# let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+let writer: FirestoreSimpleBatchWriter = db
+    .create_simple_batch_writer_with_options(
+        FirestoreSimpleBatchWriteOptions::new()
+            .with_retry_max_elapsed_time(BATCH_WRITE_RETRY_LIMIT),
+    )
+    .await?;
 # let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
 #     FirestoreKeyringStore::new(db.clone()),
 #     KeyringRegistryOptions::new(),

@@ -46,8 +46,9 @@ use std::time::{Duration, Instant};
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb,
-    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDuration,
+    FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
 use futures_util::stream::TryChunksError;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -78,10 +79,13 @@ const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 /// The batches in flight at once. On a new collection of a real database, raise the write rate
 /// step by step, as Firestore's 500/50/5 rule for ramping up traffic advises.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
-/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
-/// never ends. A batch that runs out of it fails.
-const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error:
+/// with no limit, a sweep against an unreachable Firestore never ends.
+const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
+/// How long one `BatchWrite` may take, its retries included: the retry limit starts no retry past
+/// it but does not end an attempt, and an attempt on a connection that never answers waits for
+/// minutes. A batch that runs out of it fails.
+const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// The users between two progress lines.
 const PROGRESS_EVERY: usize = 100_000;
 const DEFAULT_USERS: u32 = 100;
@@ -185,7 +189,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         FirestoreKeyringStore::new(db.clone()).with_collection(keyrings.clone()),
         KeyringRegistryOptions::new(),
     )?;
-    let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+    let writer: FirestoreSimpleBatchWriter = db
+        .create_simple_batch_writer_with_options(
+            FirestoreSimpleBatchWriteOptions::new()
+                .with_retry_max_elapsed_time(BATCH_WRITE_RETRY_LIMIT),
+        )
+        .await?;
 
     let outcome = run(&registry, &writer, &users, count).await;
     let shutdown = registry.shutdown().await;
