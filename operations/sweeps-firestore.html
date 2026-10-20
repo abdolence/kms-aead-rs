@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
+            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -193,12 +193,14 @@ of the batch carries its document’s update time as its precondition, and Fires
 anything changed the document since the query read it:</p>
 <pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreDuration, FirestoreSimpleBatchWriteOptions,
-    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreDb, FirestoreDbOptions,
+    FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
@@ -213,8 +215,7 @@ use kms_aead_keyring::{
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
-<span class="boring">use firestore::FirestoreDb;
-</span><span class="boring">use kms_aead::providers::GcpKmsKeyRef;
+<span class="boring">use kms_aead::providers::GcpKmsKeyRef;
 </span><span class="boring">use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
 </span>
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
@@ -231,7 +232,9 @@ const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 /// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error.
 /// The writer retries with no limit of its own, so without this a sweep against a Firestore that
 /// refuses or fails its requests never ends.
-const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
+const BATCH_WRITE_RETRY_LIMIT: Duration = Duration::from_secs(5);
+/// How long a request waits for an answer, so that one to a Firestore that stopped answering fails.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -448,8 +451,11 @@ async fn reseal_batch(
 </span><span class="boring">    "my-key-ring".to_string(),
 </span><span class="boring">    "my-key".to_string(),
 </span><span class="boring">);
-</span><span class="boring">let db = FirestoreDb::new("my-project").await?;
-</span>let writer: FirestoreSimpleBatchWriter = db
+</span>let db: FirestoreDb = FirestoreDb::with_options(
+    FirestoreDbOptions::new("my-project".to_string()).with_request_timeout(REQUEST_TIMEOUT),
+)
+.await?;
+let writer: FirestoreSimpleBatchWriter = db
     .create_simple_batch_writer_with_options(
         FirestoreSimpleBatchWriteOptions::new()
             .with_retry_max_elapsed_time(BATCH_WRITE_RETRY_LIMIT),
@@ -467,9 +473,8 @@ println!("{report:?}");
 <span class="boring">registry.shutdown().await?;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The retry limit ends retries, not a request: a request on a connection that never answers, the
-candidate query included, waits until HTTP/2 keep-alive drops the connection, so the job timeout of
-the scheduler that runs the sweep is what bounds a run.</p>
+<p>The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
+candidate query included.</p>
 <p>A range filter never matches a document without the field. <code>#[serde(default)]</code> reads a document
 written before the marker as <code>SealMarker::ENVELOPE</code>, and the query finds it only once its <code>seal</code>
 holds those bytes, see <a href="../use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
