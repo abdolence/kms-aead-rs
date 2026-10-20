@@ -41,12 +41,12 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDuration,
+    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDbOptions,
     FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
     FirestoreWritePrecondition,
 };
@@ -81,9 +81,11 @@ const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 /// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error.
 /// The writer retries with no limit of its own, so without this a sweep against a Firestore that
-/// refuses or fails its requests never ends. The limit ends retries, not a request: one on a
-/// connection that never answers waits until HTTP/2 keep-alive drops the connection.
-const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
+/// refuses or fails its requests never ends. The limit ends retries, and [`REQUEST_TIMEOUT`] a
+/// request.
+const BATCH_WRITE_RETRY_LIMIT: Duration = Duration::from_secs(5);
+/// How long a request waits for an answer, so that one to a Firestore that stopped answering fails.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The users between two progress lines.
 const PROGRESS_EVERY: usize = 100_000;
 const DEFAULT_USERS: u32 = 100;
@@ -177,7 +179,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let suffix = uuid::Uuid::now_v7().simple();
     let keyrings = FirestoreCollectionId::new(format!("sweep_example_keyrings_{suffix}"))?;
     let users = FirestoreCollectionId::new(format!("sweep_example_users_{suffix}"))?;
-    let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
+    let db: FirestoreDb = FirestoreDb::with_options(
+        FirestoreDbOptions::new(std::env::var("PROJECT_ID")?).with_request_timeout(REQUEST_TIMEOUT),
+    )
+    .await?;
     let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
         FirestoreKeyringStore::new(db.clone()).with_collection(keyrings.clone()),
         KeyringRegistryOptions::new(),
