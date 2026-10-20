@@ -1056,7 +1056,7 @@ mod postgres {
                 "{caused} revalidations in {intervals} intervals"
             );
             drop(keyring);
-            registry.shutdown().await?;
+            registry.shutdown(None).await;
             drop_table(&admin, &table).await
         }
     }
@@ -1073,7 +1073,7 @@ mod gcs {
     };
     use gcloud_sdk::{tonic, GoogleApi};
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
-    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore};
+    use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore, ObjectPrefix};
     use kms_aead_keyring::KeyringError;
 
     use super::{conformance, unique_keyring_id, TestResult};
@@ -1083,10 +1083,12 @@ mod gcs {
         let client =
             GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
                 .await?;
-        Ok(GcsKeyringStore::new(client, bucket)?.with_prefix(format!(
-            "kms-keyrings-conformance/{}/",
-            uuid::Uuid::now_v7()
-        )))
+        Ok(
+            GcsKeyringStore::new(client, bucket)?.with_prefix(ObjectPrefix::from(format!(
+                "kms-keyrings-conformance/{}/",
+                uuid::Uuid::now_v7()
+            ))),
+        )
     }
 
     #[tokio::test]
@@ -1100,7 +1102,9 @@ mod gcs {
     #[tokio::test]
     #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let failing = store().await?.with_prefix("x".repeat(1100));
+        let failing = store()
+            .await?
+            .with_prefix(ObjectPrefix::from("x".repeat(1100)));
         super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 
@@ -1140,8 +1144,8 @@ mod gcs {
             format!("bucket={resource}").parse()?,
         );
         client.get().write_object(request).await?;
-        let store =
-            GcsKeyringStore::new(client, GcsBucketName::try_from(bucket)?)?.with_prefix(prefix);
+        let store = GcsKeyringStore::new(client, GcsBucketName::try_from(bucket)?)?
+            .with_prefix(ObjectPrefix::from(prefix));
         assert!(matches!(
             store.load(&id).await,
             Err(KeyringError::RecordInvalid(RecordInvalidError {
@@ -1161,7 +1165,7 @@ mod s3 {
     use aws_config::{BehaviorVersion, Region};
     use aws_sdk_s3::primitives::ByteStream;
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
-    use kms_aead_keyring::store::{KeyringStore, S3BucketName, S3KeyringStore};
+    use kms_aead_keyring::store::{KeyringStore, ObjectPrefix, S3BucketName, S3KeyringStore};
     use kms_aead_keyring::KeyringError;
 
     use super::{conformance, unique_keyring_id, TestResult};
@@ -1190,7 +1194,8 @@ mod s3 {
     }
 
     async fn store() -> Result<S3KeyringStore, Box<dyn std::error::Error>> {
-        Ok(S3KeyringStore::new(client().await?, bucket()?).with_prefix(run_prefix()))
+        Ok(S3KeyringStore::new(client().await?, bucket()?)
+            .with_prefix(ObjectPrefix::from(run_prefix())))
     }
 
     #[tokio::test]
@@ -1204,7 +1209,9 @@ mod s3 {
     #[tokio::test]
     #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let failing = store().await?.with_prefix("x".repeat(1100));
+        let failing = store()
+            .await?
+            .with_prefix(ObjectPrefix::from("x".repeat(1100)));
         super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 
@@ -1223,7 +1230,7 @@ mod s3 {
             .body(ByteStream::from(vec![b' '; (1 << 20) + 1]))
             .send()
             .await?;
-        let store = S3KeyringStore::new(client, bucket).with_prefix(prefix);
+        let store = S3KeyringStore::new(client, bucket).with_prefix(ObjectPrefix::from(prefix));
         assert!(matches!(
             store.load(&id).await,
             Err(KeyringError::RecordInvalid(RecordInvalidError {

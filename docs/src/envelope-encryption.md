@@ -269,7 +269,7 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope};
 # let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
 
-let stored: Vec<u8> = encrypted_dek.value().clone();
+let stored: Vec<u8> = encrypted_dek.value().to_vec();
 let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
 
 let stored_hex: String = encrypted_dek.to_hex_string();

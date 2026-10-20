@@ -218,13 +218,16 @@ pub struct BeaconMac<B> {
 }
 
 impl<B: AeadBackend> BeaconMac<B> {
-    /// A beacon MAC for `algorithm` on the backend `B`. Every backend implements every
-    /// [`BeaconAlgorithm`].
-    pub fn new(algorithm: BeaconAlgorithm) -> Self {
-        Self {
+    /// A beacon MAC for `algorithm` on the backend `B`.
+    ///
+    /// # Errors
+    ///
+    /// None today: every backend implements every [`BeaconAlgorithm`].
+    pub fn new(algorithm: BeaconAlgorithm) -> KmsAeadResult<Self> {
+        Ok(Self {
             algorithm,
             backend: PhantomData,
-        }
+        })
     }
 
     /// The algorithm this MAC computes beacons with.
@@ -364,10 +367,10 @@ mod tests {
     }
 
     #[test]
-    fn a_key_of_another_length_is_refused() {
+    fn a_key_of_another_length_is_refused() -> KmsAeadResult<()> {
         let dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
 
-        let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256).beacon(
+        let result = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256)?.beacon(
             KeyId::new(7),
             b"user/email",
             BeaconBits::DEFAULT,
@@ -380,5 +383,6 @@ mod tests {
                 if error.public.code == "INVALID_KEY_LENGTH"),
             "{result:?}"
         );
+        Ok(())
     }
 }

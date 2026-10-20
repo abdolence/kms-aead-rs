@@ -528,7 +528,7 @@ where
         value: &T,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
-        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256);
+        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256)?;
         let measurement = Measurement::start(metrics::Call {
             operation: "beacon",
             mode: "caller_dek",
@@ -1662,7 +1662,7 @@ mod tests {
             CountingKmsProvider::new(TestKmsProvider::Working, ORDERS_KEK),
             KmsAeadEnvelopeOptions::new().with_dek_cache(DekCache::new(DekCacheOptions::new())?),
         )?;
-        let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
+        let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256)?;
         let (dek, encrypted_dek) = mac.generate_encrypted_dek(encryption.provider()).await?;
         let key_id = KeyId::new(7);
         let email = "alice@example.com".to_string();

@@ -82,12 +82,12 @@ impl KmsAeadEncryptionProvider for TestKmsProvider {
             TestKmsProvider::Stamping(since) => {
                 let nanos = u64::try_from(since.elapsed().as_nanos())
                     .expect("a test runs for less than 584 years");
-                let mut key = encrypted_dek.value().clone();
+                let mut key = encrypted_dek.value().to_vec();
                 key.extend(nanos.to_le_bytes());
                 Ok(DataEncryptionKey::from(SecretValue::new(key)))
             }
             _ => Ok(DataEncryptionKey::from(SecretValue::new(
-                encrypted_dek.value().clone(),
+                encrypted_dek.value().to_vec(),
             ))),
         }
     }

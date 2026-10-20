@@ -97,7 +97,7 @@ let probes: Vec<Beacon<Email>> = keyring
     .await?;
 assert!(probes.contains(&beacon));
 assert_eq!(keyring.decrypt(&aad, &encrypted).await?, email);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -297,7 +297,7 @@ let report: SweepReport = sweep::run(
 println!("{report:?}");
 # assert_eq!(report.resealed, 2);
 # assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

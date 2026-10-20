@@ -101,7 +101,7 @@ fn decrypt_request(
     routed(
         DecryptRequest {
             name: key.to_string(),
-            ciphertext: encrypted_dek.value().clone(),
+            ciphertext: encrypted_dek.value().to_vec(),
             ..Default::default()
         },
         key,

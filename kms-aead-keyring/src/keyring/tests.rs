@@ -252,7 +252,7 @@ async fn a_reserved_or_deterministic_key_id_fails_before_any_store_or_kms_call()
 
     assert!(matches!(
         fixture.keyring.decrypt(&aad, &relabelled(&value, 0)?).await,
-        Err(KeyringError::ReservedKeyId)
+        Err(KeyringError::ReservedKeyId(_))
     ));
     assert!(matches!(
         fixture.keyring.decrypt(&aad, &relabelled(&value, 0x8000_0001)?).await,
@@ -290,7 +290,7 @@ async fn an_operation_on_a_reserved_key_id_fails_before_any_store_call() -> Test
                 .await
                 .map(|_| ()),
         ] {
-            assert!(matches!(refused, Err(KeyringError::ReservedKeyId)));
+            assert!(matches!(refused, Err(KeyringError::ReservedKeyId(_))));
         }
     }
     assert_eq!(store_calls(), before);
@@ -1653,7 +1653,7 @@ async fn a_write_before_the_watch_subscribes_is_seen() -> TestResult {
             .map(KeyVersion::id),
         Some(KeyId::new(2))
     );
-    registry.shutdown().await?;
+    registry.shutdown(None).await;
     Ok(())
 }
 
@@ -1686,7 +1686,7 @@ async fn watch_signals_coalesce_to_one_revalidation_per_interval() -> TestResult
     );
     tokio::time::sleep(Duration::from_secs(60)).await;
     assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 2);
-    fixture.registry.shutdown().await?;
+    fixture.registry.shutdown(None).await;
     Ok(())
 }
 

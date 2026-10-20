@@ -272,7 +272,7 @@ impl FromStr for KeyVersionState {
             "decrypt_only" => Ok(KeyVersionState::DecryptOnly),
             "retired" => Ok(KeyVersionState::Retired),
             "destroyed" => Ok(KeyVersionState::Destroyed),
-            _ => Err(KeyringError::UnknownKeyVersionState),
+            _ => Err(KeyringError::UnknownKeyVersionState(name.to_owned())),
         }
     }
 }

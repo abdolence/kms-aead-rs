@@ -2,6 +2,8 @@
 //! The memory store, for tests, is
 //! [`testing::MemoryKeyringStore`](crate::testing::MemoryKeyringStore).
 
+#[cfg(any(feature = "gcs", feature = "s3"))]
+use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
@@ -32,6 +34,36 @@ pub use gcs::*;
 mod s3;
 #[cfg(feature = "s3")]
 pub use s3::*;
+
+/// The prefix of the object names of an object store's records, such as `kms-keyrings/`: the
+/// object of a keyring is `<prefix><keyring id>.json`. A prefix that should read as a folder ends
+/// with `/`, and an empty one puts the records at the top of the bucket. The characters and the
+/// length an object name allows are the service's to check.
+#[cfg(any(feature = "gcs", feature = "s3"))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ObjectPrefix(Cow<'static, str>);
+
+#[cfg(any(feature = "gcs", feature = "s3"))]
+impl ObjectPrefix {
+    /// `prefix`, for a constant.
+    pub const fn from_static(prefix: &'static str) -> Self {
+        Self(Cow::Borrowed(prefix))
+    }
+}
+
+#[cfg(any(feature = "gcs", feature = "s3"))]
+impl From<String> for ObjectPrefix {
+    fn from(prefix: String) -> Self {
+        Self(Cow::Owned(prefix))
+    }
+}
+
+#[cfg(any(feature = "gcs", feature = "s3"))]
+impl Display for ObjectPrefix {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
 
 /// A store of keyring records, one per keyring id, with a compare-and-swap on each.
 ///

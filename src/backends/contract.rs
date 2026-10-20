@@ -473,7 +473,7 @@ fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
 fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let dek = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
-        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256);
+        let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256)?;
         for (bits, beacon) in [
             (
                 256,

@@ -199,13 +199,14 @@
 //! admin.promote_now(staged).await?;
 //!
 //! assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
-//! registry.shutdown().await?;
+//! registry.shutdown(None).await;
 //! # Ok(())
 //! # }
 //! # #[cfg(not(all(feature = "ring", feature = "admin")))]
 //! # fn main() {}
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -224,7 +225,10 @@ pub use keyring::*;
 pub use kms_aead::formats;
 #[cfg(feature = "serde-json")]
 pub use kms_aead::Json;
-pub use kms_aead::{Encrypted, KeyId, Plaintext};
+pub use kms_aead::{
+    AeadAlgorithm, Beacon, BeaconAlgorithm, BeaconBits, DeterministicAlgorithm, Encrypted, KeyId,
+    Plaintext,
+};
 
 mod metrics;
 

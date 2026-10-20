@@ -269,6 +269,7 @@ impl std::error::Error for KmsAeadError {
 /// The part of an error that is safe to return to an application's own callers.
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub struct KmsAeadErrorPublicGenericDetails {
     /// A code a caller can match on: one of the crate's codes or the code a KMS returned.
     pub code: String,
@@ -276,6 +277,7 @@ pub struct KmsAeadErrorPublicGenericDetails {
 
 /// See [`KmsAeadError::SystemError`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadSystemError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
@@ -316,6 +318,7 @@ impl std::error::Error for KmsAeadSystemError {
 
 /// See [`KmsAeadError::NetworkError`].
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadNetworkError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
@@ -359,6 +362,7 @@ impl std::error::Error for KmsAeadNetworkError {}
 
 /// See [`KmsAeadError::EncryptionError`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadEncryptionError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,

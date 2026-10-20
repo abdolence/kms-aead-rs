@@ -40,7 +40,7 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
    has DEKs of its own, see [Encrypted fields and AAD](../keyring/fields.md);
 4. on every write, `keyring.sealer()` and its `encrypt`, and the seal marker it gives, see
    [The seal marker](../operations/sweeps.md#the-seal-marker); on every read, `keyring.decrypt`;
-5. `registry.shutdown()` before the process exits, see
+5. `registry.shutdown(None)` before the process exits, see
    [The registry and its handles](../keyring.md#the-registry-and-its-handles).
 
 Rotations and sweeps run per keyring: the administrative job loops over the tenants, see

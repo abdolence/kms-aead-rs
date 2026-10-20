@@ -5,7 +5,9 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 
-use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
+use super::{
+    KeyringStore, KeyringWatch, ObjectPrefix, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+};
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
 use crate::{KeyringId, KeyringRecord};
@@ -73,13 +75,13 @@ impl Display for S3ETag {
 pub struct S3KeyringStore {
     client: aws_sdk_s3::Client,
     bucket: S3BucketName,
-    prefix: String,
+    prefix: ObjectPrefix,
 }
 
 impl S3KeyringStore {
     /// The prefix of [`new`](Self::new): the object of a keyring is
     /// `kms-keyrings/<keyring id>.json`.
-    pub const DEFAULT_PREFIX: &'static str = "kms-keyrings/";
+    pub const DEFAULT_PREFIX: ObjectPrefix = ObjectPrefix::from_static("kms-keyrings/");
 
     /// A store of the records in `bucket` under [`DEFAULT_PREFIX`](Self::DEFAULT_PREFIX), that
     /// sends its requests with `client`.
@@ -106,13 +108,13 @@ impl S3KeyringStore {
         Self {
             client,
             bucket,
-            prefix: Self::DEFAULT_PREFIX.to_string(),
+            prefix: Self::DEFAULT_PREFIX,
         }
     }
 
     /// The store with its records under `prefix` instead: the object of a keyring is
-    /// `<prefix><keyring id>.json`. A prefix that should read as a folder ends with `/`.
-    pub fn with_prefix(self, prefix: String) -> Self {
+    /// `<prefix><keyring id>.json`.
+    pub fn with_prefix(self, prefix: ObjectPrefix) -> Self {
         Self { prefix, ..self }
     }
 

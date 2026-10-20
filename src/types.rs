@@ -110,7 +110,7 @@ impl EncryptedDataEncryptionKey {
     }
 
     /// The bytes.
-    pub fn value(&self) -> &Vec<u8> {
+    pub fn value(&self) -> &[u8] {
         &self.bytes
     }
 

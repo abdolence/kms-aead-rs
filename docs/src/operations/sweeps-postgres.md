@@ -270,7 +270,7 @@ async fn reseal_batch(
 #     .await?;
 let report: SweepReport = sweep_users(&keyring, &reader, &client).await?;
 println!("{report:?}");
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

@@ -281,6 +281,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     admin.promote_now(staged).await?;
     sweep_table(&keyring, &table).await;
     print_rows(&keyring, &table).await?;
-    registry.shutdown().await?;
+    registry.shutdown(None).await;
     Ok(())
 }

@@ -79,7 +79,7 @@ let second: Encrypted<Email, Deterministic> =
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
 assert_eq!(keyring.decrypt_deterministic(&aad, &first).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -158,7 +158,7 @@ admin.promote_now(staged).await?;
 let probes: Vec<Encrypted<Email, Deterministic>> = keyring.deterministic_probes(&aad, &alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&before));
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

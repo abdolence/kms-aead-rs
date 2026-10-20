@@ -495,6 +495,7 @@ pub enum CompromisedReadPolicy {
 }
 
 /// A decrypted value, with the version that opened it and whether that version is trusted.
+#[non_exhaustive]
 pub struct Decrypted<T> {
     /// The value.
     pub value: T,
@@ -506,6 +507,7 @@ pub struct Decrypted<T> {
 
 /// A value sealed again under the active version of its purpose, by [`Sealer::reseal`] or
 /// `Sealer::reseal_deterministic`, with the trust of the version the old value was read under.
+#[non_exhaustive]
 pub struct Resealed<T, F: Format> {
     /// The value under the active version, to write in place of the old one.
     pub value: Encrypted<T, F>,

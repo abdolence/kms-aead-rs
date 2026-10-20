@@ -13,7 +13,7 @@ page is the checklist of each side, and what to alert on in production.
   [Store rights](../keyring/deployment.md#store-rights);
 - calls `KeyringRegistry::open`, and on the `Keyring` it returns `sealer`, `decrypt` and the
   probes, and runs the sweeps;
-- awaits `registry.shutdown()` before it exits.
+- awaits `registry.shutdown(None)` before it exits.
 
 ## The administration
 
@@ -45,7 +45,7 @@ and [Events](../observability.md#events), and the metrics need the `opentelemetr
 | `WARN`: a compromised flag written without a rotation | the KMS could not encrypt a new DEK, so `encrypt` fails with `NoActiveVersion` | `rotate` and `promote_now` once the KMS answers, see [Compromised versions](../keyring/lifecycle.md#compromised-versions) |
 | `WARN`: a read of a compromised version under the `Allow` policy | values under a leaked DEK are being read | the sweep of [A plaintext DEK leaked](../operations/runbook.md#a-plaintext-dek-leaked) |
 | `WARN`: a read refused because its version is retired or destroyed | a value the sweep missed | `reinstate` a retired version, and sweep again |
-| `WARN`: a `KeyringRegistry` dropped with its tasks running, or a `shutdown` that aborted them | the process exits without `shutdown` | await `registry.shutdown()` before the exit |
+| `WARN`: a `KeyringRegistry` dropped with its tasks running, or a `shutdown` that aborted them | the process exits without `shutdown` | await `registry.shutdown(None)` before the exit |
 | `WARN`: a record a sweep could not re-seal, or `SweepReport::failed` above zero | a record left under an old version | the cause in the event's `error`, see [Running a sweep](../operations/sweeps.md#running-a-sweep) |
 | `error.type` on `kms_aead.operation.duration` | calls that fail, by code, such as `DECRYPT` for a value that is not authentic under its key and AAD, or `KEY_VERSION_UNKNOWN` | the code, see [Error handling](../errors.md) |
 | `error.type` on `kms_aead.kms.duration` | KMS requests that fail: a denied permission, a disabled key version, a quota | [Retries](../errors.md#retries) for the codes of each KMS |
