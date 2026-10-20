@@ -1,7 +1,7 @@
 //! The keyset exports: a keyring's versions as a Tink keyset encrypted by the keyring's KEK, for
 //! BigQuery's `KEYS.KEYSET_CHAIN` or for Tink's own keyset readers.
 
-use std::fmt::{Debug, Formatter, Write};
+use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 
 use kms_aead::backends::AeadBackend;
@@ -11,7 +11,9 @@ use kms_aead::formats::{TinkKeyType, TinkKeyset};
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
 
-use crate::encodings::{BigQuery, KeysetEncoding, Tink};
+#[cfg(feature = "bigquery-export")]
+use crate::encodings::BigQuery;
+use crate::encodings::{KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
 use crate::purpose::unreserved;
 use crate::spans::{self, LoadReason};
@@ -98,21 +100,6 @@ impl<E: KeysetEncoding> EncryptedKeyset<E> {
     }
 }
 
-impl EncryptedKeyset<BigQuery> {
-    /// The keyset as a GoogleSQL bytes literal, `b'\x0a\x24…'`, for the second argument of
-    /// `KEYS.KEYSET_CHAIN`, which takes a literal or a query parameter.
-    pub fn to_sql_literal(&self) -> String {
-        let mut literal = String::with_capacity(3 + 4 * self.bytes.len());
-        literal.push_str("b'");
-        for byte in &self.bytes {
-            // Writing to a `String` cannot fail.
-            let _ = write!(literal, "\\x{byte:02x}");
-        }
-        literal.push('\'');
-        literal
-    }
-}
-
 impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EncryptedKeyset")
@@ -141,6 +128,10 @@ impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
     ///
     /// The keys inside are the versions' own keys. The keyset never opens as a version's key:
     /// what the KMS decrypts from it is a serialised keyset, which is no serialised Tink key.
+    ///
+    /// A query binds the export as two parameters, never as SQL text:
+    /// `KEYS.KEYSET_CHAIN(@kms_key, @keyset)`, with [`key_uri`](EncryptedKeyset::key_uri) a
+    /// `STRING` parameter and [`value`](EncryptedKeyset::value) a `BYTES` one.
     ///
     /// # Errors
     ///
@@ -324,6 +315,7 @@ mod tests {
     use secret_vault_value::SecretValue;
 
     use super::*;
+    use crate::encodings::BigQuery;
     use crate::errors::{InteropError, KeyVersionError};
     use crate::test_support::{
         email_of, TestAdmin, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,

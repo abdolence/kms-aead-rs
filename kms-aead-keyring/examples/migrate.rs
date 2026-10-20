@@ -217,7 +217,7 @@ async fn sweep_table(keyring: &UsersKeyring, table: &Table) {
         .collect();
     let report: SweepReport = sweep::run(
         keyring.id(),
-        stream::iter(candidates),
+        stream::iter(candidates.into_iter().map(Ok)),
         NonZeroUsize::MIN.saturating_add(1),
         |candidate| async move { reseal(keyring, table, &candidate).await },
     )

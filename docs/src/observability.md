@@ -184,7 +184,7 @@ those of `KeyringAdmin` calls, under the `admin` feature.
 | `Keyring destroy all versions` | `dangerously_destroy_all_versions` | `keyring`, `cas_retries`, `error_code` |
 | `Keyring re-encrypt DEKs` | `reencrypt_deks` | `keyring`, `versions`, `dek_cache`, `cas_retries`, `error_code` |
 | `Keyring export` | `export_bigquery_keyset`, `export_tink_keyset` | `keyring`, `purpose`, `versions`, `dek_cache`, `error_code` |
-| `Keyring sweep` | `sweep::run` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
+| `Keyring sweep` | `sweep::run`, `sweep::run_batched` | `keyring`, `scanned`, `resealed`, `resealed_from_compromised`, `skipped`, `failed` |
 
 | Field | Value |
 |---|---|
@@ -227,6 +227,12 @@ those of `KeyringAdmin` calls, under the `admin` feature.
   in `record` and of its error in `error`. Both are the application's own text, so it keeps
   values, secrets and personal data out of them. A record id is often an entity id, so the
   sweep's log is an administrative log;
+- `WARN`: a candidate the sweep's stream returned as an error, with the `Display` of the error in
+  `error`;
+- `WARN`: a batch of `sweep::run_batched` whose re-seal failed as a whole, with its number of
+  candidates in `candidates` and the `Display` of the error in `error`, and a batch that returned
+  a different number of outcomes from it was given candidates, with both counts in `candidates` and
+  `outcomes`;
 - `DEBUG`: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
   retried.
 

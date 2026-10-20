@@ -224,13 +224,12 @@ let first_level_keyset: EncryptedDataEncryptionKey = provider
 ```
 
 BigQuery reads the column with `KEYS.KEYSET_CHAIN` over the encrypted keyset, passed as a `BYTES`
-query parameter:
+query parameter, beside the key's Tink URI as a `STRING` one,
+`gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key`:
 
 ```sql
 SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(
-    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
-    @first_level_keyset),
+  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
   u.email,
   CONCAT('users/', CAST(u.id AS STRING), '/email'))
 FROM users u;
@@ -515,8 +514,8 @@ query or a reader that opens one fails once the old version is disabled:
 - a keyring's `export_bigquery_keyset` and `export_tink_keyset`: export each keyset again, with the
   same selection, after `reencrypt_deks` and, under Cloud KMS, after the new primary version has
   propagated. The new export holds the same keys, encrypted under the KEK's current version. Write
-  its bytes wherever the old ones are kept: the query parameter or the literal of each
-  `KEYS.KEYSET_CHAIN`, a column or a setting that holds the keyset, and the file or the setting a
+  its bytes wherever the old ones are kept: the query parameter of each `KEYS.KEYSET_CHAIN`, a
+  column or a setting that holds the keyset, and the file or the setting a
   Tink reader opens. See [BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery);
 - the application's own encrypted keyset, such as `first_level_keyset` in
   [One fixed key](#one-fixed-key): the provider decrypts it and encrypts it again, and the new bytes

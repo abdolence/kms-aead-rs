@@ -46,6 +46,10 @@ serde_bytes = { workspace = true, optional = true }
 bytes = { workspace = true, optional = true }
 sqlx-core = { workspace = true, optional = true }
 sqlx-postgres = { workspace = true, optional = true }
+# The client of the BigQuery live test and the `sweep_bigquery` example, with the root store and
+# crypto provider of kms-aead's `gcp-kms-encryption`. An optional dependency rather than a
+# dev-dependency, so that the rows that build no BigQuery do not compile it.
+bigquery = { version = "0.9", optional = true }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -103,14 +107,9 @@ s3 = ["dep:aws-sdk-s3"]
 # a TLS root store or crypto provider: the application enables kms-aead's `gcp-kms-encryption` to
 # build it.
 bigquery-export = ["admin", "kms-aead/gcp-kms-encryption-base"]
-# The live test of the keyset export: BigQuery's `jobs.query`, and a root store and crypto provider
-# for its Cloud KMS and BigQuery clients.
-ci-bigquery = [
-    "bigquery-export",
-    "dep:gcloud-sdk",
-    "gcloud-sdk/google-cloud-bigquery-v2",
-    "kms-aead/gcp-kms-encryption",
-]
+# The BigQuery client of the keyset export's live test and of the `sweep_bigquery` example, and a
+# root store and crypto provider for their Cloud KMS client.
+ci-bigquery = ["bigquery-export", "dep:bigquery", "kms-aead/gcp-kms-encryption"]
 # The live check of the Tink keyset export: kms-aead's Cloud KMS and AWS KMS providers, with a
 # root store and crypto provider, for the `tink_export` example.
 ci-tink = ["admin", "kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
@@ -152,6 +151,21 @@ path = "examples/rotate.rs"
 required-features = ["ring", "admin"]
 
 [[example]]
+name = "sweep_bigquery"
+path = "examples/sweep_bigquery.rs"
+required-features = ["ci-bigquery", "ring", "serde"]
+
+[[example]]
+name = "sweep_firestore"
+path = "examples/sweep_firestore.rs"
+required-features = ["ring", "admin", "serde", "firestore"]
+
+[[example]]
+name = "sweep_postgres"
+path = "examples/sweep_postgres.rs"
+required-features = ["ring", "admin", "postgres"]
+
+[[example]]
 name = "tink_export"
 path = "examples/tink_export.rs"
 required-features = ["ci-tink", "aws-lc"]
@@ -159,7 +173,7 @@ required-features = ["ci-tink", "aws-lc"]
 [[test]]
 name = "bigquery_live"
 path = "tests/bigquery_live.rs"
-required-features = ["ci-bigquery", "deterministic", "ring"]
+required-features = ["ci-bigquery", "deterministic", "ring", "serde"]
 
 [[test]]
 name = "firestore_live"
