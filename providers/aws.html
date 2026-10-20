@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -253,16 +253,8 @@ DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own 
 missing is imported again.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
-<code>NotFoundException</code>, and the message AWS KMS returned. A <code>NetworkError</code>:</p>
-<ul>
-<li><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code> and
-<code>KeyUnavailableException</code>;</li>
-<li>any 5xx or 429 status;</li>
-<li>a timeout, a connection failure, or a response the SDK could not read.</li>
-</ul>
-<p>Any other error, such as <code>AccessDeniedException</code>, <code>DisabledException</code> or a request that could not
-be built or signed, is an <code>EncryptionError</code> whose root cause is the SDK error. See
-<a href="../errors.html#retries">Error handling</a>.</p>
+<code>NotFoundException</code>, and the message AWS KMS returned, and its root cause is the SDK error. Which
+errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>.</p>
 
                     </main>
 

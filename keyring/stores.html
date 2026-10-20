@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -255,8 +255,8 @@ where the log leaves the administration’s reach.</p>
 );
 </code></pre>
 <ul>
-<li>an application needs <code>SELECT</code> on it, and the administration also <code>INSERT</code> and <code>UPDATE</code>. An
-application’s watch runs <code>LISTEN</code> on the table’s channel, which PostgreSQL allows every role;</li>
+<li>the rights of the application and the administration on the table are in
+<a href="./deployment.html#store-rights">Store rights</a>;</li>
 <li>the table name is unqualified, so the connection’s <code>search_path</code> selects the schema;</li>
 <li>every write sends <code>NOTIFY &lt;table&gt;, '&lt;keyring id&gt;'</code> when it commits, through <code>pg_notify</code> in the
 same statement;</li>
@@ -316,8 +316,8 @@ tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</c
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.</p>
 <ul>
-<li>an application needs <code>storage.objects.get</code> on the bucket, and the administration also
-<code>storage.objects.create</code> and <code>storage.objects.delete</code>, since a write replaces the object;</li>
+<li>the rights of the application and the administration on the bucket are in
+<a href="./deployment.html#store-rights">Store rights</a>;</li>
 <li>Cloud Storage has no change notification the store listens to, so a process sees a change once
 its record is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
@@ -349,8 +349,8 @@ that should read as a folder ends with <code>/</code>. A create is conditional o
 (<code>If-None-Match: *</code>), an update on the ETag the writer read (<code>If-Match</code>), and a revalidation reads
 the object only when its ETag changed (<code>If-None-Match</code> on the read).</p>
 <ul>
-<li>an application needs <code>s3:GetObject</code> on the objects, and the administration also
-<code>s3:PutObject</code>;</li>
+<li>the rights of the application and the administration on the objects are in
+<a href="./deployment.html#store-rights">Store rights</a>;</li>
 <li>S3 has no change notification the store listens to, so a process sees a change once its record
 is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to

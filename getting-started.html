@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -207,7 +207,7 @@ let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
 </span><span class="boring">}</span></code></pre>
 <p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
 nothing else, see <a href="./crypto-backends.html#code-generic-over-the-backend">Crypto backends</a>.</p>
-<h2 id="first-example"><a class="header" href="#first-example">First example</a></h2>
+<h2 id="with-an-envelope"><a class="header" href="#with-an-envelope">With an envelope</a></h2>
 <p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -232,6 +232,85 @@ assert_eq!(decrypted, secret);
 </span><span class="boring">}</span></code></pre>
 <p>To move to a cloud KMS, replace the provider, see <a href="./providers.html">KMS providers</a>. The rest of
 the code stays the same.</p>
+<h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
+<!-- The included file compiles as a doctest of kms-aead-keyring, see its src/book.rs. -->
+<p>Field encryption under a keyring is the <code>kms-aead-keyring</code> crate, see
+<a href="./keyring.html">Keyring and field encryption</a>. Its features are in
+<a href="./features.html#kms-aead-keyring">Cargo features</a>.</p>
+<p>Cargo.toml:</p>
+<pre><code class="language-toml">[dependencies]
+kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+secret-vault-value = "1"
+</code></pre>
+<p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
+cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Sealer,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>let provider =
+    LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+    MemoryKeyringStore::new(),
+    KeyringRegistryOptions::new(),
+)?;
+let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = registry
+    .create(provider, TENANT, KeyringAlgorithms::new())
+    .await?;
+// The application's handle on the same keyring
+let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
+
+// The AAD ties the value to user 42's email: `user/42/email`
+let aad: FieldAad = EMAIL.aad(&amp;EntityId::try_from("42")?);
+let alice = Email("alice@example.com".to_string());
+// One sealer per write of a record, for every encrypted field it holds
+let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = keyring.sealer().await;
+let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
+assert_eq!(value.key_id(), KeyId::new(1));
+
+// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
+// so it promotes at once
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+admin.promote_now(staged).await?;
+assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
+registry.shutdown().await?;
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The registry, its handles and the sealer are in
+<a href="./keyring.html#the-registry-and-its-handles">The registry and its handles</a>.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs">here</a>,
+run it with <code>cargo run -p kms-aead-keyring --example local_kms --features ring,admin</code>.</p>
 <h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
 <p>The minimum supported Rust version is 1.99, for every feature.</p>
 

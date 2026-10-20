@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -179,60 +179,41 @@
                     <main>
                         <h1 id="cargo-features"><a class="header" href="#cargo-features">Cargo features</a></h1>
 <h2 id="kms-aead"><a class="header" href="#kms-aead">kms-aead</a></h2>
-<p>KMS providers:</p>
-<ul>
-<li><code>gcp-kms-encryption</code>: Google Cloud KMS, with the native TLS roots of the system. Be aware it
-also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls
-whatever its TLS feature;</li>
-<li><code>gcp-kms-encryption-webpki</code>: Google Cloud KMS with the bundled WebPKI roots;</li>
-<li><code>gcp-kms-encryption-base</code>: Google Cloud KMS without a TLS root store or crypto provider. The
-application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or
-<code>tls-webpki-roots</code>, and the crate does not build without one;</li>
-<li><code>aws-kms-encryption</code>: AWS KMS;</li>
-<li><code>azure-kms-encryption</code>: Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto
-provider. Other TLS variants, choose one:
-<ul>
-<li><code>azure-kms-encryption-tls-aws-lc-rs</code>, the same as <code>azure-kms-encryption</code>;</li>
-<li><code>azure-kms-encryption-tls-no-provider</code>, rustls with the crypto provider the application
-installs. The application must install a process-default rustls <code>CryptoProvider</code> before
-creating the provider, otherwise rustls panics;</li>
-<li><code>azure-kms-encryption-native-tls</code>, the platform TLS library;</li>
-</ul>
-</li>
-<li><code>hashicorp-vault-transit-kms-encryption</code>: HashiCorp Vault Transit, with the system root
-certificates and the aws-lc-rs crypto provider. To choose them, enable one root store and one
-crypto provider instead:
-<ul>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-roots</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-webpki</code>;</li>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-ring</code>.</li>
-</ul>
-</li>
-</ul>
+<p>The crate has no default features.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>What it adds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>gcp-kms-encryption</code></td><td>Google Cloud KMS, with the native TLS roots of the system. Be aware it also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls whatever its TLS feature</td></tr>
+<tr><td><code>gcp-kms-encryption-webpki</code></td><td>Google Cloud KMS with the bundled WebPKI roots</td></tr>
+<tr><td><code>gcp-kms-encryption-base</code></td><td>Google Cloud KMS without a TLS root store or crypto provider. The application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or <code>tls-webpki-roots</code>, and the crate does not build without one</td></tr>
+<tr><td><code>aws-kms-encryption</code></td><td>AWS KMS</td></tr>
+<tr><td><code>azure-kms-encryption</code></td><td>Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>azure-kms-encryption-tls-aws-lc-rs</code></td><td>the same as <code>azure-kms-encryption</code></td></tr>
+<tr><td><code>azure-kms-encryption-tls-no-provider</code></td><td>Azure with rustls and the crypto provider the application installs. The application must install a process-default rustls <code>CryptoProvider</code> before creating the provider, otherwise rustls panics</td></tr>
+<tr><td><code>azure-kms-encryption-native-tls</code></td><td>Azure with the platform TLS library</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption</code></td><td>HashiCorp Vault Transit, with the system root certificates and the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-base</code></td><td>Vault Transit without a root store or crypto provider, to combine with one of each below</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-roots</code></td><td>Vault Transit with the system root certificates</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-webpki</code></td><td>Vault Transit with the bundled WebPKI roots</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code></td><td>Vault Transit with the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-ring</code></td><td>Vault Transit with the ring crypto provider</td></tr>
+<tr><td><code>ring</code></td><td>the ring backend, see <a href="./crypto-backends.html">Crypto backends</a></td></tr>
+<tr><td><code>aws-lc</code></td><td>the aws-lc-rs backend</td></tr>
+<tr><td><code>aws-lc-fips</code></td><td>the aws-lc-rs backend on the AWS-LC FIPS module. Needs CMake and Go to build</td></tr>
+<tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed</td></tr>
+<tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="./deterministic.html">Deterministic encryption</a></td></tr>
+<tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="./formats.html">Formats</a></td></tr>
+<tr><td><code>serde</code></td><td><code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for <code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>, see <a href="./stored-values.html#storing">Storing</a></td></tr>
+<tr><td><code>serde-json</code></td><td><code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON</td></tr>
+<tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
+<tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
+</tbody>
+</table>
+</div>
 <p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
-<p>Crypto backends, see <a href="./crypto-backends.html">Crypto backends</a>:</p>
-<ul>
-<li><code>ring</code>: the ring library;</li>
-<li><code>aws-lc</code>: the aws-lc-rs library;</li>
-<li><code>aws-lc-fips</code>: the aws-lc-rs library on the AWS-LC FIPS module. Needs CMake and Go to build;</li>
-<li><code>rustcrypto</code>: the pure Rust RustCrypto crates, no C compiler needed.</li>
-</ul>
-<p>Other features:</p>
-<ul>
-<li><code>deterministic</code>: deterministic encryption with AES-SIV, see
-<a href="./deterministic.html">Deterministic encryption</a>;</li>
-<li><code>legacy-formats</code>: reads the layouts written by 0.29 and earlier. Deprecated, see
-<a href="./formats.html">Formats</a>;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for
-<code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>;</li>
-<li><code>serde-json</code>: <code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON;</li>
-<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for
-tokio-postgres;</li>
-<li><code>sqlx</code>: sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS
-stack.</li>
-</ul>
-<p>See <a href="./stored-values.html">Stored values</a>.</p>
 <h3 id="feature-rules"><a class="header" href="#feature-rules">Feature rules</a></h3>
 <p>The crate refuses some feature combinations at compile time with <code>compile_error!</code>:</p>
 <ul>
@@ -250,28 +231,27 @@ alone, the aws-lc-rs build fails. Use <code>aws-lc</code> or <code>aws-lc-fips</
 <p>A build without any backend feature compiles, and <code>LocalKmsProvider</code> is in it, but nothing that
 seals or encrypts can be constructed, since no type implements <code>AeadBackend</code>.</p>
 <h2 id="kms-aead-keyring"><a class="header" href="#kms-aead-keyring">kms-aead-keyring</a></h2>
-<p>The crate has no default features, and the backend features are those of kms-aead:</p>
-<ul>
-<li><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code>: the crypto backends, see
-<a href="./crypto-backends.html">Crypto backends</a>. A keyring names its backend as a type parameter, such
-as <code>kms_aead::backends::Ring</code>;</li>
-<li><code>admin</code>: <code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types
-of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the
-<code>encodings</code> module, see <a href="./keyring/deployment.html">Applications and administration</a>;</li>
-<li><code>deterministic</code>: deterministic key versions and every call on them, <code>encrypt_deterministic</code>
-and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>,
-<code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see
-<a href="./keyring/deterministic.html">Deterministic fields</a>. The deterministic types exist in every
-build, so a process without the feature keeps a record’s deterministic versions intact;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes;</li>
-<li><code>serde-json</code>: <code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON;</li>
-<li><code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>: the keyring stores, see
-<a href="./keyring/stores.html">Keyring stores</a>. <code>gcs</code> has TLS variants listed there, and <code>postgres</code>
-also binds <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code>;</li>
-<li><code>sqlx</code>: <code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code>;</li>
-<li><code>bigquery-export</code>: <code>admin</code>, and <code>export_bigquery_keyset</code>, see
-<a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>.</li>
-</ul>
+<p>The crate has no default features.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>What it adds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="./crypto-backends.html">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
+<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="./keyring/deployment.html">Applications and administration</a></td></tr>
+<tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, <code>encrypt_deterministic</code> and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see <a href="./keyring/deterministic.html">Deterministic fields</a>. The deterministic types exist in every build, so a process without the feature keeps a record’s deterministic versions intact</td></tr>
+<tr><td><code>serde</code></td><td><code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes</td></tr>
+<tr><td><code>serde-json</code></td><td><code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON</td></tr>
+<tr><td><code>firestore</code></td><td>the Firestore keyring store, see <a href="./keyring/stores.html">Keyring stores</a></td></tr>
+<tr><td><code>postgres</code></td><td>the PostgreSQL keyring store, and <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code></td></tr>
+<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, with the TLS variants listed in <a href="./keyring/stores.html#cloud-storage">Keyring stores</a></td></tr>
+<tr><td><code>s3</code></td><td>the S3 keyring store</td></tr>
+<tr><td><code>sqlx</code></td><td><code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code></td></tr>
+<tr><td><code>bigquery-export</code></td><td><code>admin</code>, and <code>export_bigquery_keyset</code>, see <a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a></td></tr>
+</tbody>
+</table>
+</div>
 <p>Beacons need no feature, and <code>export_tink_keyset</code> needs <code>admin</code> only. The KMS providers come from
 kms-aead and its provider features, and secret-vault-value’s <code>SecretValue</code> is what an application
 type’s <code>Plaintext</code> encodes to.</p>

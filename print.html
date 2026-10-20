@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -307,7 +307,7 @@ let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
 </span><span class="boring">}</span></code></pre>
 <p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
 nothing else, see <a href="#code-generic-over-the-backend">Crypto backends</a>.</p>
-<h2 id="first-example"><a class="header" href="#first-example">First example</a></h2>
+<h2 id="with-an-envelope"><a class="header" href="#with-an-envelope">With an envelope</a></h2>
 <p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -332,6 +332,85 @@ assert_eq!(decrypted, secret);
 </span><span class="boring">}</span></code></pre>
 <p>To move to a cloud KMS, replace the provider, see <a href="#kms-providers">KMS providers</a>. The rest of
 the code stays the same.</p>
+<h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
+<!-- The included file compiles as a doctest of kms-aead-keyring, see its src/book.rs. -->
+<p>Field encryption under a keyring is the <code>kms-aead-keyring</code> crate, see
+<a href="#keyring-and-field-encryption">Keyring and field encryption</a>. Its features are in
+<a href="#kms-aead-keyring">Cargo features</a>.</p>
+<p>Cargo.toml:</p>
+<pre><code class="language-toml">[dependencies]
+kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+secret-vault-value = "1"
+</code></pre>
+<p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
+cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
+    Sealer,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+);
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>let provider =
+    LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+    MemoryKeyringStore::new(),
+    KeyringRegistryOptions::new(),
+)?;
+let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = registry
+    .create(provider, TENANT, KeyringAlgorithms::new())
+    .await?;
+// The application's handle on the same keyring
+let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
+
+// The AAD ties the value to user 42's email: `user/42/email`
+let aad: FieldAad = EMAIL.aad(&amp;EntityId::try_from("42")?);
+let alice = Email("alice@example.com".to_string());
+// One sealer per write of a record, for every encrypted field it holds
+let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = keyring.sealer().await;
+let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
+assert_eq!(value.key_id(), KeyId::new(1));
+
+// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
+// so it promotes at once
+let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+admin.promote_now(staged).await?;
+assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
+registry.shutdown().await?;
+<span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The registry, its handles and the sealer are in
+<a href="#the-registry-and-its-handles">The registry and its handles</a>.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs">here</a>,
+run it with <code>cargo run -p kms-aead-keyring --example local_kms --features ring,admin</code>.</p>
 <h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
 <p>The minimum supported Rust version is 1.99, for every feature.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -622,8 +701,9 @@ layout and the layouts of 0.29 and earlier.</p>
 lowercase hex. The only ways back are <code>Encrypted::try_from</code> for bytes and
 <code>Encrypted::try_from_hex_string</code> for hex in either case. Both check the bytes against the layout
 of <code>F</code> before any KMS call, so a truncated or foreign value fails when it is read, with
-<code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>LEGACY_FORMAT</code> or <code>INVALID_HEX</code>. The
-check reads the framing only: a changed value fails to decrypt with <code>DECRYPT</code>.</p>
+<code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_HEX</code>, or <code>LEGACY_FORMAT</code> for
+a layout of 0.29 or earlier without the <code>legacy-formats</code> feature. The check reads the framing
+only: a changed value fails to decrypt with <code>DECRYPT</code>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Randomized;
 use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, KeyId};
@@ -800,13 +880,7 @@ let read_back = Beacon::&lt;Email&gt;::try_from(beacon.value().to_vec())?;
 assert_eq!(read_back, beacon);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The bits trade lookups against leakage. With <code>n</code> distinct values and <code>b</code> bits, about <code>n / 2^b</code>
-values share each beacon, so a lookup returns that many rows, which the application decrypts and
-filters by the plaintext. Fewer bits leak less and return more rows; more bits return fewer rows
-and leak which rows hold equal values, up to what a deterministic field leaks. An equal beacon
-never proves an equal value. See
-<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a> for the numbers of
-the default.</p>
+<p>The bits trade lookups against leakage, see <a href="#bits">Bits</a>.</p>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, as bytes, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code>
 features. A lookup matches the column by equality, so it gets an ordinary index:</p>
 <pre><code class="language-sql">CREATE TABLE users (
@@ -1013,63 +1087,12 @@ it with the same KMS key and algorithm, see <a href="#tinks-kms-envelope">Format
 <p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
 configured to use one, see <a href="#kms-random-generators">KMS random generators</a>.</p>
 <h2 id="typed-fields"><a class="header" href="#typed-fields">Typed fields</a></h2>
-<p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, so a field can have
-a type of its own. The value is encoded by its <code>Plaintext</code> implementation, and the result is an
-<code>Encrypted&lt;T, Envelope&gt;</code> that names the type:</p>
-<pre><code class="language-rust">use kms_aead::backends::Ring;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-// Sealed as the same UTF-8 bytes as a String
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-<span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
-
-let aad = b"users/1042/email";
-let email = Email("alice@example.com".to_string());
-let encrypted: Encrypted&lt;Email, Envelope&gt; = envelope.encrypt(aad, &amp;email).await?;
-
-// The bytes to store, and the field read back from them
-let stored: Vec&lt;u8&gt; = encrypted.into_value();
-let read_back = Encrypted::&lt;Email, Envelope&gt;::try_from(stored)?;
-
-let decrypted: Email = envelope.decrypt(aad, &amp;read_back).await?;
-assert_eq!(decrypted, email);
-<span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<ul>
-<li>an application type maps to one of the built-in <code>Plaintext</code> types, as <code>Email</code> does, see
-<a href="#plaintext">Stored values</a>;</li>
-<li>the calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt
-through the envelope’s DEK cache, whatever the type;</li>
-<li><code>Encrypted::try_from</code> checks the stored bytes against Tink’s KMS envelope layout, so a
-truncated or foreign value fails when it is read, before any KMS call, with
-<code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_CIPHER_TEXT_FORMAT</code> or, without <code>legacy-formats</code>,
-<code>LEGACY_FORMAT</code>. It checks the framing only: a changed value fails to decrypt with <code>DECRYPT</code>;</li>
-<li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>.</li>
-</ul>
-<p><code>Encrypted&lt;T, Envelope&gt;</code> has no <code>==</code> and its <code>Debug</code> shows the length only, see
-<a href="#encryptedt-f">Stored values</a>.</p>
-<h3 id="storing-typed-fields"><a class="header" href="#storing-typed-fields">Storing typed fields</a></h3>
-<p>serde, tokio-postgres and sqlx store <code>Encrypted</code> as bytes, see
-<a href="#storing">Stored values</a>.</p>
-<h3 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h3>
+<p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, such as an
+application’s <code>Email</code> newtype, and the result is an <code>Encrypted&lt;T, Envelope&gt;</code> that names the type.
+The calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt through
+the envelope’s DEK cache, whatever the type. <code>Plaintext</code>, the bytes of an <code>Encrypted</code> and how
+serde, tokio-postgres and sqlx store it are in <a href="#stored-values">Stored values</a>.</p>
+<h2 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h2>
 <p><code>AeadCipher::encrypt</code> seals a field under a key the application holds, in Tink’s layout of a key
 whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
 <code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
@@ -1742,20 +1765,9 @@ envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
 </tbody>
 </table>
 </div>
-<p>The figures come from these bounds:</p>
-<ul>
-<li>AES-GCM: RFC 8446, section 5.5, allows “up to 2^24.5 full-size records (about 24 million)” of
-2^14 bytes, 2^38.5 bytes, “while keeping a safety margin of approximately 2^-57 for
-Authenticated Encryption (AE) security”. Luykx and Paterson, “Limits on Authenticated Encryption
-Use in TLS”, table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60. The
-default of 2^38 bytes stays below that. The most allowed, 2^52 bytes, is the 2^48 blocks RFC
-8452, section 9, allows under one AES-GCM key for an advantage of 2^-32;</li>
-<li>AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
-random nonces for an advantage of 2^-32, so <code>max_uses</code> bounds it already;</li>
-<li>ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
-beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
-attempts, which no writer can count.</li>
-</ul>
+<p>The default stays below the 2^38.5 bytes RFC 8446 allows under one AES-GCM key, and the most
+allowed is the 2^48 blocks of RFC 8452. AES-GCM-SIV and ChaCha20-Poly1305 have no volume bound
+beyond <code>max_uses</code>. The citations are in <a href="#data-volume">Data volume</a>.</p>
 <p>A <code>max_bytes</code> set in the policy replaces the default, under any algorithm. Above the most
 allowed, the envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
 <p>A value that would take the count past <code>max_bytes</code> renews the DEK before it is sealed. A value
@@ -1796,14 +1808,17 @@ validated boundary, also on <code>aws-lc-fips</code>, where the keys come from t
 a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
 <a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
 <h2 id="what-it-leaks"><a class="header" href="#what-it-leaks">What it leaks</a></h2>
-<p>Be aware what equal cipher texts tell a reader of the stored data:</p>
+<p>Be aware what equal cipher texts tell a reader of the stored data, without any key:</p>
 <ul>
 <li><strong>Equality</strong>: which rows hold the same value;</li>
 <li><strong>Frequency</strong>: how often each value occurs. On a column with few distinct values, such as a
 country, a status or a yes/no answer, the most frequent cipher text is the most frequent value,
 and the values can be read back from public statistics.</li>
 </ul>
-<p>So do not use deterministic encryption:</p>
+<p>And since there is no nonce, a leaked deterministic key lets its holder test candidate values
+against the whole column offline.</p>
+<p>So deterministic encryption fits fields that are looked up by equality and have high entropy, such
+as emails and external ids. Do not use it:</p>
 <ul>
 <li>for a column with few distinct values or a skewed distribution;</li>
 <li>when equality itself is sensitive;</li>
@@ -1812,6 +1827,10 @@ kind.</li>
 </ul>
 <p>The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.</p>
+<p>An AAD that a lookup can rebuild names the field and never the row, so a deterministic value also
+opens in any other row of the same field. A deterministic field never decides identity or
+authorisation on its own; where identity matters, the check reads a randomised copy of the field,
+bound to the row by its AAD.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
 <p><code>DeterministicCipher</code> seals and opens with a <code>DataEncryptionKey</code> of
 <code>DeterministicAlgorithm::key_len()</code> bytes, 64 for AES-SIV, and refuses a key of another length
@@ -1949,30 +1968,51 @@ assert_eq!(decrypted, email);
 <ul>
 <li>the context, <code>users/email</code> here, names the field and never a row, so that equal values in one
 field give equal beacons. A beacon of one field never matches a beacon of another;</li>
-<li><code>BeaconBits</code> sets how much of the HMAC a beacon keeps, 1 to 256 bits, 16 by default. With <code>n</code>
-distinct values and <code>b</code> bits, about <code>n / 2^b</code> values share each beacon: a lookup returns that
-many rows, which the application decrypts and filters, and an equal beacon never proves an
-equal value. More bits leak more; fewer bits return more rows to filter;</li>
-<li>normalisation is the application’s: the beacon of <code>Alice@Example.com</code> and of
-<code>alice@example.com</code> differ unless the type normalises the value before it is sealed, as
-<code>Email::new</code> does;</li>
 <li>the key id, a <code>KeyId</code>, is the application’s number for the beacon key, written into every
 beacon so that a column can hold beacons of two keys at once;</li>
 <li>the beacon key is decrypted through the envelope’s DEK cache, as a DEK is.</li>
 </ul>
-<p>A beacon column leaks which rows are likely to hold equal values, and with them how often each
-value occurs, to anyone who reads the column. A leaked beacon key lets its holder test guesses
-against the whole column offline. Beacons fit fields that are looked up and have many distinct
-values, such as emails and external ids, and never low-cardinality fields such as a status or a
-country. BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery
-cannot calculate a beacon; it matches beacons the application calculated.</p>
+<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
+read back through <code>TryFrom</code>, which checks its layout, see <a href="#beacont">Stored values</a>.
+See <a href="#beacons-3">Formats</a> for its bytes.</p>
+<h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
+<p>A beacon column leaks to anyone who reads it, without any key:</p>
+<ul>
+<li><strong>Equality</strong>: which rows are likely to hold the same value;</li>
+<li><strong>Frequency</strong>: how often each value occurs, as far as the bits tell values apart.</li>
+</ul>
+<p>And a leaked beacon key lets its holder test candidate values against the whole column offline.</p>
+<p>So beacons fit fields that are looked up and have many distinct values, such as emails and
+external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
+answer, whose values the frequencies give away.</p>
+<h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
+<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256, <code>BeaconBits::DEFAULT</code>, 16,
+unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
+beacon:</p>
+<ul>
+<li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application
+decrypts and filters by the plaintext. A column of short beacons leaks less;</li>
+<li>more bits: fewer rows to filter, down to one per value once <code>2^b</code> is far above <code>n</code>, and the
+column then leaks which rows hold equal values as a deterministic column does.</li>
+</ul>
+<p>An equal beacon never proves an equal value: a lookup always decrypts the rows it found and
+compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
+never match: after a change of a column’s bits, its stored beacons match no lookup until a
+re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
+<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
+<p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
+<code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
+application’s job: the newtype normalises when it is made, as <code>Email::new</code> lowercases above, and
+every write and every lookup goes through it.</p>
+<h2 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h2>
+<p>BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot calculate
+a beacon. It matches beacons the application calculated and passed in as query parameters.</p>
+<h2 id="rotating-a-beacon-key"><a class="header" href="#rotating-a-beacon-key">Rotating a beacon key</a></h2>
 <p>Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
 beacon. kms-aead-keyring does this with key versions, see <a href="#beacons-2">Beacons</a>.</p>
-<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
-read back through <code>TryFrom</code>, which checks its layout, see <a href="#beacont">Stored values</a>.
-See <a href="#beacons-3">Formats</a> for its bytes.</p>
 <h2 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h2>
 <p>A <a href="#deterministic-encryption">deterministic field</a> also finds rows by equality, by its cipher text:</p>
 <div class="table-wrapper">
@@ -2288,10 +2328,9 @@ version. A check inside that window passes on DEKs that are still under the old 
 <p>Enabling a version is strongly consistent: an enabled version is available at once, so enabling
 the old version again after a failed check takes effect immediately.</p>
 <h2 id="errors-1"><a class="header" href="#errors-1">Errors</a></h2>
-<p>The code of a failed KMS call is the gRPC status code. <code>Unavailable</code>, <code>DeadlineExceeded</code>,
-<code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code> and <code>Cancelled</code> are a <code>NetworkError</code>, any
-other code, such as <code>PermissionDenied</code> or <code>NotFound</code>, an <code>EncryptionError</code>. See
-<a href="#retries">Error handling</a>.</p>
+<p>The code of a failed KMS call is the gRPC status code, such as <code>PermissionDenied</code> or <code>NotFound</code>.
+Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in
+<a href="#retries">Retries</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="aws-kms"><a class="header" href="#aws-kms">AWS KMS</a></h1>
 <p>Feature <code>aws-kms-encryption</code>.</p>
@@ -2369,16 +2408,8 @@ DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own 
 missing is imported again.</p>
 <h2 id="errors-2"><a class="header" href="#errors-2">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
-<code>NotFoundException</code>, and the message AWS KMS returned. A <code>NetworkError</code>:</p>
-<ul>
-<li><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code> and
-<code>KeyUnavailableException</code>;</li>
-<li>any 5xx or 429 status;</li>
-<li>a timeout, a connection failure, or a response the SDK could not read.</li>
-</ul>
-<p>Any other error, such as <code>AccessDeniedException</code>, <code>DisabledException</code> or a request that could not
-be built or signed, is an <code>EncryptionError</code> whose root cause is the SDK error. See
-<a href="#retries">Error handling</a>.</p>
+<code>NotFoundException</code>, and the message AWS KMS returned, and its root cause is the SDK error. Which
+errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="azure-key-vault"><a class="header" href="#azure-key-vault">Azure Key Vault</a></h1>
 <p>Feature <code>azure-kms-encryption</code>, or one of the TLS variants in
@@ -2427,6 +2458,25 @@ life of the key;</li>
 <li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
 policy.</li>
 </ul>
+<p>A Managed HSM AES key, with <code>A256Kw</code>:</p>
+<pre><code class="language-rust no_run">use azure_security_keyvault_keys::models::EncryptionAlgorithm;
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+
+<span class="boring">fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let kms_ref = AzureKmsKeyRef::new(
+    "https://my-hsm.managedhsm.azure.net".to_string(),
+    "my-aes-key".to_string(),
+);
+let credential = azure_identity::DeveloperToolsCredential::new(None)?;
+
+let provider = AzureKmsProvider::with_options(
+    &amp;kms_ref,
+    AzureKmsProviderOptions::new().with_algorithm(EncryptionAlgorithm::A256Kw),
+    credential,
+)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
 <h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
 <p>Key Vault decrypts only with the key version that encrypted, so the provider’s encrypted DEK carries
 it before Key Vault’s encrypted DEK, in the library’s own layout, see
@@ -2448,8 +2498,8 @@ Key Vault deletes a key with all its versions and never one version alone, so th
 disabled rather than destroyed.</p>
 <h2 id="errors-3"><a class="header" href="#errors-3">Errors</a></h2>
 <p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
-<code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. A server error or a rate limit is a
-<code>NetworkError</code>, any other status an <code>EncryptionError</code>. A decryption of an encrypted DEK in another
+<code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. Which statuses are a <code>NetworkError</code> and which an
+<code>EncryptionError</code> is in <a href="#retries">Retries</a>. A decryption of an encrypted DEK in another
 layout fails with <code>AZURE_ENCRYPTED_DEK_FORMAT</code>, before any request.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="hashicorp-vault-transit"><a class="header" href="#hashicorp-vault-transit">HashiCorp Vault Transit</a></h1>
@@ -2539,11 +2589,10 @@ it again restores them. Once
 nothing needs them, the backups included, <code>min_available_version</code> and a trim of the key delete the
 older versions for good.</p>
 <h2 id="errors-4"><a class="header" href="#errors-4">Errors</a></h2>
-<p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>: a <code>NetworkError</code> for a server error
-or a rate limit, an <code>EncryptionError</code> otherwise. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are network
-errors for a request that got no complete response, and <code>VAULT_RESPONSE</code>,
-<code>VAULT_RESPONSE_TOO_LARGE</code> and <code>VAULT_CIPHERTEXT</code> are encryption errors for a response or a
-encrypted DEK that cannot be read. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
+<p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are
+for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code> and
+<code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
+<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
 or <code>VAULT_TLS</code> when the TLS configuration cannot be built.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="local-kms"><a class="header" href="#local-kms">Local KMS</a></h1>
@@ -2728,78 +2777,9 @@ document per keyring. See <a href="#choosing-a-mode">Choosing a mode</a> for the
 the envelope modes of kms-aead.</p>
 <h2 id="applications-and-administration"><a class="header" href="#applications-and-administration">Applications and administration</a></h2>
 <p>See <a href="#applications-and-administration-1">Applications and administration</a>.</p>
-<h2 id="getting-started-1"><a class="header" href="#getting-started-1">Getting started</a></h2>
-<p>Cargo.toml:</p>
-<pre><code class="language-toml">[dependencies]
-kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
-secret-vault-value = "1"
-</code></pre>
-<p>Every feature is in <a href="#kms-aead-keyring">Cargo features</a>.</p>
-<h2 id="first-example-1"><a class="header" href="#first-example-1">First example</a></h2>
-<p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
-cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
-<pre><code class="language-rust">use kms_aead::backends::Ring;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
-use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::testing::MemoryKeyringStore;
-use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
-    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
-    Sealer,
-};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-const TENANT: KeyringId = KeyringId::from_static("tenant-42");
-const EMAIL: FieldSpec = FieldSpec::new(
-    EntityKind::from_static("user"),
-    FieldName::from_static("email"),
-);
-
-<span class="boring">#[tokio::main]
-</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
-</span>let provider =
-    LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
-let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
-    MemoryKeyringStore::new(),
-    KeyringRegistryOptions::new(),
-)?;
-let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = registry
-    .create(provider, TENANT, KeyringAlgorithms::new())
-    .await?;
-// The application's handle on the same keyring
-let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
-
-// The AAD ties the value to user 42's email: `user/42/email`
-let aad: FieldAad = EMAIL.aad(&amp;EntityId::try_from("42")?);
-let alice = Email("alice@example.com".to_string());
-// One sealer per write of a record, for every encrypted field it holds
-let sealer: Sealer&lt;'_, MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = keyring.sealer().await;
-let value: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;alice).await?;
-assert_eq!(value.key_id(), KeyId::new(1));
-
-// A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
-// so it promotes at once
-let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-admin.promote_now(staged).await?;
-assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
-registry.shutdown().await?;
-<span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
+<h2 id="the-registry-and-its-handles"><a class="header" href="#the-registry-and-its-handles">The registry and its handles</a></h2>
+<p>A first keyring, on the memory store with a local KEK, is in
+<a href="#with-a-keyring">With a keyring</a>.</p>
 <p><code>KeyringRegistry::create</code> creates the record, with one active version of each purpose its
 <code>KeyringAlgorithms</code> name, and fails with <code>RecordExists</code> when there is one already.
 <code>open_or_create</code> creates it on the first start and opens it on every later one, and <code>admin</code> only
@@ -2835,7 +2815,8 @@ and each call takes the provider, so that the handles are <code>Keyring&lt;S, P,
 <p>A <code>Keyring</code> and a <code>KeyringAdmin</code> of one keyring in one registry share its cached record and its
 watch, so a write through the <code>KeyringAdmin</code> is seen by every <code>Keyring</code> at once.
 <code>KeyringAdmin::keyring()</code> returns the <code>Keyring</code> it holds, for <code>id</code>, <code>record</code>, <code>reload</code>, encryption
-and sweeps inside an administrative job. The example takes its <code>Keyring</code> there too, since the
+and sweeps inside an administrative job. The example in
+<a href="#with-a-keyring">With a keyring</a> takes its <code>Keyring</code> there too, since the
 ephemeral local KEK has no second copy to <code>open</code> the keyring with: <code>LocalKmsProvider</code> is not
 <code>Clone</code>.</p>
 <p><code>Keyring::sealer</code> takes the cached record, and the <code>Sealer</code> seals under that record’s active
@@ -2844,25 +2825,6 @@ every encrypted field of the record through it, so that the seal marker it store
 names the versions they are under, see <a href="#the-seal-marker">The seal marker</a>.
 Neither calls the store while the cached record is fresh, nor the KMS while the version’s DEK is
 in the DEK cache, see <a href="#record-cache">Record cache</a>.</p>
-<p>Full example available
-<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs">here</a>,
-run it with <code>cargo run -p kms-aead-keyring --example local_kms --features ring,admin</code>.</p>
-<h2 id="chapters"><a class="header" href="#chapters">Chapters</a></h2>
-<ul>
-<li><a href="#key-versions-and-lifecycle">Key versions and lifecycle</a>: the record, key ids, states and staged
-rotation;</li>
-<li><a href="#keyring-stores">Keyring stores</a>: Firestore, PostgreSQL, Cloud Storage, S3 and memory;</li>
-<li><a href="#record-cache">Record cache</a>: how fast a change reaches every process;</li>
-<li><a href="#encrypted-fields-and-aad">Encrypted fields and AAD</a>: <code>Encrypted&lt;T, Randomized&gt;</code>, plaintext
-encodings, the default AAD and
-<a href="#why-the-aad-is-structured">why the keyring’s AAD is structured</a>, unlike
-the free bytes of kms-aead;</li>
-<li><a href="#deterministic-fields">Deterministic fields</a>: equality queries, and what they leak;</li>
-<li><a href="#beacons-2">Beacons</a>: blind indexes of randomised fields, and what they leak;</li>
-<li><a href="#bigquery-and-tink-interop">BigQuery and Tink interop</a>: the BigQuery and Tink checks and the keyset
-exports;</li>
-<li><a href="#operations">Operations</a>: rotation, sweeps, migration and the emergency runbook.</li>
-</ul>
 <p>The bytes of values, key ids and records are in <a href="#formats">Formats</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="applications-and-administration-1"><a class="header" href="#applications-and-administration-1">Applications and administration</a></h1>
@@ -3245,8 +3207,8 @@ where the log leaves the administration’s reach.</p>
 );
 </code></pre>
 <ul>
-<li>an application needs <code>SELECT</code> on it, and the administration also <code>INSERT</code> and <code>UPDATE</code>. An
-application’s watch runs <code>LISTEN</code> on the table’s channel, which PostgreSQL allows every role;</li>
+<li>the rights of the application and the administration on the table are in
+<a href="#store-rights">Store rights</a>;</li>
 <li>the table name is unqualified, so the connection’s <code>search_path</code> selects the schema;</li>
 <li>every write sends <code>NOTIFY &lt;table&gt;, '&lt;keyring id&gt;'</code> when it commits, through <code>pg_notify</code> in the
 same statement;</li>
@@ -3306,8 +3268,8 @@ tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</c
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.</p>
 <ul>
-<li>an application needs <code>storage.objects.get</code> on the bucket, and the administration also
-<code>storage.objects.create</code> and <code>storage.objects.delete</code>, since a write replaces the object;</li>
+<li>the rights of the application and the administration on the bucket are in
+<a href="#store-rights">Store rights</a>;</li>
 <li>Cloud Storage has no change notification the store listens to, so a process sees a change once
 its record is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
@@ -3339,8 +3301,8 @@ that should read as a folder ends with <code>/</code>. A create is conditional o
 (<code>If-None-Match: *</code>), an update on the ETag the writer read (<code>If-Match</code>), and a revalidation reads
 the object only when its ETag changed (<code>If-None-Match</code> on the read).</p>
 <ul>
-<li>an application needs <code>s3:GetObject</code> on the objects, and the administration also
-<code>s3:PutObject</code>;</li>
+<li>the rights of the application and the administration on the objects are in
+<a href="#store-rights">Store rights</a>;</li>
 <li>S3 has no change notification the store listens to, so a process sees a change once its record
 is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
@@ -3786,25 +3748,12 @@ every build, so values pass through a process without the feature.</p>
 field only needs lookups and its stored value should stay randomised, a
 <a href="#beacons-2">beacon</a> fits instead.</p>
 <h2 id="what-they-leak"><a class="header" href="#what-they-leak">What they leak</a></h2>
-<p>A deterministic column leaks to anyone who reads it, without any key:</p>
-<ul>
-<li><strong>Equality</strong>: which rows hold the same value;</li>
-<li><strong>Frequency</strong>: how often each value occurs.</li>
-</ul>
-<p>And since there is no nonce, a leaked deterministic DEK lets its holder test candidate values
-against the whole column offline.</p>
-<p>So deterministic fields fit fields that are queried by equality and have high entropy, such as
-emails and external ids. Do not use them:</p>
-<ul>
-<li>for low-cardinality fields, such as a status, a country or a yes/no answer, whose values the
-frequencies give away;</li>
-<li>when equality itself is sensitive;</li>
-<li>for a field that is never looked up by equality: a randomised field leaks nothing of the kind.</li>
-</ul>
-<p>A deterministic value also opens in any row of the same kind and field, see <a href="#aad-2">AAD</a>, so a
-deterministic field never decides identity or authorisation on its own. Where identity matters,
-the check reads a randomised copy of the field, bound to the row by its AAD.</p>
-<p>See also <a href="#deterministic-encryption">Deterministic encryption</a> in kms-aead.</p>
+<p>A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
+deterministic DEK lets its holder test candidate values offline, see
+<a href="#what-it-leaks">What it leaks</a> in kms-aead.</p>
+<p>The AAD of a deterministic field names its kind and field and no entity, see <a href="#aad-2">AAD</a>, so a
+deterministic value also opens in any row of the same kind and field, and a deterministic field
+never decides identity or authorisation on its own.</p>
 <h2 id="usage-1"><a class="header" href="#usage-1">Usage</a></h2>
 <p>A keyring with deterministic versions names their algorithm in its <code>KeyringAlgorithms</code>: AES-SIV,
 the one <code>DeterministicAlgorithm</code> has:</p>
@@ -3969,16 +3918,10 @@ and <code>BeaconBits</code>, with keys the application keeps itself, and <a href
 bytes.</p>
 <p>A <a href="#deterministic-fields">deterministic field</a> also finds rows by equality, by its encrypted value,
 see <a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
-<h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
-<p>A beacon column leaks to anyone who reads it, without any key:</p>
-<ul>
-<li><strong>Equality</strong>: which rows are likely to hold the same value;</li>
-<li><strong>Frequency</strong>: how often each value occurs, as far as the bits tell values apart.</li>
-</ul>
-<p>And a leaked beacon key lets its holder test candidate values against the whole column offline.</p>
-<p>So beacons fit fields that are looked up and have many distinct values, such as emails and
-external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
-answer, whose values the frequencies give away.</p>
+<h2 id="what-a-beacon-leaks-1"><a class="header" href="#what-a-beacon-leaks-1">What a beacon leaks</a></h2>
+<p>A beacon column leaks likely equality and frequency to anyone who reads it, and a leaked beacon
+key lets its holder test candidate values offline, see
+<a href="#what-a-beacon-leaks">What a beacon leaks</a> in kms-aead.</p>
 <p>A beacon is computed in a field’s context, <code>&lt;kind&gt;/&lt;field&gt;</code> such as <code>user/email</code>, with no entity
 id: equal values in different rows give equal beacons, which is what a lookup matches. A beacon of
 one field never matches a beacon of another.</p>
@@ -4071,30 +4014,18 @@ registry.shutdown().await?;
 </div>
 <p>With the <code>postgres</code> feature, <code>Beacon</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and with
 the <code>serde</code> feature it serialises as bytes, as <code>Encrypted</code> does.</p>
-<h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
-<p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep, 1 to 256,
-<code>BeaconBits::DEFAULT</code>, 16, unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about
-<code>n / 2^b</code> values share each beacon:</p>
-<ul>
-<li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application
-decrypts and filters by the plaintext. A column of short beacons leaks less;</li>
-<li>more bits: fewer rows to filter, down to one per value once <code>2^b</code> is far above <code>n</code>, and the
-column then leaks which rows hold equal values as a deterministic column does.</li>
-</ul>
-<p>An equal beacon never proves an equal value: a lookup always decrypts the rows it found and
-compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
-never match: after a change of a field’s bits, its stored beacons match no probe until a re-index
-computes them again.</p>
-<h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
-<p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
-<code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
-application’s job: the newtype normalises when it is made, as <code>Email::new</code> lowercases above, and
-every write and every lookup goes through it.</p>
-<h2 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h2>
-<p>BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot compute a
-beacon, and the keyring never exports beacon keys to it: <code>export_bigquery_keyset</code> of the beacon
-purpose fails with <code>ExportAlgorithmUnsupported</code>. A BigQuery query matches beacons the application
-computed and passed in as query parameters.</p>
+<h2 id="bits-1"><a class="header" href="#bits-1">Bits</a></h2>
+<p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep,
+<code>BeaconBits::DEFAULT</code>, 16, unless set; what the bits trade is in <a href="#bits">Bits</a>. The
+bits enter the HMAC, so after a change of a field’s bits, its stored beacons match no probe until a
+re-index computes them again. A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so
+the field’s newtype normalises the value, as <code>Email::new</code> lowercases above, see
+<a href="#normalisation">Normalisation</a>.</p>
+<h2 id="bigquery-1"><a class="header" href="#bigquery-1">BigQuery</a></h2>
+<p>The keyring never exports beacon keys to BigQuery: <code>export_bigquery_keyset</code> of the beacon purpose
+fails with <code>ExportAlgorithmUnsupported</code>, see
+<a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>. A BigQuery query
+matches beacons the application computed, see <a href="#bigquery">BigQuery</a> in kms-aead.</p>
 <h2 id="rotating-beacon-versions"><a class="header" href="#rotating-beacon-versions">Rotating beacon versions</a></h2>
 <p>A beacon version rotates as the other purposes do, see <a href="#staged-rotation">Staged
 rotation</a>, and a column holds beacons of several versions while it
@@ -4289,7 +4220,7 @@ BigQuery would seal under it.</li>
 </ul>
 <p>Beacon versions are never exported: a selection of the beacon purpose fails with
 <code>ExportAlgorithmUnsupported</code>. BigQuery’s SQL cannot compute a beacon either, see
-<a href="#bigquery">Beacons</a>.</p>
+<a href="#bigquery">BigQuery</a> in kms-aead.</p>
 <p>The type parameter of a <code>EncryptedKeyset</code> is its encoding, from the <code>encodings</code> module, which names
 the reader of its bytes. The <code>EncryptedKeyset&lt;encodings::BigQuery&gt;</code> this export returns:</p>
 <ul>
@@ -4440,18 +4371,28 @@ beacon version fails with <code>ExportAlgorithmUnsupported</code>, before any KM
 <p>Running a keyring in production: how often to rotate, how sweeps move values to the active
 versions, the migration from envelope values, and what to do when a key leaks.</p>
 <h2 id="rotation-cadence"><a class="header" href="#rotation-cadence">Rotation cadence</a></h2>
-<p>See <a href="#rotation-cadence-1">Rotation cadence</a>.</p>
+<p>A rotation is staged: <code>rotate</code>, export the BigQuery keysets again, wait for every process to see
+the pending version, then <code>promote</code>. How often to rotate follows from the nonce and volume bounds
+of each purpose, and deterministic and beacon versions rotate rarely, since each adds a probe to
+every lookup until a sweep. See <a href="#rotation-cadence-1">Rotation cadence</a>.</p>
 <h2 id="rotating-the-kek"><a class="header" href="#rotating-the-kek">Rotating the KEK</a></h2>
-<p>See <a href="#rotating-the-kek-1">Rotating the KEK</a>.</p>
+<p>The KEK rotates in the KMS on its own schedule, and <code>reencrypt_deks</code> moves the record’s DEKs to
+its current version without changing any value, before the old KEK version is disabled. See
+<a href="#rotating-the-kek-1">Rotating the KEK</a>.</p>
 <h2 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h2>
-<p>See <a href="#sweeps-1">Sweeps</a>, and the sweeps by store:
-<a href="#sweeps-on-firestore">Firestore</a>,
-<a href="#sweeps-on-postgresql">PostgreSQL</a> and
-<a href="#sweeps-on-bigquery">BigQuery</a>.</p>
+<p>A sweep re-seals stored values under the active versions, after a rotation, after a compromise
+and to migrate envelope values: a job the application runs on a schedule, which finds the records
+behind by their seal marker. <a href="#sweeps-1">Sweeps</a> has the mechanism, and the sweeps by
+store have the queries and writes of <a href="#sweeps-on-firestore">Firestore</a>,
+<a href="#sweeps-on-postgresql">PostgreSQL</a> and <a href="#sweeps-on-bigquery">BigQuery</a>.</p>
 <h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
-<p>See <a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</p>
+<p>Values that <code>KmsAeadEnvelope</code> wrote move to keyring values in five steps, with the seal marker
+telling the two layouts apart and a sweep re-sealing the envelope values. See
+<a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</p>
 <h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
-<p>See <a href="#emergency-runbook-1">Emergency runbook</a>.</p>
+<p>What to do when a plaintext DEK, an encrypted DEK or the record leaks, after a KMS IAM over-grant,
+a version the administrative job did not create, a deleted or corrupted record and a KMS outage,
+and how to crypto-shred a scope. See <a href="#emergency-runbook-1">Emergency runbook</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="rotation"><a class="header" href="#rotation">Rotation</a></h1>
 <h2 id="rotation-cadence-1"><a class="header" href="#rotation-cadence-1">Rotation cadence</a></h2>
@@ -4982,6 +4923,11 @@ everywhere afterwards.</p>
 fewer on the <a href="#sweeps-on-bigquery">BigQuery <code>MERGE</code> path</a>, whose batches with a conflict count as skipped.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-on-firestore"><a class="header" href="#sweeps-on-firestore">Sweeps on Firestore</a></h1>
+<p>A sweep of a Firestore collection: the seal marker as a field, the query for the documents behind,
+and the conditional write back. The mechanism is in <a href="#sweeps-1">Sweeps</a>, and the example has the
+five properties of <a href="#sweeps-by-store">Sweeps by store</a>: it resumes without a checkpoint,
+a concurrent writer wins, <code>concurrency</code> bounds the load, each write stores the marker of its sealer,
+and it runs on a schedule until a run scans nothing.</p>
 <p>The marker is a <code>bytes</code> field, <code>seal</code>, and the query is one range filter on it. Firestore indexes a
 field ascending and descending by default, and the query needs the ascending index only, so an
 exemption keeps just that one:</p>
@@ -5288,6 +5234,11 @@ ends early, on a deadline or an error, leaves the documents it did not reach bel
 marker, and the next run of the sweep finds them.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-on-postgresql"><a class="header" href="#sweeps-on-postgresql">Sweeps on PostgreSQL</a></h1>
+<p>A sweep of a PostgreSQL table: the seal marker as a column, the query for the rows behind, and the
+conditional write back. The mechanism is in <a href="#sweeps-1">Sweeps</a>, and the example has the five
+properties of <a href="#sweeps-by-store">Sweeps by store</a>: it resumes without a checkpoint, a
+concurrent writer wins, <code>concurrency</code> bounds the load, each write stores the marker of its sealer,
+and it runs on a schedule until a run scans nothing.</p>
 <p>The marker is a <code>BYTEA</code> column with a btree index. Its default, the bytes of
 <code>SealMarker::ENVELOPE</code>, gives the rows written before the column a marker too:</p>
 <pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTEA NOT NULL DEFAULT '\x0100000000';
@@ -5565,6 +5516,9 @@ PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row a
 runs this sweep end to end, from the writes to the report, on a local PostgreSQL.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-on-bigquery"><a class="header" href="#sweeps-on-bigquery">Sweeps on BigQuery</a></h1>
+<p>A sweep of a BigQuery table, in two paths: one <code>UPDATE</code> in SQL for the fields BigQuery reads, and a
+Rust path for the rest. The mechanism is in <a href="#sweeps-1">Sweeps</a>. The Rust path has the five
+properties of <a href="#sweeps-by-store">Sweeps by store</a>, and the SQL path states its own below.</p>
 <p>The marker is a <code>BYTES</code> column. BigQuery gives a column added to a table <code>NULL</code> in the rows already
 there, so the column’s default goes with a write of <code>SealMarker::ENVELOPE</code> into them:</p>
 <pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTES;
@@ -5906,60 +5860,41 @@ flag.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="cargo-features"><a class="header" href="#cargo-features">Cargo features</a></h1>
 <h2 id="kms-aead"><a class="header" href="#kms-aead">kms-aead</a></h2>
-<p>KMS providers:</p>
-<ul>
-<li><code>gcp-kms-encryption</code>: Google Cloud KMS, with the native TLS roots of the system. Be aware it
-also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls
-whatever its TLS feature;</li>
-<li><code>gcp-kms-encryption-webpki</code>: Google Cloud KMS with the bundled WebPKI roots;</li>
-<li><code>gcp-kms-encryption-base</code>: Google Cloud KMS without a TLS root store or crypto provider. The
-application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or
-<code>tls-webpki-roots</code>, and the crate does not build without one;</li>
-<li><code>aws-kms-encryption</code>: AWS KMS;</li>
-<li><code>azure-kms-encryption</code>: Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto
-provider. Other TLS variants, choose one:
-<ul>
-<li><code>azure-kms-encryption-tls-aws-lc-rs</code>, the same as <code>azure-kms-encryption</code>;</li>
-<li><code>azure-kms-encryption-tls-no-provider</code>, rustls with the crypto provider the application
-installs. The application must install a process-default rustls <code>CryptoProvider</code> before
-creating the provider, otherwise rustls panics;</li>
-<li><code>azure-kms-encryption-native-tls</code>, the platform TLS library;</li>
-</ul>
-</li>
-<li><code>hashicorp-vault-transit-kms-encryption</code>: HashiCorp Vault Transit, with the system root
-certificates and the aws-lc-rs crypto provider. To choose them, enable one root store and one
-crypto provider instead:
-<ul>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-roots</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-webpki</code>;</li>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-ring</code>.</li>
-</ul>
-</li>
-</ul>
+<p>The crate has no default features.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>What it adds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>gcp-kms-encryption</code></td><td>Google Cloud KMS, with the native TLS roots of the system. Be aware it also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls whatever its TLS feature</td></tr>
+<tr><td><code>gcp-kms-encryption-webpki</code></td><td>Google Cloud KMS with the bundled WebPKI roots</td></tr>
+<tr><td><code>gcp-kms-encryption-base</code></td><td>Google Cloud KMS without a TLS root store or crypto provider. The application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or <code>tls-webpki-roots</code>, and the crate does not build without one</td></tr>
+<tr><td><code>aws-kms-encryption</code></td><td>AWS KMS</td></tr>
+<tr><td><code>azure-kms-encryption</code></td><td>Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>azure-kms-encryption-tls-aws-lc-rs</code></td><td>the same as <code>azure-kms-encryption</code></td></tr>
+<tr><td><code>azure-kms-encryption-tls-no-provider</code></td><td>Azure with rustls and the crypto provider the application installs. The application must install a process-default rustls <code>CryptoProvider</code> before creating the provider, otherwise rustls panics</td></tr>
+<tr><td><code>azure-kms-encryption-native-tls</code></td><td>Azure with the platform TLS library</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption</code></td><td>HashiCorp Vault Transit, with the system root certificates and the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-base</code></td><td>Vault Transit without a root store or crypto provider, to combine with one of each below</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-roots</code></td><td>Vault Transit with the system root certificates</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-webpki</code></td><td>Vault Transit with the bundled WebPKI roots</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code></td><td>Vault Transit with the aws-lc-rs crypto provider</td></tr>
+<tr><td><code>hashicorp-vault-transit-kms-encryption-tls-ring</code></td><td>Vault Transit with the ring crypto provider</td></tr>
+<tr><td><code>ring</code></td><td>the ring backend, see <a href="#crypto-backends">Crypto backends</a></td></tr>
+<tr><td><code>aws-lc</code></td><td>the aws-lc-rs backend</td></tr>
+<tr><td><code>aws-lc-fips</code></td><td>the aws-lc-rs backend on the AWS-LC FIPS module. Needs CMake and Go to build</td></tr>
+<tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed</td></tr>
+<tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="#deterministic-encryption">Deterministic encryption</a></td></tr>
+<tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="#formats">Formats</a></td></tr>
+<tr><td><code>serde</code></td><td><code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for <code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>, see <a href="#storing">Storing</a></td></tr>
+<tr><td><code>serde-json</code></td><td><code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON</td></tr>
+<tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
+<tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
+</tbody>
+</table>
+</div>
 <p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
-<p>Crypto backends, see <a href="#crypto-backends">Crypto backends</a>:</p>
-<ul>
-<li><code>ring</code>: the ring library;</li>
-<li><code>aws-lc</code>: the aws-lc-rs library;</li>
-<li><code>aws-lc-fips</code>: the aws-lc-rs library on the AWS-LC FIPS module. Needs CMake and Go to build;</li>
-<li><code>rustcrypto</code>: the pure Rust RustCrypto crates, no C compiler needed.</li>
-</ul>
-<p>Other features:</p>
-<ul>
-<li><code>deterministic</code>: deterministic encryption with AES-SIV, see
-<a href="#deterministic-encryption">Deterministic encryption</a>;</li>
-<li><code>legacy-formats</code>: reads the layouts written by 0.29 and earlier. Deprecated, see
-<a href="#formats">Formats</a>;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for
-<code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>;</li>
-<li><code>serde-json</code>: <code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON;</li>
-<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for
-tokio-postgres;</li>
-<li><code>sqlx</code>: sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS
-stack.</li>
-</ul>
-<p>See <a href="#stored-values">Stored values</a>.</p>
 <h3 id="feature-rules"><a class="header" href="#feature-rules">Feature rules</a></h3>
 <p>The crate refuses some feature combinations at compile time with <code>compile_error!</code>:</p>
 <ul>
@@ -5977,28 +5912,27 @@ alone, the aws-lc-rs build fails. Use <code>aws-lc</code> or <code>aws-lc-fips</
 <p>A build without any backend feature compiles, and <code>LocalKmsProvider</code> is in it, but nothing that
 seals or encrypts can be constructed, since no type implements <code>AeadBackend</code>.</p>
 <h2 id="kms-aead-keyring"><a class="header" href="#kms-aead-keyring">kms-aead-keyring</a></h2>
-<p>The crate has no default features, and the backend features are those of kms-aead:</p>
-<ul>
-<li><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code>: the crypto backends, see
-<a href="#crypto-backends">Crypto backends</a>. A keyring names its backend as a type parameter, such
-as <code>kms_aead::backends::Ring</code>;</li>
-<li><code>admin</code>: <code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types
-of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the
-<code>encodings</code> module, see <a href="#applications-and-administration-1">Applications and administration</a>;</li>
-<li><code>deterministic</code>: deterministic key versions and every call on them, <code>encrypt_deterministic</code>
-and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>,
-<code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see
-<a href="#deterministic-fields">Deterministic fields</a>. The deterministic types exist in every
-build, so a process without the feature keeps a record’s deterministic versions intact;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes;</li>
-<li><code>serde-json</code>: <code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON;</li>
-<li><code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>: the keyring stores, see
-<a href="#keyring-stores">Keyring stores</a>. <code>gcs</code> has TLS variants listed there, and <code>postgres</code>
-also binds <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code>;</li>
-<li><code>sqlx</code>: <code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code>;</li>
-<li><code>bigquery-export</code>: <code>admin</code>, and <code>export_bigquery_keyset</code>, see
-<a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>.</li>
-</ul>
+<p>The crate has no default features.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Feature</th><th>What it adds</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="#crypto-backends">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
+<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="#applications-and-administration-1">Applications and administration</a></td></tr>
+<tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, <code>encrypt_deterministic</code> and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see <a href="#deterministic-fields">Deterministic fields</a>. The deterministic types exist in every build, so a process without the feature keeps a record’s deterministic versions intact</td></tr>
+<tr><td><code>serde</code></td><td><code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes</td></tr>
+<tr><td><code>serde-json</code></td><td><code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON</td></tr>
+<tr><td><code>firestore</code></td><td>the Firestore keyring store, see <a href="#keyring-stores">Keyring stores</a></td></tr>
+<tr><td><code>postgres</code></td><td>the PostgreSQL keyring store, and <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code></td></tr>
+<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, with the TLS variants listed in <a href="#cloud-storage">Keyring stores</a></td></tr>
+<tr><td><code>s3</code></td><td>the S3 keyring store</td></tr>
+<tr><td><code>sqlx</code></td><td><code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code></td></tr>
+<tr><td><code>bigquery-export</code></td><td><code>admin</code>, and <code>export_bigquery_keyset</code>, see <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a></td></tr>
+</tbody>
+</table>
+</div>
 <p>Beacons need no feature, and <code>export_tink_keyset</code> needs <code>admin</code> only. The KMS providers come from
 kms-aead and its provider features, and secret-vault-value’s <code>SecretValue</code> is what an application
 type’s <code>Plaintext</code> encodes to.</p>
@@ -6938,13 +6872,25 @@ encryptions. Add a new version before that.</li>
 values sealed with it are equal, and does not break integrity.</p>
 <p>Deterministic encryption with AES-SIV takes no random nonce.</p>
 <h2 id="data-volume"><a class="header" href="#data-volume">Data volume</a></h2>
-<p>AES-GCM also has a bound on the data under one key, whatever the nonces: RFC 8446, section 5.5,
-allows 2^24.5 records of 2^14 bytes, 2^38.5 bytes, for an AE advantage of about 2^-57. The bound
-applies to AES-GCM keys this way:</p>
+<p>AES-GCM also has a bound on the data under one key, whatever the nonces. The bounds per algorithm:</p>
 <ul>
-<li>a store-less envelope renews its DEK at <code>max_bytes</code>, 2^38 bytes by default under AES-GCM and at
-most 2^52, see <a href="#volume-limit">Volume limit</a>. AES-256-GCM-SIV and
-ChaCha20-Poly1305 have no default volume limit;</li>
+<li>AES-GCM: RFC 8446, section 5.5, allows “up to 2^24.5 full-size records (about 24 million)” of
+2^14 bytes, 2^38.5 bytes, “while keeping a safety margin of approximately 2^-57 for
+Authenticated Encryption (AE) security”. Luykx and Paterson, “Limits on Authenticated Encryption
+Use in TLS”, table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60.
+RFC 8452, section 9, allows 2^48 blocks, 2^52 bytes, under one AES-GCM key for an advantage of
+2^-32;</li>
+<li>AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
+random nonces for an advantage of 2^-32, so the bound on the number of values bounds it already;</li>
+<li>ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
+beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
+attempts, which no writer can count.</li>
+</ul>
+<p>The bound applies to AES-GCM keys this way:</p>
+<ul>
+<li>a store-less envelope renews its DEK at <code>max_bytes</code>, 2^38 bytes by default under AES-GCM, below
+the 2^38.5 of RFC 8446, and at most 2^52, see <a href="#volume-limit">Volume limit</a>.
+AES-256-GCM-SIV and ChaCha20-Poly1305 have no default volume limit;</li>
 <li>with <code>encrypt_with_dek</code> and <code>AeadCipher</code>, the application counts the bytes it seals under one
 AES-GCM key too, and moves to a new key before 2^38 bytes.</li>
 </ul>
@@ -7033,9 +6979,9 @@ decided per record before a sweep re-seals them, see
 <a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
 <li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
 links a value’s history for whoever reads the query, see
-<a href="#what-they-leak">Deterministic fields</a>;</li>
+<a href="#what-it-leaks">What it leaks</a>;</li>
 <li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
-<a href="#what-a-beacon-leaks">Beacons</a>;</li>
+<a href="#what-a-beacon-leaks">What a beacon leaks</a>;</li>
 <li><strong>a promotion’s guard covers healthy processes only.</strong> <code>promote</code> refuses until <code>record_ttl</code> has
 passed since the rotation, and <code>promote_now</code> skips that. A process whose revalidations fail
 keeps an older record for longer: when it meets a value under a version it has not seen, it

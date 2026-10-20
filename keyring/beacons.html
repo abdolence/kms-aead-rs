@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -188,15 +188,9 @@ bytes.</p>
 <p>A <a href="./deterministic.html">deterministic field</a> also finds rows by equality, by its encrypted value,
 see <a href="../beacons.html#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
 <h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
-<p>A beacon column leaks to anyone who reads it, without any key:</p>
-<ul>
-<li><strong>Equality</strong>: which rows are likely to hold the same value;</li>
-<li><strong>Frequency</strong>: how often each value occurs, as far as the bits tell values apart.</li>
-</ul>
-<p>And a leaked beacon key lets its holder test candidate values against the whole column offline.</p>
-<p>So beacons fit fields that are looked up and have many distinct values, such as emails and
-external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
-answer, whose values the frequencies give away.</p>
+<p>A beacon column leaks likely equality and frequency to anyone who reads it, and a leaked beacon
+key lets its holder test candidate values offline, see
+<a href="../beacons.html#what-a-beacon-leaks">What a beacon leaks</a> in kms-aead.</p>
 <p>A beacon is computed in a field’s context, <code>&lt;kind&gt;/&lt;field&gt;</code> such as <code>user/email</code>, with no entity
 id: equal values in different rows give equal beacons, which is what a lookup matches. A beacon of
 one field never matches a beacon of another.</p>
@@ -290,29 +284,17 @@ registry.shutdown().await?;
 <p>With the <code>postgres</code> feature, <code>Beacon</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and with
 the <code>serde</code> feature it serialises as bytes, as <code>Encrypted</code> does.</p>
 <h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
-<p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep, 1 to 256,
-<code>BeaconBits::DEFAULT</code>, 16, unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about
-<code>n / 2^b</code> values share each beacon:</p>
-<ul>
-<li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application
-decrypts and filters by the plaintext. A column of short beacons leaks less;</li>
-<li>more bits: fewer rows to filter, down to one per value once <code>2^b</code> is far above <code>n</code>, and the
-column then leaks which rows hold equal values as a deterministic column does.</li>
-</ul>
-<p>An equal beacon never proves an equal value: a lookup always decrypts the rows it found and
-compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
-never match: after a change of a field’s bits, its stored beacons match no probe until a re-index
-computes them again.</p>
-<h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
-<p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
-<code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
-application’s job: the newtype normalises when it is made, as <code>Email::new</code> lowercases above, and
-every write and every lookup goes through it.</p>
+<p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep,
+<code>BeaconBits::DEFAULT</code>, 16, unless set; what the bits trade is in <a href="../beacons.html#bits">Bits</a>. The
+bits enter the HMAC, so after a change of a field’s bits, its stored beacons match no probe until a
+re-index computes them again. A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so
+the field’s newtype normalises the value, as <code>Email::new</code> lowercases above, see
+<a href="../beacons.html#normalisation">Normalisation</a>.</p>
 <h2 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h2>
-<p>BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot compute a
-beacon, and the keyring never exports beacon keys to it: <code>export_bigquery_keyset</code> of the beacon
-purpose fails with <code>ExportAlgorithmUnsupported</code>. A BigQuery query matches beacons the application
-computed and passed in as query parameters.</p>
+<p>The keyring never exports beacon keys to BigQuery: <code>export_bigquery_keyset</code> of the beacon purpose
+fails with <code>ExportAlgorithmUnsupported</code>, see
+<a href="./bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>. A BigQuery query
+matches beacons the application computed, see <a href="../beacons.html#bigquery">BigQuery</a> in kms-aead.</p>
 <h2 id="rotating-beacon-versions"><a class="header" href="#rotating-beacon-versions">Rotating beacon versions</a></h2>
 <p>A beacon version rotates as the other purposes do, see <a href="./lifecycle.html#staged-rotation">Staged
 rotation</a>, and a column holds beacons of several versions while it

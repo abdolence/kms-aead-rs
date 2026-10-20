@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -184,25 +184,12 @@ every build, so values pass through a process without the feature.</p>
 field only needs lookups and its stored value should stay randomised, a
 <a href="./beacons.html">beacon</a> fits instead.</p>
 <h2 id="what-they-leak"><a class="header" href="#what-they-leak">What they leak</a></h2>
-<p>A deterministic column leaks to anyone who reads it, without any key:</p>
-<ul>
-<li><strong>Equality</strong>: which rows hold the same value;</li>
-<li><strong>Frequency</strong>: how often each value occurs.</li>
-</ul>
-<p>And since there is no nonce, a leaked deterministic DEK lets its holder test candidate values
-against the whole column offline.</p>
-<p>So deterministic fields fit fields that are queried by equality and have high entropy, such as
-emails and external ids. Do not use them:</p>
-<ul>
-<li>for low-cardinality fields, such as a status, a country or a yes/no answer, whose values the
-frequencies give away;</li>
-<li>when equality itself is sensitive;</li>
-<li>for a field that is never looked up by equality: a randomised field leaks nothing of the kind.</li>
-</ul>
-<p>A deterministic value also opens in any row of the same kind and field, see <a href="#aad">AAD</a>, so a
-deterministic field never decides identity or authorisation on its own. Where identity matters,
-the check reads a randomised copy of the field, bound to the row by its AAD.</p>
-<p>See also <a href="../deterministic.html">Deterministic encryption</a> in kms-aead.</p>
+<p>A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
+deterministic DEK lets its holder test candidate values offline, see
+<a href="../deterministic.html#what-it-leaks">What it leaks</a> in kms-aead.</p>
+<p>The AAD of a deterministic field names its kind and field and no entity, see <a href="#aad">AAD</a>, so a
+deterministic value also opens in any row of the same kind and field, and a deterministic field
+never decides identity or authorisation on its own.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
 <p>A keyring with deterministic versions names their algorithm in its <code>KeyringAlgorithms</code>: AES-SIV,
 the one <code>DeterministicAlgorithm</code> has:</p>

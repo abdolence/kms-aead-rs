@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -242,63 +242,12 @@ it with the same KMS key and algorithm, see <a href="./formats.html#tinks-kms-en
 <p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
 configured to use one, see <a href="./providers.html#kms-random-generators">KMS random generators</a>.</p>
 <h2 id="typed-fields"><a class="header" href="#typed-fields">Typed fields</a></h2>
-<p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, so a field can have
-a type of its own. The value is encoded by its <code>Plaintext</code> implementation, and the result is an
-<code>Encrypted&lt;T, Envelope&gt;</code> that names the type:</p>
-<pre><code class="language-rust">use kms_aead::backends::Ring;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-// Sealed as the same UTF-8 bytes as a String
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-<span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-</span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
-
-let aad = b"users/1042/email";
-let email = Email("alice@example.com".to_string());
-let encrypted: Encrypted&lt;Email, Envelope&gt; = envelope.encrypt(aad, &amp;email).await?;
-
-// The bytes to store, and the field read back from them
-let stored: Vec&lt;u8&gt; = encrypted.into_value();
-let read_back = Encrypted::&lt;Email, Envelope&gt;::try_from(stored)?;
-
-let decrypted: Email = envelope.decrypt(aad, &amp;read_back).await?;
-assert_eq!(decrypted, email);
-<span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<ul>
-<li>an application type maps to one of the built-in <code>Plaintext</code> types, as <code>Email</code> does, see
-<a href="./stored-values.html#plaintext">Stored values</a>;</li>
-<li>the calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt
-through the envelope’s DEK cache, whatever the type;</li>
-<li><code>Encrypted::try_from</code> checks the stored bytes against Tink’s KMS envelope layout, so a
-truncated or foreign value fails when it is read, before any KMS call, with
-<code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_CIPHER_TEXT_FORMAT</code> or, without <code>legacy-formats</code>,
-<code>LEGACY_FORMAT</code>. It checks the framing only: a changed value fails to decrypt with <code>DECRYPT</code>;</li>
-<li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>.</li>
-</ul>
-<p><code>Encrypted&lt;T, Envelope&gt;</code> has no <code>==</code> and its <code>Debug</code> shows the length only, see
-<a href="./stored-values.html#encryptedt-f">Stored values</a>.</p>
-<h3 id="storing-typed-fields"><a class="header" href="#storing-typed-fields">Storing typed fields</a></h3>
-<p>serde, tokio-postgres and sqlx store <code>Encrypted</code> as bytes, see
-<a href="./stored-values.html#storing">Stored values</a>.</p>
-<h3 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h3>
+<p><code>encrypt</code> and <code>decrypt</code> take a value of any type that implements <code>Plaintext</code>, such as an
+application’s <code>Email</code> newtype, and the result is an <code>Encrypted&lt;T, Envelope&gt;</code> that names the type.
+The calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt through
+the envelope’s DEK cache, whatever the type. <code>Plaintext</code>, the bytes of an <code>Encrypted</code> and how
+serde, tokio-postgres and sqlx store it are in <a href="./stored-values.html">Stored values</a>.</p>
+<h2 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h2>
 <p><code>AeadCipher::encrypt</code> seals a field under a key the application holds, in Tink’s layout of a key
 whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
 <code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an

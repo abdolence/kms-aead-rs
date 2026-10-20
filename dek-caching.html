@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -341,20 +341,9 @@ envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
 </tbody>
 </table>
 </div>
-<p>The figures come from these bounds:</p>
-<ul>
-<li>AES-GCM: RFC 8446, section 5.5, allows “up to 2^24.5 full-size records (about 24 million)” of
-2^14 bytes, 2^38.5 bytes, “while keeping a safety margin of approximately 2^-57 for
-Authenticated Encryption (AE) security”. Luykx and Paterson, “Limits on Authenticated Encryption
-Use in TLS”, table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60. The
-default of 2^38 bytes stays below that. The most allowed, 2^52 bytes, is the 2^48 blocks RFC
-8452, section 9, allows under one AES-GCM key for an advantage of 2^-32;</li>
-<li>AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
-random nonces for an advantage of 2^-32, so <code>max_uses</code> bounds it already;</li>
-<li>ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
-beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
-attempts, which no writer can count.</li>
-</ul>
+<p>The default stays below the 2^38.5 bytes RFC 8446 allows under one AES-GCM key, and the most
+allowed is the 2^48 blocks of RFC 8452. AES-GCM-SIV and ChaCha20-Poly1305 have no volume bound
+beyond <code>max_uses</code>. The citations are in <a href="./security.html#data-volume">Data volume</a>.</p>
 <p>A <code>max_bytes</code> set in the policy replaces the default, under any algorithm. Above the most
 allowed, the envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
 <p>A value that would take the count past <code>max_bytes</code> renews the DEK before it is sealed. A value

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -221,8 +221,9 @@ layout and the layouts of 0.29 and earlier.</p>
 lowercase hex. The only ways back are <code>Encrypted::try_from</code> for bytes and
 <code>Encrypted::try_from_hex_string</code> for hex in either case. Both check the bytes against the layout
 of <code>F</code> before any KMS call, so a truncated or foreign value fails when it is read, with
-<code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>LEGACY_FORMAT</code> or <code>INVALID_HEX</code>. The
-check reads the framing only: a changed value fails to decrypt with <code>DECRYPT</code>.</p>
+<code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_HEX</code>, or <code>LEGACY_FORMAT</code> for
+a layout of 0.29 or earlier without the <code>legacy-formats</code> feature. The check reads the framing
+only: a changed value fails to decrypt with <code>DECRYPT</code>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Randomized;
 use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, KeyId};
@@ -399,13 +400,7 @@ let read_back = Beacon::&lt;Email&gt;::try_from(beacon.value().to_vec())?;
 assert_eq!(read_back, beacon);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The bits trade lookups against leakage. With <code>n</code> distinct values and <code>b</code> bits, about <code>n / 2^b</code>
-values share each beacon, so a lookup returns that many rows, which the application decrypts and
-filters by the plaintext. Fewer bits leak less and return more rows; more bits return fewer rows
-and leak which rows hold equal values, up to what a deterministic field leaks. An equal beacon
-never proves an equal value. See
-<a href="./beacons.html#beacon-or-deterministic-field">Beacon or deterministic field</a> for the numbers of
-the default.</p>
+<p>The bits trade lookups against leakage, see <a href="./beacons.html#bits">Bits</a>.</p>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, as bytes, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code>
 features. A lookup matches the column by equality, so it gets an ordinary index:</p>
 <pre><code class="language-sql">CREATE TABLE users (

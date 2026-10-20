@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -250,30 +250,51 @@ assert_eq!(decrypted, email);
 <ul>
 <li>the context, <code>users/email</code> here, names the field and never a row, so that equal values in one
 field give equal beacons. A beacon of one field never matches a beacon of another;</li>
-<li><code>BeaconBits</code> sets how much of the HMAC a beacon keeps, 1 to 256 bits, 16 by default. With <code>n</code>
-distinct values and <code>b</code> bits, about <code>n / 2^b</code> values share each beacon: a lookup returns that
-many rows, which the application decrypts and filters, and an equal beacon never proves an
-equal value. More bits leak more; fewer bits return more rows to filter;</li>
-<li>normalisation is the application’s: the beacon of <code>Alice@Example.com</code> and of
-<code>alice@example.com</code> differ unless the type normalises the value before it is sealed, as
-<code>Email::new</code> does;</li>
 <li>the key id, a <code>KeyId</code>, is the application’s number for the beacon key, written into every
 beacon so that a column can hold beacons of two keys at once;</li>
 <li>the beacon key is decrypted through the envelope’s DEK cache, as a DEK is.</li>
 </ul>
-<p>A beacon column leaks which rows are likely to hold equal values, and with them how often each
-value occurs, to anyone who reads the column. A leaked beacon key lets its holder test guesses
-against the whole column offline. Beacons fit fields that are looked up and have many distinct
-values, such as emails and external ids, and never low-cardinality fields such as a status or a
-country. BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery
-cannot calculate a beacon; it matches beacons the application calculated.</p>
+<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
+read back through <code>TryFrom</code>, which checks its layout, see <a href="./stored-values.html#beacont">Stored values</a>.
+See <a href="./formats.html#beacons">Formats</a> for its bytes.</p>
+<h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
+<p>A beacon column leaks to anyone who reads it, without any key:</p>
+<ul>
+<li><strong>Equality</strong>: which rows are likely to hold the same value;</li>
+<li><strong>Frequency</strong>: how often each value occurs, as far as the bits tell values apart.</li>
+</ul>
+<p>And a leaked beacon key lets its holder test candidate values against the whole column offline.</p>
+<p>So beacons fit fields that are looked up and have many distinct values, such as emails and
+external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
+answer, whose values the frequencies give away.</p>
+<h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
+<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256, <code>BeaconBits::DEFAULT</code>, 16,
+unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
+beacon:</p>
+<ul>
+<li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application
+decrypts and filters by the plaintext. A column of short beacons leaks less;</li>
+<li>more bits: fewer rows to filter, down to one per value once <code>2^b</code> is far above <code>n</code>, and the
+column then leaks which rows hold equal values as a deterministic column does.</li>
+</ul>
+<p>An equal beacon never proves an equal value: a lookup always decrypts the rows it found and
+compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
+never match: after a change of a column’s bits, its stored beacons match no lookup until a
+re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
+<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
+<p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
+<code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
+application’s job: the newtype normalises when it is made, as <code>Email::new</code> lowercases above, and
+every write and every lookup goes through it.</p>
+<h2 id="bigquery"><a class="header" href="#bigquery">BigQuery</a></h2>
+<p>BigQuery’s SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot calculate
+a beacon. It matches beacons the application calculated and passed in as query parameters.</p>
+<h2 id="rotating-a-beacon-key"><a class="header" href="#rotating-a-beacon-key">Rotating a beacon key</a></h2>
 <p>Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
 beacon. kms-aead-keyring does this with key versions, see <a href="./keyring/beacons.html">Beacons</a>.</p>
-<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, and
-read back through <code>TryFrom</code>, which checks its layout, see <a href="./stored-values.html#beacont">Stored values</a>.
-See <a href="./formats.html#beacons">Formats</a> for its bytes.</p>
 <h2 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h2>
 <p>A <a href="./deterministic.html">deterministic field</a> also finds rows by equality, by its cipher text:</p>
 <div class="table-wrapper">

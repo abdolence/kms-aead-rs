@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -224,6 +224,25 @@ life of the key;</li>
 <li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
 policy.</li>
 </ul>
+<p>A Managed HSM AES key, with <code>A256Kw</code>:</p>
+<pre><code class="language-rust no_run">use azure_security_keyvault_keys::models::EncryptionAlgorithm;
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+
+<span class="boring">fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let kms_ref = AzureKmsKeyRef::new(
+    "https://my-hsm.managedhsm.azure.net".to_string(),
+    "my-aes-key".to_string(),
+);
+let credential = azure_identity::DeveloperToolsCredential::new(None)?;
+
+let provider = AzureKmsProvider::with_options(
+    &amp;kms_ref,
+    AzureKmsProviderOptions::new().with_algorithm(EncryptionAlgorithm::A256Kw),
+    credential,
+)?;
+<span class="boring">let _ = provider;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
 <h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
 <p>Key Vault decrypts only with the key version that encrypted, so the provider’s encrypted DEK carries
 it before Key Vault’s encrypted DEK, in the library’s own layout, see
@@ -245,8 +264,8 @@ Key Vault deletes a key with all its versions and never one version alone, so th
 disabled rather than destroyed.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
-<code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. A server error or a rate limit is a
-<code>NetworkError</code>, any other status an <code>EncryptionError</code>. A decryption of an encrypted DEK in another
+<code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. Which statuses are a <code>NetworkError</code> and which an
+<code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. A decryption of an encrypted DEK in another
 layout fails with <code>AZURE_ENCRYPTED_DEK_FORMAT</code>, before any request.</p>
 
                     </main>

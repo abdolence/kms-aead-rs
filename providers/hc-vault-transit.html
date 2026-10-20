@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -264,11 +264,10 @@ it again restores them. Once
 nothing needs them, the backups included, <code>min_available_version</code> and a trim of the key delete the
 older versions for good.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
-<p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>: a <code>NetworkError</code> for a server error
-or a rate limit, an <code>EncryptionError</code> otherwise. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are network
-errors for a request that got no complete response, and <code>VAULT_RESPONSE</code>,
-<code>VAULT_RESPONSE_TOO_LARGE</code> and <code>VAULT_CIPHERTEXT</code> are encryption errors for a response or a
-encrypted DEK that cannot be read. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
+<p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are
+for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code> and
+<code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
+<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
 or <code>VAULT_TLS</code> when the TLS configuration cannot be built.</p>
 
                     </main>

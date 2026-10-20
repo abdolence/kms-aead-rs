@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -181,18 +181,28 @@
 <p>Running a keyring in production: how often to rotate, how sweeps move values to the active
 versions, the migration from envelope values, and what to do when a key leaks.</p>
 <h2 id="rotation-cadence"><a class="header" href="#rotation-cadence">Rotation cadence</a></h2>
-<p>See <a href="./operations/rotation.html#rotation-cadence">Rotation cadence</a>.</p>
+<p>A rotation is staged: <code>rotate</code>, export the BigQuery keysets again, wait for every process to see
+the pending version, then <code>promote</code>. How often to rotate follows from the nonce and volume bounds
+of each purpose, and deterministic and beacon versions rotate rarely, since each adds a probe to
+every lookup until a sweep. See <a href="./operations/rotation.html#rotation-cadence">Rotation cadence</a>.</p>
 <h2 id="rotating-the-kek"><a class="header" href="#rotating-the-kek">Rotating the KEK</a></h2>
-<p>See <a href="./operations/rotation.html#rotating-the-kek">Rotating the KEK</a>.</p>
+<p>The KEK rotates in the KMS on its own schedule, and <code>reencrypt_deks</code> moves the record’s DEKs to
+its current version without changing any value, before the old KEK version is disabled. See
+<a href="./operations/rotation.html#rotating-the-kek">Rotating the KEK</a>.</p>
 <h2 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h2>
-<p>See <a href="./operations/sweeps.html">Sweeps</a>, and the sweeps by store:
-<a href="./operations/sweeps-firestore.html">Firestore</a>,
-<a href="./operations/sweeps-postgres.html">PostgreSQL</a> and
-<a href="./operations/sweeps-bigquery.html">BigQuery</a>.</p>
+<p>A sweep re-seals stored values under the active versions, after a rotation, after a compromise
+and to migrate envelope values: a job the application runs on a schedule, which finds the records
+behind by their seal marker. <a href="./operations/sweeps.html">Sweeps</a> has the mechanism, and the sweeps by
+store have the queries and writes of <a href="./operations/sweeps-firestore.html">Firestore</a>,
+<a href="./operations/sweeps-postgres.html">PostgreSQL</a> and <a href="./operations/sweeps-bigquery.html">BigQuery</a>.</p>
 <h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
-<p>See <a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
+<p>Values that <code>KmsAeadEnvelope</code> wrote move to keyring values in five steps, with the seal marker
+telling the two layouts apart and a sweep re-sealing the envelope values. See
+<a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
 <h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
-<p>See <a href="./operations/runbook.html">Emergency runbook</a>.</p>
+<p>What to do when a plaintext DEK, an encrypted DEK or the record leaks, after a KMS IAM over-grant,
+a version the administrative job did not create, a deleted or corrupted record and a KMS outage,
+and how to crypto-shred a scope. See <a href="./operations/runbook.html">Emergency runbook</a>.</p>
 
                     </main>
 

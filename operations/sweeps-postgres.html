@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-a4854cec.js";
+            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -178,6 +178,11 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="sweeps-on-postgresql"><a class="header" href="#sweeps-on-postgresql">Sweeps on PostgreSQL</a></h1>
+<p>A sweep of a PostgreSQL table: the seal marker as a column, the query for the rows behind, and the
+conditional write back. The mechanism is in <a href="./sweeps.html">Sweeps</a>, and the example has the five
+properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>: it resumes without a checkpoint, a
+concurrent writer wins, <code>concurrency</code> bounds the load, each write stores the marker of its sealer,
+and it runs on a schedule until a run scans nothing.</p>
 <p>The marker is a <code>BYTEA</code> column with a btree index. Its default, the bytes of
 <code>SealMarker::ENVELOPE</code>, gives the rows written before the column a marker too:</p>
 <pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTEA NOT NULL DEFAULT '\x0100000000';
