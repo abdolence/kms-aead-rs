@@ -17,13 +17,12 @@ anything changed the document since the query read it:
 ```rust,no_run
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
-use std::time::Duration;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreSimpleBatchWriter, FirestoreTimestamp,
-    FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreDuration, FirestoreSimpleBatchWriteOptions,
+    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
 };
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
@@ -53,10 +52,10 @@ const EMAIL: FieldSpec = FieldSpec::new(
 /// Firestore's limit of writes in one `BatchWrite`.
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
-/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
-/// never ends. A batch that runs out of it fails.
-const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error.
+/// The writer retries with no limit of its own, so without this a sweep against a Firestore that
+/// refuses or fails its requests never ends.
+const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -102,13 +101,12 @@ impl Display for UserDoc {
 }
 
 /// Why the sweep failed on a document or a batch: an error of the keyring or of the users
-/// collection, the status of a document's write in a batch, `None` for a status the batch did not
-/// return, or a batch that ran out of [`BATCH_WRITE_TIMEOUT`].
+/// collection, or the status of a document's write in a batch, `None` for a status the batch did
+/// not return.
 enum SweepError {
     Keyring(KeyringError),
     Users(FirestoreError),
     Write(Option<Code>),
-    WriteTimedOut,
 }
 
 impl From<KeyringError> for SweepError {
@@ -138,10 +136,6 @@ impl Display for SweepError {
             SweepError::Users(_) => f.write_str("the users collection failed"),
             SweepError::Write(Some(code)) => write!(f, "its write failed with {code:?}"),
             SweepError::Write(None) => f.write_str("its write returned no status"),
-            SweepError::WriteTimedOut => write!(
-                f,
-                "its batch was not written within {BATCH_WRITE_TIMEOUT:?}"
-            ),
         }
     }
 }
@@ -253,10 +247,7 @@ async fn reseal_batch(
     if queued.is_empty() {
         return Ok(done);
     }
-    let response: FirestoreBatchWriteResponse =
-        tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write())
-            .await
-            .map_err(|_| SweepError::WriteTimedOut)??;
+    let response: FirestoreBatchWriteResponse = batch.write().await?;
     done.extend(queued.into_iter().enumerate().map(|(index, (doc, outcome))| {
         let code: Option<Code> = response
             .statuses
@@ -282,7 +273,12 @@ async fn reseal_batch(
 #     "my-key".to_string(),
 # );
 # let db = FirestoreDb::new("my-project").await?;
-# let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+let writer: FirestoreSimpleBatchWriter = db
+    .create_simple_batch_writer_with_options(
+        FirestoreSimpleBatchWriteOptions::new()
+            .with_retry_max_elapsed_time(BATCH_WRITE_RETRY_LIMIT),
+    )
+    .await?;
 # let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
 #     FirestoreKeyringStore::new(db.clone()),
 #     KeyringRegistryOptions::new(),
@@ -296,6 +292,10 @@ println!("{report:?}");
 # Ok(())
 # }
 ```
+
+The retry limit ends retries, not a request: a request on a connection that never answers, the
+candidate query included, waits until HTTP/2 keep-alive drops the connection, so the job timeout of
+the scheduler that runs the sweep is what bounds a run.
 
 A range filter never matches a document without the field. `#[serde(default)]` reads a document
 written before the marker as `SealMarker::ENVELOPE`, and the query finds it only once its `seal`

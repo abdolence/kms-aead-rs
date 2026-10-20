@@ -41,13 +41,14 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb,
-    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDuration,
+    FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
 use futures_util::stream::TryChunksError;
 use futures_util::{stream, StreamExt, TryStreamExt};
@@ -78,10 +79,11 @@ const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 /// The batches in flight at once. On a new collection of a real database, raise the write rate
 /// step by step, as Firestore's 500/50/5 rule for ramping up traffic advises.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
-/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
-/// never ends. A batch that runs out of it fails.
-const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error.
+/// The writer retries with no limit of its own, so without this a sweep against a Firestore that
+/// refuses or fails its requests never ends. The limit ends retries, not a request: one on a
+/// connection that never answers waits until HTTP/2 keep-alive drops the connection.
+const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
 /// The users between two progress lines.
 const PROGRESS_EVERY: usize = 100_000;
 const DEFAULT_USERS: u32 = 100;
@@ -118,13 +120,12 @@ struct UserFields {
 }
 
 /// Why the sweep failed on a document or a batch: an error of the keyring or of the users
-/// collection, the status of a document's write in a batch, `None` for a status the batch did not
-/// return, or a batch that ran out of [`BATCH_WRITE_TIMEOUT`].
+/// collection, or the status of a document's write in a batch, `None` for a status the batch did
+/// not return.
 enum SweepError {
     Keyring(KeyringError),
     Users(FirestoreError),
     Write(Option<Code>),
-    WriteTimedOut,
 }
 
 impl From<KeyringError> for SweepError {
@@ -156,10 +157,6 @@ impl Display for SweepError {
             },
             SweepError::Write(Some(code)) => write!(f, "its write failed with {code:?}"),
             SweepError::Write(None) => f.write_str("its write returned no status"),
-            SweepError::WriteTimedOut => write!(
-                f,
-                "its batch was not written within {BATCH_WRITE_TIMEOUT:?}"
-            ),
         }
     }
 }
@@ -185,7 +182,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         FirestoreKeyringStore::new(db.clone()).with_collection(keyrings.clone()),
         KeyringRegistryOptions::new(),
     )?;
-    let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+    let writer: FirestoreSimpleBatchWriter = db
+        .create_simple_batch_writer_with_options(
+            FirestoreSimpleBatchWriteOptions::new()
+                .with_retry_max_elapsed_time(BATCH_WRITE_RETRY_LIMIT),
+        )
+        .await?;
 
     let outcome = run(&registry, &writer, &users, count).await;
     let shutdown = registry.shutdown().await;
@@ -321,10 +323,7 @@ async fn reseal_batch(
     if queued.is_empty() {
         return Ok(done);
     }
-    let response: FirestoreBatchWriteResponse =
-        tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write())
-            .await
-            .map_err(|_| SweepError::WriteTimedOut)??;
+    let response: FirestoreBatchWriteResponse = batch.write().await?;
     done.extend(
         queued
             .into_iter()
@@ -401,9 +400,7 @@ async fn seed_test_data(
                         .object(&fields)
                         .add_to_batch(&mut batch)?;
                 }
-                every_write_succeeded(
-                    &tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write()).await??,
-                )?;
+                every_write_succeeded(&batch.write().await?)?;
                 count_progress(written, batch_count, "wrote");
                 Ok::<(), Box<dyn Error>>(())
             }
@@ -456,9 +453,7 @@ async fn delete_test_data(
                         .document_id(&doc.id)
                         .add_to_batch(&mut batch)?;
                 }
-                every_write_succeeded(
-                    &tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write()).await??,
-                )?;
+                every_write_succeeded(&batch.write().await?)?;
                 Ok::<usize, Box<dyn Error>>(docs.len())
             })
             .try_buffer_unordered(CONCURRENCY.get())
