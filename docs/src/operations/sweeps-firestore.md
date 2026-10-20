@@ -21,12 +21,14 @@ anything changed the document since the query read it:
 ```rust,no_run
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreDuration, FirestoreSimpleBatchWriteOptions,
-    FirestoreSimpleBatchWriter, FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreDb, FirestoreDbOptions,
+    FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
@@ -41,7 +43,6 @@ use kms_aead_keyring::{
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
-# use firestore::FirestoreDb;
 # use kms_aead::providers::GcpKmsKeyRef;
 # use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
 
@@ -59,7 +60,9 @@ const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 /// How long the batch writer retries a failed `BatchWrite` before the batch fails with its error.
 /// The writer retries with no limit of its own, so without this a sweep against a Firestore that
 /// refuses or fails its requests never ends.
-const BATCH_WRITE_RETRY_LIMIT: FirestoreDuration = FirestoreDuration::from_secs(5);
+const BATCH_WRITE_RETRY_LIMIT: Duration = Duration::from_secs(5);
+/// How long a request waits for an answer, so that one to a Firestore that stopped answering fails.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -276,7 +279,10 @@ async fn reseal_batch(
 #     "my-key-ring".to_string(),
 #     "my-key".to_string(),
 # );
-# let db = FirestoreDb::new("my-project").await?;
+let db: FirestoreDb = FirestoreDb::with_options(
+    FirestoreDbOptions::new("my-project".to_string()).with_request_timeout(REQUEST_TIMEOUT),
+)
+.await?;
 let writer: FirestoreSimpleBatchWriter = db
     .create_simple_batch_writer_with_options(
         FirestoreSimpleBatchWriteOptions::new()
@@ -297,9 +303,8 @@ println!("{report:?}");
 # }
 ```
 
-The retry limit ends retries, not a request: a request on a connection that never answers, the
-candidate query included, waits until HTTP/2 keep-alive drops the connection, so the job timeout of
-the scheduler that runs the sweep is what bounds a run.
+The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
+candidate query included.
 
 A range filter never matches a document without the field. `#[serde(default)]` reads a document
 written before the marker as `SealMarker::ENVELOPE`, and the query finds it only once its `seal`
