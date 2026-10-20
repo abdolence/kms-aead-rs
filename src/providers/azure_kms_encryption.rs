@@ -2,7 +2,6 @@ use rsb_derive::*;
 
 use crate::errors::*;
 use crate::*;
-use async_trait::async_trait;
 use azure_core::credentials::TokenCredential;
 use azure_core::http::RequestContent;
 use azure_security_keyvault_keys::models::{
@@ -31,25 +30,44 @@ pub struct AzureKmsKeyRef {
     pub kek_version: Option<KekVersion>,
 }
 
+/// The algorithm Key Vault encrypts and decrypts data encryption keys with, the `alg` of its
+/// wrapKey and unwrapKey operations. It must suit the key type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AzureKmsAlgorithm {
+    /// `RSA-OAEP-256`: RSA-OAEP with SHA-256, for an RSA key.
+    RsaOaepSha256,
+    /// `RSA-OAEP`: RSA-OAEP with SHA-1, for an RSA key whose encrypted DEKs were written with it.
+    RsaOaepSha1,
+    /// `A128KW`: AES key wrap with a 128-bit key, for a Managed HSM AES key.
+    Aes128KeyWrap,
+    /// `A192KW`: AES key wrap with a 192-bit key, for a Managed HSM AES key.
+    Aes192KeyWrap,
+    /// `A256KW`: AES key wrap with a 256-bit key, for a Managed HSM AES key.
+    Aes256KeyWrap,
+    /// `CKM_AES_KEY_WRAP`: the PKCS#11 AES key wrap, for a Managed HSM AES key.
+    Pkcs11AesKeyWrap,
+    /// `CKM_AES_KEY_WRAP_PAD`: the PKCS#11 AES key wrap with padding, for a Managed HSM AES key.
+    Pkcs11AesKeyWrapWithPadding,
+}
+
 /// Options for [`AzureKmsProvider`].
 #[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct AzureKmsProviderOptions {
-    /// Wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys, `A256Kw` for
-    /// Managed HSM AES keys. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5` and
-    /// unknown algorithms are rejected. Encrypted keys do not record the algorithm, so it stays
-    /// fixed for the life of the key. [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default.
+    /// The algorithm, [`DEFAULT_ALGORITHM`](Self::DEFAULT_ALGORITHM) by default. Encrypted keys
+    /// do not record it, so it stays fixed for the life of the key.
     #[default = "Self::DEFAULT_ALGORITHM"]
-    pub algorithm: EncryptionAlgorithm,
+    pub algorithm: AzureKmsAlgorithm,
 
     /// Client settings passed to the Azure SDK, such as a custom HTTP transport or retry policy.
     pub client_options: Option<KeyClientOptions>,
 }
 
 impl AzureKmsProviderOptions {
-    /// The default [`algorithm`](Self::algorithm): `RsaOaep256`, RSA-OAEP with SHA-256, for an
+    /// The default [`algorithm`](Self::algorithm): [`AzureKmsAlgorithm::RsaOaepSha256`], for an
     /// RSA key.
-    pub const DEFAULT_ALGORITHM: EncryptionAlgorithm = EncryptionAlgorithm::RsaOaep256;
+    pub const DEFAULT_ALGORITHM: AzureKmsAlgorithm = AzureKmsAlgorithm::RsaOaepSha256;
 }
 
 /// Encrypts and decrypts data encryption keys with an Azure Key Vault key.
@@ -70,8 +88,8 @@ impl AzureKmsProviderOptions {
 /// A decryption of other bytes fails with `AZURE_ENCRYPTED_DEK_FORMAT` before any request.
 ///
 /// For the same reason, the plaintext Key Vault encrypts is the raw data encryption key of 16, 32
-/// or 64 bytes, not the key as Tink serialises it, so every wrap algorithm takes it: AES key wrap
-/// takes only multiples of 8 bytes.
+/// or 64 bytes, not the key as Tink serialises it, so every [`AzureKmsAlgorithm`] takes it: AES
+/// key wrap takes only multiples of 8 bytes.
 pub struct AzureKmsProvider {
     client: KeyClient,
     azure_key_ref: AzureKmsKeyRef,
@@ -99,9 +117,8 @@ impl AzureKmsProvider {
     /// # Errors
     ///
     /// A [`SystemError`](crate::errors::KmsAeadError::SystemError): `AZURE_KEY_NAME` when the key
-    /// name holds characters Key Vault does not allow in it, `AZURE_WRAP_ALGORITHM` when the
-    /// algorithm is `Rsa1_5` or unknown, and `AZURE_VAULT_URL` when the vault URL is not an
-    /// HTTP(S) URL.
+    /// name holds characters Key Vault does not allow in it, and `AZURE_VAULT_URL` when the vault
+    /// URL is not an HTTP(S) URL.
     pub fn with_options(
         kms_key_ref: &AzureKmsKeyRef,
         options: AzureKmsProviderOptions,
@@ -116,18 +133,6 @@ impl AzureKmsProvider {
                 &format!(
                     "Azure Key Vault key names allow only 0-9, a-z, A-Z and -: {:?}",
                     kms_key_ref.key_name
-                ),
-            ));
-        }
-
-        if let EncryptionAlgorithm::Rsa1_5 | EncryptionAlgorithm::UnknownValue(_) =
-            options.algorithm
-        {
-            return Err(KmsAeadSystemError::create(
-                "AZURE_WRAP_ALGORITHM",
-                &format!(
-                    "Azure Key Vault wrap algorithm {} is not supported",
-                    options.algorithm
                 ),
             ));
         }
@@ -167,7 +172,17 @@ impl AzureKmsProvider {
         value: Vec<u8>,
     ) -> KmsAeadResult<RequestContent<KeyOperationParameters>> {
         RequestContent::try_from(KeyOperationParameters {
-            algorithm: Some(self.options.algorithm.clone()),
+            algorithm: Some(match self.options.algorithm {
+                AzureKmsAlgorithm::RsaOaepSha256 => EncryptionAlgorithm::RsaOaep256,
+                AzureKmsAlgorithm::RsaOaepSha1 => EncryptionAlgorithm::RsaOaep,
+                AzureKmsAlgorithm::Aes128KeyWrap => EncryptionAlgorithm::A128Kw,
+                AzureKmsAlgorithm::Aes192KeyWrap => EncryptionAlgorithm::A192Kw,
+                AzureKmsAlgorithm::Aes256KeyWrap => EncryptionAlgorithm::A256Kw,
+                AzureKmsAlgorithm::Pkcs11AesKeyWrap => EncryptionAlgorithm::CkmAesKeyWrap,
+                AzureKmsAlgorithm::Pkcs11AesKeyWrapWithPadding => {
+                    EncryptionAlgorithm::CkmAesKeyWrapPad
+                }
+            }),
             value: Some(value),
             ..Default::default()
         })
@@ -179,7 +194,6 @@ fn is_key_vault_name(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for AzureKmsProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

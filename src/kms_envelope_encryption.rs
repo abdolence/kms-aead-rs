@@ -308,7 +308,7 @@ impl DekReuse {
 
 impl<P, B> KmsAeadEnvelope<P, B>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     /// An envelope on the backend `B` with the default options: AES-256-GCM, a DEK per value,

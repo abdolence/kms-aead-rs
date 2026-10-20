@@ -4,10 +4,11 @@ use azure_core::http::headers::{self, Headers};
 use azure_core::http::{
     AsyncRawResponse, Body, ClientOptions, HttpClient, Request, RetryOptions, StatusCode, Transport,
 };
-use azure_security_keyvault_keys::models::EncryptionAlgorithm;
 use azure_security_keyvault_keys::KeyClientOptions;
 use kms_aead::errors::KmsAeadError;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion};
+use kms_aead::providers::{
+    AzureKmsAlgorithm, AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion,
+};
 use kms_aead::*;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -308,23 +309,44 @@ async fn client_errors_keep_the_key_vault_error_code() -> KmsAeadResult<()> {
     Ok(())
 }
 
-#[test]
-fn insecure_or_unknown_wrap_algorithms_are_rejected() {
-    for algorithm in [
-        EncryptionAlgorithm::Rsa1_5,
-        EncryptionAlgorithm::UnknownValue("RSA-OAEP-512".into()),
+#[tokio::test]
+async fn key_vault_receives_the_configured_algorithm() -> Result<(), Box<dyn std::error::Error>> {
+    for (algorithm, alg) in [
+        (AzureKmsAlgorithm::RsaOaepSha256, "RSA-OAEP-256"),
+        (AzureKmsAlgorithm::RsaOaepSha1, "RSA-OAEP"),
+        (AzureKmsAlgorithm::Aes128KeyWrap, "A128KW"),
+        (AzureKmsAlgorithm::Aes192KeyWrap, "A192KW"),
+        (AzureKmsAlgorithm::Aes256KeyWrap, "A256KW"),
+        (AzureKmsAlgorithm::Pkcs11AesKeyWrap, "CKM_AES_KEY_WRAP"),
+        (
+            AzureKmsAlgorithm::Pkcs11AesKeyWrapWithPadding,
+            "CKM_AES_KEY_WRAP_PAD",
+        ),
     ] {
-        let result = AzureKmsProvider::with_options(
+        let http_client = Arc::new(CannedHttpClient::new(
+            StatusCode::Ok,
+            format!(
+                r#"{{"kid": "{VAULT_URL}/keys/{KEY_NAME}/{KEY_VERSION}", "value": "d3JhcHBlZA"}}"#
+            ),
+        ));
+        let provider = AzureKmsProvider::with_options(
             &AzureKmsKeyRef::new(VAULT_URL.into(), KEY_NAME.into()),
-            options_over(StatusCode::Ok, String::new()).with_algorithm(algorithm.clone()),
+            options_with(http_client.clone()).with_algorithm(algorithm),
             Arc::new(FixedTokenCredential),
-        );
+        )?;
 
-        assert!(
-            matches!(&result, Err(KmsAeadError::SystemError(e)) if e.public.code == "AZURE_WRAP_ALGORITHM"),
-            "{algorithm:?}"
-        );
+        provider
+            .encrypt_data_encryption_key(&data_encryption_key())
+            .await?;
+
+        let request_bodies = http_client.request_bodies.lock().unwrap();
+        let [request_body] = request_bodies.as_slice() else {
+            panic!("{algorithm:?}: {} requests", request_bodies.len());
+        };
+        let parameters: serde_json::Value = serde_json::from_slice(request_body)?;
+        assert_eq!(parameters["alg"], alg, "{algorithm:?}");
     }
+    Ok(())
 }
 
 #[test]

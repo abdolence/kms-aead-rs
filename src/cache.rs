@@ -430,7 +430,7 @@ impl DekCache {
         use_dek: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
     where
-        P: KmsAeadEncryptionProvider + Sync + ?Sized,
+        P: KmsAeadEncryptionProvider,
     {
         // An encrypted value of the same KEK that is no data encryption key, such as an exported
         // keyset, decrypts too, and the decoding of the decrypted key keeps it out.

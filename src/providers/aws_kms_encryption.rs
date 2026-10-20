@@ -3,7 +3,6 @@ use rsb_derive::*;
 use crate::errors::*;
 use crate::spans::{self, kms};
 use crate::*;
-use async_trait::async_trait;
 use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
 use aws_sdk_kms::operation::encrypt::builders::EncryptFluentBuilder;
 use aws_sdk_kms::primitives::Blob;
@@ -149,7 +148,6 @@ impl AwsKmsProvider {
     }
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for AwsKmsProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

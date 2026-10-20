@@ -1,8 +1,8 @@
 use std::convert::Infallible;
 use std::fmt::{Display, Formatter};
+use std::future::Future;
 use std::str::FromStr;
 
-use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
 use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
@@ -12,12 +12,15 @@ use crate::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadResult};
 /// Applications may implement it, for a KMS of their own or as a wrapper around another
 /// provider, such as a cache. A wrapper returns the inner provider's [`kek`](Self::kek).
 ///
+/// Write each method that returns a future as an `async fn`. Its future must be `Send`, so that
+/// an envelope or a keyring runs on a multi-threaded runtime. Envelopes and keyrings are generic
+/// over their provider: the trait has no `dyn` form.
+///
 /// An implementation's errors carry no key material in any form, plaintext or encrypted, in
 /// `Display` or `Debug`. A provider that calls a KMS hands the plaintext key to the KMS SDK or
 /// HTTP client, which keeps copies of it in request and response buffers that kms-aead cannot
 /// zeroise.
-#[async_trait]
-pub trait KmsAeadEncryptionProvider {
+pub trait KmsAeadEncryptionProvider: Send + Sync {
     /// The KEK this provider encrypts with and names to the KMS on every decryption, so that a key
     /// encrypted under another KEK fails at the KMS and never yields a data encryption key.
     ///
@@ -33,10 +36,10 @@ pub trait KmsAeadEncryptionProvider {
     ///
     /// The error the KMS returned, with the provider's code: the KMS's own error code where it
     /// has one, such as `NotFoundException` from AWS KMS or `VAULT_STATUS_403` from Vault.
-    async fn encrypt_data_encryption_key(
+    fn encrypt_data_encryption_key(
         &self,
         dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<EncryptedDataEncryptionKey>;
+    ) -> impl Future<Output = KmsAeadResult<EncryptedDataEncryptionKey>> + Send;
 
     /// Decrypts `encrypted_dek` with the KEK. The request names the configured KEK, so a key
     /// encrypted under another KEK is refused by the KMS.
@@ -44,18 +47,21 @@ pub trait KmsAeadEncryptionProvider {
     /// # Errors
     ///
     /// As [`encrypt_data_encryption_key`](Self::encrypt_data_encryption_key).
-    async fn decrypt_data_encryption_key(
+    fn decrypt_data_encryption_key(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<DataEncryptionKey>;
+    ) -> impl Future<Output = KmsAeadResult<DataEncryptionKey>> + Send;
 
     /// `len` random bytes from the KMS's own generator, for a provider configured to use it.
     /// `Ok(None)` means the caller generates the key with its crypto backend, which is what the
     /// default implementation returns. The caller checks the length and fails with
     /// `INVALID_KEY_LENGTH` when the KMS returned another one.
-    async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
+    fn generate_key_material(
+        &self,
+        len: usize,
+    ) -> impl Future<Output = KmsAeadResult<Option<SecretValue>>> + Send {
         let _ = len;
-        Ok(None)
+        std::future::ready(Ok(None))
     }
 }
 

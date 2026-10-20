@@ -25,6 +25,14 @@ In short:
   0.29 open only with `KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305)`,
   and fail with `DECRYPT` without it;
 - the AWS provider names the configured key on every decryption;
+- an application's own provider implements `KmsAeadEncryptionProvider` without `#[async_trait]`,
+  and the trait has no `dyn` form: code that holds a provider is generic over it;
+- the Azure provider's `algorithm` is an `AzureKmsAlgorithm` rather than the Azure SDK's
+  `EncryptionAlgorithm`, with a variant for every algorithm 0.29 accepted: `RsaOaep256` is
+  `RsaOaepSha256`, `RsaOaep` is `RsaOaepSha1`, `A128Kw`, `A192Kw` and `A256Kw` are
+  `Aes128KeyWrap`, `Aes192KeyWrap` and `Aes256KeyWrap`, and `CkmAesKeyWrap` and
+  `CkmAesKeyWrapPad` are `Pkcs11AesKeyWrap` and `Pkcs11AesKeyWrapWithPadding`. `Rsa1_5`, which
+  0.29 refused when the provider was built, has no variant;
 - `EncryptedDataEncryptionKey` is the provider's bytes: store `value()` or `to_hex_string()`, and
   read them back with `EncryptedDataEncryptionKey::from` or `try_from_hex_string`. Its
   `kek_version()` is the KEK version the KMS reported, on an encrypted DEK the provider has just

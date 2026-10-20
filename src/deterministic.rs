@@ -167,7 +167,7 @@ mod aes_siv_cipher {
             provider: &P,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
         where
-            P: KmsAeadEncryptionProvider + Sync + ?Sized,
+            P: KmsAeadEncryptionProvider,
         {
             crate::formats::generate_encrypted_dek::<B, P>(
                 self.algorithm.into(),
@@ -298,7 +298,7 @@ mod aes_siv_cipher {
     /// Deterministic keys, encrypted and decrypted by the envelope's provider.
     impl<P, B> KmsAeadEnvelope<P, B>
     where
-        P: KmsAeadEncryptionProvider + Send + Sync,
+        P: KmsAeadEncryptionProvider,
         B: AeadBackend,
     {
         /// A new deterministic key and the same key encrypted by the provider, to store. The key

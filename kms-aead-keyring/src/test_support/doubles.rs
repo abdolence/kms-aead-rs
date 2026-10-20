@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use kms_aead::backends::AeadBackend;
 use kms_aead::errors::KmsAeadNetworkError;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
@@ -112,7 +111,6 @@ impl TestProvider {
     }
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for TestProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

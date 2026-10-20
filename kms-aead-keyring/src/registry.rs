@@ -173,7 +173,7 @@ where
     /// which leaves the keyring and its other handles as they were.
     pub async fn open<P>(&self, provider: P, id: KeyringId) -> KeyringResult<Keyring<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+        P: KmsAeadEncryptionProvider + 'static,
     {
         let store = &*self.inner.store;
         let cache = self
@@ -243,7 +243,7 @@ where
     /// As [`open`](Self::open).
     pub async fn admin<P>(&self, provider: P, id: KeyringId) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+        P: KmsAeadEncryptionProvider + 'static,
     {
         Ok(KeyringAdmin::new(self.open(provider, id).await?))
     }
@@ -267,7 +267,7 @@ where
         algorithms: KeyringAlgorithms,
     ) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+        P: KmsAeadEncryptionProvider + 'static,
     {
         let store = &*self.inner.store;
         let mut created = false;
@@ -309,7 +309,7 @@ where
         algorithms: KeyringAlgorithms,
     ) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+        P: KmsAeadEncryptionProvider + 'static,
     {
         let store = &*self.inner.store;
         let cache = self

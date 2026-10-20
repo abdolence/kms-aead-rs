@@ -55,6 +55,9 @@ the backend's CSPRNG.
 An application can implement `KmsAeadEncryptionProvider` for a KMS of its own, or as a wrapper
 around another provider. The implementation:
 
+- is `Send` and `Sync`, and writes `encrypt_data_encryption_key`, `decrypt_data_encryption_key`
+  and `generate_key_material` as `async fn`, whose futures must be `Send`. The trait has no `dyn`
+  form, so code that holds a provider is generic over it;
 - returns from `kek()` a `KekRef` with `KekProvider::Other` and a key name that identifies the
   key across every KMS instance it may address. A wrapper returns the inner provider's `kek()`;
 - names that KEK to the KMS on every decryption;

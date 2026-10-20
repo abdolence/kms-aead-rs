@@ -5,7 +5,6 @@ use std::io::Read;
 use std::num::NonZeroU32;
 use std::path::Path;
 
-use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 
 use super::KekVersion;
@@ -358,7 +357,6 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
     }
 }
 
-#[async_trait]
 impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
     fn kek(&self) -> &KekRef {
         &self.kek

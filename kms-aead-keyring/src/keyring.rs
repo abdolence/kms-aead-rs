@@ -70,7 +70,7 @@ pub use sealer::Sealer;
 /// async fn rotate<S, P, B>(keyring: &Keyring<S, P, B>) -> KeyringResult<KeyId>
 /// where
 ///     S: KeyringStore,
-///     P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+///     P: KmsAeadEncryptionProvider + 'static,
 ///     B: AeadBackend,
 /// {
 ///     keyring.rotate(Purpose::Randomized).await
@@ -86,7 +86,7 @@ pub struct Keyring<S: KeyringStore, P, B> {
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// A handle on the keyring `cache` holds, with `provider`, whose KEK the record names.

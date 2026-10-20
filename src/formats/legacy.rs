@@ -208,7 +208,7 @@ pub(super) fn warn_once(format: KmsAeadLegacyFormat) {
 /// The upgrades of stored values to Tink's format.
 impl<P, B> KmsAeadEnvelope<P, B>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     /// `value`, sealed under `aad`, in Tink's KMS envelope format, or `None` when it already is

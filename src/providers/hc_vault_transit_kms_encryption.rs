@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
@@ -372,7 +371,6 @@ impl HcVaultTransitProvider {
     }
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

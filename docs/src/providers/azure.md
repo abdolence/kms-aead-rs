@@ -46,20 +46,25 @@ wrapKey and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 
 `AzureKmsProviderOptions` has:
 
-- `algorithm`: the wrap algorithm, which must suit the key type: `RsaOaep256` for RSA keys,
-  `A256Kw` for Managed HSM AES keys. The default, `DEFAULT_ALGORITHM`, is `RsaOaep256` for every
-  key, so a Managed HSM AES key needs `algorithm` set to `A256Kw` and the provider built with
-  `AzureKmsProvider::with_options`. `RsaOaep` (SHA-1) is accepted for existing keys; `Rsa1_5`
-  and unknown algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
-  life of the key;
+- `algorithm`: an `AzureKmsAlgorithm`, Key Vault's `alg` of the wrapKey and unwrapKey
+  operations, which must suit the key type: `RsaOaepSha256` (`RSA-OAEP-256`) for RSA keys,
+  `Aes256KeyWrap` (`A256KW`) for Managed HSM AES keys. The default, `DEFAULT_ALGORITHM`, is
+  `RsaOaepSha256` for every key, so a Managed HSM AES key needs `algorithm` set to
+  `Aes256KeyWrap` and the provider built with `AzureKmsProvider::with_options`. `RsaOaepSha1`
+  (`RSA-OAEP`) is for an RSA key whose encrypted DEKs were written with it. The other AES key
+  wraps, `Aes128KeyWrap` (`A128KW`), `Aes192KeyWrap` (`A192KW`), `Pkcs11AesKeyWrap`
+  (`CKM_AES_KEY_WRAP`) and `Pkcs11AesKeyWrapWithPadding` (`CKM_AES_KEY_WRAP_PAD`), are for
+  Managed HSM AES keys too. `RSA1_5` is not offered. Encrypted DEKs do not record the algorithm, so it
+  stays fixed for the life of the key;
 - `client_options`: settings passed to the Azure SDK, such as a custom HTTP transport or retry
   policy.
 
-A Managed HSM AES key, with `A256Kw`:
+A Managed HSM AES key, with `Aes256KeyWrap`:
 
 ```rust,no_run
-use azure_security_keyvault_keys::models::EncryptionAlgorithm;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+use kms_aead::providers::{
+    AzureKmsAlgorithm, AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions,
+};
 
 # fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 let kms_ref = AzureKmsKeyRef::new(
@@ -70,7 +75,7 @@ let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
 let provider = AzureKmsProvider::with_options(
     &kms_ref,
-    AzureKmsProviderOptions::new().with_algorithm(EncryptionAlgorithm::A256Kw),
+    AzureKmsProviderOptions::new().with_algorithm(AzureKmsAlgorithm::Aes256KeyWrap),
     credential,
 )?;
 # let _ = provider;
@@ -84,8 +89,8 @@ Key Vault decrypts only with the key version that encrypted, so the provider's e
 it before Key Vault's encrypted DEK, in the library's own layout, see
 [Formats](../formats.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
 values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
-as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, `A256Kw` too,
-which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
+too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 [Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
 
 ## Key versions and rotation

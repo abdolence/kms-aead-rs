@@ -66,7 +66,7 @@ pub(crate) async fn encrypt_dek<P>(
     provider: &P,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey>
 where
-    P: KmsAeadEncryptionProvider + Sync + ?Sized,
+    P: KmsAeadEncryptionProvider,
 {
     match provider.kek().provider() {
         KekProvider::Azure => provider.encrypt_data_encryption_key(dek).await,
@@ -92,7 +92,7 @@ pub(crate) async fn generate_encrypted_dek<B, P>(
 ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
 where
     B: AeadBackend,
-    P: KmsAeadEncryptionProvider + Sync + ?Sized,
+    P: KmsAeadEncryptionProvider,
 {
     let dek = match provider.generate_key_material(key_len).await? {
         Some(material) if material.ref_sensitive_value().len() != key_len => {
@@ -127,7 +127,7 @@ pub(crate) async fn decrypt_dek<P>(
     provider: &P,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)>
 where
-    P: KmsAeadEncryptionProvider + Sync + ?Sized,
+    P: KmsAeadEncryptionProvider,
 {
     let kek = provider.kek().provider();
     match encrypted_dek_v1_body(encrypted_dek, kek) {
@@ -168,7 +168,7 @@ pub(crate) async fn reencrypt_encrypted_dek<P>(
     provider: &P,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey>
 where
-    P: KmsAeadEncryptionProvider + Sync + ?Sized,
+    P: KmsAeadEncryptionProvider,
 {
     let kek = provider.kek().provider();
     if encrypted_dek_v1_body(encrypted_dek, kek).is_some() {

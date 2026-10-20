@@ -33,8 +33,8 @@ Notes on the table:
   [Vault Transit](../providers/hc-vault-transit.md) and [Local KMS](../providers/local.md);
 - with an RSA key on Azure Key Vault the encryption is a public-key operation, so whoever holds the
   public key encrypts a DEK of their own into a keyring record. Use an AES key from Managed HSM,
-  with `algorithm` set to `A256Kw`, see [Azure Key Vault](../providers/azure.md#options) and
-  [Keyring limits](../security.md#keyring-limits);
+  with `algorithm` set to `AzureKmsAlgorithm::Aes256KeyWrap`, see
+  [Azure Key Vault](../providers/azure.md#options) and [Keyring limits](../security.md#keyring-limits);
 - the local KMS has no IAM, no audit log and no HSM, see [Local KMS](../providers/local.md#limits);
 - crypto-shredding per KMS is in [A leaked key or a shredded tenant](./incidents.md#crypto-shredding).
 

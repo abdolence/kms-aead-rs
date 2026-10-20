@@ -5,7 +5,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
 use std::time::Instant;
 
-use async_trait::async_trait;
 use secret_vault_value::SecretValue;
 use tokio::sync::watch;
 
@@ -48,7 +47,6 @@ pub(crate) enum TestKmsProvider {
     Stamping(Instant),
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for TestKmsProvider {
     fn kek(&self) -> &KekRef {
         &TEST_KEK
@@ -157,7 +155,6 @@ impl CountingKmsProvider {
     }
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for CountingKmsProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

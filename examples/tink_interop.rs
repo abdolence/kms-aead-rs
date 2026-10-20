@@ -125,7 +125,7 @@ fn hex_field(case: &Value, name: &str) -> Vec<u8> {
 
 async fn encrypt<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
 {
     let envelope = KmsAeadEnvelope::<P, AwsLc>::with_options(
         provider,
@@ -151,7 +151,7 @@ where
 /// encrypted by `provider`, from which `decrypt` opens the value Tink seals with the keyset.
 async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
 {
     let cipher = AeadCipher::<AwsLc>::new(algorithm)?;
     let (dek, encrypted_dek) = cipher.generate_encrypted_dek(&provider).await?;
@@ -180,7 +180,7 @@ where
 /// The value of `case`: a Tink envelope, or with `encrypted_dek` a value of that key.
 async fn decrypt<P>(provider: P, case: &Value) -> KmsAeadResult<Message>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
 {
     let algorithm: AeadAlgorithm = case["algorithm"]
         .as_str()
