@@ -67,6 +67,7 @@ The crate declares `rust-version = "1.99"`.
 | `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
 | `DataEncryptionKey(secret)`, `DataEncryptionKey::new(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
+| `AzureKmsProviderOptions::with_algorithm(EncryptionAlgorithm::RsaOaep256)`, with the Azure SDK's enum | `with_algorithm(AzureKmsAlgorithm::RsaOaepSha256)`; `RsaOaep` is `RsaOaepSha1` and `A256Kw` is `Aes256KeyWrap`, and the SDK's other algorithms have no variant |
 
 HashiCorp Vault Transit types have the `Hc` prefix:
 
@@ -108,7 +109,8 @@ has its own `value()` and `into_value()`, and so has `EncryptedDataEncryptionKey
 
 An application's own implementation of the provider trait:
 
-- implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`;
+- implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`, without
+  `#[async_trait]`. Its methods stay `async fn`, and their futures must be `Send`;
 - adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other` and a key name that identifies the
   key;
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
@@ -120,6 +122,10 @@ An application's own implementation of the provider trait:
 
 The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 [Formats](./formats.md#serialised-deks). The library never inspects the provider's own bytes.
+
+The trait has no `dyn` form, so a `Box<dyn KmsAeadRingEncryptionProvider>` becomes a type
+parameter `P: KmsAeadEncryptionProvider`, or an enum of the providers the application uses. The
+trait requires `Send` and `Sync`, so `P: KmsAeadEncryptionProvider` needs no `+ Send + Sync`.
 
 ## Errors
 
@@ -158,6 +164,7 @@ Error codes that changed:
 | `SYSTEM_TIME_ERROR` | removed | |
 | `UNKNOWN_ENCRYPTED_KEY_LAYOUT` | removed | stored encrypted DEKs are the provider's bytes |
 | `AZURE_KEY_VERSION_MISSING` | `AZURE_ENCRYPTED_DEK_FORMAT` | the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with `legacy-formats` |
+| `AZURE_WRAP_ALGORITHM` | removed | `AzureKmsAlgorithm` has no variant for `Rsa1_5` or an unknown algorithm |
 
 The other 0.29 codes keep their spelling. The new codes are listed in
 [Error handling](./errors.md#codes).
