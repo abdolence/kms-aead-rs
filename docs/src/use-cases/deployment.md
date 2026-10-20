@@ -52,6 +52,8 @@ and [Events](../observability.md#events), and the metrics need the `opentelemetr
 | `error.type` on `kms_aead.store.duration` | keyring store reads that fail | the store's own monitoring |
 | values and bytes per keyring version | a version near the limits of its algorithm | [Alerting on volume](../operations/rotation.md#alerting-on-volume) |
 | an `Encrypt` in the KMS audit log by a principal other than the administration | an IAM over-grant, or a version the job did not create | [A KMS IAM over-grant](../operations/runbook.md#a-kms-iam-over-grant) |
+| a `Decrypt` in the KMS audit log by a principal other than the application and the administration | an IAM over-grant, or an encrypted DEK or a keyset opened outside the deployment. Cloud KMS logs `Decrypt` in its Data Access audit logs, which are off by default and must be turned on, see [Enable Data Access audit logs](https://docs.cloud.google.com/logging/docs/audit/configure-data-access) | [A KMS IAM over-grant](../operations/runbook.md#a-kms-iam-over-grant) |
+| `WARN`, inside the KMS span: a Cloud KMS or Vault Transit response without a key version | the KMS reported no version, so `kek_versions_in_use` lists a `None` and the check before a KEK disable never passes | [A KEK version the KMS did not report](../operations/rotation.md#a-kek-version-the-kms-did-not-report) |
 | `WARN`, once per process: the first read of a layout of 0.29 or earlier | values not yet upgraded | [Upgrading stored values](../formats.md#upgrading-stored-values) |
 
 Without a keyring, the rows of kms-aead apply: `error.type` on `kms_aead.operation.duration` and

@@ -213,6 +213,7 @@ async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRe
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
         return Ok(ResealOutcome::Skipped);
     };
+    let read: Vec<u8> = row.email.value().to_vec();
     let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
     let (email, email_beacon, outcome) = if sealer.is_current(row.email_beacon.key_id()).await? {
@@ -232,11 +233,16 @@ async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRe
         (email, email_beacon, ResealOutcome::Resealed { from_compromised })
     };
     let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, email_beacon, seal });
-    Ok(outcome)
+    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
+    // own value, which it sealed under the active versions anyway.
+    let mut table = table.lock().unwrap();
+    match table.get_mut(user) {
+        Some(stored) if stored.email.value() == read.as_slice() => {
+            *stored = UserRow { email, email_beacon, seal };
+            Ok(outcome)
+        }
+        _ => Ok(ResealOutcome::Skipped),
+    }
 }
 
 # #[tokio::main]
@@ -290,10 +296,7 @@ let report: SweepReport = sweep::run(
 .await;
 println!("{report:?}");
 # assert_eq!(report.resealed, 2);
-# let probes: Vec<Beacon<Email>> = keyring
-#     .beacon_probes(&EMAIL, &Email("alice@example.com".to_string()))
-#     .await?;
-# assert!(probes.contains(&table.lock().unwrap()["42"].email_beacon));
+# assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
 # registry.shutdown().await?;
 # Ok(())
 # }

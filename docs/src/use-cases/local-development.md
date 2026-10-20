@@ -62,6 +62,4 @@ The same with kms-aead alone is in [With an envelope](../getting-started.md#with
 
 - The local KMS has no IAM and no audit log, and the KEK in a variable stays in the process
   environment, see [Local KMS](../providers/local.md#limits);
-- values sealed under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS only;
-- the Firestore emulator does not enforce Firestore's limits, such as those of a listen stream with
-  many targets, so a load test of many keyrings runs on Firestore itself.
+- values sealed under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS only.

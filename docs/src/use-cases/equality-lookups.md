@@ -27,7 +27,7 @@ How the bits trade rows to filter against what the column leaks is in
 
 ## With kms-aead alone
 
-The application keeps the key, its key id and the encrypted DEK of the key itself, such as in its
+The application keeps the key itself, as a key id and the key encrypted by the KMS, such as in its
 settings, and rotates it by hand:
 
 - a deterministic field: `DeterministicCipher` with a key the KMS encrypts once, see
@@ -54,8 +54,8 @@ Each rotation of a deterministic or beacon version adds a probe to every lookup 
 
 1. Normalise the value in its newtype, such as a lowercased email, so that the write and the lookup
    encode the same bytes, see [Normalisation](../beacons.md#normalisation);
-2. compute the probes of the value looked for: one with kms-aead alone, one per version with a
-   keyring;
+2. compute the probes of the value looked for, one per key that still decrypts: with kms-aead
+   alone one, or two during a rotation by hand until the re-index; with a keyring one per version;
 3. query by them: `WHERE email_beacon = ANY($1)` on PostgreSQL with the probes bound as a
    `BYTEA[]`, an `in` filter on Firestore, which takes up to 30 values, see
    [Queries across rotations](../keyring/deterministic.md#queries-across-rotations);
