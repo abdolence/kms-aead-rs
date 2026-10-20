@@ -70,8 +70,8 @@ sum by (kms_aead_keyring, kms_aead_key_id) (
 ```
 
 A histogram starts at zero in every new process, and `increase()` counts across those restarts.
-The `[90d]` range needs 90 days of retention, or a recording rule that keeps the increase for that
-long: Prometheus keeps 15 days by default. The bytes alert keeps to AES-GCM versions, the only ones
+The `[90d]` range needs 90 days of retention: Prometheus keeps 15 days by default, so keep the
+metric in long-term storage, through remote write or in a backend with a longer retention. The bytes alert keeps to AES-GCM versions, the only ones
 with a volume bound. Rotate the version the alert names, as above.
 
 ## Rotating the KEK

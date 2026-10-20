@@ -257,11 +257,24 @@ otherwise the instruments record nothing:
 ```rust
 use opentelemetry::Key;
 use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
-use opentelemetry_sdk::metrics::{Instrument, SdkMeterProvider, Stream};
+use opentelemetry_sdk::metrics::{Aggregation, Instrument, SdkMeterProvider, Stream};
 
 fn install_meter_provider(exporter: impl PushMetricExporter) -> SdkMeterProvider {
     let provider = SdkMeterProvider::builder()
         .with_periodic_exporter(exporter)
+        // The plaintext size without its smallest and largest value, see below.
+        .with_view(|instrument: &Instrument| {
+            if instrument.name() != "kms_aead.plaintext.size" {
+                return None;
+            }
+            Stream::builder()
+                .with_aggregation(Aggregation::ExplicitBucketHistogram {
+                    boundaries: Vec::new(),
+                    record_min_max: false,
+                })
+                .build()
+                .ok()
+        })
         // Optional: the durations without `kms_aead.keyring`, see below.
         .with_view(|instrument: &Instrument| {
             let kept: &[&'static str] = match instrument.name() {
@@ -301,18 +314,22 @@ call has no `error.type`.
 | `kms_aead.store.duration` | histogram | `s` | `kms_aead.keyring`, `kms_aead.store`, `kms_aead.reason`, `error.type` | |
 
 - `kms_aead.plaintext.size` records the plaintext length of each value sealed or opened: its count
-  is the values, and its sum their bytes. It has no buckets, so each series exports those two
-  numbers only. A failed call records no value;
+  is the values, and its sum their bytes. It has no buckets. The SDK also keeps the smallest and
+  the largest value of each series and OTLP exports them, unless a view turns them off as above.
+  A failed call records no value;
 - `kms_aead.operation` of a value is `encrypt` or `decrypt`. The envelope also times `beacon`,
-  `generate_dek` for `generate_encrypted_dek`, and `reencrypt_dek` for `reencrypt_dek` and
-  `reencrypt_encrypted_dek`;
-- `kms_aead.mode` is the envelope's `per_call` or `store_less` for `encrypt`, `decrypt` and
-  `reencrypt_dek`, `caller_dek` for the `*_with_dek` and `*_with_encrypted_dek` calls, `beacon`,
-  `generate_encrypted_dek` and `reencrypt_encrypted_dek`, and `keyring` for a keyring's calls;
+  `generate_dek` for `generate_encrypted_dek` and `generate_encrypted_deterministic_dek`,
+  `decrypt_dek` for `decrypt_deterministic_dek`, and `reencrypt_dek` for `reencrypt_dek`,
+  `reencrypt_encrypted_dek` and the deprecated `upgrade_legacy_value` and
+  `upgrade_legacy_encrypted_dek`;
+- `kms_aead.mode` is the envelope's `per_call` or `store_less` for `encrypt`, `decrypt`,
+  `reencrypt_dek` and `upgrade_legacy_value`, `caller_dek` for the `*_with_dek` and
+  `*_with_encrypted_dek` calls, `beacon`, the calls that generate or decrypt a DEK,
+  `reencrypt_encrypted_dek` and `upgrade_legacy_encrypted_dek`, and `keyring` for a keyring's
+  calls;
 - `kms_aead.algorithm` and `kms_aead.backend` are those of the span. `kms_aead.algorithm` is
   absent where it is unknown: on a re-encryption, in which the algorithm plays no part, on a probe,
-  which runs
-  under every version, and on a keyring call that fails before it finds its version. A keyring's
+  which runs under every version, and on a keyring call that fails before it finds its version. A keyring's
   deterministic call has `kms_aead.backend` `rustcrypto`, since AES-SIV runs on RustCrypto
   whatever the keyring's backend;
 - a keyring call is recorded once, with `kms_aead.mode` `keyring`: it runs kms-aead's ciphers,
@@ -341,8 +358,13 @@ the values and bytes under one keyring version, see
 [Alerting on volume](./operations/rotation.md#alerting-on-volume).
 
 The keyring's plaintext size has one time series per keyring, purpose, key version and operation.
-With a keyring per tenant, that is a series per tenant and version, and a version keeps its series
-for as long as its values are read. Key ids are numbered per keyring, so the plaintext size keeps
+With a keyring per tenant, that is a series per tenant and version. Under cumulative temporality,
+the default, the SDK keeps a series until the process restarts, also once its version is no longer
+used. The SDK keeps at most 2000 attribute sets per instrument and records every further one into
+one series with the attribute `otel.metric.overflow`, with no error: an alert per version stops
+counting the versions past the limit. Be aware to raise the limit with
+`Stream::builder().with_cardinality_limit` in a view where the keyrings and their versions come
+near it. Key ids are numbered per keyring, so the plaintext size keeps
 `kms_aead.keyring`: without it, version 1 of every keyring would add up to one series. The
 duration histograms do not need it, and with their buckets they cost the most series, so the view
 above drops it from them. The view's `with_allowed_attribute_keys` needs the SDK's
@@ -361,7 +383,12 @@ No span field or event carries:
 
 The `kms_aead.plaintext.size` histogram is the exception: it adds up plaintext lengths. A keyring
 or an envelope that seals one value per export interval gives that value's length to whoever reads
-the metrics, so treat the histogram like the values themselves where traffic is low.
+the metrics. The SDK also keeps the smallest and the largest value of each series, under cumulative
+temporality since the process started, and OTLP exports them: the exact length of the shortest and
+the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
+The OpenTelemetry API gives kms-aead's instrument no setting to leave them out, so the view in
+[Metrics](#metrics) turns them off with `record_min_max: false`. Treat the histogram like the
+values themselves where traffic is low, and everywhere without that view.
 
 Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
 project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the

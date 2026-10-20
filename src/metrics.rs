@@ -89,6 +89,8 @@ pub mod instruments {
         Instruments {
             // No buckets: its count is the values and its sum their bytes, the two numbers the
             // volume limits of a key bound.
+            // The SDK keeps their min and max too, which the API has no setting to leave out:
+            // the book's view turns them off.
             plaintext_size: meter
                 .u64_histogram("kms_aead.plaintext.size")
                 .with_unit("By")
