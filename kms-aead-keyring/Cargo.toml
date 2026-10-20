@@ -50,6 +50,7 @@ sqlx-postgres = { workspace = true, optional = true }
 # crypto provider of kms-aead's `gcp-kms-encryption`. An optional dependency rather than a
 # dev-dependency, so that the rows that build no BigQuery do not compile it.
 bigquery = { version = "0.9", optional = true }
+opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
 # The test provider implements kms-aead's provider trait, which is an `async_trait`.
@@ -70,6 +71,8 @@ rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-native-certs = "0.8"
 # The pool of the `sqlx` feature's live test.
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+# The meter provider and in-memory exporter of the `opentelemetry` feature's tests.
+opentelemetry_sdk = { workspace = true }
 
 [features]
 default = []
@@ -113,6 +116,10 @@ ci-bigquery = ["bigquery-export", "dep:bigquery", "kms-aead/gcp-kms-encryption"]
 # The live check of the Tink keyset export: kms-aead's Cloud KMS and AWS KMS providers, with a
 # root store and crypto provider, for the `tink_export` example.
 ci-tink = ["admin", "kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
+# Counters of the values and plaintext bytes each key version seals and opens, and histograms of
+# the time a call, a store load and a KMS call take, on the OpenTelemetry API: the application
+# installs the SDK and an exporter.
+opentelemetry = ["dep:opentelemetry", "kms-aead/opentelemetry"]
 # The live test of the Firestore store's one listen stream, with hundreds of keyrings on it, run by
 # hand against Firestore rather than in CI.
 ci-firestore-live = ["firestore"]
@@ -174,6 +181,11 @@ required-features = ["ci-tink", "aws-lc"]
 name = "bigquery_live"
 path = "tests/bigquery_live.rs"
 required-features = ["ci-bigquery", "deterministic", "ring", "serde"]
+
+[[test]]
+name = "metrics"
+path = "tests/metrics.rs"
+required-features = ["opentelemetry", "admin"]
 
 [[test]]
 name = "firestore_live"

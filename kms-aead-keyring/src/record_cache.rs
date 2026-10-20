@@ -23,6 +23,7 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 
 use crate::errors::{KeyringResult, RecordRegressedError, RegressionRule};
+use crate::metrics::KeyringAttribute;
 use crate::record::{check_successor, withdrawn_deks};
 use crate::spans::{self, LoadChanged, LoadReason, Reload};
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, WatchEvent};
@@ -46,6 +47,7 @@ pub(crate) struct RecordCache<S: KeyringStore> {
     /// The reloads for key ids that `find` missed so far, read before waiting for `refresh`, so
     /// that a caller can tell that a reload ran while it waited.
     lookup_reloads: AtomicU64,
+    metrics: KeyringAttribute,
 }
 
 struct Cached<R> {
@@ -68,6 +70,7 @@ impl<S: KeyringStore> RecordCache<S> {
         Self {
             store,
             id: stored.record.id().clone(),
+            metrics: KeyringAttribute::new(stored.record.id()),
             kek,
             dek_cache,
             record_ttl,
@@ -84,6 +87,11 @@ impl<S: KeyringStore> RecordCache<S> {
 
     pub(crate) fn id(&self) -> &KeyringId {
         &self.id
+    }
+
+    /// The `keyring` attribute of this keyring's metrics.
+    pub(crate) fn metrics(&self) -> &KeyringAttribute {
+        &self.metrics
     }
 
     pub(crate) fn dek_cache(&self) -> &DekCache {
@@ -153,7 +161,7 @@ impl<S: KeyringStore> RecordCache<S> {
         let refresh = self.refresh.lock().await;
         let span = spans::load(&self.id, S::KIND, reason);
         spans::in_span(span, async {
-            let stored = spans::timed(self.store.load(&self.id))
+            let stored = spans::timed(&self.metrics, S::KIND, reason, self.store.load(&self.id))
                 .await?
                 .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
             let revision = stored.revision.clone();
@@ -177,7 +185,13 @@ impl<S: KeyringStore> RecordCache<S> {
     ) -> KeyringResult<Option<Stored<S::Revision>>> {
         let span = spans::load(id, S::KIND, LoadReason::Open);
         spans::in_span(span, async {
-            let stored = spans::timed(store.load(id)).await?;
+            let stored = spans::timed(
+                &KeyringAttribute::new(id),
+                S::KIND,
+                LoadReason::Open,
+                store.load(id),
+            )
+            .await?;
             if let Some(stored) = &stored {
                 spans::record_load(LoadChanged::Taken, Some(&stored.revision));
             }
@@ -193,7 +207,14 @@ impl<S: KeyringStore> RecordCache<S> {
         let revision = self.lock().revision.clone();
         let span = spans::load(&self.id, S::KIND, reason);
         let result = spans::in_span(span, async {
-            match spans::timed(self.store.revalidate(&self.id, &revision)).await? {
+            match spans::timed(
+                &self.metrics,
+                S::KIND,
+                reason,
+                self.store.revalidate(&self.id, &revision),
+            )
+            .await?
+            {
                 Revalidation::Unchanged => {
                     spans::record_load(LoadChanged::Unchanged, None::<&S::Revision>)
                 }
@@ -330,9 +351,14 @@ impl<S: KeyringStore> RecordCache<S> {
     async fn read_for_write(&self) -> KeyringResult<Stored<S::Revision>> {
         let span = spans::load(&self.id, S::KIND, LoadReason::Admin);
         spans::in_span(span, async {
-            let stored = spans::timed(self.store.load(&self.id))
-                .await?
-                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
+            let stored = spans::timed(
+                &self.metrics,
+                S::KIND,
+                LoadReason::Admin,
+                self.store.load(&self.id),
+            )
+            .await?
+            .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
             match check_successor(&self.record(), &stored.record) {
                 Ok(()) => {
                     spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));

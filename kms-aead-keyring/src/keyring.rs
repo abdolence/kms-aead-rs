@@ -16,6 +16,7 @@ use crate::errors::{
     InteropRequirement, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
     RecordInvalidReason,
 };
+use crate::metrics;
 use crate::record::withdrawn_deks;
 use crate::record_cache::{RecordCache, VersionLookup};
 use crate::spans::{self, LoadReason};
@@ -157,7 +158,7 @@ where
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
-        spans::in_span(
+        let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
@@ -167,8 +168,8 @@ where
                 self.open_cached(&record, version, encrypted_dek, aad, value)
                     .await
             },
-        )
-        .await
+        );
+        metrics::decrypt(self.cache.metrics(), Purpose::Randomized, value, open).await
     }
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
@@ -185,7 +186,7 @@ where
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
-        spans::in_span(
+        let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
@@ -209,8 +210,8 @@ where
                     trust,
                 })
             },
-        )
-        .await
+        );
+        metrics::decrypt(self.cache.metrics(), Purpose::Randomized, value, open).await
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error

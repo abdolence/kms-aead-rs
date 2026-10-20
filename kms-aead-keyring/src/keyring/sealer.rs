@@ -10,8 +10,8 @@ use kms_aead::{Encrypted, KmsAeadEncryptionProvider, Plaintext};
 use crate::errors::{KeyringError, KeyringResult};
 use crate::purpose::unreserved;
 use crate::record_cache::VersionLookup;
-use crate::spans;
 use crate::store::KeyringStore;
+use crate::{metrics, spans};
 use crate::{FieldAad, KeyId, KeyVersionState, Keyring, KeyringRecord, Purpose, Resealed};
 
 /// The sealing calls of one write of an application record, under the active versions of one
@@ -82,7 +82,7 @@ where
     ) -> KeyringResult<Encrypted<T, Randomized>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Randomized, Some(B::NAME));
-        spans::in_span(span, async {
+        let seal = spans::in_span(span, async {
             let (version, encrypted_dek) =
                 self.record.active_dek(Purpose::Randomized).ok_or_else(|| {
                     KeyringError::no_active_version(keyring.id(), Purpose::Randomized)
@@ -97,8 +97,8 @@ where
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(sealed?)
-        })
-        .await
+        });
+        metrics::encrypt(keyring.cache.metrics(), Purpose::Randomized, seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active randomised version, with the

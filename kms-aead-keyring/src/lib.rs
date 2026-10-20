@@ -225,6 +225,8 @@ pub use kms_aead::formats;
 pub use kms_aead::Json;
 pub use kms_aead::{Encrypted, KeyId, Plaintext};
 
+mod metrics;
+
 mod purpose;
 pub use purpose::Purpose;
 

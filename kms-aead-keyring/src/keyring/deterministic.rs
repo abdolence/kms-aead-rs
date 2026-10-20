@@ -13,8 +13,8 @@ use kms_aead::{
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::record_cache::VersionLookup;
-use crate::spans;
 use crate::store::KeyringStore;
+use crate::{metrics, spans};
 use crate::{
     Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
     Purpose, Resealed, Sealer,
@@ -55,7 +55,7 @@ where
     ) -> KeyringResult<Encrypted<T, Deterministic>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Deterministic, None);
-        spans::in_span(span, async {
+        let seal = spans::in_span(span, async {
             let (version, encrypted_dek) = self
                 .record
                 .active_dek(Purpose::Deterministic)
@@ -69,8 +69,8 @@ where
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(sealed)
-        })
-        .await
+        });
+        metrics::encrypt(keyring.cache.metrics(), Purpose::Deterministic, seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active deterministic version, with the
@@ -127,7 +127,7 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<T> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
-        spans::in_span(
+        let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
@@ -143,8 +143,8 @@ where
                 spans::record_dek_cache(outcome);
                 Ok(opened?)
             },
-        )
-        .await
+        );
+        metrics::decrypt(self.cache.metrics(), Purpose::Deterministic, value, open).await
     }
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
@@ -163,7 +163,7 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Decrypted<T>> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
-        spans::in_span(
+        let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
@@ -190,8 +190,8 @@ where
                     trust,
                 })
             },
-        )
-        .await
+        );
+        metrics::decrypt(self.cache.metrics(), Purpose::Deterministic, value, open).await
     }
 
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
@@ -217,7 +217,7 @@ where
         // One span for every version's probe, so it records no field of a single version: no
         // key id, algorithm or DEK cache outcome.
         let span = spans::encrypt(self.id(), Purpose::Deterministic, None);
-        spans::in_span(span, async {
+        let probes = spans::in_span(span, async {
             let record = self.cache.current().await;
             let mut versions = record
                 .versions()
@@ -250,8 +250,8 @@ where
                 });
             }
             Ok(probes)
-        })
-        .await
+        });
+        metrics::probe(self.cache.metrics(), probes).await
     }
 
     fn deterministic_cipher(&self, version: &KeyVersion) -> KeyringResult<DeterministicCipher<B>> {
