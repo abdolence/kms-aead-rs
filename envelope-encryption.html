@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
+            window.path_to_searchindex_js = "searchindex-d66597cf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -377,11 +377,10 @@ let first_level_keyset: EncryptedDataEncryptionKey = provider
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
-query parameter:</p>
+query parameter, beside the key’s Tink URI as a <code>STRING</code> one,
+<code>gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key</code>:</p>
 <pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(
-    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
-    @first_level_keyset),
+  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
   u.email,
   CONCAT('users/', CAST(u.id AS STRING), '/email'))
 FROM users u;
@@ -634,8 +633,8 @@ query or a reader that opens one fails once the old version is disabled:</p>
 <li>a keyring’s <code>export_bigquery_keyset</code> and <code>export_tink_keyset</code>: export each keyset again, with the
 same selection, after <code>reencrypt_deks</code> and, under Cloud KMS, after the new primary version has
 propagated. The new export holds the same keys, encrypted under the KEK’s current version. Write
-its bytes wherever the old ones are kept: the query parameter or the literal of each
-<code>KEYS.KEYSET_CHAIN</code>, a column or a setting that holds the keyset, and the file or the setting a
+its bytes wherever the old ones are kept: the query parameter of each <code>KEYS.KEYSET_CHAIN</code>, a
+column or a setting that holds the keyset, and the file or the setting a
 Tink reader opens. See <a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">BigQuery</a>;</li>
 <li>the application’s own encrypted keyset, such as <code>first_level_keyset</code> in
 <a href="#one-fixed-key">One fixed key</a>: the provider decrypts it and encrypts it again, and the new bytes

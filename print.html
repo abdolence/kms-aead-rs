@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
+            window.path_to_searchindex_js = "searchindex-d66597cf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -1537,11 +1537,10 @@ let first_level_keyset: EncryptedDataEncryptionKey = provider
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
-query parameter:</p>
+query parameter, beside the key’s Tink URI as a <code>STRING</code> one,
+<code>gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key</code>:</p>
 <pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(
-    'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key',
-    @first_level_keyset),
+  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
   u.email,
   CONCAT('users/', CAST(u.id AS STRING), '/email'))
 FROM users u;
@@ -1794,8 +1793,8 @@ query or a reader that opens one fails once the old version is disabled:</p>
 <li>a keyring’s <code>export_bigquery_keyset</code> and <code>export_tink_keyset</code>: export each keyset again, with the
 same selection, after <code>reencrypt_deks</code> and, under Cloud KMS, after the new primary version has
 propagated. The new export holds the same keys, encrypted under the KEK’s current version. Write
-its bytes wherever the old ones are kept: the query parameter or the literal of each
-<code>KEYS.KEYSET_CHAIN</code>, a column or a setting that holds the keyset, and the file or the setting a
+its bytes wherever the old ones are kept: the query parameter of each <code>KEYS.KEYSET_CHAIN</code>, a
+column or a setting that holds the keyset, and the file or the setting a
 Tink reader opens. See <a href="#exporting-a-keyset-to-bigquery">BigQuery</a>;</li>
 <li>the application’s own encrypted keyset, such as <code>first_level_keyset</code> in
 <a href="#one-fixed-key">One fixed key</a>: the provider decrypts it and encrypts it again, and the new bytes
@@ -3953,7 +3952,7 @@ AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
 -- Deterministic: &lt;kind&gt;/&lt;field&gt;
 DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
 </code></pre>
-<p><code>keyset</code> is a <code>KEYS.KEYSET_CHAIN</code> of the keyring’s versions, see
+<p><code>keyset</code> is <code>KEYS.KEYSET_CHAIN(@kms_key, @keyset)</code> over an export of the keyring’s versions, see
 <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>. SQL cannot rebuild an AAD of
 the application’s own bytes, so <code>FieldSpec::custom_aad</code> fails on a field declared with
 <code>Interop::BigQuery</code>, see <a href="#why-the-aad-is-structured">Why the AAD is structured</a>.</p>
@@ -4084,9 +4083,10 @@ let admin: KeyringAdmin&lt;MemoryKeyringStore, GcpKmsProvider, Ring&gt; = regist
 let keyset: EncryptedKeyset&lt;encodings::BigQuery&gt; = admin
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-let literal: String = keyset.to_sql_literal();
-let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
-<span class="boring">let _ = chain;
+// The query parameters of `KEYS.KEYSET_CHAIN(@kms_key, @keyset)`: a `STRING` and a `BYTES`
+let kms_key: &amp;str = keyset.key_uri();
+let keyset_bytes: &amp;[u8] = keyset.value();
+<span class="boring">let _ = (kms_key, keyset_bytes);
 </span>registry.shutdown().await?;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
@@ -4110,11 +4110,8 @@ the reader of its bytes. The <code>EncryptedKeyset&lt;encodings::BigQuery&gt;</c
 <ul>
 <li><code>value()</code> and <code>into_value()</code>: the encrypted keyset, as a <code>BYTES</code> column or query parameter holds
 it;</li>
-<li><code>to_sql_literal()</code>: the same bytes as a GoogleSQL bytes literal, <code>b'\x0a\x24…'</code>. Only a
-<code>EncryptedKeyset&lt;encodings::BigQuery&gt;</code> has it: <code>export_tink_keyset</code> returns a
-<code>EncryptedKeyset&lt;encodings::Tink&gt;</code>, which <code>KEYS.KEYSET_CHAIN</code> does not read;</li>
 <li><code>key_uri()</code>: Tink’s key URI of the Cloud KMS key, <code>gcp-kms://projects/…/cryptoKeys/…</code>, the
-first argument of <code>KEYS.KEYSET_CHAIN</code>;</li>
+first argument of <code>KEYS.KEYSET_CHAIN</code>, as a <code>STRING</code> query parameter;</li>
 <li><code>key_ids()</code>: the key ids of the versions inside, in ascending order.</li>
 </ul>
 <p>The export selects its versions from the record in the store, read at the time of the call, not
@@ -4134,21 +4131,23 @@ every keyset again after <code>reencrypt_deks</code>, once the new primary versi
 the old bytes in every query and column that holds them before the old version is disabled, see
 <a href="#encrypted-keysets">Encrypted keysets</a>.</p>
 <h3 id="queries"><a class="header" href="#queries">Queries</a></h3>
-<p>With <code>keyset</code> standing for the <code>KEYS.KEYSET_CHAIN(…)</code> expression of each export:</p>
+<p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
+keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for:</p>
 <pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
 FROM users u;
 
 -- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
+SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
 FROM users u;
 
 -- An equality query: one probe per deterministic version, each with its Single keyset
 SELECT u.id
 FROM users u
 WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(keyset_d2, 'alice@example.com', 'user/email'),
-  DETERMINISTIC_ENCRYPT(keyset_d1, 'alice@example.com', 'user/email')
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
 );
 </code></pre>
 <p>The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
@@ -4297,8 +4296,10 @@ re-index, see <a href="#rotating-beacon-versions">Rotating beacon versions</a>.<
 </ul>
 <p>After a promotion, export the <code>Single</code> BigQuery keysets of the new deterministic version, since
 a pending version has none.</p>
-<p>Rotation does not touch values already written. To stop reading them under the old version, run a
-<a href="#sweeps">sweep</a>, then <code>retire</code> the version.</p>
+<p>Rotation does not touch values already written. A <a href="#sweeps">sweep</a> re-seals them: a job that runs
+on a schedule until its <code>SweepReport</code> shows nothing scanned. Retiring the old version is a separate
+step of the administrative job, once the sweep is done and the old version’s
+<a href="#records-under-a-version">range query</a> returns nothing: <code>retire</code>, and later <code>destroy</code>.</p>
 <h2 id="rotating-the-kek"><a class="header" href="#rotating-the-kek">Rotating the KEK</a></h2>
 <p>The KEK rotates in the KMS on its own schedule. After a rotation, <code>reencrypt_deks()</code> decrypts every
 DEK in the record and encrypts it again under the KEK’s current version. No value changes. A keyring
@@ -4397,7 +4398,10 @@ DEK cache entry has expired. Under AWS KMS only imported key material can be rem
 <p>A sweep re-seals stored values under the active versions: after a rotation, to retire the old
 version, after a compromise, and to migrate envelope values. It is a job the application runs, a
 CLI or a Kubernetes Job, never a task inside the library: only the application knows its tables,
-its pages and its write rules.</p>
+its queries and its write rules. The job runs on a schedule, and again until its <code>SweepReport</code>
+shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
+next run’s marker query returns exactly the records it did not write. Retiring the old version is
+a separate step of the administrative job, see <a href="#rotation-cadence">Rotation cadence</a>.</p>
 <h3 id="the-seal-marker"><a class="header" href="#the-seal-marker">The seal marker</a></h3>
 <p>A keyring record counts a seal epoch, which moves on by one with every administrative write that
 makes a version active:</p>
@@ -4478,7 +4482,8 @@ an unknown key id: <code>record.version(key_id)</code> is <code>None</code>. The
 </div>
 <p>Firestore takes both bounds on the one field and serves them from its ascending index on <code>seal</code>,
 and an open range is one filter:</p>
-<pre><code class="language-rust no_run">use firestore::FirestoreDb;
+<pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
+use futures_util::stream::{self, BoxStream, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead_keyring::store::FirestoreKeyringStore;
@@ -4494,12 +4499,12 @@ struct UserDoc {
     seal: SealMarker,
 }
 
-/// The users that can hold a value under `key_id`.
-async fn users_under(
-    db: &amp;FirestoreDb,
+/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
+async fn users_under&lt;'a&gt;(
+    db: &amp;'a FirestoreDb,
     keyring: &amp;Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;,
     key_id: KeyId,
-) -&gt; Result&lt;Vec&lt;UserDoc&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
     // The store's record: a compromise or promotion in another process is in it
     let range: Option&lt;SealRange&gt; = keyring
         .reload()
@@ -4508,9 +4513,9 @@ async fn users_under(
         .and_then(KeyVersion::seal_range);
     let Some(range) = range else {
         // Never active: no record holds a value under it
-        return Ok(Vec::new());
+        return Ok(stream::empty().boxed());
     };
-    let users: Vec&lt;UserDoc&gt; = db
+    let users: BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt; = db
         .fluent()
         .select()
         .from("users")
@@ -4521,7 +4526,7 @@ async fn users_under(
             ])
         })
         .obj()
-        .query()
+        .stream_query_with_errors()
         .await?;
     Ok(users)
 }
@@ -4537,7 +4542,8 @@ run without a successful refresh of its record has passed since the compromise, 
 of the last of them. A version flagged compromised after it stopped being active moves no epoch,
 and keeps the range it had;</li>
 <li>before <code>retire</code>, and again before <code>destroy</code>, the query of the version returning nothing shows
-that no record holds a value under it.</li>
+that no record holds a value under it. That check needs one record at most: <code>limit(1)</code> in
+Firestore, <code>EXISTS</code> in SQL.</li>
 </ul>
 <p>One epoch counts the activations of every purpose of the keyring, so a range can match a record
 with no field of the version’s purpose, such as a record without beacons in the range of a beacon
@@ -4578,7 +4584,12 @@ the beacon under the active beacon version, through its <code>beacon(field, &amp
 as the sweep read it, and the re-seal returns <code>ResealOutcome::Skipped</code>.</p>
 <h3 id="running-a-sweep"><a class="header" href="#running-a-sweep">Running a sweep</a></h3>
 <p><code>sweep::run</code> drives the application’s re-seal over a stream of candidates, with at most
-<code>concurrency</code> in flight, and counts what happened. A sweep is data plane: it takes a <code>Keyring</code>
+<code>concurrency</code> in flight, and counts what happened. <code>sweep::run_batched</code> cuts the same stream into
+batches, re-sealed and written back one batch per call, as <code>BatchedSweepOptions</code> sets: 100
+candidates a batch and 4 batches in flight by default, <code>DEFAULT_BATCH_SIZE</code> and
+<code>DEFAULT_CONCURRENCY</code>. The stream returns each candidate as a
+<code>Result</code>, so that the query that finds them can fail into the report rather than end the sweep in
+silence. A sweep is data plane: it takes a <code>Keyring</code>
 and needs the application’s rights only, since a re-seal encrypts under a DEK the record already
 holds. The rotation before it and the <code>retire</code> after it are the administrative job’s, on a
 <code>KeyringAdmin</code>. Here over an in-memory table, with both in one process:</p>
@@ -4588,39 +4599,43 @@ use std::sync::Mutex;
 
 use futures_util::stream;
 use kms_aead::backends::Ring;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
+use kms_aead::providers::LocalKmsProvider;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SealRange, SweepReport};
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, KeyVersion, Keyring,
-    KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
-    KeyringResult, Plaintext, Purpose, Resealed, Rotation,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringResult,
+    Resealed,
 };
-use secret_vault_value::SecretValue;
-
+<span class="boring">use kms_aead::providers::LocalKekId;
+</span><span class="boring">use kms_aead::KmsAeadResult;
+</span><span class="boring">use kms_aead_keyring::{
+</span><span class="boring">    KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+</span><span class="boring">    Plaintext, Purpose,
+</span><span class="boring">};
+</span><span class="boring">use secret_vault_value::SecretValue;
+</span>
 type UsersKeyring = Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt;;
 
-const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-
-#[derive(Clone)]
-struct Email(String);
-
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
+<span class="boring">const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+</span><span class="boring">
+</span><span class="boring">#[derive(Clone)]
+</span><span class="boring">struct Email(String);
+</span><span class="boring">
+</span><span class="boring">impl Plaintext for Email {
+</span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+</span><span class="boring">        self.0.to_plaintext()
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
+</span><span class="boring">    }
+</span><span class="boring">}
+</span>
 #[derive(Clone)]
 struct UserRow {
     email: Encrypted&lt;Email, Randomized&gt;,
@@ -4629,26 +4644,6 @@ struct UserRow {
 
 /// The users table, by user id.
 type Table = Mutex&lt;BTreeMap&lt;String, UserRow&gt;&gt;;
-
-/// The application's write of a user: every field sealed through one sealer, and the marker of
-/// the sealer's record.
-async fn write_user(
-    keyring: &amp;UsersKeyring,
-    table: &amp;Table,
-    user: &amp;str,
-    email: &amp;Email,
-) -&gt; KeyringResult&lt;()&gt; {
-    let sealer = keyring.sealer().await;
-    let email = sealer
-        .encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), email)
-        .await?;
-    let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, seal });
-    Ok(())
-}
 
 /// Re-seals the row of `user` under the active version, with the marker of the sealer's record.
 async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ResealOutcome&gt; {
@@ -4686,17 +4681,18 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
 </span><span class="boring">    .create(provider, TENANT, KeyringAlgorithms::new())
 </span><span class="boring">    .await?;
 </span><span class="boring">let keyring: &amp;UsersKeyring = admin.keyring();
-</span>let table = Table::default();
-for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-    write_user(keyring, &amp;table, user, &amp;Email(email.to_string())).await?;
-}
-
-// The administrative job stages a version, and promotes it after the wait for every process to
-// see it; `promote_now` stands in for the wait here
-let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-let rotation: Rotation = admin.promote_now(staged).await?;
-
-// The sweep, on the data-plane handle: every row whose marker is below the keyring's
+</span><span class="boring">let table = Table::default();
+</span><span class="boring">for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
+</span><span class="boring">    let sealer = keyring.sealer().await;
+</span><span class="boring">    let email = sealer
+</span><span class="boring">        .encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;Email(email.to_string()))
+</span><span class="boring">        .await?;
+</span><span class="boring">    let seal: SealMarker = sealer.record().seal_marker();
+</span><span class="boring">    table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
+</span><span class="boring">}
+</span><span class="boring">let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+</span><span class="boring">admin.promote_now(staged).await?;
+</span>// Every row whose marker is below the keyring's
 let current: SealMarker = keyring.record().seal_marker();
 let candidates = table
     .lock()
@@ -4708,7 +4704,7 @@ let candidates = table
 
 let report: SweepReport = sweep::run(
     keyring.id(),
-    stream::iter(candidates),
+    stream::iter(candidates.into_iter().map(Ok)),
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
         let table = &amp;table;
@@ -4716,25 +4712,15 @@ let report: SweepReport = sweep::run(
     },
 )
 .await;
-
-// Nothing left in the old version's range: the administrative job retires it
-if let Some(previous) = rotation.previous {
-    let range: SealRange = keyring
-        .record()
-        .version(previous)
-        .and_then(KeyVersion::seal_range)
-        .ok_or("a replaced version was active")?;
-    let left = table.lock().unwrap().values().any(|row| range.contains(row.seal));
-    if report.failed == 0 &amp;&amp; !left {
-        admin.retire(previous).await?;
-    }
-}
+println!("{report:?}");
 <span class="boring">assert_eq!(report.resealed, 2);
 </span><span class="boring">registry.shutdown().await?;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>resealed</code>, <code>skipped</code> or
-<code>failed</code>. A re-seal that fails does not stop the sweep: it is counted in <code>failed</code> and logged at
+<code>failed</code>. A candidate the stream returns as an error is counted in <code>scanned</code> and <code>failed</code>, and
+logged at <code>WARN</code> with the error’s <code>Display</code>; a stream whose query cannot go on returns its error
+and ends. A re-seal that fails does not stop the sweep either: it is counted in <code>failed</code> and logged at
 <code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code>. A re-seal that fails with
 <code>SealerOutdated</code> is one of them: a process with a newer record rewrote the record after the query
 returned it. The record is counted as failed, and the next run’s query no longer returns it,
@@ -4743,33 +4729,36 @@ record itself holds as pending, such as a value from another keyring whose key i
 fails in every run instead. A candidate is the application’s own type, such as a record id, a
 struct of key columns or the record itself, and its <code>Display</code> names the record and nothing else. A
 record id is often an entity id, so read the sweep’s log as an administrative log.</p>
-<p>The re-seal returns <code>Result&lt;ResealOutcome, E&gt;</code> with the application’s own error type, any type
-that implements <code>Display</code>. The keyring’s calls inside it return a <code>KeyringError</code>, and a <code>From</code>
+<p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-seal <code>Result&lt;ResealOutcome, E&gt;</code>, with the
+application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it return a <code>KeyringError</code>, and a <code>From</code>
 impl on the application’s error lets <code>?</code> convert it, as the examples below do with an error of
 their data store; a re-seal with no errors of its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as
 above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.</p>
-<p>Once a sweep reports <code>failed == 0</code> and the range query of the old version returns nothing, <code>retire</code>
-it. Keep it retired for a while before <code>destroy</code>: <code>reinstate</code> brings a retired version back for a value that
+<p>Retiring the old version is not the sweep’s: once a run reports nothing scanned and the range
+query of the old version returns nothing, the administrative job <code>retire</code>s it, see
+<a href="#rotation-cadence">Rotation cadence</a>. Keep it retired for a while before <code>destroy</code>: <code>reinstate</code> brings a retired version back for a value that
 turned up after all, while a destroyed one is gone.</p>
 <h3 id="sweeps-by-store"><a class="header" href="#sweeps-by-store">Sweeps by store</a></h3>
-<p>At millions of records a sweep streams its candidates from the store and never holds the result
-of its query in memory. Every example below has the same five properties:</p>
+<p>At millions of records a sweep streams its candidates from the store in one query and never holds
+its result in memory, and it writes them back in batches. Every example below has the same five
+properties:</p>
 <ul>
 <li>it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
 matches it, so a cancelled or failed run is started again over the same query;</li>
 <li>a concurrent writer wins: the write is conditional on the record the sweep read, and a record
 that changed in between is <code>Skipped</code>. The application’s own write re-seals every field under
 the active versions anyway;</li>
-<li><code>concurrency</code> bounds the re-seals in flight, and with them the load on both the store and the
+<li><code>concurrency</code> bounds the batches in flight, and with them the load on both the store and the
 KMS. The DEK cache keeps each version’s key, so a sweep makes one KMS decrypt per key version
 and cache TTL, never one per record. The keys of a compromised version are the exception: they are decrypted
 for every value and never cached;</li>
 <li>each write stores the marker of the sealer that re-sealed the record, so the record lies in the
 range of every version it is under;</li>
-<li>it ends with <code>retire</code>, then later <code>destroy</code>, once a run reports <code>failed == 0</code> and the range query
-of the old version returns nothing.</li>
+<li>it runs on a schedule until a run reports nothing scanned. The <code>retire</code>, and later the
+<code>destroy</code>, of the old version are the administrative job’s, see
+<a href="#rotation-cadence">Rotation cadence</a>.</li>
 </ul>
 <p>The examples keep one keyring’s records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring’s id beside the marker, and
@@ -4782,30 +4771,37 @@ exemption keeps just that one:</p>
 <pre><code class="language-sh">gcloud firestore indexes fields update seal --collection-group=users --index=order=ASCENDING
 </code></pre>
 <p>The query streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a
-failed candidate, and the sweep never ends early on it. The write carries the document’s update time
-as its precondition, and Firestore refuses it once anything changed the document since the query
-read it:</p>
+failed candidate, and the sweep never ends early on it. <code>sweep::run_batched</code> cuts the documents into
+batches of 500, each re-sealed through one sealer and written back in one <code>BatchWrite</code>. Each write
+of the batch carries its document’s update time as its precondition, and Firestore refuses it once
+anything changed the document since the query read it:</p>
 <pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
+use std::time::Duration;
 
 use firestore::errors::FirestoreError;
+use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreDb, FirestoreResult, FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
-use futures_util::StreamExt;
+use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed, Sealer,
+    KeyringResult, Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
-
+<span class="boring">use firestore::FirestoreDb;
+</span><span class="boring">use kms_aead::providers::GcpKmsKeyRef;
+</span><span class="boring">use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
+</span>
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 type UsersSealer&lt;'k&gt; = Sealer&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 
@@ -4814,7 +4810,13 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
+/// Firestore's limit of writes in one `BatchWrite`.
+const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(500).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+/// How long one `BatchWrite` may take, its retries included: the batch writer retries a transient
+/// failure with no limit of its own, so without this a sweep against an unreachable Firestore
+/// never ends. A batch that runs out of it fails.
+const BATCH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
@@ -4831,11 +4833,11 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>#[derive(Serialize, Deserialize)]
+</span>#[derive(Deserialize)]
 struct UserDoc {
-    #[serde(rename = "_firestore_id", skip_serializing)]
+    #[serde(rename = "_firestore_id")]
     id: String,
-    #[serde(rename = "_firestore_updated", skip_serializing)]
+    #[serde(rename = "_firestore_updated")]
     updated: FirestoreTimestamp,
     /// An envelope value under `SealMarker::ENVELOPE`, a keyring value under any other marker.
     #[serde(with = "serde_bytes")]
@@ -4844,23 +4846,29 @@ struct UserDoc {
     seal: SealMarker,
 }
 
-/// A document the query returned, or the error of reading it, which the sweep counts as failed.
-struct Candidate(FirestoreResult&lt;UserDoc&gt;);
+/// The fields a re-seal writes: the encrypted fields and the marker of the sealer that sealed
+/// them.
+#[derive(Serialize, Deserialize)]
+struct UserFields {
+    email: Encrypted&lt;Email, Randomized&gt;,
+    seal: SealMarker,
+}
 
 /// The document id, and nothing of its fields.
-impl Display for Candidate {
+impl Display for UserDoc {
     fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
-        match &amp;self.0 {
-            Ok(doc) =&gt; write!(f, "{USERS}/{}", doc.id),
-            Err(_) =&gt; write!(f, "an unreadable document of {USERS}"),
-        }
+        write!(f, "{USERS}/{}", self.id)
     }
 }
 
-/// Why the re-seal of a document failed: an error of the keyring or of the users collection.
+/// Why the sweep failed on a document or a batch: an error of the keyring or of the users
+/// collection, the status of a document's write in a batch, `None` for a status the batch did not
+/// return, or a batch that ran out of [`BATCH_WRITE_TIMEOUT`].
 enum SweepError {
     Keyring(KeyringError),
     Users(FirestoreError),
+    Write(Option&lt;Code&gt;),
+    WriteTimedOut,
 }
 
 impl From&lt;KeyringError&gt; for SweepError {
@@ -4888,8 +4896,44 @@ impl Display for SweepError {
                 f.write_str("a document of users did not deserialise")
             }
             SweepError::Users(_) =&gt; f.write_str("the users collection failed"),
+            SweepError::Write(Some(code)) =&gt; write!(f, "its write failed with {code:?}"),
+            SweepError::Write(None) =&gt; f.write_str("its write returned no status"),
+            SweepError::WriteTimedOut =&gt; write!(
+                f,
+                "its batch was not written within {BATCH_WRITE_TIMEOUT:?}"
+            ),
         }
     }
+}
+
+/// Re-seals every user whose marker is below the current one, in batches of [`BATCH_SIZE`] with
+/// [`CONCURRENCY`] in flight, and returns the sweep's report.
+async fn sweep_users(
+    keyring: &amp;UsersKeyring,
+    writer: &amp;FirestoreSimpleBatchWriter,
+) -&gt; Result&lt;SweepReport, FirestoreError&gt; {
+    let current: SealMarker = keyring.record().seal_marker();
+    let candidates = writer
+        .db
+        .fluent()
+        .select()
+        .fields(paths!(UserFields::{email, seal}))
+        .from(USERS)
+        .filter(|q| q.field("seal").less_than(current))
+        .obj::&lt;UserDoc&gt;()
+        .stream_query_with_errors()
+        .await?
+        .err_into::&lt;SweepError&gt;();
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        candidates,
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |docs: Vec&lt;UserDoc&gt;| reseal_batch(keyring, writer, docs),
+    )
+    .await;
+    Ok(report)
 }
 
 /// The AAD the application gave its envelope values.
@@ -4931,38 +4975,62 @@ async fn reseal_email(
     })
 }
 
-/// Re-seals a document under the active version and writes the marker of the sealer's record.
-async fn reseal(
+/// Re-seals a batch of documents through one sealer and writes them back in one `BatchWrite`,
+/// each write stamped with the sealer's marker and conditional on the update time the query read.
+/// A batch is not atomic: a conflict fails its own write only.
+async fn reseal_batch(
     keyring: &amp;UsersKeyring,
-    db: &amp;FirestoreDb,
-    candidate: Candidate,
-) -&gt; Result&lt;ResealOutcome, SweepError&gt; {
-    let doc = candidate.0?;
+    writer: &amp;FirestoreSimpleBatchWriter,
+    docs: Vec&lt;UserDoc&gt;,
+) -&gt; Result&lt;Vec&lt;(UserDoc, Result&lt;ResealOutcome, SweepError&gt;)&gt;, SweepError&gt; {
     let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-    let (email, outcome) = reseal_email(keyring, &amp;sealer, &amp;doc.id, doc.seal, &amp;doc.email).await?;
-    let update = UserDoc {
-        email: email.into_value(),
-        seal: sealer.record().seal_marker(),
-        ..doc
-    };
-    let written: FirestoreResult&lt;UserDoc&gt; = db
-        .fluent()
-        .update()
-        .fields(paths!(UserDoc::{email, seal}))
-        .in_col(USERS)
-        .precondition(FirestoreWritePrecondition::UpdateTime(update.updated.into()))
-        .document_id(&amp;update.id)
-        .object(&amp;update)
-        .execute()
-        .await;
-    match written {
-        Ok(_) =&gt; Ok(outcome),
-        // A write since the query: the writer re-sealed the document itself
-        Err(FirestoreError::DatabaseError(error)) if error.public.code == "FailedPrecondition" =&gt; {
-            Ok(ResealOutcome::Skipped)
+    let seal: SealMarker = sealer.record().seal_marker();
+    let mut batch = writer.new_batch();
+    let mut done: Vec&lt;(UserDoc, Result&lt;ResealOutcome, SweepError&gt;)&gt; =
+        Vec::with_capacity(docs.len());
+    let mut queued: Vec&lt;(UserDoc, ResealOutcome)&gt; = Vec::with_capacity(docs.len());
+    for doc in docs {
+        let queue = async {
+            let (email, outcome) =
+                reseal_email(keyring, &amp;sealer, &amp;doc.id, doc.seal, &amp;doc.email).await?;
+            writer
+                .db
+                .fluent()
+                .update()
+                .fields(paths!(UserFields::{email, seal}))
+                .in_col(USERS)
+                .precondition(FirestoreWritePrecondition::UpdateTime(doc.updated.into()))
+                .document_id(&amp;doc.id)
+                .object(&amp;UserFields { email, seal })
+                .add_to_batch(&amp;mut batch)?;
+            Ok::&lt;ResealOutcome, SweepError&gt;(outcome)
+        };
+        match queue.await {
+            Ok(outcome) =&gt; queued.push((doc, outcome)),
+            Err(error) =&gt; done.push((doc, Err(error))),
         }
-        Err(error) =&gt; Err(SweepError::Users(error)),
     }
+    if queued.is_empty() {
+        return Ok(done);
+    }
+    let response: FirestoreBatchWriteResponse =
+        tokio::time::timeout(BATCH_WRITE_TIMEOUT, batch.write())
+            .await
+            .map_err(|_| SweepError::WriteTimedOut)??;
+    done.extend(queued.into_iter().enumerate().map(|(index, (doc, outcome))| {
+        let code: Option&lt;Code&gt; = response
+            .statuses
+            .get(index)
+            .and_then(|status| Code::try_from(status.code).ok());
+        let outcome = match code {
+            Some(Code::Ok) =&gt; Ok(outcome),
+            // A write since the query: the writer re-sealed the document itself
+            Some(Code::FailedPrecondition) =&gt; Ok(ResealOutcome::Skipped),
+            _ =&gt; Err(SweepError::Write(code)),
+        };
+        (doc, outcome)
+    }));
+    Ok(done)
 }
 
 <span class="boring">#[tokio::main]
@@ -4973,74 +5041,71 @@ async fn reseal(
 </span><span class="boring">    "my-key-ring".to_string(),
 </span><span class="boring">    "my-key".to_string(),
 </span><span class="boring">);
-</span>let db = FirestoreDb::new("my-project").await?;
-let registry = KeyringRegistry::&lt;FirestoreKeyringStore, Ring&gt;::new(
-    FirestoreKeyringStore::new(db.clone()),
-    KeyringRegistryOptions::new(),
-)?;
-let keyring: UsersKeyring = registry
-    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
-    .await?;
-
-let current: SealMarker = keyring.record().seal_marker();
-let candidates = db
-    .fluent()
-    .select()
-    .from(USERS)
-    .filter(|q| q.field("seal").less_than(current))
-    .obj::&lt;UserDoc&gt;()
-    .stream_query_with_errors()
-    .await?
-    .map(Candidate);
-let report: SweepReport = sweep::run(keyring.id(), candidates, CONCURRENCY, |candidate| {
-    let (keyring, db) = (&amp;keyring, &amp;db);
-    async move { reseal(keyring, db, candidate).await }
-})
-.await;
+</span><span class="boring">let db = FirestoreDb::new("my-project").await?;
+</span><span class="boring">let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+</span><span class="boring">let registry = KeyringRegistry::&lt;FirestoreKeyringStore, Ring&gt;::new(
+</span><span class="boring">    FirestoreKeyringStore::new(db.clone()),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let keyring: UsersKeyring = registry
+</span><span class="boring">    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
+</span><span class="boring">    .await?;
+</span>let report: SweepReport = sweep_users(&amp;keyring, &amp;writer).await?;
 println!("{report:?}");
-registry.shutdown().await?;
-<span class="boring">Ok(())
+<span class="boring">registry.shutdown().await?;
+</span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>A range filter never matches a document without the field. <code>#[serde(default)]</code> reads a document
 written before the marker as <code>SealMarker::ENVELOPE</code>, and the query finds it only once its <code>seal</code>
 holds those bytes, see <a href="#migrating-from-envelope-values">Migrating from envelope values</a>.</p>
-<p><code>partition_query()</code> splits a collection into cursors that separate workers run in parallel, for a
-sweep faster than one stream reads. Firestore partitions only a query with no filter, so each worker
-compares <code>doc.seal &lt; current</code> and skips the current documents before the re-seal.</p>
+<p>A partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers would
+read every document, the current ones included.</p>
 <p>The marker takes 10 bytes of a document: the field name as a 5-byte string and the 5 bytes of the
 value. Its entry in the ascending index takes the size of the document’s name, of its parent’s
 name, of the field name and of the value, plus 32 bytes, by Firestore’s storage size rules: about
 70 bytes for a short document id in a top-level collection. 10 million documents hold about 0.1 GB
 of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.</p>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs"><code>sweep_firestore</code> example</a>
+runs this sweep end to end, from the writes to the report, on the Firestore emulator. Its memory
+holds the batches in flight only, so it runs the same over millions of documents. A stream that
+ends early, on a deadline or an error, leaves the documents it did not reach below the current
+marker, and the next run of the sweep finds them.</p>
 <h4 id="postgresql-2"><a class="header" href="#postgresql-2">PostgreSQL</a></h4>
 <p>The marker is a <code>BYTEA</code> column with a btree index. Its default, the bytes of
 <code>SealMarker::ENVELOPE</code>, gives the rows written before the column a marker too:</p>
 <pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTEA NOT NULL DEFAULT '\x0100000000';
 CREATE INDEX users_seal ON users (seal);
 </code></pre>
-<p>The candidates stream in pages by keyset pagination on the primary key, with
-<code>futures_util::stream::unfold</code>: each page is one short query, so no transaction stays open across
-the sweep, and memory holds one page. The <code>UPDATE</code> is conditional on the bytes it read, which a write
-of any other process changes, since every randomised value has its own nonce. A process that has
-not seen the promotion yet still seals under the old version and stamps the old epoch, which the
-row holds already, so the marker alone does not detect its write:</p>
-<pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
+<p>The candidates are one query, <code>seal &lt; $1</code> with no <code>ORDER BY</code>, so the planner is free to read them
+from the index on <code>seal</code>, and <code>query_raw</code> streams its rows: memory holds the batches in flight only.
+The query holds its connection for as long as it streams, so the <code>UPDATE</code>s go through a second one.
+<code>sweep::run_batched</code> cuts the candidates into batches of 1000 rows, each re-sealed through one sealer
+and written back in one <code>UPDATE</code> over arrays of the ids, the new values and the values it read. The
+<code>UPDATE</code> is conditional on the bytes it read, which a write of any other process changes, since
+every randomised value has its own nonce. A process that has not seen the promotion yet still seals
+under the old version and stamps the old epoch, which the row holds already, so the marker alone
+does not detect its write:</p>
+<pre><code class="language-rust no_run">use std::collections::HashSet;
+use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 
-use futures_util::{stream, Stream, StreamExt};
+use futures_util::{future, StreamExt};
 use kms_aead::backends::Ring;
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed, Sealer,
+    Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
-use tokio_postgres::{Client, Config, NoTls, Row};
-
+use tokio_postgres::{Client, NoTls, Row};
+<span class="boring">use kms_aead::providers::GcpKmsKeyRef;
+</span><span class="boring">use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
+</span><span class="boring">use tokio_postgres::Config;
+</span>
 type UsersKeyring = Keyring&lt;PostgresKeyringStore&lt;NoTls&gt;, GcpKmsProvider, Ring&gt;;
 type UsersSealer&lt;'k&gt; = Sealer&lt;'k, PostgresKeyringStore&lt;NoTls&gt;, GcpKmsProvider, Ring&gt;;
 
@@ -5048,7 +5113,7 @@ const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-const PAGE_SIZE: u16 = 1000;
+const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
@@ -5066,41 +5131,21 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>/// A row the query returned, or the error of reading its page, which the sweep counts as failed.
-enum Candidate {
-    /// `email` is an envelope value under `SealMarker::ENVELOPE`, a keyring value under any other
-    /// marker.
-    Row {
-        id: i64,
-        email: Vec&lt;u8&gt;,
-        seal: SealMarker,
-    },
-    Unread(tokio_postgres::Error),
+</span>/// A row the query returned, by its id. Its other columns are decoded in its batch, so a row that
+/// does not decode is one failed candidate.
+struct UserRow {
+    id: i64,
+    row: Row,
 }
 
 /// The row id, and nothing of its columns.
-impl Display for Candidate {
+impl Display for UserRow {
     fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
-        match self {
-            Candidate::Row { id, .. } =&gt; write!(f, "users/{id}"),
-            Candidate::Unread(_) =&gt; f.write_str("a row or page of users that did not read"),
-        }
+        write!(f, "users/{}", self.id)
     }
 }
 
-impl TryFrom&lt;Row&gt; for Candidate {
-    type Error = tokio_postgres::Error;
-
-    fn try_from(row: Row) -&gt; Result&lt;Self, Self::Error&gt; {
-        Ok(Candidate::Row {
-            id: row.try_get("id")?,
-            email: row.try_get("email")?,
-            seal: row.try_get("seal")?,
-        })
-    }
-}
-
-/// Why the re-seal of a row failed: an error of the keyring or of the users table.
+/// Why the sweep failed on a row or a batch: an error of the keyring or of the users table.
 enum SweepError {
     Keyring(KeyringError),
     Users(tokio_postgres::Error),
@@ -5132,33 +5177,48 @@ impl Display for SweepError {
     }
 }
 
-/// The rows whose marker is below `current`, a page at a time in the order of `id`.
-fn candidates(client: &amp;Client, current: SealMarker) -&gt; impl Stream&lt;Item = Candidate&gt; + '_ {
-    stream::unfold(Some(i64::MIN), move |after| async move {
-        let rows = client
-            .query(
-                "SELECT id, email, seal FROM users WHERE seal &lt; $1 AND id &gt; $2 ORDER BY id LIMIT $3",
-                &amp;[&amp;current, &amp;after?, &amp;i64::from(PAGE_SIZE)],
-            )
-            .await;
-        let page = match rows {
-            Ok(rows) =&gt; rows
-                .into_iter()
-                .map(|row| Candidate::try_from(row).unwrap_or_else(Candidate::Unread))
-                .collect::&lt;Vec&lt;Candidate&gt;&gt;(),
-            Err(error) =&gt; return Some((vec![Candidate::Unread(error)], None)),
-        };
-        let last = page.iter().rev().find_map(|candidate| match candidate {
-            Candidate::Row { id, .. } =&gt; Some(*id),
-            Candidate::Unread(_) =&gt; None,
+/// Re-seals every user whose marker is below the current one, read through `reader` and written
+/// back through `writer` in batches of [`BATCH_SIZE`] with [`CONCURRENCY`] in flight, and returns
+/// the sweep's report.
+async fn sweep_users(
+    keyring: &amp;UsersKeyring,
+    reader: &amp;Client,
+    writer: &amp;Client,
+) -&gt; Result&lt;SweepReport, tokio_postgres::Error&gt; {
+    let current: SealMarker = keyring.record().seal_marker();
+    // A row whose id does not read is a failed candidate. An error of the stream itself is one
+    // failed candidate and ends the stream: once its connection drops, the stream returns that
+    // error on every poll and never its end.
+    let candidates = reader
+        .query_raw("SELECT id, email, seal FROM users WHERE seal &lt; $1", [current])
+        .await?
+        .scan(
+            false,
+            |ended: &amp;mut bool, row: Result&lt;Row, tokio_postgres::Error&gt;| {
+                if *ended {
+                    return future::ready(None);
+                }
+                *ended = row.is_err();
+                future::ready(Some(row))
+            },
+        )
+        .map(|row: Result&lt;Row, tokio_postgres::Error&gt;| {
+            let row: Row = row?;
+            Ok::&lt;UserRow, SweepError&gt;(UserRow {
+                id: row.try_get("id")?,
+                row,
+            })
         });
-        let next = match last {
-            Some(last) if page.len() == usize::from(PAGE_SIZE) =&gt; Some(last),
-            _ =&gt; None,
-        };
-        (!page.is_empty()).then_some((page, next))
-    })
-    .flat_map(stream::iter)
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        candidates,
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |batch: Vec&lt;UserRow&gt;| reseal_batch(keyring, writer, batch),
+    )
+    .await;
+    Ok(report)
 }
 
 /// The AAD the application gave its envelope values.
@@ -5166,64 +5226,88 @@ fn envelope_aad(id: i64) -&gt; Vec&lt;u8&gt; {
     format!("users:{id}:email").into_bytes()
 }
 
-/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version of
-/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
-/// is, with `ResealOutcome::Skipped`.
-async fn reseal_email(
+/// The stored `email` of `user`, that value under the active version of `sealer`, and the outcome
+/// of its re-seal. A keyring value under that version comes back as it is, with
+/// `ResealOutcome::Skipped`.
+async fn reseal_row(
     keyring: &amp;UsersKeyring,
     sealer: &amp;UsersSealer&lt;'_&gt;,
-    id: i64,
-    seal: SealMarker,
-    email: &amp;[u8],
-) -&gt; KeyringResult&lt;(Encrypted&lt;Email, Randomized&gt;, ResealOutcome)&gt; {
-    let aad = EMAIL.aad(&amp;EntityId::try_from(id.to_string())?);
+    user: &amp;UserRow,
+) -&gt; Result&lt;(Vec&lt;u8&gt;, Encrypted&lt;Email, Randomized&gt;, ResealOutcome), SweepError&gt; {
+    let read_email: Vec&lt;u8&gt; = user.row.try_get("email")?;
+    let seal: SealMarker = user.row.try_get("seal")?;
+    let aad = EMAIL.aad(&amp;EntityId::try_from(user.id.to_string())?);
     if seal == SealMarker::ENVELOPE {
-        let value = Encrypted::&lt;Email, Envelope&gt;::try_from(email.to_vec())?;
+        let value = Encrypted::&lt;Email, Envelope&gt;::try_from(read_email.clone()).map_err(KeyringError::from)?;
         let opened: Email = keyring
-            .decrypt_envelope_for_migration(&amp;envelope_aad(id), &amp;value, ENVELOPE_ALGORITHM)
+            .decrypt_envelope_for_migration(&amp;envelope_aad(user.id), &amp;value, ENVELOPE_ALGORITHM)
             .await?;
         // Envelope values name no key version, so the record carries no trust to decide on
         let resealed = ResealOutcome::Resealed {
             from_compromised: false,
         };
-        return Ok((sealer.encrypt(&amp;aad, &amp;opened).await?, resealed));
+        return Ok((read_email, sealer.encrypt(&amp;aad, &amp;opened).await?, resealed));
     }
-    let email = Encrypted::&lt;Email, Randomized&gt;::try_from(email.to_vec())?;
+    let email = Encrypted::&lt;Email, Randomized&gt;::try_from(read_email.clone()).map_err(KeyringError::from)?;
     let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;email).await?;
     Ok(match resealed {
         Some(resealed) =&gt; {
             let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, ResealOutcome::Resealed { from_compromised })
+            (read_email, resealed.value, ResealOutcome::Resealed { from_compromised })
         }
         // The value is current: the row gets the marker alone
-        None =&gt; (email, ResealOutcome::Skipped),
+        None =&gt; (read_email, email, ResealOutcome::Skipped),
     })
 }
 
-/// Re-seals a row under the active version and writes the marker of the sealer's record.
-async fn reseal(
+/// Re-seals a batch of rows through one sealer, and writes it back in one `UPDATE` that stamps
+/// the sealer's marker and is conditional, row by row, on the bytes the query read.
+async fn reseal_batch(
     keyring: &amp;UsersKeyring,
     client: &amp;Client,
-    candidate: Candidate,
-) -&gt; Result&lt;ResealOutcome, SweepError&gt; {
-    let (id, email, row_seal) = match candidate {
-        Candidate::Row { id, email, seal } =&gt; (id, email, seal),
-        Candidate::Unread(error) =&gt; return Err(SweepError::Users(error)),
-    };
+    batch: Vec&lt;UserRow&gt;,
+) -&gt; Result&lt;Vec&lt;(UserRow, Result&lt;ResealOutcome, SweepError&gt;)&gt;, SweepError&gt; {
     let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-    let (new_email, outcome) = reseal_email(keyring, &amp;sealer, id, row_seal, &amp;email).await?;
     let seal: SealMarker = sealer.record().seal_marker();
-    let updated: u64 = client
-        .execute(
-            "UPDATE users SET email = $2, seal = $3 WHERE id = $1 AND email = $4",
-            &amp;[&amp;id, &amp;new_email, &amp;seal, &amp;email],
+    let mut done: Vec&lt;(UserRow, Result&lt;ResealOutcome, SweepError&gt;)&gt; =
+        Vec::with_capacity(batch.len());
+    let mut queued: Vec&lt;(UserRow, ResealOutcome)&gt; = Vec::with_capacity(batch.len());
+    let mut ids: Vec&lt;i64&gt; = Vec::with_capacity(batch.len());
+    let mut read_emails: Vec&lt;Vec&lt;u8&gt;&gt; = Vec::with_capacity(batch.len());
+    let mut emails: Vec&lt;Encrypted&lt;Email, Randomized&gt;&gt; = Vec::with_capacity(batch.len());
+    for user in batch {
+        match reseal_row(keyring, &amp;sealer, &amp;user).await {
+            Ok((read_email, email, outcome)) =&gt; {
+                ids.push(user.id);
+                read_emails.push(read_email);
+                emails.push(email);
+                queued.push((user, outcome));
+            }
+            Err(error) =&gt; done.push((user, Err(error))),
+        }
+    }
+    let written: HashSet&lt;i64&gt; = client
+        .query(
+            "UPDATE users SET email = batch.email, seal = $4
+             FROM unnest($1::BIGINT[], $2::BYTEA[], $3::BYTEA[]) AS batch(id, email, read_email)
+             WHERE users.id = batch.id AND users.email = batch.read_email
+             RETURNING users.id",
+            &amp;[&amp;ids, &amp;emails, &amp;read_emails, &amp;seal],
         )
-        .await?;
-    Ok(match updated {
-        // A write since the query: the writer re-sealed the row itself
-        0 =&gt; ResealOutcome::Skipped,
-        _ =&gt; outcome,
-    })
+        .await?
+        .iter()
+        .map(|row| row.try_get("id"))
+        .collect::&lt;Result&lt;HashSet&lt;i64&gt;, tokio_postgres::Error&gt;&gt;()?;
+    done.extend(queued.into_iter().map(|(user, outcome)| {
+        // A row the `UPDATE` did not return changed since the query: its writer re-sealed it
+        let outcome = if written.contains(&amp;user.id) {
+            outcome
+        } else {
+            ResealOutcome::Skipped
+        };
+        (user, Ok(outcome))
+    }));
+    Ok(done)
 }
 
 <span class="boring">#[tokio::main]
@@ -5234,46 +5318,34 @@ async fn reseal(
 </span><span class="boring">    "my-key-ring".to_string(),
 </span><span class="boring">    "my-key".to_string(),
 </span><span class="boring">);
-</span>let config: Config = "postgres://app@localhost/app".parse()?;
-let (client, connection) = config.connect(NoTls).await?;
-tokio::spawn(connection);
-let registry = KeyringRegistry::&lt;PostgresKeyringStore&lt;NoTls&gt;, Ring&gt;::new(
-    PostgresKeyringStore::new(config, NoTls),
-    KeyringRegistryOptions::new(),
-)?;
-let keyring: UsersKeyring = registry
-    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
-    .await?;
-
-let current: SealMarker = keyring.record().seal_marker();
-let report: SweepReport = sweep::run(
-    keyring.id(),
-    candidates(&amp;client, current),
-    CONCURRENCY,
-    |candidate| {
-        let (keyring, client) = (&amp;keyring, &amp;client);
-        async move { reseal(keyring, client, candidate).await }
-    },
-)
-.await;
+</span><span class="boring">let config: Config = "postgres://app@localhost/app".parse()?;
+</span><span class="boring">let (client, connection) = config.connect(NoTls).await?;
+</span><span class="boring">tokio::spawn(connection);
+</span><span class="boring">let (reader, connection) = config.connect(NoTls).await?;
+</span><span class="boring">tokio::spawn(connection);
+</span><span class="boring">let registry = KeyringRegistry::&lt;PostgresKeyringStore&lt;NoTls&gt;, Ring&gt;::new(
+</span><span class="boring">    PostgresKeyringStore::new(config, NoTls),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let keyring: UsersKeyring = registry
+</span><span class="boring">    .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
+</span><span class="boring">    .await?;
+</span>let report: SweepReport = sweep_users(&amp;keyring, &amp;reader, &amp;client).await?;
 println!("{report:?}");
-registry.shutdown().await?;
-<span class="boring">Ok(())
+<span class="boring">registry.shutdown().await?;
+</span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>SealMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code> feature,
-and through sqlx with the <code>sqlx</code> feature. One tokio-postgres <code>Client</code> pipelines the page queries and
-the concurrent <code>UPDATE</code>s on one connection. The primary key serves every page while most rows are
-behind, and the index on <code>seal</code> serves the sweep that leaves most rows current, such as the final
-check that the query returns nothing.</p>
-<p>A single query read through a portal is the alternative to pages: <code>Transaction::bind</code> and
-<code>query_portal_raw</code> fetch the rows of one <code>SELECT</code> in batches. A portal lives only inside its
-transaction, so that transaction stays open for the whole sweep, hours at millions of rows. Its
-snapshot keeps vacuum from removing the dead row versions the <code>UPDATE</code>s leave behind, and the
-<code>UPDATE</code>s run on a second connection, since the first holds the portal.</p>
+and through sqlx with the <code>sqlx</code> feature. The query holds one snapshot for as long as it streams,
+and while it is open <code>VACUUM</code> cannot reclaim the old versions of the rows the sweep updates; a
+scheduled job that ends and runs again keeps each snapshot short, since the query of the markers
+below the current one returns exactly the rows the last run did not write.</p>
 <p>The marker takes 6 bytes of a row: its 5 bytes and a 1-byte length header. A btree on a column of a
 few distinct epochs stores each one once per page with the list of its rows: measured on
 PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.
 10 million rows hold about 130 MB of markers and index.</p>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs"><code>sweep_postgres</code> example</a>
+runs this sweep end to end, from the writes to the report, on a local PostgreSQL.</p>
 <h4 id="bigquery-1"><a class="header" href="#bigquery-1">BigQuery</a></h4>
 <p>The marker is a <code>BYTES</code> column. BigQuery gives a column added to a table <code>NULL</code> in the rows already
 there, so the column’s default goes with a write of <code>SealMarker::ENVELOPE</code> into them:</p>
@@ -5282,15 +5354,17 @@ ALTER TABLE users ALTER COLUMN seal SET DEFAULT b'\x01\x00\x00\x00\x00';
 UPDATE users SET seal = b'\x01\x00\x00\x00\x00' WHERE seal IS NULL;
 </code></pre>
 <p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-sealed by one <code>UPDATE</code> in SQL,
-with no Rust loop and no value leaving BigQuery. With <code>keyset</code> standing for the
-<code>KEYS.KEYSET_CHAIN(…)</code> expression of a <code>Readable(Purpose::Randomized)</code> export, see
-<a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>, and
-<code>@seal</code> for the bytes of the export’s marker, <code>keyset.seal_marker().value()</code>:</p>
+with no Rust loop and no value leaving BigQuery. Its parameters come from a
+<code>Readable(Purpose::Randomized)</code> export, see
+<a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>: <code>@kms_key</code>
+is the export’s <code>key_uri()</code>, <code>@keyset</code> its <code>value()</code>, and <code>@seal</code> the bytes of its marker,
+<code>keyset.seal_marker().value()</code>:</p>
 <pre><code class="language-sql">UPDATE users
 SET
   email = AEAD.ENCRYPT(
-    keyset,
-    AEAD.DECRYPT_BYTES(keyset, email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
+    KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+    AEAD.DECRYPT_BYTES(
+      KEYS.KEYSET_CHAIN(@kms_key, @keyset), email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
     CAST(CONCAT('user/', id, '/email') AS BYTES)),
   seal = @seal
 WHERE seal &lt; @seal AND seal &gt; b'\x01\x00\x00\x00\x00';
@@ -5311,12 +5385,14 @@ under <code>SealMarker::ENVELOPE</code>, the lowest marker, which the statement 
 does not open under a keyring’s keyset.</p>
 <p>This sweep:</p>
 <ul>
-<li>resumes without a checkpoint: the statement is atomic, and a failed one changed nothing;</li>
+<li>resumes without a checkpoint: the statement is atomic, a failed one changed nothing, and the
+next run’s <code>WHERE</code> finds every row it did not write;</li>
 <li>loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
 statements on the same rows one fails and runs again, and its <code>WHERE</code> then sees the other’s
 marker;</li>
 <li>makes no KMS call per record: BigQuery opens the keyset through Cloud KMS for the statement;</li>
-<li>ends with <code>retire</code>, then later <code>destroy</code>, once the range query of the old version,
+<li>runs on a schedule until it re-seals no row. The administrative job retires the old version
+once its range query,
 <code>SELECT COUNT(*) FROM users WHERE seal &gt;= @start AND (@end IS NULL OR seal &lt; @end)</code>, returns 0.</li>
 </ul>
 <p>A <code>Readable</code> keyset leaves a compromised version out, so the values under it fail
@@ -5324,16 +5400,18 @@ marker;</li>
 the Rust path below, where the sealer’s <code>reseal</code> reports their trust.</p>
 <p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-sealed in
 Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one <code>MERGE</code>
-per page of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
+per batch of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
 <pre><code class="language-sql">MERGE users u
-USING UNNEST(@pages) p
+USING UNNEST(@rows) p
 ON u.id = p.id AND u.phone = p.old_phone
 WHEN MATCHED THEN UPDATE SET phone = p.phone, seal = @seal;
 </code></pre>
-<p>The pages stream from the application’s BigQuery client, a query of <code>SELECT id, phone, seal FROM users WHERE seal &lt; @current</code> with the current marker, read a page at a time. Each page is re-sealed
-through one sealer, and the client runs the <code>MERGE</code> with <code>@seal</code> bound to the marker of the
-sealer’s record. Every row of a page goes into <code>@pages</code>, the current ones with their bytes as they
-are, so that each gets the marker. The candidate is then a page, and the report counts pages:</p>
+<p>The rows stream from the application’s BigQuery client, one query of
+<code>SELECT id, phone, seal FROM users WHERE seal &lt; @current</code> with the current marker, and
+<code>sweep::run_batched</code> cuts them into batches. Each batch is re-sealed through one sealer, and the
+client runs the <code>MERGE</code> with <code>@seal</code> bound to the marker of the sealer’s record. Every row of a
+batch goes into <code>@rows</code>, the current ones with their bytes as they are, so that each gets the
+marker:</p>
 <pre><code class="language-rust">use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -5344,7 +5422,7 @@ use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
     KeyringResult, Plaintext, Resealed, Sealer,
@@ -5358,6 +5436,8 @@ const PHONE: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("phone"),
 );
+const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
+/// BigQuery runs 2 mutating DML statements on a table at once and queues the rest.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 /// The algorithm of the store-less envelope that wrote the values before the migration.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
@@ -5383,20 +5463,14 @@ struct UserRow {
     seal: SealMarker,
 }
 
-/// A page of rows, as the application's BigQuery client reads the query result.
-struct UsersPage {
-    /// The page token the client read the page with, which names the page and no row.
-    token: String,
-    rows: Vec&lt;UserRow&gt;,
-}
-
-impl Display for UsersPage {
+/// The row id, and nothing of its columns.
+impl Display for UserRow {
     fn fmt(&amp;self, f: &amp;mut Formatter&lt;'_&gt;) -&gt; fmt::Result {
-        write!(f, "users page {}", self.token)
+        write!(f, "users/{}", self.id)
     }
 }
 
-/// One element of `@pages`: a row with the bytes it held and the bytes to write.
+/// One element of `@rows`: a row with the bytes it held and the bytes to write.
 struct PhoneUpdate {
     id: String,
     old_phone: Vec&lt;u8&gt;,
@@ -5442,66 +5516,77 @@ async fn reseal_phone(
     })
 }
 
-/// Re-seals the `pages` of the query, one sealer per page, and writes each through `merge`, which
-/// runs the `MERGE` with `@seal` bound to the marker it is given, the marker of the page's
-/// sealer, and returns its number of affected rows. `ClientError` is the error of the
-/// application's BigQuery client, which a `KeyringError` converts into, and its `Display` is the
-/// text the sweep logs for a failed page.
-async fn sweep_phones&lt;Pages, Merge, Merged, ClientError&gt;(
+/// Re-seals the `rows` of the query in batches, one sealer per batch, and writes each batch
+/// through `merge`, which runs the `MERGE` with `@seal` bound to the marker it is given, the
+/// marker of the batch's sealer, and returns its number of affected rows. `ClientError` is the
+/// error of the application's BigQuery client, which a row that did not read returns and a
+/// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failure.
+async fn sweep_phones&lt;Rows, Merge, Merged, ClientError&gt;(
     keyring: &amp;UsersKeyring,
-    pages: Pages,
+    rows: Rows,
     merge: Merge,
 ) -&gt; SweepReport
 where
-    Pages: Stream&lt;Item = UsersPage&gt;,
+    Rows: Stream&lt;Item = Result&lt;UserRow, ClientError&gt;&gt;,
     Merge: Fn(Vec&lt;PhoneUpdate&gt;, SealMarker) -&gt; Merged,
     Merged: Future&lt;Output = Result&lt;u64, ClientError&gt;&gt;,
     ClientError: From&lt;KeyringError&gt; + Display,
 {
-    sweep::run(keyring.id(), pages, CONCURRENCY, |page| {
+    let options: BatchedSweepOptions = BatchedSweepOptions::new()
+        .with_batch_size(BATCH_SIZE)
+        .with_concurrency(CONCURRENCY);
+    sweep::run_batched(keyring.id(), rows, options, |batch: Vec&lt;UserRow&gt;| {
         let merge = &amp;merge;
         async move {
             let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-            let mut updates = Vec::with_capacity(page.rows.len());
-            let mut resealed_any = false;
-            let mut from_compromised = false;
-            for row in page.rows {
-                let (phone, outcome) =
-                    reseal_phone(keyring, &amp;sealer, &amp;row.id, row.seal, &amp;row.phone).await?;
-                if let ResealOutcome::Resealed {
-                    from_compromised: compromised,
-                } = outcome
-                {
-                    resealed_any = true;
-                    from_compromised |= compromised;
+            let mut done: Vec&lt;(UserRow, Result&lt;ResealOutcome, ClientError&gt;)&gt; =
+                Vec::with_capacity(batch.len());
+            let mut queued: Vec&lt;(UserRow, ResealOutcome)&gt; = Vec::with_capacity(batch.len());
+            let mut updates: Vec&lt;PhoneUpdate&gt; = Vec::with_capacity(batch.len());
+            for row in batch {
+                match reseal_phone(keyring, &amp;sealer, &amp;row.id, row.seal, &amp;row.phone).await {
+                    Ok((phone, outcome)) =&gt; {
+                        updates.push(PhoneUpdate {
+                            id: row.id.clone(),
+                            old_phone: row.phone.clone(),
+                            phone,
+                        });
+                        queued.push((row, outcome));
+                    }
+                    Err(error) =&gt; done.push((row, Err(error.into()))),
                 }
-                updates.push(PhoneUpdate {
-                    id: row.id,
-                    old_phone: row.phone,
-                    phone,
-                });
             }
             let merged: u64 = merge(updates, sealer.record().seal_marker()).await?;
-            Ok::&lt;ResealOutcome, ClientError&gt;(if merged &gt; 0 &amp;&amp; resealed_any {
-                ResealOutcome::Resealed { from_compromised }
-            } else {
-                ResealOutcome::Skipped
-            })
+            // A `MERGE` returns a count, not the rows: a batch with one row a concurrent writer
+            // changed counts every row as skipped
+            let all_written = u64::try_from(queued.len()) == Ok(merged);
+            done.extend(queued.into_iter().map(|(row, outcome)| {
+                (row, Ok(if all_written { outcome } else { ResealOutcome::Skipped }))
+            }));
+            Ok(done)
         }
     })
     .await
 }
 <span class="boring">
 </span><span class="boring">fn main() {}</span></code></pre>
-<p>A page is re-sealed sequentially inside its re-seal, and <code>concurrency</code> bounds the pages in flight,
-which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per page: a
+<p>A batch is re-sealed sequentially inside its call, and <code>concurrency</code> bounds the batches in flight,
+which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per batch: a
 row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for the next
 run.</p>
+<p>A <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its rows
+as <code>Skipped</code>, the ones it wrote included. Its re-seals from a compromised version then drop out of
+<code>SweepReport::resealed_from_compromised</code>, although they went through the trust decision below, so
+on this path that count is a lower bound.</p>
 <p>The marker takes 7 bytes of a row: its 5 bytes and the 2 BigQuery counts for every <code>BYTES</code> value.
 Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep’s query processed
 700,000 bytes, the <code>seal</code> column alone. BigQuery does not cluster a <code>BYTES</code> column, so the query
 reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB
 on demand, and its storage about $0.0013 a month at $0.02 per GiB.</p>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs"><code>sweep_bigquery</code> example</a>
+runs the <code>UPDATE</code> above end to end, from the writes to the count of re-sealed rows, against Cloud
+KMS and BigQuery. It writes the rows through the Storage Write API, and the <code>UPDATE</code> re-seals them
+straight after: DML can modify rows recently written through its gRPC interface.</p>
 <h3 id="the-trust-of-re-sealed-values"><a class="header" href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a></h3>
 <p>A sweep reads every field with <code>decrypt_with_trust</code>, and reports in <code>ResealOutcome::Resealed</code>
 whether the <code>KeyTrust</code> of any of them is compromised. A value read under a compromised version is untrusted data: whoever holds the
@@ -5513,7 +5598,8 @@ everywhere afterwards.</p>
 <li>a comparison against a backup taken before the compromise;</li>
 <li>or acceptance, when forged values do no harm.</li>
 </ul>
-<p><code>SweepReport::resealed_from_compromised</code> counts the records that went through that decision.</p>
+<p><code>SweepReport::resealed_from_compromised</code> counts the records that went through that decision, or
+fewer on the <a href="#bigquery-1">BigQuery <code>MERGE</code> path</a>, whose batches with a conflict count as skipped.</p>
 <h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
 <p>Values that kms-aead’s <code>KmsAeadEnvelope</code> wrote, per call or store-less, move to keyring values in
 five steps:</p>
@@ -6459,7 +6545,7 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
+<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code>, <code>sweep::run_batched</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -6510,6 +6596,12 @@ their count;</li>
 in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
 values, secrets and personal data out of them. A record id is often an entity id, so the
 sweep’s log is an administrative log;</li>
+<li><code>WARN</code>: a candidate the sweep’s stream returned as an error, with the <code>Display</code> of the error in
+<code>error</code>;</li>
+<li><code>WARN</code>: a batch of <code>sweep::run_batched</code> whose re-seal failed as a whole, with its number of
+candidates in <code>candidates</code> and the <code>Display</code> of the error in <code>error</code>, and a batch that returned
+a different number of outcomes from it was given candidates, with both counts in <code>candidates</code> and
+<code>outcomes</code>;</li>
 <li><code>DEBUG</code>: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
 retried.</li>
 </ul>

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1bfcec7f.js";
+            window.path_to_searchindex_js = "searchindex-d66597cf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-13ad1cdb.js"></script>
@@ -361,7 +361,7 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
+<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code>, <code>sweep::run_batched</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -412,6 +412,12 @@ their count;</li>
 in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
 values, secrets and personal data out of them. A record id is often an entity id, so the
 sweep’s log is an administrative log;</li>
+<li><code>WARN</code>: a candidate the sweep’s stream returned as an error, with the <code>Display</code> of the error in
+<code>error</code>;</li>
+<li><code>WARN</code>: a batch of <code>sweep::run_batched</code> whose re-seal failed as a whole, with its number of
+candidates in <code>candidates</code> and the <code>Display</code> of the error in <code>error</code>, and a batch that returned
+a different number of outcomes from it was given candidates, with both counts in <code>candidates</code> and
+<code>outcomes</code>;</li>
 <li><code>DEBUG</code>: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
 retried.</li>
 </ul>

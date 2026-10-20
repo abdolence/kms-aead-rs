@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1bfcec7f.js";
+            window.path_to_searchindex_js = "../searchindex-d66597cf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-13ad1cdb.js"></script>
@@ -197,7 +197,7 @@ AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
 -- Deterministic: &lt;kind&gt;/&lt;field&gt;
 DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
 </code></pre>
-<p><code>keyset</code> is a <code>KEYS.KEYSET_CHAIN</code> of the keyring’s versions, see
+<p><code>keyset</code> is <code>KEYS.KEYSET_CHAIN(@kms_key, @keyset)</code> over an export of the keyring’s versions, see
 <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>. SQL cannot rebuild an AAD of
 the application’s own bytes, so <code>FieldSpec::custom_aad</code> fails on a field declared with
 <code>Interop::BigQuery</code>, see <a href="./fields.html#why-the-aad-is-structured">Why the AAD is structured</a>.</p>
@@ -328,9 +328,10 @@ let admin: KeyringAdmin&lt;MemoryKeyringStore, GcpKmsProvider, Ring&gt; = regist
 let keyset: EncryptedKeyset&lt;encodings::BigQuery&gt; = admin
     .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
     .await?;
-let literal: String = keyset.to_sql_literal();
-let chain = format!("KEYS.KEYSET_CHAIN('{}', {literal})", keyset.key_uri());
-<span class="boring">let _ = chain;
+// The query parameters of `KEYS.KEYSET_CHAIN(@kms_key, @keyset)`: a `STRING` and a `BYTES`
+let kms_key: &amp;str = keyset.key_uri();
+let keyset_bytes: &amp;[u8] = keyset.value();
+<span class="boring">let _ = (kms_key, keyset_bytes);
 </span>registry.shutdown().await?;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
@@ -354,11 +355,8 @@ the reader of its bytes. The <code>EncryptedKeyset&lt;encodings::BigQuery&gt;</c
 <ul>
 <li><code>value()</code> and <code>into_value()</code>: the encrypted keyset, as a <code>BYTES</code> column or query parameter holds
 it;</li>
-<li><code>to_sql_literal()</code>: the same bytes as a GoogleSQL bytes literal, <code>b'\x0a\x24…'</code>. Only a
-<code>EncryptedKeyset&lt;encodings::BigQuery&gt;</code> has it: <code>export_tink_keyset</code> returns a
-<code>EncryptedKeyset&lt;encodings::Tink&gt;</code>, which <code>KEYS.KEYSET_CHAIN</code> does not read;</li>
 <li><code>key_uri()</code>: Tink’s key URI of the Cloud KMS key, <code>gcp-kms://projects/…/cryptoKeys/…</code>, the
-first argument of <code>KEYS.KEYSET_CHAIN</code>;</li>
+first argument of <code>KEYS.KEYSET_CHAIN</code>, as a <code>STRING</code> query parameter;</li>
 <li><code>key_ids()</code>: the key ids of the versions inside, in ascending order.</li>
 </ul>
 <p>The export selects its versions from the record in the store, read at the time of the call, not
@@ -378,21 +376,23 @@ every keyset again after <code>reencrypt_deks</code>, once the new primary versi
 the old bytes in every query and column that holds them before the old version is disabled, see
 <a href="../envelope-encryption.html#encrypted-keysets">Encrypted keysets</a>.</p>
 <h3 id="queries"><a class="header" href="#queries">Queries</a></h3>
-<p>With <code>keyset</code> standing for the <code>KEYS.KEYSET_CHAIN(…)</code> expression of each export:</p>
+<p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
+keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for:</p>
 <pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(keyset, u.email_enc, CONCAT('user/', u.id, '/email'))
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
 FROM users u;
 
 -- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(keyset, u.email_det, 'user/email')
+SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
 FROM users u;
 
 -- An equality query: one probe per deterministic version, each with its Single keyset
 SELECT u.id
 FROM users u
 WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(keyset_d2, 'alice@example.com', 'user/email'),
-  DETERMINISTIC_ENCRYPT(keyset_d1, 'alice@example.com', 'user/email')
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
 );
 </code></pre>
 <p>The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
