@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-7b9fc3bc.js";
+            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -201,16 +201,11 @@ runs the whole cycle, and a KEK re-encryption after it, on the memory store and 
 <code>cargo run -p kms-aead-keyring --example rotate --features ring,admin</code>.</p>
 <p>How often:</p>
 <ul>
-<li>A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
-<a href="../security.html#nonces">Nonces</a>. The library cannot count the values a fleet seals, so estimate
-them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
-sooner at higher rates. AES-128-GCM, AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all
-take a 12-byte nonce, so the same cadence applies to each;</li>
-<li>AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
-for an AE advantage of about 2^-57. The keyring does not count bytes, since its DEKs are shared
-across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
-default <a href="../dek-caching.html#volume-limit"><code>max_bytes</code></a> of a store-less envelope. AES-256-GCM-SIV
-and ChaCha20-Poly1305 need no volume bound beyond the count of values;</li>
+<li>a randomised version is good for about 2^32 values, see <a href="../security.html#nonces">Nonces</a>, and an
+AES-GCM version for about 2^38 bytes, see <a href="../security.html#data-volume">Data volume</a>. The keyring
+stops at neither, since its DEKs are shared across processes: estimate the values and bytes a
+fleet seals, or measure them, see <a href="#alerting-on-volume">Alerting on volume</a>. At 550 values per
+second a version reaches 2^32 in 90 days, so rotate every 30 to 90 days, sooner at higher rates;</li>
 <li>a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
 deterministic rotation adds a probe to each equality query until a full sweep re-seals every
 row, see <a href="../keyring/deterministic.html#queries-across-rotations">Queries across rotations</a>, so
@@ -224,6 +219,29 @@ a pending version has none.</p>
 on a schedule until its <code>SweepReport</code> shows nothing scanned. Retiring the old version is a separate
 step of the administrative job, once the sweep is done and the old version’s
 <a href="./sweeps.html#records-under-a-version">range query</a> returns nothing: <code>retire</code>, and later <code>destroy</code>.</p>
+<h3 id="alerting-on-volume"><a class="header" href="#alerting-on-volume">Alerting on volume</a></h3>
+<p>With the <code>opentelemetry</code> feature, the keyring records the plaintext size of each value it seals
+under each version, see <a href="../observability.html#metrics">Metrics</a>: the histogram’s count is the
+values, and its sum their bytes. Each process records its own, and the alert sums them across the
+fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
+export, with the range covering the version’s life:</p>
+<pre><code class="language-promql">sum by (kms_aead_keyring, kms_aead_key_id) (
+  increase(kms_aead_plaintext_size_bytes_count{
+    kms_aead_mode="keyring", kms_aead_operation="encrypt", kms_aead_purpose="randomized"
+  }[90d])
+) &gt; 0.5 * 2^32
+
+sum by (kms_aead_keyring, kms_aead_key_id) (
+  increase(kms_aead_plaintext_size_bytes_sum{
+    kms_aead_mode="keyring", kms_aead_operation="encrypt",
+    kms_aead_algorithm=~"aes-(128|256)-gcm"
+  }[90d])
+) &gt; 0.5 * 2^38
+</code></pre>
+<p>A histogram starts at zero in every new process, and <code>increase()</code> counts across those restarts.
+The <code>[90d]</code> range needs 90 days of retention: Prometheus keeps 15 days by default, so keep the
+metric in long-term storage, through remote write or in a backend with a longer retention. The bytes alert keeps to AES-GCM versions, the only ones
+with a volume bound. Rotate the version the alert names, as above.</p>
 <h2 id="rotating-the-kek"><a class="header" href="#rotating-the-kek">Rotating the KEK</a></h2>
 <p>The KEK rotates in the KMS on its own schedule. After a rotation, <code>reencrypt_deks()</code> decrypts every
 DEK in the record and encrypts it again under the KEK’s current version. No value changes. A keyring

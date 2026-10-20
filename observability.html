@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
+            window.path_to_searchindex_js = "searchindex-077e19e1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -424,6 +424,133 @@ retried.</li>
 <p>The keyring’s spans, events and errors leave out everything kms-aead’s do, listed below. The AAD
 rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
 <code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
+<h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
+<p>With the <code>opentelemetry</code> feature, kms-aead records OpenTelemetry metrics for every envelope call
+and KMS request. kms-aead-keyring’s <code>opentelemetry</code> feature turns it on, and the keyring records
+into the same instruments, with its own attributes. Both depend on the <code>opentelemetry</code> API crate
+only (no SDK): the application installs the SDK and an exporter, such as OTLP with
+<code>opentelemetry-otlp</code> or Prometheus with <code>opentelemetry-prometheus</code>. Without the feature neither
+crate depends on OpenTelemetry.</p>
+<p>The instruments come from the global meter provider, with an instrumentation scope named after
+kms-aead and its version, the first time either crate records, and stay bound to it for the life
+of the process. Be aware to install the provider before the first KMS, envelope or keyring call,
+otherwise the instruments record nothing:</p>
+<pre><code class="language-rust">use opentelemetry::Key;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::{Aggregation, Instrument, SdkMeterProvider, Stream};
+
+fn install_meter_provider(exporter: impl PushMetricExporter) -&gt; SdkMeterProvider {
+    let provider = SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        // The plaintext size without its smallest and largest value, see below.
+        .with_view(|instrument: &amp;Instrument| {
+            if instrument.name() != "kms_aead.plaintext.size" {
+                return None;
+            }
+            Stream::builder()
+                .with_aggregation(Aggregation::ExplicitBucketHistogram {
+                    boundaries: Vec::new(),
+                    record_min_max: false,
+                })
+                .build()
+                .ok()
+        })
+        // Optional: the durations without `kms_aead.keyring`, see below.
+        .with_view(|instrument: &amp;Instrument| {
+            let kept: &amp;[&amp;'static str] = match instrument.name() {
+                "kms_aead.operation.duration" =&gt; &amp;[
+                    "kms_aead.operation",
+                    "kms_aead.mode",
+                    "kms_aead.algorithm",
+                    "kms_aead.backend",
+                    "kms_aead.purpose",
+                    "error.type",
+                ],
+                "kms_aead.store.duration" =&gt; &amp;["kms_aead.store", "kms_aead.reason", "error.type"],
+                _ =&gt; return None,
+            };
+            Stream::builder()
+                .with_allowed_attribute_keys(kept.iter().map(|key| Key::from_static_str(key)))
+                .build()
+                .ok()
+        })
+        .build();
+    opentelemetry::global::set_meter_provider(provider.clone());
+    provider
+}
+<span class="boring">let provider = install_meter_provider(opentelemetry_sdk::metrics::InMemoryMetricExporter::default());
+</span><span class="boring">provider.shutdown().unwrap();</span></code></pre>
+<p>The names follow OpenTelemetry’s semantic conventions: the library’s own attributes have the
+<code>kms_aead.</code> prefix, and a failed call carries <code>error.type</code>, the code of its error. A successful
+call has no <code>error.type</code>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Instrument</th><th>Type</th><th>Unit</th><th>Attributes</th><th>Keyring calls add</th></tr>
+</thead>
+<tbody>
+<tr><td><code>kms_aead.plaintext.size</code></td><td>histogram, no buckets</td><td><code>By</code></td><td><code>kms_aead.operation</code>, <code>kms_aead.mode</code>, <code>kms_aead.algorithm</code>, <code>kms_aead.backend</code></td><td><code>kms_aead.keyring</code>, <code>kms_aead.purpose</code>, <code>kms_aead.key_id</code></td></tr>
+<tr><td><code>kms_aead.operation.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.operation</code>, <code>kms_aead.mode</code>, <code>kms_aead.algorithm</code>, <code>kms_aead.backend</code>, <code>error.type</code></td><td><code>kms_aead.keyring</code>, <code>kms_aead.purpose</code></td></tr>
+<tr><td><code>kms_aead.kms.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.provider</code>, <code>kms_aead.operation</code>, <code>error.type</code></td><td></td></tr>
+<tr><td><code>kms_aead.store.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.keyring</code>, <code>kms_aead.store</code>, <code>kms_aead.reason</code>, <code>error.type</code></td><td></td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><code>kms_aead.plaintext.size</code> records the plaintext length of each value sealed or opened: its count
+is the values, and its sum their bytes. It has no buckets. The SDK also keeps the smallest and
+the largest value of each series and OTLP exports them, unless a view turns them off as above.
+A failed call records no value;</li>
+<li><code>kms_aead.operation</code> of a value is <code>encrypt</code> or <code>decrypt</code>. The envelope also times <code>beacon</code>,
+<code>generate_dek</code> for <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>,
+<code>decrypt_dek</code> for <code>decrypt_deterministic_dek</code>, and <code>reencrypt_dek</code> for <code>reencrypt_dek</code>,
+<code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and
+<code>upgrade_legacy_encrypted_dek</code>;</li>
+<li><code>kms_aead.mode</code> is the envelope’s <code>per_call</code> or <code>store_less</code> for <code>encrypt</code>, <code>decrypt</code>,
+<code>reencrypt_dek</code> and <code>upgrade_legacy_value</code>, <code>caller_dek</code> for the <code>*_with_dek</code> and
+<code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK,
+<code>reencrypt_encrypted_dek</code> and <code>upgrade_legacy_encrypted_dek</code>, and <code>keyring</code> for a keyring’s
+calls;</li>
+<li><code>kms_aead.algorithm</code> and <code>kms_aead.backend</code> are those of the span. <code>kms_aead.algorithm</code> is
+absent where it is unknown: on a re-encryption, in which the algorithm plays no part, on a probe,
+which runs under every version, and on a keyring call that fails before it finds its version. A keyring’s
+deterministic call has <code>kms_aead.backend</code> <code>rustcrypto</code>, since AES-SIV runs on RustCrypto
+whatever the keyring’s backend;</li>
+<li>a keyring call is recorded once, with <code>kms_aead.mode</code> <code>keyring</code>: it runs kms-aead’s ciphers,
+never its envelope. <code>encrypt</code> is a sealer’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>decrypt</code> is
+<code>decrypt</code>, <code>decrypt_with_trust</code> and their deterministic pair, <code>reseal</code> is <code>reseal</code> and
+<code>reseal_deterministic</code>, which also record the <code>decrypt</code> and <code>encrypt</code> they make, <code>beacon</code> is a
+sealer’s <code>beacon</code>, and <code>probe</code> is <code>beacon_probes</code> and <code>deterministic_probes</code>.
+<code>decrypt_envelope_for_migration</code> is a <code>decrypt</code> with no <code>kms_aead.purpose</code>. <code>kms_aead.key_id</code> is
+the version’s key id, as a number;</li>
+<li>probes and beacons record no value. A probe is never stored, and a beacon is an HMAC-SHA256
+output: HMAC takes no nonce, and its bound as a PRF is far beyond the values one key can seal;</li>
+<li><code>kms_aead.kms.duration</code> covers the request to the KMS only, as the span’s <code>response_time</code> does.
+<code>kms_aead.operation</code> is <code>encrypt_dek</code>, <code>decrypt_dek</code> or <code>random</code>, and <code>kms_aead.provider</code> is the
+span’s <code>provider</code>. The KEK name is left out;</li>
+<li><code>kms_aead.store.duration</code> covers every read of a keyring record, with the <code>store</code> and <code>reason</code>
+of the <code>Keyring load</code> span.</li>
+</ul>
+<p>No attribute names a DEK, so the envelope’s values are recorded per algorithm, not per key. A
+store-less envelope needs no alert on them: it renews its DEK at <code>max_uses</code> and <code>max_bytes</code>, see
+<a href="./dek-caching.html#volume-limit">Volume limit</a>.</p>
+<p>A Prometheus exporter adds the unit to the name and replaces the dots with underscores:
+<code>kms_aead_plaintext_size_bytes_count</code> and <code>kms_aead_plaintext_size_bytes_sum</code>,
+<code>kms_aead_operation_duration_seconds</code>, and attributes such as <code>kms_aead_key_id</code>. For an alert on
+the values and bytes under one keyring version, see
+<a href="./operations/rotation.html#alerting-on-volume">Alerting on volume</a>.</p>
+<p>The keyring’s plaintext size has one time series per keyring, purpose, key version and operation.
+With a keyring per tenant, that is a series per tenant and version. Under cumulative temporality,
+the default, the SDK keeps a series until the process restarts, also once its version is no longer
+used. The SDK keeps at most 2000 attribute sets per instrument and records every further one into
+one series with the attribute <code>otel.metric.overflow</code>, with no error: an alert per version stops
+counting the versions past the limit. Raise the limit with
+<code>Stream::builder().with_cardinality_limit</code> in a view where the keyrings and their versions come near
+it. Key ids are numbered per keyring, so the plaintext size keeps
+<code>kms_aead.keyring</code>: without it, version 1 of every keyring would add up to one series. The
+duration histograms do not need it, and with their buckets they cost the most series, so the view
+above drops it from them. The view’s <code>with_allowed_attribute_keys</code> needs the SDK’s
+<code>spec_unstable_metrics_views</code> feature.</p>
 <h2 id="what-is-never-logged"><a class="header" href="#what-is-never-logged">What is never logged</a></h2>
 <p>No span field or event carries:</p>
 <ul>
@@ -434,6 +561,14 @@ rule matters most there, since the default AAD holds the entity id: neither the 
 minus a fixed overhead, and a length tells short values such as <code>yes</code>, <code>no</code> or a country code
 apart.</li>
 </ul>
+<p>The <code>kms_aead.plaintext.size</code> histogram is the exception: it adds up plaintext lengths. A keyring
+or an envelope that seals one value per export interval gives that value’s length to whoever reads
+the metrics. The SDK also keeps the smallest and the largest value of each series, under cumulative
+temporality since the process started, and OTLP exports them: the exact length of the shortest and
+the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
+The OpenTelemetry API gives kms-aead’s instrument no setting to leave them out, so the view in
+<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat the histogram like the
+values themselves where traffic is low, and everywhere without that view.</p>
 <p>Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
 project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
 <code>key</code> field accordingly in a trace pipeline.</p>

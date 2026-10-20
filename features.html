@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
+            window.path_to_searchindex_js = "searchindex-077e19e1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -210,6 +210,7 @@
 <tr><td><code>serde-json</code></td><td><code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON</td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
+<tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value sealed and opened, and the time each call, KMS request and keyring store read takes, see <a href="./observability.html#metrics">Metrics</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -249,6 +250,7 @@ seals or encrypts can be constructed, since no type implements <code>AeadBackend
 <tr><td><code>s3</code></td><td>the S3 keyring store</td></tr>
 <tr><td><code>sqlx</code></td><td><code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code></td></tr>
 <tr><td><code>bigquery-export</code></td><td><code>admin</code>, and <code>export_bigquery_keyset</code>, see <a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a></td></tr>
+<tr><td><code>opentelemetry</code></td><td>kms-aead’s <code>opentelemetry</code>, with the keyring’s calls recorded per keyring and key version, see <a href="./observability.html#metrics">Metrics</a></td></tr>
 </tbody>
 </table>
 </div>
