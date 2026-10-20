@@ -51,8 +51,10 @@ wrapKey and unwrapKey key operations, as in the "Key Vault Crypto User" role.
   `Aes256KeyWrap` (`A256KW`) for Managed HSM AES keys. The default, `DEFAULT_ALGORITHM`, is
   `RsaOaepSha256` for every key, so a Managed HSM AES key needs `algorithm` set to
   `Aes256KeyWrap` and the provider built with `AzureKmsProvider::with_options`. `RsaOaepSha1`
-  (`RSA-OAEP`) is for an RSA key whose encrypted DEKs were written with it. Other Key Vault
-  algorithms, such as `RSA1_5`, are not offered. Encrypted DEKs do not record the algorithm, so it
+  (`RSA-OAEP`) is for an RSA key whose encrypted DEKs were written with it. The other AES key
+  wraps, `Aes128KeyWrap` (`A128KW`), `Aes192KeyWrap` (`A192KW`), `Pkcs11AesKeyWrap`
+  (`CKM_AES_KEY_WRAP`) and `Pkcs11AesKeyWrapWithPadding` (`CKM_AES_KEY_WRAP_PAD`), are for
+  Managed HSM AES keys too. `RSA1_5` is not offered. Encrypted DEKs do not record the algorithm, so it
   stays fixed for the life of the key;
 - `client_options`: settings passed to the Azure SDK, such as a custom HTTP transport or retry
   policy.

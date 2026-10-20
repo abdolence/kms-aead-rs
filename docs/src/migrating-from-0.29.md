@@ -67,7 +67,7 @@ The crate declares `rust-version = "1.99"`.
 | `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
 | `DataEncryptionKey(secret)`, `DataEncryptionKey::new(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
-| `AzureKmsProviderOptions::with_algorithm(EncryptionAlgorithm::RsaOaep256)`, with the Azure SDK's enum | `with_algorithm(AzureKmsAlgorithm::RsaOaepSha256)`; `RsaOaep` is `RsaOaepSha1` and `A256Kw` is `Aes256KeyWrap`, and the SDK's other algorithms have no variant |
+| `AzureKmsProviderOptions::with_algorithm(EncryptionAlgorithm::RsaOaep256)`, with the Azure SDK's enum | `with_algorithm(AzureKmsAlgorithm::RsaOaepSha256)`; `RsaOaep` is `RsaOaepSha1`, `A128Kw`, `A192Kw` and `A256Kw` are `Aes128KeyWrap`, `Aes192KeyWrap` and `Aes256KeyWrap`, and `CkmAesKeyWrap` and `CkmAesKeyWrapPad` are `Pkcs11AesKeyWrap` and `Pkcs11AesKeyWrapWithPadding`. `Rsa1_5`, refused by 0.29 too, and the algorithms Key Vault does not wrap keys with have no variant |
 
 HashiCorp Vault Transit types have the `Hc` prefix:
 

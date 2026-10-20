@@ -314,7 +314,14 @@ async fn key_vault_receives_the_configured_algorithm() -> Result<(), Box<dyn std
     for (algorithm, alg) in [
         (AzureKmsAlgorithm::RsaOaepSha256, "RSA-OAEP-256"),
         (AzureKmsAlgorithm::RsaOaepSha1, "RSA-OAEP"),
+        (AzureKmsAlgorithm::Aes128KeyWrap, "A128KW"),
+        (AzureKmsAlgorithm::Aes192KeyWrap, "A192KW"),
         (AzureKmsAlgorithm::Aes256KeyWrap, "A256KW"),
+        (AzureKmsAlgorithm::Pkcs11AesKeyWrap, "CKM_AES_KEY_WRAP"),
+        (
+            AzureKmsAlgorithm::Pkcs11AesKeyWrapWithPadding,
+            "CKM_AES_KEY_WRAP_PAD",
+        ),
     ] {
         let http_client = Arc::new(CannedHttpClient::new(
             StatusCode::Ok,

@@ -39,8 +39,16 @@ pub enum AzureKmsAlgorithm {
     RsaOaepSha256,
     /// `RSA-OAEP`: RSA-OAEP with SHA-1, for an RSA key whose encrypted DEKs were written with it.
     RsaOaepSha1,
+    /// `A128KW`: AES key wrap with a 128-bit key, for a Managed HSM AES key.
+    Aes128KeyWrap,
+    /// `A192KW`: AES key wrap with a 192-bit key, for a Managed HSM AES key.
+    Aes192KeyWrap,
     /// `A256KW`: AES key wrap with a 256-bit key, for a Managed HSM AES key.
     Aes256KeyWrap,
+    /// `CKM_AES_KEY_WRAP`: the PKCS#11 AES key wrap, for a Managed HSM AES key.
+    Pkcs11AesKeyWrap,
+    /// `CKM_AES_KEY_WRAP_PAD`: the PKCS#11 AES key wrap with padding, for a Managed HSM AES key.
+    Pkcs11AesKeyWrapWithPadding,
 }
 
 /// Options for [`AzureKmsProvider`].
@@ -167,7 +175,13 @@ impl AzureKmsProvider {
             algorithm: Some(match self.options.algorithm {
                 AzureKmsAlgorithm::RsaOaepSha256 => EncryptionAlgorithm::RsaOaep256,
                 AzureKmsAlgorithm::RsaOaepSha1 => EncryptionAlgorithm::RsaOaep,
+                AzureKmsAlgorithm::Aes128KeyWrap => EncryptionAlgorithm::A128Kw,
+                AzureKmsAlgorithm::Aes192KeyWrap => EncryptionAlgorithm::A192Kw,
                 AzureKmsAlgorithm::Aes256KeyWrap => EncryptionAlgorithm::A256Kw,
+                AzureKmsAlgorithm::Pkcs11AesKeyWrap => EncryptionAlgorithm::CkmAesKeyWrap,
+                AzureKmsAlgorithm::Pkcs11AesKeyWrapWithPadding => {
+                    EncryptionAlgorithm::CkmAesKeyWrapPad
+                }
             }),
             value: Some(value),
             ..Default::default()
