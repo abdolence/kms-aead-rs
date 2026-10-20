@@ -35,9 +35,16 @@ build:
 2. the administrative job exports the keyset, with `export_bigquery_keyset` under the
    `bigquery-export` feature or `export_tink_keyset` under `admin`, and writes its bytes where the
    query or the reader takes them;
-3. the job exports again after every `rotate`, before the promotion, and after every
-   `mark_compromised` and every KEK rotation, see [Rotation cadence](../operations/rotation.md#rotation-cadence)
-   and [Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
+3. the job exports again:
+   - the `Readable` keysets after every `rotate`, before the promotion, and after every `retire`,
+     every `mark_compromised` and every KEK rotation;
+   - the `Single` keyset of a new deterministic version after its promotion, since a pending
+     version has none. Until then, an equality lookup in SQL computes no probe under the new
+     version and misses the rows sealed under it, with no error.
+
+   See [Rotation cadence](../operations/rotation.md#rotation-cadence),
+   [Retiring the old version](../operations/sweeps.md#retiring-the-old-version) and
+   [Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
 
 Full example of a Tink export available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs),

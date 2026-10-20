@@ -312,19 +312,28 @@ it keeps decrypting with the old version only. `reencrypt_encrypted_dek` and `re
 stored DEK to the current version, so the old version can be retired while the application keeps
 reading and writing:
 
-1. rotate the KEK in the KMS, as the page of each provider describes;
+1. rotate the KEK in the KMS, as the page of each provider describes. Under Cloud KMS, wait until
+   the new primary version has propagated, see
+   [Google Cloud KMS](./providers/gcp.md#key-versions-and-rotation);
 2. re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
    values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`. Then
    export the keyrings' keysets again and re-encrypt the application's own encrypted keysets, see
    [Encrypted keysets](#encrypted-keysets);
-3. check that the `kek_versions_in_use` of every keyring record lists the new version alone. Then,
-   once no process holds an encrypted DEK from before step 2, disable the old version, and check
-   that the KMS decrypts every stored DEK, every keyring's DEKs with `reencrypt_deks`, and every
-   encrypted keyset. A DEK or a keyset it refuses is one the sweep missed: enable the old version
-   again, sweep again and check again. When to disable, and how the local KMS checks before it,
-   are in [The check](#the-check);
-4. keep the old version disabled for as long as the backups of the stored values are kept, check
-   once more, then destroy it.
+3. check that the `kek_versions_in_use` of every keyring record lists the new version alone, and so
+   does the KEK version an application stores beside its own DEKs. A `None` never passes this
+   check, see [A KEK version the KMS did not report](./operations/rotation.md#a-kek-version-the-kms-did-not-report);
+4. wait until no process holds an encrypted DEK from before step 2: one `record_ttl` after the last
+   `reencrypt_deks`, with no process logging "The keyring record could not be revalidated"
+   meanwhile, and every process has read its DEKs stored apart from their values again, see
+   [The check](#the-check);
+5. disable the old version, and wait until the disable has propagated in the KMS: under Cloud KMS
+   typically up to a minute, and several hours in exceptional cases;
+6. check that the KMS decrypts every stored DEK, every keyring's DEKs with `reencrypt_deks`, and
+   every encrypted keyset, see [The check](#the-check). A DEK or a keyset it refuses is one the
+   sweep missed: enable the old version again, sweep again, and go back to step 3;
+7. keep the old version disabled for as long as the backups of the stored values and of the
+   keyring records are kept. Immediately before destroying it, run the check of step 6 again, and
+   destroy it only when it passes.
 
 A backup taken before the sweep holds the DEKs under the old version, so destroying the old version
 makes every such backup unreadable for good. Keyring records are the same, see
@@ -430,7 +439,7 @@ Write each value back only where the stored bytes are still the ones read, with 
 such as `UPDATE orders SET card = $new WHERE id = $id AND card = $read`, or the store's own
 conditional write. An unconditional write puts back the value the sweep read over one the
 application wrote in the meantime, which is then lost. A row the application rewrote keeps its new
-value, and the check in step 3 finds it if its DEK is still under the old version.
+value, and the checks of steps 3 and 6 find it if its DEK is still under the old version.
 
 `reencrypt_dek` does the same for one value. It gives each value an encrypted DEK of its own, so
 values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
@@ -618,12 +627,13 @@ disable:
 - a process keeps the encrypted DEKs it read before the sweep. A keyring's cached record holds the
   ones it had before `reencrypt_deks` until it is refreshed, at a change signal of the store or
   once it is older than `record_ttl`, 5 minutes by default, and Cloud Storage and S3 send no
-  signal, see [Record cache](./keyring/record-cache.md#how-late-a-change-is-seen). An encrypted DEK
+  signal, see [Record cache](./keyring/record-cache.md#how-late-a-change-is-seen). A process whose
+  revalidations fail keeps its record for as long as they fail, and logs "The keyring record could
+  not be revalidated; the cached record stays in use" at `WARN` on each failure. An encrypted DEK
   the application read from its settings at startup, as in [One fixed key](#one-fixed-key), stays
   as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
-  decrypts the old bytes again and fails under a disabled old version, with no reload. Disable the
-  old version no sooner than one `record_ttl` after the last `reencrypt_deks`, and only once every
-  process has read its DEKs stored apart from their values again.
+  decrypts the old bytes again and fails under a disabled old version, with no reload. This is the
+  wait of step 4 in [Re-encrypting DEKs after a KEK rotation](#re-encrypting-deks-after-a-kek-rotation).
 
 A KMS whose changes take time to propagate, such as Cloud KMS, can keep encrypting under the old
 version for a while after the rotation and keep decrypting under it for a while after it is

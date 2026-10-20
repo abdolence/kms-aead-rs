@@ -155,7 +155,8 @@ version.
   carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
   values through it. Keep it in the read path for the migration only;
 - **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
-  record holds encrypted DEKs the KMS still opens, see
+  record holds encrypted DEKs the KMS still opens, and a keyset exported before the destroy holds
+  the version's key under the same KEK, see
   [Crypto-shredding](./operations/runbook.md#crypto-shredding);
 - **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
   BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export

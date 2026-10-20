@@ -90,16 +90,22 @@ table.
 To make a scope's values unrecoverable:
 
 - with a KEK per scope: destroy the KEK's versions in the KMS. Every encrypted DEK of the scope is
-  then unrecoverable, backups included;
+  then unrecoverable, backups of the record and keysets exported from it included, since the KEK
+  encrypts both;
 - with a shared KEK: `dangerously_destroy_all_versions`, which destroys every version of the
-  keyring in one write, so that it encrypts and decrypts nothing from then on. A backup of the
-  record still holds the encrypted DEKs, which the KMS opens as long as the KEK version that
-  encrypted them exists, so then either delete the record and every backup of it, or destroy that
-  KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks` every
-  other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
-  never destroyed, so only the deletion of the KMS key itself shreds. Azure Key Vault deletes a key
-  with all its versions and never one version alone, so there too only the deletion of the key
-  shreds, and a vault with soft delete keeps it recoverable until it is purged.
+  keyring in one write, so that it encrypts and decrypts nothing from then on. Two copies outside
+  the record still hold its keys, and the KMS opens both as long as the KEK version that encrypted
+  them exists: every backup of the record, and every BigQuery and Tink keyset exported from the
+  keyring, see [Keyring limits](../security.md#keyring-limits). So then either delete the record,
+  every backup of it and every copy of those keysets, or destroy that KEK version: on GCP, Vault
+  Transit and the local KMS, rotate the KEK, re-encrypt every other keyring under it as in
+  [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+  then destroy the previous KEK version. On AWS rotated key material is never destroyed, so only
+  the deletion of the KMS key itself shreds. Azure Key Vault deletes a key with all its versions
+  and never one version alone, so there too only the deletion of the key shreds. A vault with soft
+  delete keeps a deleted key recoverable until it is purged, and with purge protection on, no purge
+  is possible until the vault's retention period of 7 to 90 days has passed, see
+  [Azure Key Vault soft-delete](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview).
 
 A deployment that needs shredding guarantees uses a KEK per scope.
 

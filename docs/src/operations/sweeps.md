@@ -6,7 +6,7 @@ CLI or a Kubernetes Job, never a task inside the library: only the application k
 its queries and its write rules. The job runs on a schedule, and again until its `SweepReport`
 shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
 next run's marker query returns exactly the records it did not write. Retiring the old version is
-a separate step of the administrative job, see [Rotation cadence](./rotation.md#rotation-cadence).
+a separate step of the administrative job, see [Retiring the old version](#retiring-the-old-version).
 
 ## The seal marker
 
@@ -154,7 +154,7 @@ The range serves two decisions:
   of the last of them. A version flagged compromised after it stopped being active moves no epoch,
   and keeps the range it had;
 - before `retire`, and again before `destroy`, the query of the version returning nothing shows
-  that no record holds a value under it. That check needs one record at most: `limit(1)` in
+  that no record holds a value under it, see [Retiring the old version](#retiring-the-old-version). That check needs one record at most: `limit(1)` in
   Firestore, `EXISTS` in SQL.
 
 One epoch counts the activations of every purpose of the keyring, so a range can match a record
@@ -271,6 +271,7 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
         return Ok(ResealOutcome::Skipped);
     };
+    let read: Vec<u8> = row.email.value().to_vec();
     let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
     let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &row.email).await?;
@@ -283,11 +284,16 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
         None => (row.email, ResealOutcome::Skipped),
     };
     let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, seal });
-    Ok(outcome)
+    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
+    // own value, which it sealed under the active versions anyway.
+    let mut table = table.lock().unwrap();
+    match table.get_mut(user) {
+        Some(stored) if stored.email.value() == read.as_slice() => {
+            *stored = UserRow { email, seal };
+            Ok(outcome)
+        }
+        _ => Ok(ResealOutcome::Skipped),
+    }
 }
 
 # #[tokio::main]
@@ -362,10 +368,34 @@ above. The error's `Display` is the application's text and goes to the log as it
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.
 
-Retiring the old version is not the sweep's: once a run reports nothing scanned and the range
-query of the old version returns nothing, the administrative job `retire`s it, see
-[Rotation cadence](./rotation.md#rotation-cadence). Keep it retired for a while before `destroy`: `reinstate` brings a retired version back for a value that
-turned up after all, while a destroyed one is gone.
+Retiring the old version is not the sweep's, see [Retiring the old version](#retiring-the-old-version).
+
+## Retiring the old version
+
+Once the sweep is done, the administrative job retires the version a promotion replaced, and later
+destroys it, on its `KeyringAdmin`:
+
+1. wait, from the promotion, the longest time any process may run without a successful refresh of
+   its record, and check that no process logged "The keyring record could not be revalidated"
+   meanwhile. Until then a process on the old record seals under the old version and stamps the
+   old epoch, see [Finding records behind](#finding-records-behind);
+2. run the sweep until a run reports nothing scanned and nothing failed;
+3. run the old version's [range query](#records-under-a-version). When it returns nothing,
+   `retire(key_id)`. Reads under the version fail with `KeyVersionRetired` from then on, logged at
+   `WARN`;
+4. export the `Readable` BigQuery and Tink keysets again, which leave a retired version out, and
+   write them where the old ones are kept, see
+   [BigQuery and Tink interop](../keyring/bigquery.md). A keyset exported before keeps reading
+   values under the retired version in SQL and in Tink;
+5. keep the version retired for a while. A value the sweep missed fails with `KeyVersionRetired`:
+   `reinstate(key_id)`, export the keysets again, sweep again, and go back to step 3;
+6. run the range query again. When it still returns nothing, delete every copy of the keysets
+   exported before step 4, then `destroy(key_id)`. No call brings a destroyed version back.
+
+`destroy` removes the encrypted DEK from the record only. A backup of the record still holds it,
+and so does every copy of a keyset exported while the version decrypted, both opened by the KMS as
+long as the KEK version that encrypted them exists, see
+[Crypto-shredding](./runbook.md#crypto-shredding).
 
 ## Sweeps by store
 
@@ -387,7 +417,7 @@ its result in memory, and it writes them back in batches. Every example, on
   range of every version it is under;
 - it runs on a schedule until a run reports nothing scanned. The `retire`, and later the
   `destroy`, of the old version are the administrative job's, see
-  [Rotation cadence](./rotation.md#rotation-cadence).
+  [Retiring the old version](#retiring-the-old-version).
 
 The examples keep one keyring's records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring's id beside the marker, and

@@ -43,7 +43,9 @@ them, backups included. Per KMS:
   [AWS KMS](../providers/aws.md#key-versions-and-rotation);
 - **Azure Key Vault**: delete the key, which deletes it with all its versions: Key Vault never
   deletes one version alone, see [Azure Key Vault](../providers/azure.md#key-versions-and-rotation).
-  A vault with soft delete keeps a deleted key recoverable until it is purged;
+  A vault with soft delete keeps a deleted key recoverable until it is purged, and with purge
+  protection on, no purge is possible until the vault's retention period of 7 to 90 days has
+  passed, see [Azure Key Vault soft-delete](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview);
 - **Vault Transit**: `min_available_version` and a trim of the key delete the versions below it, see
   [Vault Transit](../providers/hc-vault-transit.md#key-versions-and-rotation), and a deletion of
   the key, once its configuration sets `deletion_allowed`, deletes every version;
@@ -52,6 +54,6 @@ them, backups included. Per KMS:
 
 Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
 Vault needs a key per scope. With a keyring, a shared KEK has a second route,
-`dangerously_destroy_all_versions`, and its limits are in
-[Crypto-shredding](../operations/runbook.md#crypto-shredding). A deployment that needs shredding
+`dangerously_destroy_all_versions`, which leaves the keys in every backup of the record and in every
+keyset exported from it, see [Crypto-shredding](../operations/runbook.md#crypto-shredding). A deployment that needs shredding
 guarantees uses a KEK per scope, see [A keyring per tenant](./keyring-per-tenant.md).

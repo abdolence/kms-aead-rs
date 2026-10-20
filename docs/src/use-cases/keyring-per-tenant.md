@@ -11,7 +11,7 @@ PostgreSQL. The keyring id names the tenant, see
 |---|---|---|
 | A DEK copied into another tenant's record | fails at the KMS, which decrypts with the tenant's own KEK | decrypts, since the KMS opens it for any principal allowed to decrypt with the KEK |
 | KMS rights | per tenant, so a principal can be limited to some tenants | one grant covers every tenant |
-| Crypto-shredding a tenant | destroying its KEK, backups of the record included | `dangerously_destroy_all_versions`, and then the record's backups or a KEK rotation for every other keyring |
+| Crypto-shredding a tenant | destroying its KEK, backups of the record and exported keysets included | `dangerously_destroy_all_versions`, and then deleting the record's backups and exported keysets, or a KEK rotation for every other keyring |
 | KMS keys to manage | one per tenant | one |
 
 The first row is the store-writer threat of [Keyring deployment](../security.md#keyring-deployment),
