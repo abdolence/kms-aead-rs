@@ -27,6 +27,9 @@ type Backend = kms_aead::backends::AwsLc;
 #[cfg(all(not(feature = "ring"), not(feature = "aws-lc"), feature = "rustcrypto"))]
 type Backend = kms_aead::backends::RustCrypto;
 
+/// The name of `Backend`, the `backend` attribute of a randomised call.
+const BACKEND: &str = <Backend as kms_aead::backends::AeadBackend>::NAME;
+
 type LocalKeyringAdmin = KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Backend>, Backend>;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -152,24 +155,36 @@ async fn a_seal_counts_one_value_and_its_plaintext_bytes_under_the_version() -> 
     sealer.encrypt(&aad, &ALICE.to_string()).await?;
 
     let attributes = sorted(vec![
+        KeyValue::new("operation", "encrypt"),
+        KeyValue::new("mode", "keyring"),
+        KeyValue::new("algorithm", "aes-256-gcm"),
+        KeyValue::new("backend", BACKEND),
         KeyValue::new("keyring", "metrics-seal"),
         KeyValue::new("purpose", "randomized"),
         KeyValue::new("key_id", i64::from(key_id.as_u32())),
-        KeyValue::new("operation", "encrypt"),
     ]);
     assert_eq!(
-        points_of_keyring("kms_aead_keyring.values", "metrics-seal")?,
+        points_of_keyring("kms_aead.values", "metrics-seal")?,
         [Point {
             attributes: attributes.clone(),
             value: 2
         }]
     );
     assert_eq!(
-        points_of_keyring("kms_aead_keyring.plaintext", "metrics-seal")?,
+        points_of_keyring("kms_aead.plaintext", "metrics-seal")?,
         [Point {
             attributes,
             value: 2 * ALICE.len() as u64
         }]
+    );
+    // A keyring seal runs kms-aead's cipher and never its envelope, so no other point counts it.
+    let keyring_mode = KeyValue::new("mode", "keyring");
+    assert_eq!(
+        points("kms_aead.values")?
+            .into_iter()
+            .filter(|point| !point.attributes.contains(&keyring_mode))
+            .collect::<Vec<_>>(),
+        []
     );
     Ok(())
 }
@@ -198,17 +213,11 @@ async fn a_decrypt_counts_one_value_and_its_plaintext_bytes_under_the_version() 
             .collect::<Vec<_>>()
     };
     assert_eq!(
-        decrypts(points_of_keyring(
-            "kms_aead_keyring.values",
-            "metrics-decrypt"
-        )?),
+        decrypts(points_of_keyring("kms_aead.values", "metrics-decrypt")?),
         [1]
     );
     assert_eq!(
-        decrypts(points_of_keyring(
-            "kms_aead_keyring.plaintext",
-            "metrics-decrypt"
-        )?),
+        decrypts(points_of_keyring("kms_aead.plaintext", "metrics-decrypt")?),
         [ALICE.len() as u64]
     );
     Ok(())
@@ -231,7 +240,7 @@ async fn a_deterministic_seal_and_open_count_its_plaintext_bytes() -> TestResult
         .await?;
     keyring.decrypt_deterministic(&aad, &value).await?;
 
-    let bytes = points_of_keyring("kms_aead_keyring.plaintext", "metrics-deterministic")?
+    let bytes = points_of_keyring("kms_aead.plaintext", "metrics-deterministic")?
         .into_iter()
         .filter(|point| {
             point
@@ -260,20 +269,23 @@ async fn a_failed_seal_counts_nothing_and_times_the_call_with_its_error_code() -
     };
 
     assert_eq!(
-        points_of_keyring("kms_aead_keyring.values", "metrics-failed-seal")?,
+        points_of_keyring("kms_aead.values", "metrics-failed-seal")?,
         []
     );
     assert_eq!(
-        points_of_keyring("kms_aead_keyring.plaintext", "metrics-failed-seal")?,
+        points_of_keyring("kms_aead.plaintext", "metrics-failed-seal")?,
         []
     );
     assert_eq!(
-        points_of_keyring("kms_aead_keyring.operation.duration", "metrics-failed-seal")?,
+        points_of_keyring("kms_aead.operation.duration", "metrics-failed-seal")?,
         [Point {
             attributes: sorted(vec![
+                KeyValue::new("operation", "encrypt"),
+                KeyValue::new("mode", "keyring"),
+                KeyValue::new("algorithm", "aes-256-gcm"),
+                KeyValue::new("backend", BACKEND),
                 KeyValue::new("keyring", "metrics-failed-seal"),
                 KeyValue::new("purpose", "randomized"),
-                KeyValue::new("operation", "encrypt"),
                 KeyValue::new("error_code", error.code().to_string()),
             ]),
             value: 1
@@ -287,7 +299,7 @@ async fn a_store_read_is_timed_by_store_and_reason() -> TestResult {
     let admin = keyring("metrics-load").await?;
     admin.keyring().reload().await?;
 
-    let loads = points_of_keyring("kms_aead_keyring.store.duration", "metrics-load")?;
+    let loads = points_of_keyring("kms_aead.store.duration", "metrics-load")?;
     assert!(
         loads.iter().any(|point| point.attributes
             == sorted(vec![
@@ -345,10 +357,10 @@ async fn no_attribute_carries_the_plaintext_or_the_aad() -> TestResult {
     keyring.decrypt(&aad, &value).await?;
 
     let names = [
-        "kms_aead_keyring.values",
-        "kms_aead_keyring.plaintext",
-        "kms_aead_keyring.operation.duration",
-        "kms_aead_keyring.store.duration",
+        "kms_aead.values",
+        "kms_aead.plaintext",
+        "kms_aead.operation.duration",
+        "kms_aead.store.duration",
         "kms_aead.kms.duration",
     ];
     let mut attributes = 0;

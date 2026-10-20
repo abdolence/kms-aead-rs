@@ -158,18 +158,20 @@ where
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
+        let call = metrics::Call::new(self.cache.metrics(), Purpose::Randomized, B::NAME);
         let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                call.version(version);
                 self.apply_read_policy(version, compromise)?;
                 self.open_cached(&record, version, encrypted_dek, aad, value)
                     .await
             },
         );
-        metrics::decrypt(self.cache.metrics(), Purpose::Randomized, value, open).await
+        metrics::decrypt(&call, value, open).await
     }
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
@@ -186,12 +188,14 @@ where
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
         let key_id = Purpose::Randomized.check(value.key_id())?;
+        let call = metrics::Call::new(self.cache.metrics(), Purpose::Randomized, B::NAME);
         let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Randomized, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                call.version(version);
                 let (opened, trust) = match compromise {
                     None => (
                         self.open_cached(&record, version, encrypted_dek, aad, value)
@@ -211,7 +215,7 @@ where
                 })
             },
         );
-        metrics::decrypt(self.cache.metrics(), Purpose::Randomized, value, open).await
+        metrics::decrypt(&call, value, open).await
     }
 
     /// The version `key_id` of `record`, its encrypted DEK and its compromised flag, or the error

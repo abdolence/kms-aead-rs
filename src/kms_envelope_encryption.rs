@@ -14,6 +14,7 @@ use crate::backends::AeadBackend;
 use crate::cache::{DekCache, DekCacheOptions, DekCacheOutcome};
 use crate::errors::{KmsAeadError, KmsAeadLegacyFormatError, KmsAeadSystemError};
 use crate::formats::{Bare, Envelope};
+use crate::metrics;
 use crate::{
     spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
     DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadEncryptionProvider,
@@ -379,11 +380,17 @@ where
         aad: &(impl AsRef<[u8]> + ?Sized),
         value: &T,
     ) -> KmsAeadResult<Encrypted<T, Envelope>> {
-        spans::in_span(self.encrypt_span(self.mode()), async {
+        let seal = async {
             let plain_text = value.to_plaintext()?;
-            self.seal(aad.as_ref(), plain_text.ref_sensitive_value())
-                .await
-        })
+            let plain_text = plain_text.ref_sensitive_value();
+            let sealed = self.seal(aad.as_ref(), plain_text).await?;
+            Ok((sealed, plain_text.len()))
+        };
+        let call = self.call("encrypt", self.mode());
+        spans::in_span(
+            self.encrypt_span(self.mode()),
+            metrics::measured(call, seal),
+        )
         .await
     }
 
@@ -405,9 +412,16 @@ where
         aad: &(impl AsRef<[u8]> + ?Sized),
         value: &Encrypted<T, Envelope>,
     ) -> KmsAeadResult<T> {
-        spans::in_span(self.decrypt_span(self.mode()), async {
-            T::from_plaintext(self.open(aad.as_ref(), value.value()).await?)
-        })
+        let open = async {
+            let plain_text = self.open(aad.as_ref(), value.value()).await?;
+            let len = plain_text.ref_sensitive_value().len();
+            Ok((T::from_plaintext(plain_text)?, len))
+        };
+        let call = self.call("decrypt", self.mode());
+        spans::in_span(
+            self.decrypt_span(self.mode()),
+            metrics::measured(call, open),
+        )
         .await
     }
 
@@ -424,7 +438,11 @@ where
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Encrypted<T, Bare>> {
         spans::in_scope(self.encrypt_span("caller_dek"), || {
-            self.cipher.encrypt_bare(aad, value, dek)
+            metrics::measured_now(self.call("encrypt", "caller_dek"), || {
+                let sealed = self.cipher.encrypt_bare(aad, value, dek)?;
+                let len = bare_plaintext_len(&sealed);
+                Ok((sealed, len))
+            })
         })
     }
 
@@ -441,12 +459,20 @@ where
         value: &T,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Encrypted<T, Bare>> {
-        spans::in_span(self.encrypt_span("caller_dek"), async {
-            self.with_dek(encrypted_dek, |dek| {
-                self.cipher.encrypt_bare(aad, value, dek)
-            })
-            .await
-        })
+        let seal = async {
+            let sealed = self
+                .with_dek(encrypted_dek, |dek| {
+                    self.cipher.encrypt_bare(aad, value, dek)
+                })
+                .await?;
+            let len = bare_plaintext_len(&sealed);
+            Ok((sealed, len))
+        };
+        let call = self.call("encrypt", "caller_dek");
+        spans::in_span(
+            self.encrypt_span("caller_dek"),
+            metrics::measured(call, seal),
+        )
         .await
     }
 
@@ -463,7 +489,12 @@ where
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<T> {
         spans::in_scope(self.decrypt_span("caller_dek"), || {
-            self.cipher.decrypt_bare(aad, value, dek)
+            metrics::measured_now(self.call("decrypt", "caller_dek"), || {
+                Ok((
+                    self.cipher.decrypt_bare(aad, value, dek)?,
+                    bare_plaintext_len(value),
+                ))
+            })
         })
     }
 
@@ -479,12 +510,19 @@ where
         value: &Encrypted<T, Bare>,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<T> {
-        spans::in_span(self.decrypt_span("caller_dek"), async {
-            self.with_dek(encrypted_dek, |dek| {
-                self.cipher.decrypt_bare(aad, value, dek)
-            })
-            .await
-        })
+        let open = async {
+            let opened = self
+                .with_dek(encrypted_dek, |dek| {
+                    self.cipher.decrypt_bare(aad, value, dek)
+                })
+                .await?;
+            Ok((opened, bare_plaintext_len(value)))
+        };
+        let call = self.call("decrypt", "caller_dek");
+        spans::in_span(
+            self.decrypt_span("caller_dek"),
+            metrics::measured(call, open),
+        )
         .await
     }
 
@@ -727,6 +765,15 @@ where
         }
     }
 
+    fn call(&self, operation: &'static str, mode: &'static str) -> metrics::EnvelopeCall {
+        metrics::EnvelopeCall {
+            operation,
+            mode,
+            algorithm: self.cipher.algorithm(),
+            backend: B::NAME,
+        }
+    }
+
     fn encrypt_span(&self, mode: &str) -> Span {
         spans::aead_encrypt(mode, self.cipher.algorithm(), B::NAME, &self.dek_cache)
     }
@@ -734,6 +781,14 @@ where
     fn decrypt_span(&self, mode: &str) -> Span {
         spans::aead_decrypt(mode, self.cipher.algorithm(), B::NAME, &self.dek_cache)
     }
+}
+
+/// The plaintext length of a bare value: its length less the nonce and the tag.
+fn bare_plaintext_len<T>(value: &Encrypted<T, Bare>) -> usize {
+    value
+        .value()
+        .len()
+        .saturating_sub(AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN)
 }
 
 #[cfg(all(

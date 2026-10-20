@@ -185,8 +185,8 @@ deterministic = [
 # Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
 # later breaking release.
 legacy-formats = []
-# Histograms of the time each KMS call takes, on the OpenTelemetry API: the application installs
-# the SDK and an exporter.
+# OpenTelemetry metrics of the envelope's calls and the KMS requests, which kms-aead-keyring
+# records its calls into too, on the API crate: the application installs the SDK and an exporter.
 opentelemetry = ["dep:opentelemetry"]
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
@@ -247,6 +247,11 @@ required-features = ["hashicorp-vault-transit-kms-encryption-base", "ring"]
 name = "azure_kms"
 path = "examples/azure_kms.rs"
 required-features = ["azure-kms-encryption-base", "aws-lc"]
+
+[[test]]
+name = "metrics"
+path = "tests/metrics.rs"
+required-features = ["opentelemetry", "ring"]
 
 [[test]]
 name = "postgres_fields"

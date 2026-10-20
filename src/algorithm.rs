@@ -37,6 +37,15 @@ impl AeadAlgorithm {
     /// Every algorithm takes a nonce of this length.
     pub(crate) const NONCE_LEN: usize = 12;
 
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            AeadAlgorithm::ChaCha20Poly1305 => "chacha20-poly1305",
+            AeadAlgorithm::Aes128Gcm => "aes-128-gcm",
+            AeadAlgorithm::Aes256Gcm => "aes-256-gcm",
+            AeadAlgorithm::Aes256GcmSiv => "aes-256-gcm-siv",
+        }
+    }
+
     /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -52,12 +61,7 @@ impl AeadAlgorithm {
 /// `/kms_aead/algorithm` span field.
 impl Display for AeadAlgorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            AeadAlgorithm::ChaCha20Poly1305 => "chacha20-poly1305",
-            AeadAlgorithm::Aes128Gcm => "aes-128-gcm",
-            AeadAlgorithm::Aes256Gcm => "aes-256-gcm",
-            AeadAlgorithm::Aes256GcmSiv => "aes-256-gcm-siv",
-        })
+        f.write_str(self.as_str())
     }
 }
 

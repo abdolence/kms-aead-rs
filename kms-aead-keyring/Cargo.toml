@@ -116,9 +116,8 @@ ci-bigquery = ["bigquery-export", "dep:bigquery", "kms-aead/gcp-kms-encryption"]
 # The live check of the Tink keyset export: kms-aead's Cloud KMS and AWS KMS providers, with a
 # root store and crypto provider, for the `tink_export` example.
 ci-tink = ["admin", "kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"]
-# Counters of the values and plaintext bytes each key version seals and opens, and histograms of
-# the time a call, a store load and a KMS call take, on the OpenTelemetry API: the application
-# installs the SDK and an exporter.
+# kms-aead's OpenTelemetry metrics, with the keyring's calls and store reads recorded into them per
+# keyring and key version.
 opentelemetry = ["dep:opentelemetry", "kms-aead/opentelemetry"]
 # The live test of the Firestore store's one listen stream, with hundreds of keyrings on it, run by
 # hand against Firestore rather than in CI.

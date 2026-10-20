@@ -117,7 +117,12 @@ pub(crate) mod kms {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         );
         #[cfg(feature = "opentelemetry")]
-        crate::metrics::record_kms_call(operation, provider, elapsed, response.is_err());
+        crate::metrics::instruments::record_kms_call(
+            operation,
+            provider,
+            elapsed,
+            response.is_err(),
+        );
         response
     }
 }

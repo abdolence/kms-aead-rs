@@ -82,12 +82,14 @@ where
     ) -> KeyringResult<Encrypted<T, Randomized>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Randomized, Some(B::NAME));
+        let call = metrics::Call::new(keyring.cache.metrics(), Purpose::Randomized, B::NAME);
         let seal = spans::in_span(span, async {
             let (version, encrypted_dek) =
                 self.record.active_dek(Purpose::Randomized).ok_or_else(|| {
                     KeyringError::no_active_version(keyring.id(), Purpose::Randomized)
                 })?;
             spans::record_sealing_version(version);
+            call.version(version);
             keyring.check_interop(aad.interop, version)?;
             let cipher = keyring.cipher(version)?;
             let (sealed, outcome) = keyring
@@ -98,7 +100,7 @@ where
             spans::record_dek_cache(outcome);
             Ok(sealed?)
         });
-        metrics::encrypt(keyring.cache.metrics(), Purpose::Randomized, seal).await
+        metrics::encrypt(&call, seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active randomised version, with the

@@ -1,12 +1,8 @@
-//! The OpenTelemetry instruments of the keyring, of the `opentelemetry` feature. Dashboards and
-//! alerts depend on their names, units and attributes, so they change only in a breaking release.
+//! The keyring's measurements, of the `opentelemetry` feature, recorded into kms-aead's
+//! instruments with `mode` `keyring` and the keyring's own attributes. A keyring call runs
+//! kms-aead's ciphers and never its envelope, so each call is recorded once, here.
 //!
 //! Without the feature every call here runs the operation it is given and nothing else.
-//!
-//! The instruments come from the global meter provider the first time a keyring call records
-//! one, and stay bound to that provider: an application installs its provider before that call,
-//! or the instruments record nothing for the life of the process. No attribute carries plaintext,
-//! AAD, cipher text or key material, only identifiers, and lengths only as counter increments.
 
 use std::future::Future;
 
@@ -15,7 +11,7 @@ use kms_aead::formats::{Deterministic, Format, Randomized};
 use crate::errors::KeyringResult;
 use crate::spans::LoadReason;
 use crate::store::StoreKind;
-use crate::{Encrypted, KeyId, KeyringId, Purpose};
+use crate::{Encrypted, KeyId, KeyVersion, KeyringId, Purpose};
 
 /// The formats of the values a keyring version seals.
 pub(crate) trait VersionedFormat: Format + Sized {
@@ -59,62 +55,89 @@ impl KeyringAttribute {
     }
 }
 
-/// Runs `seal`, a seal of one value under the active version of `purpose`, and with the feature
-/// records its duration and, when it succeeds, the value and its plaintext bytes under the
-/// version it names.
+/// One keyring call of `purpose`: what its measurements carry. The call names the version it
+/// seals or opens under with [`version`](Self::version) once it has found it.
+#[cfg_attr(not(feature = "opentelemetry"), allow(dead_code))]
+pub(crate) struct Call<'k> {
+    keyring: &'k KeyringAttribute,
+    purpose: Purpose,
+    backend: &'static str,
+    algorithm: std::sync::OnceLock<&'static str>,
+}
+
+impl<'k> Call<'k> {
+    /// A call on the backend named `backend`: the keyring's for a randomised call, and
+    /// `rustcrypto` for a deterministic one, whose AES-SIV runs on RustCrypto whatever the
+    /// keyring's backend.
+    pub(crate) fn new(
+        keyring: &'k KeyringAttribute,
+        purpose: Purpose,
+        backend: &'static str,
+    ) -> Self {
+        Self {
+            keyring,
+            purpose,
+            backend,
+            algorithm: std::sync::OnceLock::new(),
+        }
+    }
+
+    /// Names `version`, the version the call seals or opens under.
+    #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
+    pub(crate) fn version(&self, version: &KeyVersion) {
+        #[cfg(feature = "opentelemetry")]
+        if let Some(name) = instruments::algorithm_name(version.algorithm()) {
+            let _ = self.algorithm.set(name);
+        }
+    }
+}
+
+/// The backend of every deterministic call: AES-SIV runs on RustCrypto whatever the keyring's
+/// backend.
+#[cfg(feature = "deterministic")]
+pub(crate) const DETERMINISTIC_BACKEND: &str = "rustcrypto";
+
+/// Runs `seal`, a seal of one value, and with the feature records its duration and, when it
+/// succeeds, the value and its plaintext bytes under the version it names.
 #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
 pub(crate) async fn encrypt<T, F: VersionedFormat>(
-    keyring: &KeyringAttribute,
-    purpose: Purpose,
+    call: &Call<'_>,
     seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
 ) -> KeyringResult<Encrypted<T, F>> {
     #[cfg(feature = "opentelemetry")]
-    {
-        let started = std::time::Instant::now();
-        let result = seal.await;
-        instruments::record_call(
-            keyring,
-            purpose,
-            "encrypt",
-            started.elapsed(),
-            result.as_ref().err(),
-        );
-        if let Ok(sealed) = &result {
-            instruments::record_value(keyring, purpose, "encrypt", sealed);
-        }
-        result
-    }
-    #[cfg(not(feature = "opentelemetry"))]
-    seal.await
+    let started = std::time::Instant::now();
+    let result = seal.await;
+    #[cfg(feature = "opentelemetry")]
+    instruments::record_call(
+        call,
+        "encrypt",
+        started.elapsed(),
+        result.as_ref().ok(),
+        &result,
+    );
+    result
 }
 
 /// Runs `open`, the opening of `value`, and with the feature records its duration and, when it
 /// succeeds, the value and its plaintext bytes under the version `value` names.
 #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
 pub(crate) async fn decrypt<T, F: VersionedFormat, R>(
-    keyring: &KeyringAttribute,
-    purpose: Purpose,
+    call: &Call<'_>,
     value: &Encrypted<T, F>,
     open: impl Future<Output = KeyringResult<R>>,
 ) -> KeyringResult<R> {
     #[cfg(feature = "opentelemetry")]
-    {
-        let started = std::time::Instant::now();
-        let result = open.await;
-        instruments::record_call(
-            keyring,
-            purpose,
-            "decrypt",
-            started.elapsed(),
-            result.as_ref().err(),
-        );
-        if result.is_ok() {
-            instruments::record_value(keyring, purpose, "decrypt", value);
-        }
-        result
-    }
-    #[cfg(not(feature = "opentelemetry"))]
-    open.await
+    let started = std::time::Instant::now();
+    let result = open.await;
+    #[cfg(feature = "opentelemetry")]
+    instruments::record_call(
+        call,
+        "decrypt",
+        started.elapsed(),
+        result.is_ok().then_some(value),
+        &result,
+    );
+    result
 }
 
 /// Runs `probes`, the deterministic probes of one plaintext, and with the feature records its
@@ -122,24 +145,21 @@ pub(crate) async fn decrypt<T, F: VersionedFormat, R>(
 #[cfg(feature = "deterministic")]
 #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
 pub(crate) async fn probe<R>(
-    keyring: &KeyringAttribute,
+    call: &Call<'_>,
     probes: impl Future<Output = KeyringResult<R>>,
 ) -> KeyringResult<R> {
     #[cfg(feature = "opentelemetry")]
-    {
-        let started = std::time::Instant::now();
-        let result = probes.await;
-        instruments::record_call(
-            keyring,
-            Purpose::Deterministic,
-            "probe",
-            started.elapsed(),
-            result.as_ref().err(),
-        );
-        result
-    }
-    #[cfg(not(feature = "opentelemetry"))]
-    probes.await
+    let started = std::time::Instant::now();
+    let result = probes.await;
+    #[cfg(feature = "opentelemetry")]
+    instruments::record_call::<(), Deterministic, R>(
+        call,
+        "probe",
+        started.elapsed(),
+        None,
+        &result,
+    );
+    result
 }
 
 /// With the feature, records one store read of `keyring` for `reason` that took `elapsed`.
@@ -152,144 +172,89 @@ pub(crate) fn record_store_load<T>(
     result: &KeyringResult<T>,
 ) {
     #[cfg(feature = "opentelemetry")]
-    instruments::record_store_load(keyring, store, reason, elapsed, result.as_ref().err());
+    kms_aead::__instruments::record_store_load(
+        &[
+            instruments::keyring(keyring),
+            opentelemetry::KeyValue::new("store", store.to_string()),
+            opentelemetry::KeyValue::new("reason", reason.as_str()),
+        ],
+        elapsed,
+        result.as_ref().err().map(|error| error.code()),
+    );
 }
 
 #[cfg(feature = "opentelemetry")]
 mod instruments {
-    use std::sync::LazyLock;
     use std::time::Duration;
 
-    use opentelemetry::metrics::{Counter, Histogram};
-    use opentelemetry::{InstrumentationScope, KeyValue};
+    use kms_aead::__instruments::{
+        aead_algorithm_name, deterministic_algorithm_name, record_operation, record_value,
+    };
+    use opentelemetry::KeyValue;
 
-    use super::{KeyringAttribute, VersionedFormat};
-    use crate::spans::LoadReason;
-    use crate::store::StoreKind;
-    use crate::{Encrypted, KeyringError, Purpose};
+    use super::{Call, KeyringAttribute, VersionedFormat};
+    use crate::errors::KeyringResult;
+    use crate::{Encrypted, KeyAlgorithm};
 
-    /// The bucket bounds of a keyring call, in seconds: from the microsecond of a seal with a
-    /// cached key up to the KMS round trip of a cache miss.
-    const CALL_DURATION_BOUNDS: [f64; 19] = [
-        0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025,
-        0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-    ];
+    /// The `mode` of every keyring call, beside the `per_call`, `store_less` and `caller_dek` of
+    /// kms-aead's envelope.
+    const MODE: &str = "keyring";
 
-    /// The bucket bounds of a store read, in seconds: those OpenTelemetry's semantic
-    /// conventions give for HTTP durations.
-    const NETWORK_DURATION_BOUNDS: [f64; 14] = [
-        0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
-    ];
-
-    struct Instruments {
-        values: Counter<u64>,
-        plaintext: Counter<u64>,
-        call_duration: Histogram<f64>,
-        store_duration: Histogram<f64>,
+    pub(super) fn keyring(keyring: &KeyringAttribute) -> KeyValue {
+        KeyValue::new("keyring", keyring.value.clone())
     }
 
-    static INSTRUMENTS: LazyLock<Instruments> = LazyLock::new(|| {
-        let scope = InstrumentationScope::builder(env!("CARGO_PKG_NAME"))
-            .with_version(env!("CARGO_PKG_VERSION"))
-            .build();
-        let meter = opentelemetry::global::meter_with_scope(scope);
-        Instruments {
-            values: meter
-                .u64_counter("kms_aead_keyring.values")
-                .with_unit("{value}")
-                .with_description("The values sealed or opened under a key version")
-                .build(),
-            plaintext: meter
-                .u64_counter("kms_aead_keyring.plaintext")
-                .with_unit("By")
-                .with_description("The plaintext bytes sealed or opened under a key version")
-                .build(),
-            call_duration: meter
-                .f64_histogram("kms_aead_keyring.operation.duration")
-                .with_unit("s")
-                .with_description("The time a keyring encrypt, decrypt or probe call took")
-                .with_boundaries(CALL_DURATION_BOUNDS.to_vec())
-                .build(),
-            store_duration: meter
-                .f64_histogram("kms_aead_keyring.store.duration")
-                .with_unit("s")
-                .with_description("The time a read of a keyring record from its store took")
-                .with_boundaries(NETWORK_DURATION_BOUNDS.to_vec())
-                .build(),
-        }
-    });
-
-    impl KeyringAttribute {
-        fn key_value(&self) -> KeyValue {
-            KeyValue::new("keyring", self.value.clone())
+    pub(super) fn algorithm_name(algorithm: KeyAlgorithm) -> Option<&'static str> {
+        match algorithm {
+            KeyAlgorithm::Randomized(algorithm) => Some(aead_algorithm_name(algorithm)),
+            KeyAlgorithm::Deterministic(algorithm) => Some(deterministic_algorithm_name(algorithm)),
+            KeyAlgorithm::Beacon(_) => None,
         }
     }
 
-    pub(super) fn record_value<T, F: VersionedFormat>(
-        keyring: &KeyringAttribute,
-        purpose: Purpose,
+    /// Records the duration of `call`'s `operation`, and `counted`, the value it sealed or
+    /// opened, when there is one.
+    pub(super) fn record_call<T, F: VersionedFormat, R>(
+        call: &Call<'_>,
         operation: &'static str,
-        value: &Encrypted<T, F>,
+        elapsed: Duration,
+        counted: Option<&Encrypted<T, F>>,
+        result: &KeyringResult<R>,
     ) {
-        let (key_id, plaintext_len) = F::version_and_plaintext_len(value);
+        let algorithm = call.algorithm.get().copied();
         let attributes = [
-            keyring.key_value(),
-            KeyValue::new("purpose", purpose.as_str()),
-            KeyValue::new("key_id", i64::from(key_id.as_u32())),
             KeyValue::new("operation", operation),
+            KeyValue::new("mode", MODE),
+            KeyValue::new("backend", call.backend),
+            keyring(call.keyring),
+            KeyValue::new("purpose", call.purpose.as_str()),
+            KeyValue::new("algorithm", algorithm.unwrap_or_default()),
         ];
-        let instruments = &*INSTRUMENTS;
-        instruments.values.add(1, &attributes);
-        instruments.plaintext.add(
-            u64::try_from(plaintext_len).unwrap_or(u64::MAX),
-            &attributes,
+        // A call that failed before it found its version has no algorithm.
+        let known = match algorithm {
+            Some(_) => &attributes[..],
+            None => &attributes[..attributes.len() - 1],
+        };
+        record_operation(
+            known,
+            elapsed,
+            result.as_ref().err().map(|error| error.code()),
         );
-    }
-
-    pub(super) fn record_call(
-        keyring: &KeyringAttribute,
-        purpose: Purpose,
-        operation: &'static str,
-        elapsed: Duration,
-        error: Option<&KeyringError>,
-    ) {
-        let attributes = [
-            keyring.key_value(),
-            KeyValue::new("purpose", purpose.as_str()),
-            KeyValue::new("operation", operation),
-        ];
-        record_duration(&INSTRUMENTS.call_duration, attributes, elapsed, error);
-    }
-
-    pub(super) fn record_store_load(
-        keyring: &KeyringAttribute,
-        store: StoreKind,
-        reason: LoadReason,
-        elapsed: Duration,
-        error: Option<&KeyringError>,
-    ) {
-        let attributes = [
-            keyring.key_value(),
-            KeyValue::new("store", store.to_string()),
-            KeyValue::new("reason", reason.as_str()),
-        ];
-        record_duration(&INSTRUMENTS.store_duration, attributes, elapsed, error);
-    }
-
-    /// Records `elapsed` with `attributes`, and with the code of `error` when the call failed.
-    fn record_duration(
-        histogram: &Histogram<f64>,
-        attributes: [KeyValue; 3],
-        elapsed: Duration,
-        error: Option<&KeyringError>,
-    ) {
-        match error {
-            None => histogram.record(elapsed.as_secs_f64(), &attributes),
-            Some(error) => {
-                let mut attributes = attributes.to_vec();
-                attributes.push(KeyValue::new("error_code", error.code().to_owned()));
-                histogram.record(elapsed.as_secs_f64(), &attributes);
-            }
+        if let Some(value) = counted {
+            let (key_id, plaintext_len) = F::version_and_plaintext_len(value);
+            let [operation, mode, backend, keyring, purpose, algorithm] = attributes;
+            record_value(
+                &[
+                    operation,
+                    mode,
+                    backend,
+                    keyring,
+                    purpose,
+                    algorithm,
+                    KeyValue::new("key_id", i64::from(key_id.as_u32())),
+                ],
+                plaintext_len,
+            );
         }
     }
 }

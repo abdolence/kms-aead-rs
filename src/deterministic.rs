@@ -24,6 +24,12 @@ impl DeterministicAlgorithm {
     /// Every algorithm writes this synthetic IV before the cipher text.
     pub(crate) const SYNTHETIC_IV_LEN: usize = 16;
 
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
+        }
+    }
+
     /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -35,9 +41,7 @@ impl DeterministicAlgorithm {
 /// `aes-256-siv`: the value of the `/kms_aead/algorithm` span field.
 impl Display for DeterministicAlgorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
-        })
+        f.write_str(self.as_str())
     }
 }
 

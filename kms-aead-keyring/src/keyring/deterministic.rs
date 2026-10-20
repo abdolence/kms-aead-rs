@@ -55,6 +55,11 @@ where
     ) -> KeyringResult<Encrypted<T, Deterministic>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Deterministic, None);
+        let call = metrics::Call::new(
+            keyring.cache.metrics(),
+            Purpose::Deterministic,
+            metrics::DETERMINISTIC_BACKEND,
+        );
         let seal = spans::in_span(span, async {
             let (version, encrypted_dek) = self
                 .record
@@ -63,6 +68,7 @@ where
                     KeyringError::no_active_version(keyring.id(), Purpose::Deterministic)
                 })?;
             spans::record_sealing_version(version);
+            call.version(version);
             keyring.check_interop(aad.interop, version)?;
             let (sealed, outcome) = keyring
                 .seal_cached(&self.record, version, encrypted_dek, aad, value)
@@ -70,7 +76,7 @@ where
             spans::record_dek_cache(outcome);
             Ok(sealed)
         });
-        metrics::encrypt(keyring.cache.metrics(), Purpose::Deterministic, seal).await
+        metrics::encrypt(&call, seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active deterministic version, with the
@@ -127,12 +133,18 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<T> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
+        let call = metrics::Call::new(
+            self.cache.metrics(),
+            Purpose::Deterministic,
+            metrics::DETERMINISTIC_BACKEND,
+        );
         let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                call.version(version);
                 self.apply_read_policy(version, compromise)?;
                 let cipher = self.deterministic_cipher(version)?;
                 let (opened, outcome) = self
@@ -144,7 +156,7 @@ where
                 Ok(opened?)
             },
         );
-        metrics::decrypt(self.cache.metrics(), Purpose::Deterministic, value, open).await
+        metrics::decrypt(&call, value, open).await
     }
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
@@ -163,12 +175,18 @@ where
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Decrypted<T>> {
         let key_id = Purpose::Deterministic.check(value.key_id())?;
+        let call = metrics::Call::new(
+            self.cache.metrics(),
+            Purpose::Deterministic,
+            metrics::DETERMINISTIC_BACKEND,
+        );
         let open = spans::in_span(
             spans::decrypt(self.id(), Purpose::Deterministic, key_id),
             async {
                 let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
                 spans::record_reload(reload);
                 let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                call.version(version);
                 let cipher = self.deterministic_cipher(version)?;
                 let open = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
                 let (opened, trust) = match compromise {
@@ -191,7 +209,7 @@ where
                 })
             },
         );
-        metrics::decrypt(self.cache.metrics(), Purpose::Deterministic, value, open).await
+        metrics::decrypt(&call, value, open).await
     }
 
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
@@ -251,7 +269,12 @@ where
             }
             Ok(probes)
         });
-        metrics::probe(self.cache.metrics(), probes).await
+        let call = metrics::Call::new(
+            self.cache.metrics(),
+            Purpose::Deterministic,
+            metrics::DETERMINISTIC_BACKEND,
+        );
+        metrics::probe(&call, probes).await
     }
 
     fn deterministic_cipher(&self, version: &KeyVersion) -> KeyringResult<DeterministicCipher<B>> {
