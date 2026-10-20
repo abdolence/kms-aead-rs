@@ -227,7 +227,7 @@ use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, KeyId};
 # }
 
 # fn main() -> KmsAeadResult<()> {
-let mac = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256);
+let mac = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)?;
 let beacon_key = mac.generate_dek()?;
 
 let email = Email("alice@example.com".to_string());

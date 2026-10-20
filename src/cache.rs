@@ -651,7 +651,7 @@ mod tests {
         let (_, encrypted_dek) = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
             .generate_encrypted_dek(&provider)
             .await?;
-        let read_back = EncryptedDataEncryptionKey::from(encrypted_dek.value().clone());
+        let read_back = EncryptedDataEncryptionKey::from(encrypted_dek.value().to_vec());
         assert_ne!(encrypted_dek.kek_version(), read_back.kek_version());
 
         let ((), fresh) = cache.with_dek(&provider, &encrypted_dek, |_| ()).await?;

@@ -44,7 +44,7 @@ impl Plaintext for Email {
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
 // Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, encrypted_dek) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
+let (_, encrypted_dek) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)?
     .generate_encrypted_dek(envelope.provider())
     .await?;
 

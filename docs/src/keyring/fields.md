@@ -87,7 +87,7 @@ let stored: Vec<u8> = serde_json::to_vec(&user)?;
 let read: User = serde_json::from_slice(&stored)?;
 let email: Email = keyring.decrypt(&EMAIL.aad(&id), &read.email).await?;
 assert_eq!(email, alice);
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -279,7 +279,7 @@ assert!(matches!(
     bigquery_email.custom_aad(b"signup/4711"),
     Err(KeyringError::CustomAadUnsupported(Interop::BigQuery))
 ));
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

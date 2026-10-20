@@ -217,7 +217,7 @@ async fn beacons_new_deks_and_reencryptions_are_timed() -> TestResult {
         .await?;
     envelope.reencrypt_dek(&value).await?;
     envelope.reencrypt_encrypted_dek(&encrypted_dek).await?;
-    let (_, beacon_key) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)
+    let (_, beacon_key) = BeaconMac::<Ring>::new(BeaconAlgorithm::HmacSha256)?
         .generate_encrypted_dek(envelope.provider())
         .await?;
     envelope
@@ -293,7 +293,7 @@ async fn a_new_deterministic_dek_and_its_decryption_are_timed() -> TestResult {
 async fn a_kms_call_is_timed_by_provider_and_operation_with_its_error_type() -> TestResult {
     let envelope = envelope(KmsAeadEnvelopeOptions::new())?;
     let (_, encrypted_dek) = envelope.generate_encrypted_dek().await?;
-    let mut tampered = encrypted_dek.value().clone();
+    let mut tampered = encrypted_dek.value().to_vec();
     if let Some(last) = tampered.last_mut() {
         *last ^= 1;
     }

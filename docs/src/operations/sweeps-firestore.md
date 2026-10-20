@@ -298,7 +298,7 @@ let writer: FirestoreSimpleBatchWriter = db
 #     .await?;
 let report: SweepReport = sweep_users(&keyring, &writer).await?;
 println!("{report:?}");
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

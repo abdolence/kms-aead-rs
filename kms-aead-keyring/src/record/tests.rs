@@ -655,7 +655,7 @@ fn state_and_algorithm_names_parse_back() -> TestResult {
     }
     assert!(matches!(
         "compromised".parse::<KeyVersionState>(),
-        Err(KeyringError::UnknownKeyVersionState)
+        Err(KeyringError::UnknownKeyVersionState(name)) if name == "compromised"
     ));
     assert!(matches!(
         "aes-128-siv".parse::<KeyAlgorithm>(),

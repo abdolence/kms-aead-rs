@@ -93,7 +93,7 @@ pub enum KeyringError {
     PromotionTooEarly(PromotionTooEarlyError),
     /// A key id that a value or beacon carries, or that an operation names, is reserved: its
     /// ordinal is zero, or it sets both purpose bits, so no version has it.
-    ReservedKeyId,
+    ReservedKeyId(KeyId),
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
     /// An [`Interop`] requirement that sealing a field or exporting a keyset would break,
@@ -107,10 +107,11 @@ pub enum KeyringError {
     /// read: for BigQuery neither AES-256-GCM nor AES-SIV, for Tink ChaCha20-Poly1305 or a
     /// beacon's.
     ExportAlgorithmUnsupported(KeyVersionError),
-    /// A name that is not one a [`KeyVersionState`] displays as.
-    UnknownKeyVersionState,
+    /// A name that is not one a [`KeyVersionState`] displays as, which it holds.
+    UnknownKeyVersionState(String),
     /// Stored bytes that are not a [`SealMarker`](crate::sweep::SealMarker): not 5 bytes long,
-    /// or not starting with the marker version `0x01`.
+    /// or not starting with the marker version `0x01`. The bytes are left out: they come from a
+    /// column of the application's, which may hold a plaintext.
     InvalidSealMarker,
 }
 
@@ -140,12 +141,12 @@ impl KeyringError {
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::PromotionTooEarly(_) => "PROMOTION_TOO_EARLY",
-            KeyringError::ReservedKeyId => "RESERVED_KEY_ID",
+            KeyringError::ReservedKeyId(_) => "RESERVED_KEY_ID",
             KeyringError::DeterministicDisabled => "DETERMINISTIC_DISABLED",
             KeyringError::Interop(_) => "INTEROP",
             KeyringError::CustomAadUnsupported(_) => "CUSTOM_AAD_UNSUPPORTED",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
-            KeyringError::UnknownKeyVersionState => "UNKNOWN_KEY_VERSION_STATE",
+            KeyringError::UnknownKeyVersionState(_) => "UNKNOWN_KEY_VERSION_STATE",
             KeyringError::InvalidSealMarker => "INVALID_SEAL_MARKER",
         }
     }
@@ -367,7 +368,7 @@ impl Display for KeyringError {
                 error.keyring,
                 error.remaining.as_millis()
             ),
-            KeyringError::ReservedKeyId => f.write_str("The key id is reserved"),
+            KeyringError::ReservedKeyId(key_id) => write!(f, "The key id {} is reserved", key_id.as_u32()),
             KeyringError::DeterministicDisabled => {
                 f.write_str("Creating a deterministic key version needs the deterministic feature")
             }
@@ -385,9 +386,10 @@ impl Display for KeyringError {
                 "The key version {} of the keyring {} has an algorithm the keyset's reader does not read",
                 error.key_id.as_u32(), error.keyring
             ),
-            KeyringError::UnknownKeyVersionState => f.write_str(
-                "Not the name of a key version state: the names are pending, active, \
-                 decrypt_only, retired and destroyed",
+            KeyringError::UnknownKeyVersionState(name) => write!(
+                f,
+                "{name:?} is not the name of a key version state: the names are pending, active, \
+                 decrypt_only, retired and destroyed"
             ),
             KeyringError::InvalidSealMarker => f.write_str(
                 "Not a seal marker: a marker is the version byte 1 and a 4-byte seal epoch",
@@ -454,6 +456,8 @@ pub enum Identifier {
     GcsBucketName,
     /// The bucket name of the S3 store.
     S3BucketName,
+    /// The object prefix of the GCS and S3 stores.
+    ObjectPrefix,
 }
 
 impl Display for Identifier {
@@ -466,6 +470,7 @@ impl Display for Identifier {
             Identifier::PostgresTable => "PostgreSQL table name",
             Identifier::GcsBucketName => "GCS bucket name",
             Identifier::S3BucketName => "S3 bucket name",
+            Identifier::ObjectPrefix => "object prefix",
         })
     }
 }

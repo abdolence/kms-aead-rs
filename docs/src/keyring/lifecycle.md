@@ -180,7 +180,7 @@ assert!(matches!(
 let rotation: Rotation = admin.promote_now(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```

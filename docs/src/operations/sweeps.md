@@ -341,7 +341,7 @@ let report: SweepReport = sweep::run(
 .await;
 println!("{report:?}");
 # assert_eq!(report.resealed, 2);
-# registry.shutdown().await?;
+# registry.shutdown(None).await;
 # Ok(())
 # }
 ```

@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     admin.promote_now(staged).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
 
-    registry.shutdown().await?;
+    registry.shutdown(None).await;
     Ok(())
 }
 ```

@@ -158,10 +158,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let outcome = run(&registry, &reader, &client, count).await;
-    let shutdown = registry.shutdown().await;
+    registry.shutdown(None).await;
     let cleanup = delete_test_data(&client).await;
     outcome?;
-    shutdown?;
     cleanup?;
     Ok(())
 }

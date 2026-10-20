@@ -198,7 +198,8 @@ where
         &self.inner.dek_cache
     }
 
-    /// Stops the follow task of every open keyring and the store's listener, and waits for both.
+    /// Stops the follow task of every open keyring and the store's listener, and waits for both,
+    /// as [`KeyringStore::shutdown`] does with its own work.
     ///
     /// - A revalidation read in flight finishes and is taken; waits, retry delays and connection
     ///   attempts stop at once.
@@ -208,19 +209,9 @@ where
     /// - A registry that never watched, or that was shut down already, returns at once.
     /// - A cancelled call leaves the tasks it did not join to the next call.
     ///
-    /// Await it before the registry is dropped.
-    ///
-    /// # Errors
-    ///
-    /// None: the result is always `Ok`, whatever the tasks did.
-    pub async fn shutdown(&self) -> KeyringResult<()> {
-        self.inner.shutdown_with(None).await;
-        Ok(())
-    }
-
-    /// Shuts down as [`shutdown`](Self::shutdown) does, and aborts what still runs after
-    /// `timeout`, at once for a zero timeout, with a `WARN` that counts the aborted follow
-    /// tasks. An abort can interrupt:
+    /// `None` waits for the tasks to finish. With a `timeout`, what still runs after it is
+    /// aborted, at once for a zero timeout, with a `WARN` that counts the aborted follow tasks.
+    /// An abort can interrupt:
     ///
     /// - a revalidation read in flight, which is then dropped before anything is taken, so the
     ///   cached record stays;
@@ -229,12 +220,9 @@ where
     ///
     /// Neither leaves a half-written state.
     ///
-    /// # Errors
-    ///
-    /// None: the result is always `Ok`, also after an abort.
-    pub async fn shutdown_with_timeout(&self, timeout: Duration) -> KeyringResult<()> {
-        self.inner.shutdown_with(Some(timeout)).await;
-        Ok(())
+    /// Await it before the registry is dropped.
+    pub async fn shutdown(&self, timeout: Option<Duration>) {
+        self.inner.shutdown(timeout).await;
     }
 }
 
@@ -431,7 +419,7 @@ impl<S: KeyringStore> RegistryInner<S> {
     /// Stops the follow tasks, then the store, so that no follow task sees its watch end during
     /// an orderly shutdown, and evicts the open keyrings' keys. Work still running at the end of
     /// `timeout` is aborted.
-    async fn shutdown_with(&self, timeout: Option<Duration>) {
+    async fn shutdown(&self, timeout: Option<Duration>) {
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         self.stop.send_replace(true);
         self.follow_tasks.join(deadline).await;
@@ -596,7 +584,7 @@ mod tests {
         );
         let staged = admin.rotate(Purpose::Randomized).await?;
         assert!(keyring.record().version(staged).is_some());
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
         Ok(())
     }
 
@@ -615,7 +603,7 @@ mod tests {
             ),
             (1, 1)
         );
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
         Ok(())
     }
 
@@ -720,7 +708,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1)).await;
         let staged = fixture.admin.rotate(Purpose::Randomized).await?;
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
         assert!(keyring.record().version(staged).is_some());
@@ -740,7 +728,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1)).await;
         let started = Instant::now();
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         assert_eq!(started.elapsed(), Duration::ZERO);
         assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 1);
@@ -760,8 +748,8 @@ mod tests {
 
         fixture
             .registry
-            .shutdown_with_timeout(Duration::from_secs(1))
-            .await?;
+            .shutdown(Some(Duration::from_secs(1)))
+            .await;
 
         assert_eq!(started.elapsed(), Duration::from_secs(1));
         assert!(keyring.record().version(staged).is_none());
@@ -779,10 +767,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1)).await;
         let started = Instant::now();
 
-        fixture
-            .registry
-            .shutdown_with_timeout(Duration::ZERO)
-            .await?;
+        fixture.registry.shutdown(Some(Duration::ZERO)).await;
 
         assert_eq!(started.elapsed(), Duration::ZERO);
         assert!(fixture
@@ -804,7 +789,7 @@ mod tests {
             .registry
             .open(fixture.provider.clone(), TENANT)
             .await?;
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
         let calls = &fixture.store.calls;
         let before = (
             calls.loads.load(Ordering::SeqCst),
@@ -812,7 +797,7 @@ mod tests {
         );
         let started = Instant::now();
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         assert_eq!(started.elapsed(), Duration::ZERO);
         assert_eq!(
@@ -838,7 +823,7 @@ mod tests {
             .await?;
         let started = Instant::now();
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         assert_eq!(started.elapsed(), Duration::ZERO);
         assert_eq!(fixture.store.calls.watches.load(Ordering::SeqCst), 0);
@@ -856,10 +841,10 @@ mod tests {
         let staged = fixture.admin.rotate(Purpose::Randomized).await?;
 
         let cancelled =
-            tokio::time::timeout(Duration::from_secs(1), fixture.registry.shutdown()).await;
+            tokio::time::timeout(Duration::from_secs(1), fixture.registry.shutdown(None)).await;
         assert!(cancelled.is_err());
         assert!(fixture.registry.inner.follow_tasks.owns_background_work());
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         assert!(keyring.record().version(staged).is_some());
         assert!(!fixture.registry.inner.follow_tasks.owns_background_work());
@@ -899,7 +884,7 @@ mod tests {
         let decryptions = &fixture.provider.calls.decryptions;
         let before = decryptions.load(Ordering::SeqCst);
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         other.keyring().decrypt(&aad, &other_value).await?;
         assert_eq!(decryptions.load(Ordering::SeqCst), before);
@@ -935,7 +920,7 @@ mod tests {
 
         assert_eq!(value.key_id(), KeyId::new(2));
         assert_eq!(fixture.store.calls.revalidations.load(Ordering::SeqCst), 2);
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
         Ok(())
     }
 
@@ -953,7 +938,7 @@ mod tests {
             .encrypt(&aad, &ALICE.to_string())
             .await?;
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
 
         let after = keyring
             .sealer()
@@ -975,7 +960,7 @@ mod tests {
             .await?;
         assert!(fixture.registry.inner.follow_tasks.owns_background_work());
 
-        fixture.registry.shutdown().await?;
+        fixture.registry.shutdown(None).await;
         assert!(!fixture.registry.inner.follow_tasks.owns_background_work());
         fixture
             .registry

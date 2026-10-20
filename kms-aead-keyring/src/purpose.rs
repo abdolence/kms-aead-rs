@@ -109,7 +109,7 @@ pub(crate) fn is_reserved(key_id: KeyId) -> bool {
 /// [`KeyringError::ReservedKeyId`] when it is.
 pub(crate) fn unreserved(key_id: KeyId) -> KeyringResult<KeyId> {
     if is_reserved(key_id) {
-        return Err(KeyringError::ReservedKeyId);
+        return Err(KeyringError::ReservedKeyId(key_id));
     }
     Ok(key_id)
 }
@@ -131,7 +131,7 @@ mod tests {
         for id in [0, 1 << 31, 1 << 30, (3 << 30) | 1] {
             assert!(matches!(
                 unreserved(KeyId::new(id)),
-                Err(KeyringError::ReservedKeyId)
+                Err(KeyringError::ReservedKeyId(refused)) if refused == KeyId::new(id)
             ));
         }
     }

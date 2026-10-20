@@ -347,13 +347,13 @@ mod tests {
             let encrypted_dek = stored.encrypted_dek(&KekProvider::Gcp)?;
 
             assert_eq!(stored.bare, SEALED, "{header}");
-            assert_eq!(*encrypted_dek.value(), ENCRYPTED_DEK, "{header}");
+            assert_eq!(encrypted_dek.value(), ENCRYPTED_DEK, "{header}");
         }
         let encrypted_dek = encrypted_dek_from_layout_v1(
             &hex::decode(ENCRYPTED_DEK_V1).unwrap()[2..],
             &KekProvider::Gcp,
         )?;
-        assert_eq!(*encrypted_dek.value(), ENCRYPTED_DEK);
+        assert_eq!(encrypted_dek.value(), ENCRYPTED_DEK);
         Ok(())
     }
 

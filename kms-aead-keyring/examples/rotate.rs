@@ -243,6 +243,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             row.email.key_id().as_u32()
         );
     }
-    registry.shutdown().await?;
+    registry.shutdown(None).await;
     Ok(())
 }

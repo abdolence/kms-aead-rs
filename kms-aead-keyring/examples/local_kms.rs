@@ -76,6 +76,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let Email(email) = keyring.decrypt(&aad, &value).await?;
         println!("value under {}: {email}", value.key_id().as_u32());
     }
-    registry.shutdown().await?;
+    registry.shutdown(None).await;
     Ok(())
 }

@@ -111,7 +111,7 @@ assert!(matches!(
         ..
     }))
 ));
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -175,7 +175,7 @@ let keyset: EncryptedKeyset<encodings::BigQuery> = admin
 let kms_key: &str = keyset.key_uri();
 let keyset_bytes: &[u8] = keyset.value();
 # let _ = (kms_key, keyset_bytes);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -331,7 +331,7 @@ let keyset: EncryptedKeyset<encodings::Tink> = admin
     .await?;
 std::fs::write("tenant-42.keyset", keyset.value())?;
 println!("{}", keyset.key_uri());
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```

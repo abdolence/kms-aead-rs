@@ -46,8 +46,8 @@ The crate declares `rust-version = "1.99"`.
 | `KmsAeadRingEnvelopeEncryptionOptions` | `KmsAeadEnvelopeOptions` |
 | `KmsAeadRingEncryptionProvider` | `KmsAeadEncryptionProvider`, see [Your own provider](#your-own-provider) |
 | module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>`, with `AeadCipher` at the crate root and `Ring` in `kms_aead::backends` |
-| `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)` |
-| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)` |
+| `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?` |
+| `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?` |
 | `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG, and the random nonce was the only option |
 | `RingAeadEncryptionOptions`, `RingAeadEncryptionNonceKind` | removed |
 | `RingAeadEncryption.algo` | `AeadCipher::algorithm()` |
@@ -59,11 +59,12 @@ The crate declares `rust-version = "1.99"`.
 | `cipher_text.to_hex_string()` | `value.to_hex_string()`, read back with `Encrypted::try_from_hex_string` |
 | `cipher_text == other` | `value.value() == other.value()` |
 | `EncryptedDataEncryptionKey::new(encrypted, key_version)` | `EncryptedDataEncryptionKey::new(bytes)`: the provider's bytes, which carry the key version where the KMS needs one; a provider adds the KEK version the KMS reported with `with_kek_version` |
-| `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()` and `EncryptedDataEncryptionKey::from(bytes)` |
+| `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()`, a `&[u8]`, and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
 | `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
 | `AzureKmsKeyRef::with_key_version` | `AzureKmsKeyRef::with_kek_version` |
+| `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
 | `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
@@ -76,6 +77,10 @@ HashiCorp Vault Transit types have the `Hc` prefix:
 | `VaultTransitKeyRef` | `HcVaultTransitKeyRef` |
 | `VaultTransitToken` | `HcVaultTransitToken` |
 | `examples/vault_transit_kms.rs` | `examples/hc_vault_transit_kms.rs` |
+
+`GcpKmsProviderOptions`, `AwsKmsProviderOptions` and `AzureKmsProviderOptions` are
+`#[non_exhaustive]`, so a struct literal of one fails to compile. Build them with `new()` and the
+`with_*` setters.
 
 ## Traits replaced by inherent methods
 
@@ -121,6 +126,10 @@ The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 `KmsAeadError` is `#[non_exhaustive]`, so an exhaustive `match` on it needs a `_` arm. It has two
 new variants, `UnsupportedAlgorithm` and `LegacyFormat`. `code()` returns the code of any variant,
 and `source()` returns the root cause.
+
+`KmsAeadSystemError`, `KmsAeadNetworkError` and `KmsAeadEncryptionError` are `#[non_exhaustive]`
+too, so a struct literal of one fails to compile, and a pattern on one needs `..`. Build them with
+`create(code, message)`, or with `new(public, message)` and, where it has one, `with_root_cause`.
 
 The `From` conversions of SDK errors into `KmsAeadError` are gone: `gcloud_sdk::error::Error`,
 `gcloud_sdk::tonic::Status`, the AWS `SdkError`, the hyper client error, `azure_core::Error` and

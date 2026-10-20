@@ -57,7 +57,7 @@ impl NewVersion {
             #[cfg(not(feature = "deterministic"))]
             KeyAlgorithm::Deterministic(_) => return Err(KeyringError::DeterministicDisabled),
             KeyAlgorithm::Beacon(algorithm) => {
-                let (_, encrypted_dek) = BeaconMac::<B>::new(algorithm)
+                let (_, encrypted_dek) = BeaconMac::<B>::new(algorithm)?
                     .generate_encrypted_dek(provider)
                     .await?;
                 encrypted_dek

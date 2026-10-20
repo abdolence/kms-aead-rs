@@ -57,7 +57,7 @@ let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
 let keyring: Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring> = registry
     .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
     .await?;
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
@@ -83,7 +83,7 @@ in the DEK cache, see [Record cache](./keyring/record-cache.md).
 
 A keyring stays open until the registry shuts down. Where the store has push, the registry follows
 the change signals of each open keyring with a task on the current tokio runtime.
-`registry.shutdown()` stops those tasks and the store's listener and waits for them:
+`registry.shutdown(None)` stops those tasks and the store's listener and waits for them:
 
 - a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
   stop at once;
@@ -92,8 +92,7 @@ the change signals of each open keyring with a task on the current tokio runtime
   and later opens work too, with no watch.
 
 Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
-aborts them and logs a `WARN`. `shutdown_with_timeout(timeout)` aborts what still runs after
-`timeout`, with a `WARN` that counts the aborted tasks, and an abort leaves no half-written state.
-Both return `Ok` whatever the tasks did.
+aborts them and logs a `WARN`. `shutdown(Some(timeout))` aborts what still runs after `timeout`,
+with a `WARN` that counts the aborted tasks, and an abort leaves no half-written state.
 
 The bytes of values, key ids and records are in [Formats](./formats.md).

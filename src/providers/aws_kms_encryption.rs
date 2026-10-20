@@ -145,7 +145,7 @@ impl AwsKmsProvider {
         self.client
             .decrypt()
             .key_id(self.kek.key())
-            .ciphertext_blob(Blob::new(encrypted_dek.value().as_slice()))
+            .ciphertext_blob(Blob::new(encrypted_dek.value()))
     }
 }
 

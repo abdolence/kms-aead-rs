@@ -479,6 +479,7 @@ where
 
 /// What [`KeyringAdmin::reencrypt_deks`] did to the encrypted DEK of one version.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct DekReencryption {
     /// The version whose DEK was encrypted again.
     pub key_id: KeyId,
@@ -490,6 +491,7 @@ pub struct DekReencryption {
 
 /// What a promotion, or the replacement of a compromised active version, did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Rotation {
     /// The purpose rotated.
     pub purpose: Purpose,

@@ -135,7 +135,7 @@ where
 
     fn beacon_mac(&self, version: &KeyVersion) -> KeyringResult<BeaconMac<B>> {
         match version.algorithm() {
-            KeyAlgorithm::Beacon(algorithm) => Ok(BeaconMac::new(algorithm)),
+            KeyAlgorithm::Beacon(algorithm) => Ok(BeaconMac::new(algorithm)?),
             KeyAlgorithm::Randomized(_) | KeyAlgorithm::Deterministic(_) => {
                 Err(KeyringError::record_invalid(
                     self.id(),
@@ -205,7 +205,7 @@ mod tests {
             .version(first)
             .and_then(KeyVersion::encrypted_dek)
             .ok_or("the first beacon version holds no key")?;
-        let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256);
+        let mac = BeaconMac::<TestBackend>::new(BeaconAlgorithm::HmacSha256)?;
         let (expected, _) = DekCache::disabled()
             .with_dek(&provider, encrypted_dek, |dek| {
                 mac.beacon(first, b"user/email", BeaconBits::DEFAULT, &alice, dek)

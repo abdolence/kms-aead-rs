@@ -297,6 +297,7 @@ pub enum ResealOutcome {
 /// The counts of a sweep. Every candidate is counted once in `scanned` and once in `resealed`,
 /// `skipped` or `failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct SweepReport {
     /// The candidates visited, those the stream returned as an error included.
     pub scanned: u64,

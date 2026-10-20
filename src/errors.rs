@@ -276,6 +276,7 @@ pub struct KmsAeadErrorPublicGenericDetails {
 
 /// See [`KmsAeadError::SystemError`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadSystemError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
@@ -316,6 +317,7 @@ impl std::error::Error for KmsAeadSystemError {
 
 /// See [`KmsAeadError::NetworkError`].
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadNetworkError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,
@@ -359,6 +361,7 @@ impl std::error::Error for KmsAeadNetworkError {}
 
 /// See [`KmsAeadError::EncryptionError`].
 #[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
 pub struct KmsAeadEncryptionError {
     /// The error code.
     pub public: KmsAeadErrorPublicGenericDetails,

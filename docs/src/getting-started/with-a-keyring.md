@@ -74,7 +74,7 @@ assert_eq!(value.key_id(), KeyId::new(1));
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&aad, &value).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 # Ok(())
 # }
 ```
