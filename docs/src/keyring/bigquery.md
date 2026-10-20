@@ -361,3 +361,8 @@ def decrypt_email(value: bytes, user_id: str) -> str:
 The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of [Fields Tink reads](#fields-tink-reads): a selected ChaCha20-Poly1305 or
 beacon version fails with `ExportAlgorithmUnsupported`, before any KMS call.
+
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs):
+it exports a keyset for each Cloud KMS or AWS KMS key whose variables are set, and Tink for Python
+opens a value sealed before the rotation with it, through `tests/tink_interop.py read-keysets`.

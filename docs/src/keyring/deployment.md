@@ -90,3 +90,9 @@ writes the record, and the applications read it and listen to its changes, see a
 | PostgreSQL | `SELECT` on the table, and `LISTEN`, which needs no grant | `SELECT`, `INSERT` and `UPDATE` on the table; each write also sends the `NOTIFY` |
 | Cloud Storage | `storage.objects.get` | `storage.objects.get`, `storage.objects.create`, and `storage.objects.delete`, since a write replaces the object |
 | S3 | `s3:GetObject` | `s3:GetObject` and `s3:PutObject` |
+
+## What to alert on
+
+Each side logs events an operator acts on, such as a refused record, a failed revalidation or a
+re-seal that failed, and records metrics with the `opentelemetry` feature. The list, with the
+next step for each, is in [What to alert on](../use-cases/deployment.md#what-to-alert-on).

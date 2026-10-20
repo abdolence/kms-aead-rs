@@ -109,4 +109,5 @@ for a request that got no complete response, and `VAULT_RESPONSE`, `VAULT_RESPON
 `VAULT_CIPHERTEXT` for a response or an encrypted DEK that cannot be read. Which codes are a
 `NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries). Invalid options
 fail at creation with `VAULT_INVALID_OPTIONS`, or `VAULT_TLS` when the TLS configuration cannot be
-built.
+built. A request body that cannot be serialised fails with `VAULT_REQUEST`, a `SystemError`,
+before any request is sent.

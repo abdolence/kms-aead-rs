@@ -151,8 +151,9 @@ async fn email_of(
 ```
 
 A column holding a value that is no keyring value fails in the decode, before any decryption.
-kms-aead's `sqlx` feature binds `Encrypted` in sqlx the same way, see
-[Stored values](../stored-values.md#storing).
+The keyring's `sqlx` feature binds `Encrypted` and `SealMarker` in sqlx the same way, as `BYTEA`
+on PostgreSQL, and turns on kms-aead's `sqlx` feature, so the application needs no kms-aead
+dependency line for it, see [Stored values](../stored-values.md#storing).
 
 ## AAD
 

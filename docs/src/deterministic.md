@@ -16,7 +16,7 @@ validated boundary, also on `aws-lc-fips`, where the keys come from the FIPS mod
 
 Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
 a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
-[Beacon or deterministic field](./beacons.md#beacon-or-deterministic-field).
+[Find rows by an encrypted value](./use-cases/equality-lookups.md).
 
 ## What it leaks
 

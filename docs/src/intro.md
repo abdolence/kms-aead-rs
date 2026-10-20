@@ -95,6 +95,22 @@ it as bytes, so a column of secrets needs no store of its own. See
 `AeadCipher` and `DeterministicCipher` work without a KMS at all, with keys the application
 holds.
 
+## Where to start
+
+| To | Read |
+|---|---|
+| Encrypt a few fields or secrets with a cloud KMS and no store | [Encrypt fields with a KMS](./use-cases/encrypt-fields.md) |
+| Give each tenant its own keys | [A keyring per tenant](./use-cases/keyring-per-tenant.md) |
+| Find rows by an encrypted value | [Find rows by an encrypted value](./use-cases/equality-lookups.md) |
+| Read the values in BigQuery or with Tink | [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md) |
+| Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./use-cases/rotation.md) |
+| Respond to a leaked key, or shred a tenant | [A leaked key or a shredded tenant](./use-cases/incidents.md) |
+| Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./use-cases/deployment.md) |
+| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./use-cases/choosing.md) |
+| Develop and test without a cloud account | [Develop and test without a cloud](./use-cases/local-development.md) |
+| Move envelope values to a keyring | [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md) |
+| Upgrade from 0.29 | [Migrating from 0.29](./migrating-from-0.29.md) |
+
 ## Licence
 
 Apache Software License (ASL)

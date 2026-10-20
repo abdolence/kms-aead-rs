@@ -5,6 +5,15 @@
 
 # Use cases
 
+- [Encrypt fields with a KMS](./use-cases/encrypt-fields.md)
+- [A keyring per tenant](./use-cases/keyring-per-tenant.md)
+- [Find rows by an encrypted value](./use-cases/equality-lookups.md)
+- [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md)
+- [Rotate keys and re-encrypt values](./use-cases/rotation.md)
+- [A leaked key or a shredded tenant](./use-cases/incidents.md)
+- [Applications and administration apart](./use-cases/deployment.md)
+- [Choose a provider and a backend](./use-cases/choosing.md)
+- [Develop and test without a cloud](./use-cases/local-development.md)
 - [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md)
 - [Migrating from 0.29](./migrating-from-0.29.md)
 

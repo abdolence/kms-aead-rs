@@ -111,7 +111,7 @@ An equal beacon never proves an equal value: a lookup always decrypts the rows i
 compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
 never match: after a change of a column's bits, its stored beacons match no lookup until a
 re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
-[Beacon or deterministic field](#beacon-or-deterministic-field).
+[Find rows by an encrypted value](./use-cases/equality-lookups.md).
 
 ## Normalisation
 
@@ -131,19 +131,3 @@ Rotating a beacon key in store-less mode is manual. Generate the new key and kee
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. `Beacon::key_id` tells which key wrote a stored
 beacon. kms-aead-keyring does this with key versions, see [Beacons](./keyring/beacons.md).
-
-## Beacon or deterministic field
-
-A [deterministic field](./deterministic.md) also finds rows by equality, by its cipher text:
-
-| | Beacon | Deterministic field |
-|---|---|---|
-| Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
-| Match | The truncated HMAC, with deliberate collisions | Always the exact value |
-| Key | A beacon key, rotated separately from the data keys | The field's own key |
-| Cost | An extra column, and a decryption and filter of the candidates on every lookup | Nothing beyond the field |
-| BigQuery | SQL cannot calculate a beacon; it matches beacons the application calculated | SQL decrypts the field and searches it by equality |
-
-With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
-emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
-about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.

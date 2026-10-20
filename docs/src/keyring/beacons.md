@@ -10,7 +10,7 @@ and `BeaconBits`, with keys the application keeps itself, and [Formats](../forma
 bytes.
 
 A [deterministic field](./deterministic.md) also finds rows by equality, by its encrypted value,
-see [Beacon or deterministic field](../beacons.md#beacon-or-deterministic-field).
+see [Find rows by an encrypted value](../use-cases/equality-lookups.md).
 
 ## What a beacon leaks
 
@@ -147,5 +147,160 @@ is re-indexed:
    its probe drops out of every lookup.
 
 `beacon.key_id()` reads the key id of a stored beacon, so that the sweep recomputes only the beacons
-under an older version. Beacon versions are rotated by policy and on compromise only: each one adds
-a probe to every lookup until the re-index is done.
+under an older version. Here a re-index over an in-memory table, run by `sweep::run` as any sweep
+is, see [Running a sweep](../operations/sweeps.md#running-a-sweep). A beacon under the active
+version keeps its bytes and only the value is re-sealed; any other gives both again from the
+plaintext:
+
+```rust
+use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
+
+use futures_util::stream;
+use kms_aead::backends::Ring;
+use kms_aead::providers::LocalKmsProvider;
+use kms_aead::{Beacon, BeaconBits};
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring,
+    KeyringResult, Purpose,
+};
+# use kms_aead::providers::LocalKekId;
+# use kms_aead::{BeaconAlgorithm, KmsAeadResult};
+# use kms_aead_keyring::{
+#     KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+#     Plaintext,
+# };
+# use secret_vault_value::SecretValue;
+
+type UsersKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>;
+
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+)
+.with_beacon_bits(BeaconBits::DEFAULT);
+#
+# #[derive(Debug, Clone, PartialEq)]
+# struct Email(String);
+#
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+#         self.0.to_plaintext()
+#     }
+#
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
+
+#[derive(Clone)]
+struct UserRow {
+    email: Encrypted<Email, Randomized>,
+    email_beacon: Beacon<Email>,
+    seal: SealMarker,
+}
+
+/// The users table, by user id.
+type Table = Mutex<BTreeMap<String, UserRow>>;
+
+/// Computes the beacon of the row of `user` again under the active beacon version, and re-seals
+/// its value under the active randomised version, with the marker of the sealer's record.
+async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
+    let Some(row) = table.lock().unwrap().get(user).cloned() else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let sealer = keyring.sealer().await;
+    let aad = EMAIL.aad(&EntityId::try_from(user)?);
+    let (email, email_beacon, outcome) = if sealer.is_current(row.email_beacon.key_id()).await? {
+        match sealer.reseal(&aad, &row.email).await? {
+            Some(resealed) => {
+                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+                let outcome = ResealOutcome::Resealed { from_compromised };
+                (resealed.value, row.email_beacon, outcome)
+            }
+            None => (row.email, row.email_beacon, ResealOutcome::Skipped),
+        }
+    } else {
+        let decrypted: Decrypted<Email> = keyring.decrypt_with_trust(&aad, &row.email).await?;
+        let from_compromised = matches!(decrypted.trust, KeyTrust::Compromised(_));
+        let email = sealer.encrypt(&aad, &decrypted.value).await?;
+        let email_beacon = sealer.beacon(&EMAIL, &decrypted.value).await?;
+        (email, email_beacon, ResealOutcome::Resealed { from_compromised })
+    };
+    let seal: SealMarker = sealer.record().seal_marker();
+    table
+        .lock()
+        .unwrap()
+        .insert(user.to_string(), UserRow { email, email_beacon, seal });
+    Ok(outcome)
+}
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+#     MemoryKeyringStore::new(),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let admin: KeyringAdmin<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+#     .create(
+#         provider,
+#         KeyringId::from_static("tenant-42"),
+#         KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+#     )
+#     .await?;
+# let keyring: &UsersKeyring = admin.keyring();
+# let table = Table::default();
+# for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
+#     let sealer = keyring.sealer().await;
+#     let email = Email(email.to_string());
+#     let row = UserRow {
+#         email: sealer.encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &email).await?,
+#         email_beacon: sealer.beacon(&EMAIL, &email).await?,
+#         seal: sealer.record().seal_marker(),
+#     };
+#     table.lock().unwrap().insert(user.to_string(), row);
+# }
+# let staged: KeyId = admin.rotate(Purpose::Beacon).await?;
+# admin.promote_now(staged).await?;
+// Every row whose marker is below the keyring's, after the promotion of a beacon version
+let current: SealMarker = keyring.record().seal_marker();
+let candidates = table
+    .lock()
+    .unwrap()
+    .iter()
+    .filter(|(_, row)| row.seal < current)
+    .map(|(user, _)| user.clone())
+    .collect::<Vec<String>>();
+
+let report: SweepReport = sweep::run(
+    keyring.id(),
+    stream::iter(candidates.into_iter().map(Ok)),
+    NonZeroUsize::new(8).unwrap(),
+    |candidate| {
+        let table = &table;
+        async move { reindex(keyring, table, &candidate).await }
+    },
+)
+.await;
+println!("{report:?}");
+# assert_eq!(report.resealed, 2);
+# let probes: Vec<Beacon<Email>> = keyring
+#     .beacon_probes(&EMAIL, &Email("alice@example.com".to_string()))
+#     .await?;
+# assert!(probes.contains(&table.lock().unwrap()["42"].email_beacon));
+# registry.shutdown().await?;
+# Ok(())
+# }
+```
+
+A deterministic field is re-sealed the same way, with `reseal_deterministic`, under the
+`deterministic` feature.
+
+Beacon versions are rotated by policy and on compromise only: each one adds a probe to every lookup
+until the re-index is done.

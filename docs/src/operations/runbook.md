@@ -97,7 +97,9 @@ To make a scope's values unrecoverable:
   encrypted them exists, so then either delete the record and every backup of it, or destroy that
   KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks` every
   other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
-  never destroyed, so only the deletion of the KMS key itself shreds.
+  never destroyed, so only the deletion of the KMS key itself shreds. Azure Key Vault deletes a key
+  with all its versions and never one version alone, so there too only the deletion of the key
+  shreds, and a vault with soft delete keeps it recoverable until it is purged.
 
 A deployment that needs shredding guarantees uses a KEK per scope.
 
