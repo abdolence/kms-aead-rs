@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "../searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-13ad1cdb.js"></script>
+        <script src="../toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,10 +188,10 @@ without escaping. It is an identifier, not a secret, and appears in spans and er
 <li>the KEK of the provider the keyring was created with;</li>
 <li>the algorithms new versions use, one per purpose;</li>
 <li>the seal epoch, which every write that makes a version active moves on by one, and which the
-application stores beside its records as a <code>SealMarker</code>, see <a href="../operations.html#sweeps">Sweeps</a>;</li>
+application stores beside its records as a <code>SealMarker</code>, see <a href="../operations/sweeps.html">Sweeps</a>;</li>
 <li>every key version ever created, in creation order, each with its encrypted DEK, its state and,
 once it was active, its seal range: the markers of the records sealed under it, see
-<a href="../operations.html#records-under-a-version">Records under a version</a>.</li>
+<a href="../operations/sweeps.html#records-under-a-version">Records under a version</a>.</li>
 </ul>
 <p>Every store keeps it as the same JSON document, see <a href="../formats.html#keyring-records">Keyring records</a>
 for the document and the rules every read checks. A record that breaks one fails with
@@ -240,7 +240,7 @@ it.</p>
 as pending, except the replacement <code>mark_compromised</code> adds for an active version, which is active
 at once.</p>
 <p>The calls, on a <code>KeyringAdmin</code>, with the <code>admin</code> feature, see
-<a href="../keyring.html#applications-and-administration">Applications and administration</a>:</p>
+<a href="./deployment.html">Applications and administration</a>:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -363,7 +363,7 @@ pending version if the purpose has one: <code>promote</code> would refuse with <
 <p><code>destroy</code> and <code>dangerously_destroy_all_versions</code> remove encrypted DEKs from this record only. A
 backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
 that encrypted them exists, see
-<a href="../operations.html#crypto-shredding">Crypto-shredding</a>.</p>
+<a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>.</p>
 <h2 id="reading-a-compromised-version"><a class="header" href="#reading-a-compromised-version">Reading a compromised version</a></h2>
 <p><code>KeyringOptions::compromised_reads</code> decides what <code>decrypt</code> does with a value under a compromised
 version:</p>
@@ -376,14 +376,14 @@ that id meanwhile.</li>
 </ul>
 <p><code>decrypt_with_trust</code> opens the value whatever the policy, and returns a <code>Decrypted</code> with the
 value, the key id of the version that opened it and its <code>KeyTrust</code>, <code>Trusted</code> or
-<code>Compromised</code>. It is the call for a <a href="../operations.html#sweeps">sweep</a>. A compromised version’s DEK
+<code>Compromised</code>. It is the call for a <a href="../operations/sweeps.html">sweep</a>. A compromised version’s DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../keyring.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../keyring/deployment.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -397,7 +397,7 @@ is decrypted by the provider for that call only and never returns to the DEK cac
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../keyring.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../keyring/deployment.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

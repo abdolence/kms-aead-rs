@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-13ad1cdb.js"></script>
+        <script src="toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -266,7 +266,7 @@ and Tink read across rotations. See <a href="./keyring.html">Keyring and field e
 </table>
 </div>
 <p>No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
-<a href="./operations.html#migrating-from-envelope-values">Migrating from envelope values</a>.</p>
+<a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
 <p>Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 <code>Encrypted&lt;T, Envelope&gt;</code> that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
 it as bytes, so a column of secrets needs no store of its own. See

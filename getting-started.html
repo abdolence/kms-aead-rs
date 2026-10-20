@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-13ad1cdb.js"></script>
+        <script src="toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,60 +190,7 @@ other:</p>
 <li>the crypto backends that run the AEAD algorithms, one or more.</li>
 </ol>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
-<p>KMS providers:</p>
-<ul>
-<li><code>gcp-kms-encryption</code>: Google Cloud KMS, with the native TLS roots of the system. Be aware it
-also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls
-whatever its TLS feature;</li>
-<li><code>gcp-kms-encryption-webpki</code>: Google Cloud KMS with the bundled WebPKI roots;</li>
-<li><code>gcp-kms-encryption-base</code>: Google Cloud KMS without a TLS root store or crypto provider. The
-application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or
-<code>tls-webpki-roots</code>, and the crate does not build without one;</li>
-<li><code>aws-kms-encryption</code>: AWS KMS;</li>
-<li><code>azure-kms-encryption</code>: Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto
-provider. Other TLS variants, choose one:
-<ul>
-<li><code>azure-kms-encryption-tls-aws-lc-rs</code>, the same as <code>azure-kms-encryption</code>;</li>
-<li><code>azure-kms-encryption-tls-no-provider</code>, rustls with the crypto provider the application
-installs. The application must install a process-default rustls <code>CryptoProvider</code> before
-creating the provider, otherwise rustls panics;</li>
-<li><code>azure-kms-encryption-native-tls</code>, the platform TLS library;</li>
-</ul>
-</li>
-<li><code>hashicorp-vault-transit-kms-encryption</code>: HashiCorp Vault Transit, with the system root
-certificates and the aws-lc-rs crypto provider. To choose them, enable one root store and one
-crypto provider instead:
-<ul>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-roots</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-webpki</code>;</li>
-<li><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code> or
-<code>hashicorp-vault-transit-kms-encryption-tls-ring</code>.</li>
-</ul>
-</li>
-</ul>
-<p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
-<p>Crypto backends, see <a href="./crypto-backends.html">Crypto backends</a>:</p>
-<ul>
-<li><code>ring</code>: the ring library;</li>
-<li><code>aws-lc</code>: the aws-lc-rs library;</li>
-<li><code>aws-lc-fips</code>: the aws-lc-rs library on the AWS-LC FIPS module. Needs CMake and Go to build;</li>
-<li><code>rustcrypto</code>: the pure Rust RustCrypto crates, no C compiler needed.</li>
-</ul>
-<p>Other features:</p>
-<ul>
-<li><code>deterministic</code>: deterministic encryption with AES-SIV, see
-<a href="./deterministic.html">Deterministic encryption</a>;</li>
-<li><code>legacy-formats</code>: reads the layouts written by 0.29 and earlier. Deprecated, see
-<a href="./formats.html">Formats</a>;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code>, as bytes, for
-<code>KmsAeadErrorPublicGenericDetails</code> and for <code>SecretValue</code>;</li>
-<li><code>serde-json</code>: <code>Json</code>, a typed field’s plaintext of any serde type, stored as its JSON;</li>
-<li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for
-tokio-postgres;</li>
-<li><code>sqlx</code>: sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS
-stack.</li>
-</ul>
-<p>See <a href="./stored-values.html">Stored values</a>.</p>
+<p>Every feature of both crates is in <a href="./features.html">Cargo features</a>.</p>
 <h2 id="choosing-a-backend"><a class="header" href="#choosing-a-backend">Choosing a backend</a></h2>
 <p>The default features of the four cloud providers already build aws-lc-rs for TLS, so <code>aws-lc</code> is
 the backend that adds no second crypto library to a provider build. <code>ring</code> and <code>rustcrypto</code> work
@@ -260,22 +207,6 @@ let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
 </span><span class="boring">}</span></code></pre>
 <p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
 nothing else, see <a href="./crypto-backends.html#code-generic-over-the-backend">Crypto backends</a>.</p>
-<h2 id="feature-rules"><a class="header" href="#feature-rules">Feature rules</a></h2>
-<p>The crate refuses some feature combinations at compile time with <code>compile_error!</code>:</p>
-<ul>
-<li>a provider feature without a backend feature fails with “kms-aead needs a crypto backend for
-its KMS providers: enable “ring”, “aws-lc”, “aws-lc-fips” or “rustcrypto”“;</li>
-<li>HashiCorp Vault Transit needs exactly one of <code>-tls-roots</code> and <code>-tls-webpki</code>, and exactly one
-of <code>-tls-aws-lc-rs</code> and <code>-tls-ring</code>. <code>hashicorp-vault-transit-kms-encryption</code> already enables
-<code>-tls-roots</code> and <code>-tls-aws-lc-rs</code>, so combine the other variants with
-<code>hashicorp-vault-transit-kms-encryption-base</code> instead;</li>
-<li>Azure needs exactly one of <code>azure-kms-encryption-tls-aws-lc-rs</code> (or <code>azure-kms-encryption</code>),
-<code>azure-kms-encryption-tls-no-provider</code> and <code>azure-kms-encryption-native-tls</code>.</li>
-</ul>
-<p>The <code>aws-lc-rs</code> feature that <code>aws-lc</code> and <code>aws-lc-fips</code> enable is not a backend choice: enabled
-alone, the aws-lc-rs build fails. Use <code>aws-lc</code> or <code>aws-lc-fips</code>.</p>
-<p>A build without any backend feature compiles, and <code>LocalKmsProvider</code> is in it, but nothing that
-seals or encrypts can be constructed, since no type implements <code>AeadBackend</code>.</p>
 <h2 id="first-example"><a class="header" href="#first-example">First example</a></h2>
 <p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:</p>
@@ -312,7 +243,7 @@ the code stays the same.</p>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="stored-values.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="use-cases/envelope-to-keyring.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -326,7 +257,7 @@ the code stays the same.</p>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="stored-values.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="use-cases/envelope-to-keyring.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

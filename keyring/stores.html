@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "../searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-13ad1cdb.js"></script>
+        <script src="../toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,24 +197,10 @@ signals changes to it. The library provides:</p>
 <p>Every store keeps the record as the same <a href="../formats.html#keyring-records">JSON document</a>, and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see <a href="./record-cache.html">Record cache</a>.</p>
-<p>The store’s access control is what the record’s integrity rests on: only the administration
-writes the record, and the applications read it and listen to its changes, see
-<a href="../keyring.html#applications-and-administration">Applications and administration</a>:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Store</th><th>Application</th><th>Administration</th></tr>
-</thead>
-<tbody>
-<tr><td>Firestore</td><td>read of the keyring documents, which the listener uses too, such as <code>roles/datastore.viewer</code></td><td>read and write of the keyring documents, such as <code>roles/datastore.user</code></td></tr>
-<tr><td>PostgreSQL</td><td><code>SELECT</code> on the table, and <code>LISTEN</code>, which needs no grant</td><td><code>SELECT</code>, <code>INSERT</code> and <code>UPDATE</code> on the table; each write also sends the <code>NOTIFY</code></td></tr>
-<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code>, and <code>storage.objects.delete</code>, since a write replaces the object</td></tr>
-<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code></td></tr>
-</tbody>
-</table>
-</div>
+<p>The rights of the application and the administration on each store are in
+<a href="./deployment.html#store-rights">Store rights</a>.</p>
 <p>Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
-in the record, see <a href="../operations.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.</p>
+in the record, see <a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.</p>
 <h2 id="memory"><a class="header" href="#memory">Memory</a></h2>
 <p><code>MemoryKeyringStore</code> loses its records when the process exits, and with them the encrypted DEK of
 every version: a value sealed under a keyring in it, and kept anywhere that outlives the process,

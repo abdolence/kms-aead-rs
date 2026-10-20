@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-13ad1cdb.js"></script>
+        <script src="toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -269,36 +269,9 @@ as long as DEKs encrypted under it are read, and crypto-shredding means destroyi
 backups included.</p>
 <h2 id="keyring-deployment"><a class="header" href="#keyring-deployment">Keyring deployment</a></h2>
 <p>A <a href="./keyring.html">keyring</a> record decides which versions are read and which one seals new values,
-and nothing signs it: its integrity rests on the keyring store’s access control. So a deployment
-splits the two sides of
-<a href="./keyring.html#applications-and-administration">Applications and administration</a> into two
-principals:</p>
-<ul>
-<li><strong>Application</strong>: builds without the <code>admin</code> feature, and calls <code>Keyring</code> only: encryption,
-decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
-store. None of its calls asks the KMS to encrypt, so it needs nothing more;</li>
-<li><strong>Administration</strong>: builds with the <code>admin</code> feature, and calls the registry’s <code>create</code>,
-<code>open_or_create</code> and <code>admin</code>, and the <code>KeyringAdmin</code> they return: <code>rotate</code>, <code>promote</code>,
-<code>change_algorithm</code>, <code>mark_compromised</code>, <code>retire</code>, <code>reinstate</code>, <code>destroy</code>,
-<code>dangerously_destroy_all_versions</code>, <code>reencrypt_deks</code>, <code>export_bigquery_keyset</code> and
-<code>export_tink_keyset</code>. It needs KMS encrypt and decrypt on the KEK, and is the only principal
-with write access to the keyring store. It runs in a job or in infrastructure automation, never
-in a request handler.</li>
-</ul>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>KMS</th><th>Application</th><th>Administration</th></tr>
-</thead>
-<tbody>
-<tr><td>GCP</td><td><code>roles/cloudkms.cryptoKeyDecrypter</code></td><td><code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code></td></tr>
-<tr><td>AWS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:Encrypt</code> and <code>kms:Decrypt</code> on the key, plus <code>kms:GenerateRandom</code> with the KMS random generator</td></tr>
-<tr><td>Azure Key Vault</td><td>a role with <code>keys/unwrap/action</code> on the key</td><td>a role with <code>keys/wrap/action</code> and <code>keys/unwrap/action</code> on the key</td></tr>
-<tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>update</code> on <code>transit/encrypt/&lt;key&gt;</code> and <code>transit/decrypt/&lt;key&gt;</code></td></tr>
-</tbody>
-</table>
-</div>
-<p>The permissions of each store are in <a href="./keyring/stores.html">Keyring stores</a>.</p>
+and nothing signs it: its integrity rests on the keyring store’s access control. The two
+principals of a deployment and their rights are in
+<a href="./keyring/deployment.html">Applications and administration</a>.</p>
 <p>A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
 or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
 to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
@@ -336,13 +309,13 @@ carries, so an encrypted DEK kept from a version, compromised or destroyed since
 values through it. Keep it in the read path for the migration only;</li>
 <li><strong>a destroyed version’s DEK lives as long as the KEK version that encrypted it.</strong> A backup of the
 record holds encrypted DEKs the KMS still opens, see
-<a href="./operations.html#crypto-shredding">Crypto-shredding</a>;</li>
+<a href="./operations/runbook.html#crypto-shredding">Crypto-shredding</a>;</li>
 <li><strong>an exported BigQuery keyset holds the versions’ keys</strong>, encrypted with no associated data, since
 BigQuery decrypts it with none. Treat it as a copy of the record’s readable versions, and export
 again after every rotation and every <code>mark_compromised</code>;</li>
 <li><strong>a sweep re-seals forgeries as trusted values.</strong> Values read through a compromised version are
 decided per record before a sweep re-seals them, see
-<a href="./operations.html#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
+<a href="./operations/sweeps.html#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
 <li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
 links a value’s history for whoever reads the query, see
 <a href="./keyring/deterministic.html#what-they-leak">Deterministic fields</a>;</li>
@@ -375,9 +348,6 @@ automatically without auditing the changes.</p>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="migrating-from-0.29.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                            </a>
 
                         <div style="clear: both"></div>
                     </nav>
@@ -389,9 +359,6 @@ automatically without auditing the changes.</p>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="migrating-from-0.29.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
-                    </a>
             </nav>
 
         </div>

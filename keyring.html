@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-13ad1cdb.js"></script>
+        <script src="toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,58 +197,7 @@ that uses the keyring;</li>
 document per keyring. See <a href="./intro.html#choosing-a-mode">Choosing a mode</a> for the comparison with
 the envelope modes of kms-aead.</p>
 <h2 id="applications-and-administration"><a class="header" href="#applications-and-administration">Applications and administration</a></h2>
-<p>A keyring has two sides, each with its own handle and its own rights:</p>
-<ul>
-<li>the application decrypts and runs sweeps on a <code>Keyring</code>, which <code>KeyringRegistry::open</code> returns
-in every build, and encrypts, computes beacons and re-seals on the <code>Sealer</code> the <code>Keyring</code>
-hands out for each write;</li>
-<li>the administration creates keyrings, rotates, promotes, retires and destroys versions, flags
-compromised ones, re-encrypts DEKs and exports keysets, on a <code>KeyringAdmin</code>, which
-<code>KeyringRegistry::create</code>, <code>open_or_create</code> and <code>admin</code> return with the <code>admin</code> feature.</li>
-</ul>
-<p>The application builds without the <code>admin</code> feature and runs under a principal with the rights of
-its row only:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Side</th><th>Handle</th><th>KMS</th><th>Keyring store</th></tr>
-</thead>
-<tbody>
-<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt: GCP <code>roles/cloudkms.cryptoKeyDecrypter</code>, AWS <code>kms:Decrypt</code>, Azure Key Vault unwrap key, Vault Transit decrypt</td><td>read, and listen or watch: Firestore read, PostgreSQL <code>SELECT</code> and <code>LISTEN</code>, Cloud Storage object read, S3 <code>GetObject</code></td></tr>
-<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt</td><td>read and write: Firestore write, PostgreSQL <code>INSERT</code> and <code>UPDATE</code>, which also send the <code>NOTIFY</code>, Cloud Storage and S3 object write</td></tr>
-</tbody>
-</table>
-</div>
-<p>Sweeps run on the application’s side: re-sealing a value encrypts it under a DEK the record
-already holds, and never asks the KMS to encrypt a DEK. Every call that encrypts a DEK or writes
-the record is a <code>KeyringAdmin</code> call. The exact roles per KMS are in
-<a href="./security.html#keyring-deployment">Keyring deployment</a>, and the permissions per store in
-<a href="./keyring/stores.html">Keyring stores</a>.</p>
-<p>The <code>admin</code> feature keeps the administrative calls out of the application’s build, and the rights
-keep them out of its reach: without the KMS encrypt right and write access to the store, those
-calls fail in any build.</p>
-<p>An application opens only keyrings that exist: <code>open</code> on a keyring the store holds no record of
-fails with <code>KeyringError::RecordMissing</code>. So the administration creates each keyring before an
-application opens it:</p>
-<ul>
-<li>from infrastructure: a job, a CLI or a deployment step, built with the <code>admin</code> feature and run
-with the administrative rights, calls <code>create</code> or <code>open_or_create</code>;</li>
-<li>or from an application that provisions lazily, such as one keyring per tenant on the tenant’s
-first request. Such an application enables <code>admin</code> and is given the administrative rights
-deliberately, and is then trusted as the administration is, see
-<a href="./security.html#keyring-limits">Keyring limits</a>.</li>
-</ul>
-<p>An application’s own tests that create keyrings in <code>MemoryKeyringStore</code> enable <code>admin</code> for the
-tests only:</p>
-<pre><code class="language-toml">[dependencies]
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
-
-[dev-dependencies]
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore", "admin"] }
-</code></pre>
-<p>Be aware Cargo unifies the features of the packages one command builds: a <code>cargo build</code> of a
-workspace with both the application and an administrative job gives the application <code>admin</code>
-too. Build and deploy the application with <code>cargo build -p &lt;application&gt;</code>.</p>
+<p>See <a href="./keyring/deployment.html">Applications and administration</a>.</p>
 <h2 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h2>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
@@ -256,31 +205,7 @@ kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
 kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
 secret-vault-value = "1"
 </code></pre>
-<p>The crate has no default features, and the backend features are those of kms-aead:</p>
-<ul>
-<li><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code>: the crypto backends, see
-<a href="./crypto-backends.html">Crypto backends</a>. A keyring names its backend as a type parameter, such
-as <code>kms_aead::backends::Ring</code>;</li>
-<li><code>admin</code>: <code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types
-of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the
-<code>encodings</code> module, see <a href="#applications-and-administration">Applications and administration</a>;</li>
-<li><code>deterministic</code>: deterministic key versions and every call on them, <code>encrypt_deterministic</code>
-and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>,
-<code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see
-<a href="./keyring/deterministic.html">Deterministic fields</a>. The deterministic types exist in every
-build, so a process without the feature keeps a record’s deterministic versions intact;</li>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes;</li>
-<li><code>serde-json</code>: <code>serde</code>, and <code>Json&lt;T&gt;</code>, a plaintext stored as its JSON;</li>
-<li><code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>: the keyring stores, see
-<a href="./keyring/stores.html">Keyring stores</a>. <code>gcs</code> has TLS variants listed there, and <code>postgres</code>
-also binds <code>Encrypted</code> and <code>SealMarker</code> in tokio-postgres, as <code>BYTEA</code>;</li>
-<li><code>sqlx</code>: <code>Encrypted</code> and <code>SealMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code>;</li>
-<li><code>bigquery-export</code>: <code>admin</code>, and <code>export_bigquery_keyset</code>, see
-<a href="./keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>.</li>
-</ul>
-<p>Beacons need no feature, and <code>export_tink_keyset</code> needs <code>admin</code> only. The KMS providers come from
-kms-aead and its provider features, and secret-vault-value’s <code>SecretValue</code> is what an application
-type’s <code>Plaintext</code> encodes to.</p>
+<p>Every feature is in <a href="./features.html#kms-aead-keyring">Cargo features</a>.</p>
 <h2 id="first-example"><a class="header" href="#first-example">First example</a></h2>
 <p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
 cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
@@ -386,7 +311,7 @@ ephemeral local KEK has no second copy to <code>open</code> the keyring with: <c
 <p><code>Keyring::sealer</code> takes the cached record, and the <code>Sealer</code> seals under that record’s active
 versions; <code>decrypt</code> opens under the version the value names. A write takes one sealer and seals
 every encrypted field of the record through it, so that the seal marker it stores beside them
-names the versions they are under, see <a href="./operations.html#the-seal-marker">The seal marker</a>.
+names the versions they are under, see <a href="./operations/sweeps.html#the-seal-marker">The seal marker</a>.
 Neither calls the store while the cached record is fresh, nor the KMS while the version’s DEK is
 in the DEK cache, see <a href="./keyring/record-cache.html">Record cache</a>.</p>
 <p>Full example available
@@ -414,11 +339,11 @@ exports;</li>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="beacons.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="providers/local.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="keyring/lifecycle.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="keyring/deployment.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -428,11 +353,11 @@ exports;</li>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="beacons.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="providers/local.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="keyring/lifecycle.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="keyring/deployment.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

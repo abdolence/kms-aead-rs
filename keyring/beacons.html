@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d66597cf.js";
+            window.path_to_searchindex_js = "../searchindex-bad039f4.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-13ad1cdb.js"></script>
+        <script src="../toc-01e5055c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -326,7 +326,7 @@ process has seen the promotion;</li>
 version, compromised ones included, newest first;</li>
 <li>the promotion moved the keyring’s seal epoch on, so every row written before it has a
 <code>SealMarker</code> below the current one, and a re-index sweep visits them, see
-<a href="../operations.html#sweeps">Sweeps</a>. It computes each row’s beacon again under the active version
+<a href="../operations/sweeps.html">Sweeps</a>. It computes each row’s beacon again under the active version
 of its sealer and writes the sealer’s marker; a row without a beacon gets the marker alone;</li>
 <li>once the sweep reports no failure and that query returns nothing, <code>retire</code> the old version, and
 its probe drops out of every lookup.</li>
