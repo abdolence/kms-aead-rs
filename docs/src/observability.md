@@ -362,9 +362,9 @@ With a keyring per tenant, that is a series per tenant and version. Under cumula
 the default, the SDK keeps a series until the process restarts, also once its version is no longer
 used. The SDK keeps at most 2000 attribute sets per instrument and records every further one into
 one series with the attribute `otel.metric.overflow`, with no error: an alert per version stops
-counting the versions past the limit. Be aware to raise the limit with
-`Stream::builder().with_cardinality_limit` in a view where the keyrings and their versions come
-near it. Key ids are numbered per keyring, so the plaintext size keeps
+counting the versions past the limit. Raise the limit with
+`Stream::builder().with_cardinality_limit` in a view where the keyrings and their versions come near
+it. Key ids are numbered per keyring, so the plaintext size keeps
 `kms_aead.keyring`: without it, version 1 of every keyring would add up to one series. The
 duration histograms do not need it, and with their buckets they cost the most series, so the view
 above drops it from them. The view's `with_allowed_attribute_keys` needs the SDK's
