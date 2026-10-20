@@ -94,7 +94,6 @@ the old version again after a failed check takes effect immediately.
 
 ## Errors
 
-The code of a failed KMS call is the gRPC status code. `Unavailable`, `DeadlineExceeded`,
-`ResourceExhausted`, `Aborted`, `Internal`, `Unknown` and `Cancelled` are a `NetworkError`, any
-other code, such as `PermissionDenied` or `NotFound`, an `EncryptionError`. See
-[Error handling](../errors.md#retries).
+The code of a failed KMS call is the gRPC status code, such as `PermissionDenied` or `NotFound`.
+Which codes are a `NetworkError` and which an `EncryptionError` is in
+[Retries](../errors.md#retries).

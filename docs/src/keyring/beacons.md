@@ -14,16 +14,9 @@ see [Beacon or deterministic field](../beacons.md#beacon-or-deterministic-field)
 
 ## What a beacon leaks
 
-A beacon column leaks to anyone who reads it, without any key:
-
-- **Equality**: which rows are likely to hold the same value;
-- **Frequency**: how often each value occurs, as far as the bits tell values apart.
-
-And a leaked beacon key lets its holder test candidate values against the whole column offline.
-
-So beacons fit fields that are looked up and have many distinct values, such as emails and
-external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
-answer, whose values the frequencies give away.
+A beacon column leaks likely equality and frequency to anyone who reads it, and a leaked beacon
+key lets its holder test candidate values offline, see
+[What a beacon leaks](../beacons.md#what-a-beacon-leaks) in kms-aead.
 
 A beacon is computed in a field's context, `<kind>/<field>` such as `user/email`, with no entity
 id: equal values in different rows give equal beacons, which is what a lookup matches. A beacon of
@@ -121,33 +114,19 @@ the `serde` feature it serialises as bytes, as `Encrypted` does.
 
 ## Bits
 
-`FieldSpec::with_beacon_bits` sets how many bits of the HMAC the field's beacons keep, 1 to 256,
-`BeaconBits::DEFAULT`, 16, unless set. With `n` distinct values in a column and `b` bits, about
-`n / 2^b` values share each beacon:
-
-- fewer bits: more values share a beacon, so a lookup returns more rows, which the application
-  decrypts and filters by the plaintext. A column of short beacons leaks less;
-- more bits: fewer rows to filter, down to one per value once `2^b` is far above `n`, and the
-  column then leaks which rows hold equal values as a deterministic column does.
-
-An equal beacon never proves an equal value: a lookup always decrypts the rows it found and
-compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
-never match: after a change of a field's bits, its stored beacons match no probe until a re-index
-computes them again.
-
-## Normalisation
-
-A beacon is the HMAC of the bytes the `Plaintext` type encodes, so `Alice@Example.com` and
-`alice@example.com` give different beacons unless the type normalises the value. Normalising is the
-application's job: the newtype normalises when it is made, as `Email::new` lowercases above, and
-every write and every lookup goes through it.
+`FieldSpec::with_beacon_bits` sets how many bits of the HMAC the field's beacons keep,
+`BeaconBits::DEFAULT`, 16, unless set; what the bits trade is in [Bits](../beacons.md#bits). The
+bits enter the HMAC, so after a change of a field's bits, its stored beacons match no probe until a
+re-index computes them again. A beacon is the HMAC of the bytes the `Plaintext` type encodes, so
+the field's newtype normalises the value, as `Email::new` lowercases above, see
+[Normalisation](../beacons.md#normalisation).
 
 ## BigQuery
 
-BigQuery's SQL has no HMAC-SHA256 with a KMS-encrypted DEK, so a query in BigQuery cannot compute a
-beacon, and the keyring never exports beacon keys to it: `export_bigquery_keyset` of the beacon
-purpose fails with `ExportAlgorithmUnsupported`. A BigQuery query matches beacons the application
-computed and passed in as query parameters.
+The keyring never exports beacon keys to BigQuery: `export_bigquery_keyset` of the beacon purpose
+fails with `ExportAlgorithmUnsupported`, see
+[Exporting a keyset to BigQuery](./bigquery.md#exporting-a-keyset-to-bigquery). A BigQuery query
+matches beacons the application computed, see [BigQuery](../beacons.md#bigquery) in kms-aead.
 
 ## Rotating beacon versions
 

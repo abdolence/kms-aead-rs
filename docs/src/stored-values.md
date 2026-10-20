@@ -41,8 +41,9 @@ layout and the layouts of 0.29 and earlier.
 lowercase hex. The only ways back are `Encrypted::try_from` for bytes and
 `Encrypted::try_from_hex_string` for hex in either case. Both check the bytes against the layout
 of `F` before any KMS call, so a truncated or foreign value fails when it is read, with
-`INVALID_CIPHER_TEXT_FORMAT`, `UNKNOWN_CIPHER_TEXT_LAYOUT`, `LEGACY_FORMAT` or `INVALID_HEX`. The
-check reads the framing only: a changed value fails to decrypt with `DECRYPT`.
+`INVALID_CIPHER_TEXT_FORMAT`, `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_HEX`, or `LEGACY_FORMAT` for
+a layout of 0.29 or earlier without the `legacy-formats` feature. The check reads the framing
+only: a changed value fails to decrypt with `DECRYPT`.
 
 ```rust
 use kms_aead::backends::Ring;
@@ -243,13 +244,7 @@ assert_eq!(read_back, beacon);
 # }
 ```
 
-The bits trade lookups against leakage. With `n` distinct values and `b` bits, about `n / 2^b`
-values share each beacon, so a lookup returns that many rows, which the application decrypts and
-filters by the plaintext. Fewer bits leak less and return more rows; more bits return fewer rows
-and leak which rows hold equal values, up to what a deterministic field leaks. An equal beacon
-never proves an equal value. See
-[Beacon or deterministic field](./beacons.md#beacon-or-deterministic-field) for the numbers of
-the default.
+The bits trade lookups against leakage, see [Bits](./beacons.md#bits).
 
 `Beacon<T>` is stored as `Encrypted` is, as bytes, with the `serde`, `postgres` and `sqlx`
 features. A lookup matches the column by equality, so it gets an ordinary index:

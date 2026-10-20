@@ -3,6 +3,11 @@
 //! collecting doctests and never while building the crate, so a packaged crate does not need the
 //! chapters.
 
+/// The keyring half of the getting started chapter, which mdBook includes into it, since
+/// kms-aead's own doctests cannot use this crate.
+#[doc = include_str!("../../docs/src/getting-started/with-a-keyring.md")]
+mod getting_started {}
+
 #[doc = include_str!("../../docs/src/keyring.md")]
 mod keyring {}
 

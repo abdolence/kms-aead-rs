@@ -53,13 +53,25 @@ Deterministic encryption with AES-SIV takes no random nonce.
 
 ## Data volume
 
-AES-GCM also has a bound on the data under one key, whatever the nonces: RFC 8446, section 5.5,
-allows 2^24.5 records of 2^14 bytes, 2^38.5 bytes, for an AE advantage of about 2^-57. The bound
-applies to AES-GCM keys this way:
+AES-GCM also has a bound on the data under one key, whatever the nonces. The bounds per algorithm:
 
-- a store-less envelope renews its DEK at `max_bytes`, 2^38 bytes by default under AES-GCM and at
-  most 2^52, see [Volume limit](./dek-caching.md#volume-limit). AES-256-GCM-SIV and
-  ChaCha20-Poly1305 have no default volume limit;
+- AES-GCM: RFC 8446, section 5.5, allows "up to 2^24.5 full-size records (about 24 million)" of
+  2^14 bytes, 2^38.5 bytes, "while keeping a safety margin of approximately 2^-57 for
+  Authenticated Encryption (AE) security". Luykx and Paterson, "Limits on Authenticated Encryption
+  Use in TLS", table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60.
+  RFC 8452, section 9, allows 2^48 blocks, 2^52 bytes, under one AES-GCM key for an advantage of
+  2^-32;
+- AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
+  random nonces for an advantage of 2^-32, so the bound on the number of values bounds it already;
+- ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
+  beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
+  attempts, which no writer can count.
+
+The bound applies to AES-GCM keys this way:
+
+- a store-less envelope renews its DEK at `max_bytes`, 2^38 bytes by default under AES-GCM, below
+  the 2^38.5 of RFC 8446, and at most 2^52, see [Volume limit](./dek-caching.md#volume-limit).
+  AES-256-GCM-SIV and ChaCha20-Poly1305 have no default volume limit;
 - with `encrypt_with_dek` and `AeadCipher`, the application counts the bytes it seals under one
   AES-GCM key too, and moves to a new key before 2^38 bytes.
 
@@ -155,9 +167,9 @@ version.
   [The trust of re-sealed values](./operations/sweeps.md#the-trust-of-re-sealed-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
-  [Deterministic fields](./keyring/deterministic.md#what-they-leak);
+  [What it leaks](./deterministic.md#what-it-leaks);
 - **beacons leak likely equality and frequency**, as far as their bits tell values apart, see
-  [Beacons](./keyring/beacons.md#what-a-beacon-leaks);
+  [What a beacon leaks](./beacons.md#what-a-beacon-leaks);
 - **a promotion's guard covers healthy processes only.** `promote` refuses until `record_ttl` has
   passed since the rotation, and `promote_now` skips that. A process whose revalidations fail
   keeps an older record for longer: when it meets a value under a version it has not seen, it

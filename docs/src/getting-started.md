@@ -40,7 +40,7 @@ let cipher = AeadCipher::<AwsLc>::new(AeadAlgorithm::Aes256Gcm)?;
 There is no default backend. Code generic over the backend bounds it with `B: AeadBackend` and
 nothing else, see [Crypto backends](./crypto-backends.md#code-generic-over-the-backend).
 
-## First example
+## With an envelope
 
 The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:
@@ -70,6 +70,11 @@ assert_eq!(decrypted, secret);
 
 To move to a cloud KMS, replace the provider, see [KMS providers](./providers.md). The rest of
 the code stays the same.
+
+## With a keyring
+
+<!-- The included file compiles as a doctest of kms-aead-keyring, see its src/book.rs. -->
+{{#include ./getting-started/with-a-keyring.md}}
 
 ## MSRV
 

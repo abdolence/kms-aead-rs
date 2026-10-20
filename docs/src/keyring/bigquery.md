@@ -194,7 +194,7 @@ The selection:
 
 Beacon versions are never exported: a selection of the beacon purpose fails with
 `ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
-[Beacons](./beacons.md#bigquery).
+[BigQuery](../beacons.md#bigquery) in kms-aead.
 
 The type parameter of a `EncryptedKeyset` is its encoding, from the `encodings` module, which names
 the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export returns:

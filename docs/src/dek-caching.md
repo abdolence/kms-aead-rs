@@ -187,19 +187,9 @@ envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
 | AES-256-GCM-SIV | no limit beyond `max_uses` | any |
 | ChaCha20-Poly1305 | no limit beyond `max_uses` | any |
 
-The figures come from these bounds:
-
-- AES-GCM: RFC 8446, section 5.5, allows "up to 2^24.5 full-size records (about 24 million)" of
-  2^14 bytes, 2^38.5 bytes, "while keeping a safety margin of approximately 2^-57 for
-  Authenticated Encryption (AE) security". Luykx and Paterson, "Limits on Authenticated Encryption
-  Use in TLS", table 1, give the same 2^24.5 records for a confidentiality advantage of 2^-60. The
-  default of 2^38 bytes stays below that. The most allowed, 2^52 bytes, is the 2^48 blocks RFC
-  8452, section 9, allows under one AES-GCM key for an advantage of 2^-32;
-- AES-GCM-SIV: RFC 8452, section 9, allows 2^32 values of up to 8 GiB each under one key with
-  random nonces for an advantage of 2^-32, so `max_uses` bounds it already;
-- ChaCha20-Poly1305: draft-irtf-cfrg-aead-limits, section 6.3, gives it no confidentiality limit
-  beyond the security of ChaCha20 itself, and its integrity bound depends on the number of forgery
-  attempts, which no writer can count.
+The default stays below the 2^38.5 bytes RFC 8446 allows under one AES-GCM key, and the most
+allowed is the 2^48 blocks of RFC 8452. AES-GCM-SIV and ChaCha20-Poly1305 have no volume bound
+beyond `max_uses`. The citations are in [Data volume](./security.md#data-volume).
 
 A `max_bytes` set in the policy replaces the default, under any algorithm. Above the most
 allowed, the envelope fails to build with `INVALID_DEK_REUSE_POLICY`.

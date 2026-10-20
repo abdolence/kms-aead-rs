@@ -9,27 +9,13 @@ field only needs lookups and its stored value should stay randomised, a
 
 ## What they leak
 
-A deterministic column leaks to anyone who reads it, without any key:
+A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
+deterministic DEK lets its holder test candidate values offline, see
+[What it leaks](../deterministic.md#what-it-leaks) in kms-aead.
 
-- **Equality**: which rows hold the same value;
-- **Frequency**: how often each value occurs.
-
-And since there is no nonce, a leaked deterministic DEK lets its holder test candidate values
-against the whole column offline.
-
-So deterministic fields fit fields that are queried by equality and have high entropy, such as
-emails and external ids. Do not use them:
-
-- for low-cardinality fields, such as a status, a country or a yes/no answer, whose values the
-  frequencies give away;
-- when equality itself is sensitive;
-- for a field that is never looked up by equality: a randomised field leaks nothing of the kind.
-
-A deterministic value also opens in any row of the same kind and field, see [AAD](#aad), so a
-deterministic field never decides identity or authorisation on its own. Where identity matters,
-the check reads a randomised copy of the field, bound to the row by its AAD.
-
-See also [Deterministic encryption](../deterministic.md) in kms-aead.
+The AAD of a deterministic field names its kind and field and no entity, see [AAD](#aad), so a
+deterministic value also opens in any row of the same kind and field, and a deterministic field
+never decides identity or authorisation on its own.
 
 ## Usage
 
