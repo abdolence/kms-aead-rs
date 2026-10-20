@@ -26,6 +26,8 @@ rust-version = "1.99"
 async-trait = "0.1"
 bytes = "1"
 gcloud-sdk = { version = "0.33", default-features = false }
+opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "testing"] }
 proptest = "1.4"
 rsb_derive = "0.5"
 secret-vault-value = { version = "1.0.4", features = ["base64"] }
@@ -61,6 +63,8 @@ secret-vault-value = { workspace = true }
 rsb_derive = { workspace = true }
 async-trait = { workspace = true }
 hex = "0.4"
+# The instruments of the `opentelemetry` feature: the API only, never the SDK.
+opentelemetry = { workspace = true, optional = true }
 ring = { version = "0.17", features = ["default", "std"], optional = true }
 # The oldest release that exports every algorithm the AwsLc backend offers, so that an
 # application can pin an older aws-lc-rs to stay on an older FIPS module.
@@ -179,6 +183,9 @@ deterministic = [
 # Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
 # later breaking release.
 legacy-formats = []
+# Histograms of the time each KMS call takes, on the OpenTelemetry API: the application installs
+# the SDK and an exporter.
+opentelemetry = ["dep:opentelemetry"]
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
 # store feature from the application to build.

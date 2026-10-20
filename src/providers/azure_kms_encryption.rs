@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use super::KekVersion;
 use crate::formats::azure::AzureWrappedKey;
-use crate::spans::{self, kms};
+use crate::spans;
+use crate::spans::kms::{self, KmsCall};
 use secret_vault_value::SecretValue;
 
 /// A Key Vault or Managed HSM key that encrypts data encryption keys.
@@ -192,6 +193,8 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let parameters = self.key_operation(dek.value().ref_sensitive_value().clone())?;
             let wrapped = kms::timed(
+                KmsCall::EncryptDek,
+                self.kek.provider(),
                 self.client.wrap_key(
                     &self.azure_key_ref.key_name,
                     parameters,
@@ -248,12 +251,16 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
             kms::record_kek_version(wrapped_key.kek_version.as_str());
 
             let parameters = self.key_operation(wrapped_key.wrapped.to_vec())?;
-            let unwrapped = kms::timed(self.client.unwrap_key(
-                &self.azure_key_ref.key_name,
-                wrapped_key.kek_version.as_str(),
-                parameters,
-                None,
-            ))
+            let unwrapped = kms::timed(
+                KmsCall::DecryptDek,
+                self.kek.provider(),
+                self.client.unwrap_key(
+                    &self.azure_key_ref.key_name,
+                    wrapped_key.kek_version.as_str(),
+                    parameters,
+                    None,
+                ),
+            )
             .await
             .and_then(|response| response.into_model())
             .map_err(KmsAeadError::from_azure_error)?;

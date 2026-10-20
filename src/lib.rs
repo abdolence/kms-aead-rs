@@ -278,6 +278,9 @@ pub use kms_envelope_encryption::*;
 mod plaintext;
 pub use plaintext::*;
 
+#[cfg(feature = "opentelemetry")]
+mod metrics;
+
 mod spans;
 
 mod types;
