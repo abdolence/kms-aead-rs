@@ -32,7 +32,7 @@ pub(crate) mod kms {
     use tracing::{debug_span, field, Span};
 
     use super::FIELD_ERROR_CODE;
-    use crate::KekRef;
+    use crate::{KekProvider, KekRef, KmsAeadResult};
 
     const FIELD_PROVIDER: &str = "/kms_aead/provider";
     const FIELD_KEY: &str = "/kms_aead/key";
@@ -69,11 +69,7 @@ pub(crate) mod kms {
     /// `KMS random`, around a call to a KMS generator. `key` is what the request names, if
     /// anything.
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
-    pub(crate) fn random_span(
-        provider: &crate::KekProvider,
-        key: Option<&str>,
-        len: usize,
-    ) -> Span {
+    pub(crate) fn random_span(provider: &KekProvider, key: Option<&str>, len: usize) -> Span {
         let span = debug_span!(
             "KMS random",
             { FIELD_PROVIDER } = %provider,
@@ -104,12 +100,23 @@ pub(crate) mod kms {
         Span::current().record(FIELD_KEK_VERSION, kek_version);
     }
 
-    /// Sends a KMS request and records on the current span how long it took, in milliseconds.
-    pub(crate) async fn timed<T>(request: impl Future<Output = T>) -> T {
+    /// Sends a request to `provider`'s KMS and records how long it took on the current span, in
+    /// milliseconds, and with the `opentelemetry` feature in the KMS duration histogram, under
+    /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`. `request` maps the KMS's error, so
+    /// that the histogram records its code.
+    pub(crate) async fn timed<T>(
+        operation: &'static str,
+        provider: &KekProvider,
+        request: impl Future<Output = KmsAeadResult<T>>,
+    ) -> KmsAeadResult<T> {
         let started = Instant::now();
         let response = request.await;
-        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        Span::current().record(FIELD_RESPONSE_TIME, elapsed);
+        let elapsed = started.elapsed();
+        Span::current().record(
+            FIELD_RESPONSE_TIME,
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+        );
+        crate::metrics::record_kms_call(operation, provider, elapsed, &response);
         response
     }
 }

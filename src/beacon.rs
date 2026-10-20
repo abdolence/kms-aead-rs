@@ -32,6 +32,13 @@ pub enum BeaconAlgorithm {
 }
 
 impl BeaconAlgorithm {
+    /// The name [`Display`] writes, `hmac-sha256`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BeaconAlgorithm::HmacSha256 => "hmac-sha256",
+        }
+    }
+
     /// The length of a beacon key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -43,9 +50,7 @@ impl BeaconAlgorithm {
 /// `hmac-sha256`: the value of the `/kms_aead/algorithm` span field.
 impl Display for BeaconAlgorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            BeaconAlgorithm::HmacSha256 => "hmac-sha256",
-        })
+        f.write_str(self.as_str())
     }
 }
 

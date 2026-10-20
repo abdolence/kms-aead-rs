@@ -101,7 +101,12 @@
 //!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres;
 //! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
 //!   PostgreSQL, as `BYTEA` and `BYTEA[]`. It depends on sqlx-core and sqlx-postgres only, with
-//!   no runtime and no TLS stack.
+//!   no runtime and no TLS stack;
+//! - `opentelemetry`: OpenTelemetry metrics, on the `opentelemetry` API crate only: the plaintext
+//!   size of each value sealed and opened, and the duration of every envelope call and KMS
+//!   request. The application installs the SDK and its meter provider, and it must install the
+//!   provider before the first call, since the instruments stay bound to the provider they find
+//!   then.
 //!
 //! # Examples
 //!
@@ -278,6 +283,11 @@ pub use kms_envelope_encryption::*;
 mod plaintext;
 pub use plaintext::*;
 
+mod metrics;
+#[cfg(feature = "opentelemetry")]
+#[doc(hidden)]
+pub use metrics::instruments as __instruments;
+
 mod spans;
 
 mod types;
@@ -301,7 +311,8 @@ pub mod providers;
     feature = "gcp-kms-encryption",
     feature = "aws-kms-encryption",
     feature = "azure-kms-encryption",
-    feature = "hashicorp-vault-transit-kms-encryption"
+    feature = "hashicorp-vault-transit-kms-encryption",
+    feature = "opentelemetry"
 ))]
 mod book;
 

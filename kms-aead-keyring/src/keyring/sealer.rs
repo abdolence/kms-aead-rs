@@ -8,6 +8,7 @@ use kms_aead::formats::Randomized;
 use kms_aead::{Encrypted, KmsAeadEncryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult};
+use crate::metrics::KeyringCall;
 use crate::purpose::unreserved;
 use crate::record_cache::VersionLookup;
 use crate::spans;
@@ -82,12 +83,19 @@ where
     ) -> KeyringResult<Encrypted<T, Randomized>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Randomized, Some(B::NAME));
-        spans::in_span(span, async {
+        let call = KeyringCall::new(
+            keyring.cache.keyring_attribute(),
+            "encrypt",
+            Purpose::Randomized,
+            B::NAME,
+        );
+        let seal = spans::in_span(span, async {
             let (version, encrypted_dek) =
                 self.record.active_dek(Purpose::Randomized).ok_or_else(|| {
                     KeyringError::no_active_version(keyring.id(), Purpose::Randomized)
                 })?;
             spans::record_sealing_version(version);
+            call.version(version);
             keyring.check_interop(aad.interop, version)?;
             let cipher = keyring.cipher(version)?;
             let (sealed, outcome) = keyring
@@ -97,8 +105,8 @@ where
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(sealed?)
-        })
-        .await
+        });
+        call.sealed(seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active randomised version, with the
@@ -132,15 +140,24 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Option<Resealed<T, Randomized>>> {
-        let key_id = Purpose::Randomized.check(value.key_id())?;
-        if self.is_current(key_id).await? {
-            return Ok(None);
-        }
-        let decrypted = self.keyring.decrypt_with_trust(aad, value).await?;
-        Ok(Some(Resealed {
-            value: self.encrypt(aad, &decrypted.value).await?,
-            trust: decrypted.trust,
-        }))
+        let call = KeyringCall::new(
+            self.keyring.cache.keyring_attribute(),
+            "reseal",
+            Purpose::Randomized,
+            B::NAME,
+        );
+        call.timed(async {
+            let key_id = Purpose::Randomized.check(value.key_id())?;
+            if self.is_current(key_id).await? {
+                return Ok(None);
+            }
+            let decrypted = self.keyring.decrypt_with_trust(aad, value).await?;
+            Ok(Some(Resealed {
+                value: self.encrypt(aad, &decrypted.value).await?,
+                trust: decrypted.trust,
+            }))
+        })
+        .await
     }
 
     /// Whether a value or beacon under `key_id` is current for this sealer: `true` when `key_id`

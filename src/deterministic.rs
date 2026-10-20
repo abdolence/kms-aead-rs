@@ -24,6 +24,13 @@ impl DeterministicAlgorithm {
     /// Every algorithm writes this synthetic IV before the cipher text.
     pub(crate) const SYNTHETIC_IV_LEN: usize = 16;
 
+    /// The name [`Display`] writes, `aes-256-siv`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
+        }
+    }
+
     /// The length of a data encryption key for this algorithm, in bytes.
     pub fn key_len(self) -> usize {
         match self {
@@ -35,9 +42,7 @@ impl DeterministicAlgorithm {
 /// `aes-256-siv`: the value of the `/kms_aead/algorithm` span field.
 impl Display for DeterministicAlgorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
-        })
+        f.write_str(self.as_str())
     }
 }
 
@@ -97,6 +102,7 @@ mod aes_siv_cipher {
     use crate::backends::AeadBackend;
     use crate::errors::KmsAeadEncryptionError;
     use crate::formats::{tink_output_prefix, Deterministic, TINK_OUTPUT_PREFIX_LEN};
+    use crate::metrics::{self, Measurement};
     use crate::types::checked_key_bytes;
     use crate::{
         spans, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
@@ -307,9 +313,16 @@ mod aes_siv_cipher {
             &self,
             algorithm: DeterministicAlgorithm,
         ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)> {
-            let cipher = DeterministicCipher::<B>::new(algorithm)?;
+            let measurement =
+                Measurement::start(Self::deterministic_call("generate_dek", algorithm));
             let span = spans::generate_encrypted_dek("deterministic", algorithm, B::NAME);
-            spans::in_span(span, cipher.generate_encrypted_dek(&self.provider)).await
+            let generated = spans::in_span(span, async {
+                let cipher = DeterministicCipher::<B>::new(algorithm)?;
+                cipher.generate_encrypted_dek(&self.provider).await
+            })
+            .await;
+            measurement.finished(&generated);
+            generated
         }
 
         /// Decrypts a key
@@ -325,8 +338,10 @@ mod aes_siv_cipher {
             algorithm: DeterministicAlgorithm,
             encrypted_dek: &EncryptedDataEncryptionKey,
         ) -> KmsAeadResult<DataEncryptionKey> {
+            let measurement =
+                Measurement::start(Self::deterministic_call("decrypt_dek", algorithm));
             let span = spans::decrypt_dek(algorithm, self.dek_cache());
-            spans::in_span(span, async {
+            let decrypted = spans::in_span(span, async {
                 let (dek, _) = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
                 checked_key_bytes(
                     dek.value().ref_sensitive_value(),
@@ -335,7 +350,22 @@ mod aes_siv_cipher {
                 )?;
                 Ok(dek)
             })
-            .await
+            .await;
+            measurement.finished(&decrypted);
+            decrypted
+        }
+
+        /// The metric attributes of a call of `operation` on a deterministic key of `algorithm`.
+        fn deterministic_call(
+            operation: &'static str,
+            algorithm: DeterministicAlgorithm,
+        ) -> metrics::Call {
+            metrics::Call {
+                operation,
+                mode: "caller_dek",
+                backend: B::NAME,
+                algorithm: Some(algorithm.as_str()),
+            }
         }
     }
 

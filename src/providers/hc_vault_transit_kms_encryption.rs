@@ -390,7 +390,12 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             })
             .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
-            let body = kms::timed(self.post(&self.encrypt_uri, request)).await?;
+            let body = kms::timed(
+                "encrypt_dek",
+                self.kek.provider(),
+                self.post(&self.encrypt_uri, request),
+            )
+            .await?;
             let response: TransitResponse<EncryptData> = parse_response(&body)?;
             let ciphertext = response.data.ciphertext;
             let kek_version = transit_key_version(&ciphertext);
@@ -428,7 +433,12 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let request = serde_json::to_vec(&DecryptRequest { ciphertext })
                 .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
-            let body = kms::timed(self.post(&self.decrypt_uri, request)).await?;
+            let body = kms::timed(
+                "decrypt_dek",
+                self.kek.provider(),
+                self.post(&self.decrypt_uri, request),
+            )
+            .await?;
             let response: TransitResponse<DecryptData> = parse_response(&body)?;
             // The decode error is dropped because it names a byte of the key and its offset.
             let plaintext =

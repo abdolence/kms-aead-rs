@@ -140,6 +140,7 @@
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |
 //! | `bigquery-export` | `admin`, and `KeyringAdmin::export_bigquery_keyset` on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
+//! | `opentelemetry` | kms-aead's `opentelemetry`, with every keyring call and store read recorded in its instruments, per keyring and key version. The application installs the meter provider before the first call, since the instruments stay bound to the provider they find then |
 //!
 //! # Example
 //!
@@ -224,6 +225,8 @@ pub use kms_aead::formats;
 #[cfg(feature = "serde-json")]
 pub use kms_aead::Json;
 pub use kms_aead::{Encrypted, KeyId, Plaintext};
+
+mod metrics;
 
 mod purpose;
 pub use purpose::Purpose;

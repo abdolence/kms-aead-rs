@@ -7,6 +7,7 @@ use kms_aead::backends::AeadBackend;
 use kms_aead::{Beacon, BeaconMac, KmsAeadEncryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
+use crate::metrics::KeyringCall;
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{FieldSpec, KeyAlgorithm, KeyVersion, Keyring, Purpose, Sealer};
@@ -42,12 +43,19 @@ where
         value: &T,
     ) -> KeyringResult<Beacon<T>> {
         let keyring = self.keyring;
-        spans::in_span(spans::beacon(keyring.id()), async {
+        let call = KeyringCall::new(
+            keyring.cache.keyring_attribute(),
+            "beacon",
+            Purpose::Beacon,
+            B::NAME,
+        );
+        let beacon = spans::in_span(spans::beacon(keyring.id()), async {
             let (version, encrypted_dek) = self
                 .record
                 .active_dek(Purpose::Beacon)
                 .ok_or_else(|| KeyringError::no_active_version(keyring.id(), Purpose::Beacon))?;
             spans::record_sealing_version(version);
+            call.version(version);
             let mac = keyring.beacon_mac(version)?;
             let context = field.context();
             let (beacon, outcome) = keyring
@@ -57,8 +65,8 @@ where
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(beacon?)
-        })
-        .await
+        });
+        call.timed(beacon).await
     }
 }
 
@@ -85,8 +93,14 @@ where
         field: &FieldSpec,
         value: &T,
     ) -> KeyringResult<Vec<Beacon<T>>> {
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "probe",
+            Purpose::Beacon,
+            B::NAME,
+        );
         // One span for every version's probe, so it records no field of a single version.
-        spans::in_span(spans::beacon(self.id()), async {
+        let probes = spans::in_span(spans::beacon(self.id()), async {
             let record = self.cache.current().await;
             let context = field.context();
             let mut versions = record
@@ -115,8 +129,8 @@ where
                 probes.push(probe?);
             }
             Ok(probes)
-        })
-        .await
+        });
+        call.timed(probes).await
     }
 
     fn beacon_mac(&self, version: &KeyVersion) -> KeyringResult<BeaconMac<B>> {

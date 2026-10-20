@@ -15,6 +15,7 @@ use kms_aead::cache::DekCacheOutcome;
 use tracing::{debug_span, field, Instrument, Span};
 
 use crate::errors::{KeyringResult, RegressionRule};
+use crate::metrics;
 use crate::store::StoreKind;
 use crate::sweep::SweepReport;
 use crate::{KeyId, KeyVersion, KeyringError, KeyringId, Purpose};
@@ -174,12 +175,22 @@ pub(crate) fn record_load(changed: LoadChanged, revision: Option<&impl Display>)
     }
 }
 
-/// Sends a store request and records on the current span how long it took, in milliseconds.
-pub(crate) async fn timed<T>(request: impl Future<Output = T>) -> T {
+/// Sends a read of `keyring` from `store` for `reason` and records on the current span how long
+/// it took, in milliseconds, and with the `opentelemetry` feature in the store duration histogram.
+pub(crate) async fn timed<T>(
+    keyring: &metrics::KeyringAttribute,
+    store: StoreKind,
+    reason: LoadReason,
+    request: impl Future<Output = KeyringResult<T>>,
+) -> KeyringResult<T> {
     let started = tokio::time::Instant::now();
     let response = request.await;
-    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-    Span::current().record(FIELD_RESPONSE_TIME, elapsed);
+    let elapsed = started.elapsed();
+    Span::current().record(
+        FIELD_RESPONSE_TIME,
+        u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+    );
+    metrics::record_store_load(keyring, store, reason, elapsed, &response);
     response
 }
 
@@ -420,7 +431,7 @@ pub(crate) enum LoadReason {
 }
 
 impl LoadReason {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             LoadReason::Open => "open",
             LoadReason::Ttl => "ttl",

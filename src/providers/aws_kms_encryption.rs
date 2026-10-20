@@ -160,9 +160,13 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let encrypt_response = kms::timed(self.encrypt_request(dek).send())
-                .await
-                .map_err(KmsAeadError::from_aws_sdk_error)?;
+            let encrypt_response = kms::timed("encrypt_dek", self.kek.provider(), async {
+                self.encrypt_request(dek)
+                    .send()
+                    .await
+                    .map_err(KmsAeadError::from_aws_sdk_error)
+            })
+            .await?;
             match encrypt_response.ciphertext_blob {
                 // The response names no key material, so the KEK version is unknown.
                 Some(blob) => Ok(EncryptedDataEncryptionKey::new(blob.into_inner())),
@@ -183,9 +187,13 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let decrypt_response = kms::timed(self.decrypt_request(encrypted_dek).send())
-                .await
-                .map_err(KmsAeadError::from_aws_sdk_error)?;
+            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
+                self.decrypt_request(encrypted_dek)
+                    .send()
+                    .await
+                    .map_err(KmsAeadError::from_aws_sdk_error)
+            })
+            .await?;
 
             match decrypt_response.plaintext {
                 Some(plaintext) => Ok(DataEncryptionKey::from(SecretValue::new(
@@ -211,14 +219,15 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                     &format!("AWS KMS cannot generate {len} random bytes in one request"),
                 )
             })?;
-            let response = kms::timed(
+            let response = kms::timed("random", self.kek.provider(), async {
                 self.client
                     .generate_random()
                     .number_of_bytes(number_of_bytes)
-                    .send(),
-            )
-            .await
-            .map_err(KmsAeadError::from_aws_sdk_error)?;
+                    .send()
+                    .await
+                    .map_err(KmsAeadError::from_aws_sdk_error)
+            })
+            .await?;
             let random_bytes = response.plaintext.ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "AWS_ERROR",

@@ -379,7 +379,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             let kek_version = KekVersion::from(version);
             kms::record_kek_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
-            let encrypted_dek = kms::timed(async {
+            let encrypted_dek = kms::timed("encrypt_dek", self.kek.provider(), async {
                 self.cipher.seal(
                     &header,
                     &header,
@@ -421,7 +421,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let key = kms::timed(async {
+            let key = kms::timed("decrypt_dek", self.kek.provider(), async {
                 self.cipher.open(
                     layout.header,
                     layout.sealed,

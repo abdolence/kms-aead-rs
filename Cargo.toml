@@ -26,6 +26,8 @@ rust-version = "1.99"
 async-trait = "0.1"
 bytes = "1"
 gcloud-sdk = { version = "0.33", default-features = false }
+opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "testing"] }
 proptest = "1.4"
 rsb_derive = "0.5"
 secret-vault-value = { version = "1.0.4", features = ["base64"] }
@@ -61,6 +63,8 @@ secret-vault-value = { workspace = true }
 rsb_derive = { workspace = true }
 async-trait = { workspace = true }
 hex = "0.4"
+# The instruments of the `opentelemetry` feature: the API only, never the SDK.
+opentelemetry = { workspace = true, optional = true }
 ring = { version = "0.17", features = ["default", "std"], optional = true }
 # The oldest release that exports every algorithm the AwsLc backend offers, so that an
 # application can pin an older aws-lc-rs to stay on an older FIPS module.
@@ -126,6 +130,8 @@ rustls = "0.23"
 azure_identity = { version = "1.0", default-features = false }
 tokio-postgres = "0.7"
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+# The meter provider of the metrics chapter's code.
+opentelemetry_sdk = { workspace = true }
 
 [features]
 default = []
@@ -179,6 +185,9 @@ deterministic = [
 # Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
 # later breaking release.
 legacy-formats = []
+# OpenTelemetry metrics of the envelope's calls and the KMS requests, which kms-aead-keyring
+# records its calls into too, on the API crate: the application installs the SDK and an exporter.
+opentelemetry = ["dep:opentelemetry"]
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
 # store feature from the application to build.
@@ -217,7 +226,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry"]
 
 [[example]]
 name = "aws_kms"
@@ -238,6 +247,11 @@ required-features = ["hashicorp-vault-transit-kms-encryption-base", "ring"]
 name = "azure_kms"
 path = "examples/azure_kms.rs"
 required-features = ["azure-kms-encryption-base", "aws-lc"]
+
+[[test]]
+name = "metrics"
+path = "tests/metrics.rs"
+required-features = ["opentelemetry", "ring"]
 
 [[test]]
 name = "postgres_fields"

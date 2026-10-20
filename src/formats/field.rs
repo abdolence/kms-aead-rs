@@ -1,4 +1,4 @@
-use super::split_tink_output_prefix;
+use super::{split_tink_output_prefix, TINK_OUTPUT_PREFIX_LEN};
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DeterministicAlgorithm, KeyId, KmsAeadResult};
 
@@ -31,6 +31,17 @@ pub(crate) trait FormatLayout {
     /// names. It reads the framing only: whether the bytes are authentic is known when they are
     /// decrypted.
     fn check(value: &[u8]) -> KmsAeadResult<Self::FramedKeyId>;
+
+    /// The length of the plaintext that `value`, a value [`check`](Self::check) passed, seals:
+    /// its length less the framing and the algorithm's nonce and tag, or synthetic IV.
+    #[cfg_attr(
+        not(feature = "opentelemetry"),
+        expect(
+            dead_code,
+            reason = "only the `opentelemetry` feature records plaintext sizes"
+        )
+    )]
+    fn plaintext_len(value: &[u8]) -> usize;
 }
 
 /// Tink's KMS envelope:
@@ -92,16 +103,34 @@ impl FormatLayout for Envelope {
     /// With `legacy-formats`, the envelope layouts of 0.29 and earlier pass too, so that a reader
     /// keeps decoding stored rows into its final types until they are upgraded.
     fn check(value: &[u8]) -> KmsAeadResult<()> {
+        Bare::check(Envelope::bare(value)?)
+    }
+
+    fn plaintext_len(value: &[u8]) -> usize {
+        // `check` passed on `value` and splits it as `bare` does, so the split cannot fail here
+        // and the 0 is never recorded.
+        Envelope::bare(value).map_or(0, Bare::plaintext_len)
+    }
+}
+
+impl Envelope {
+    /// The part of `value` after its encrypted DEK.
+    fn bare(value: &[u8]) -> KmsAeadResult<&[u8]> {
         #[cfg(feature = "legacy-formats")]
         {
-            Bare::check(super::legacy::StoredEnvelope::split(value)?.bare)
+            Ok(super::legacy::StoredEnvelope::split(value)?.bare)
         }
         #[cfg(not(feature = "legacy-formats"))]
         {
             let (_, bare) = super::envelope::split_envelope(value)?;
-            Bare::check(bare)
+            Ok(bare)
         }
     }
+}
+
+impl Bare {
+    /// The bytes of a bare value besides its cipher text: the nonce and the tag.
+    const OVERHEAD: usize = AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN;
 }
 
 impl Format for Bare {}
@@ -110,7 +139,7 @@ impl FormatLayout for Bare {
     type FramedKeyId = ();
 
     fn check(value: &[u8]) -> KmsAeadResult<()> {
-        if value.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
+        if value.len() < Self::OVERHEAD {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 &format!(
@@ -121,6 +150,10 @@ impl FormatLayout for Bare {
         }
         Ok(())
     }
+
+    fn plaintext_len(value: &[u8]) -> usize {
+        value.len().saturating_sub(Self::OVERHEAD)
+    }
 }
 
 impl Format for Randomized {}
@@ -129,11 +162,13 @@ impl FormatLayout for Randomized {
     type FramedKeyId = KeyId;
 
     fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
-        check_tink_prefixed(
-            value,
-            "a nonce and a tag",
-            AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN,
-        )
+        check_tink_prefixed(value, "a nonce and a tag", Bare::OVERHEAD)
+    }
+
+    fn plaintext_len(value: &[u8]) -> usize {
+        value
+            .len()
+            .saturating_sub(TINK_OUTPUT_PREFIX_LEN + Bare::OVERHEAD)
     }
 }
 
@@ -148,6 +183,12 @@ impl FormatLayout for Deterministic {
             "a synthetic IV",
             DeterministicAlgorithm::SYNTHETIC_IV_LEN,
         )
+    }
+
+    fn plaintext_len(value: &[u8]) -> usize {
+        value
+            .len()
+            .saturating_sub(TINK_OUTPUT_PREFIX_LEN + DeterministicAlgorithm::SYNTHETIC_IV_LEN)
     }
 }
 

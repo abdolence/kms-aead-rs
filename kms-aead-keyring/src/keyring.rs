@@ -16,6 +16,7 @@ use crate::errors::{
     InteropRequirement, KeyVersionCompromisedError, KeyVersionError, KeyringError, KeyringResult,
     RecordInvalidReason,
 };
+use crate::metrics::KeyringCall;
 use crate::record::withdrawn_deks;
 use crate::record_cache::{RecordCache, VersionLookup};
 use crate::spans::{self, LoadReason};
@@ -156,18 +157,28 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
-        let key_id = Purpose::Randomized.check(value.key_id())?;
-        spans::in_span(
-            spans::decrypt(self.id(), Purpose::Randomized, key_id),
-            async {
-                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
-                spans::record_reload(reload);
-                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
-                self.apply_read_policy(version, compromise)?;
-                self.open_cached(&record, version, encrypted_dek, aad, value)
-                    .await
-            },
-        )
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "decrypt",
+            Purpose::Randomized,
+            B::NAME,
+        );
+        call.opened(value, async {
+            let key_id = Purpose::Randomized.check(value.key_id())?;
+            spans::in_span(
+                spans::decrypt(self.id(), Purpose::Randomized, key_id),
+                async {
+                    let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
+                    spans::record_reload(reload);
+                    let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                    call.version(version);
+                    self.apply_read_policy(version, compromise)?;
+                    self.open_cached(&record, version, encrypted_dek, aad, value)
+                        .await
+                },
+            )
+            .await
+        })
         .await
     }
 
@@ -184,32 +195,42 @@ where
         aad: &FieldAad,
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<Decrypted<T>> {
-        let key_id = Purpose::Randomized.check(value.key_id())?;
-        spans::in_span(
-            spans::decrypt(self.id(), Purpose::Randomized, key_id),
-            async {
-                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
-                spans::record_reload(reload);
-                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
-                let (opened, trust) = match compromise {
-                    None => (
-                        self.open_cached(&record, version, encrypted_dek, aad, value)
-                            .await?,
-                        KeyTrust::Trusted,
-                    ),
-                    Some(compromise) => (
-                        self.open_uncached(version, encrypted_dek, aad, value)
-                            .await?,
-                        KeyTrust::Compromised(compromise.clone()),
-                    ),
-                };
-                Ok(Decrypted {
-                    value: opened,
-                    key_id: version.id(),
-                    trust,
-                })
-            },
-        )
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "decrypt",
+            Purpose::Randomized,
+            B::NAME,
+        );
+        call.opened(value, async {
+            let key_id = Purpose::Randomized.check(value.key_id())?;
+            spans::in_span(
+                spans::decrypt(self.id(), Purpose::Randomized, key_id),
+                async {
+                    let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
+                    spans::record_reload(reload);
+                    let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                    call.version(version);
+                    let (opened, trust) = match compromise {
+                        None => (
+                            self.open_cached(&record, version, encrypted_dek, aad, value)
+                                .await?,
+                            KeyTrust::Trusted,
+                        ),
+                        Some(compromise) => (
+                            self.open_uncached(version, encrypted_dek, aad, value)
+                                .await?,
+                            KeyTrust::Compromised(compromise.clone()),
+                        ),
+                    };
+                    Ok(Decrypted {
+                        value: opened,
+                        key_id: version.id(),
+                        trust,
+                    })
+                },
+            )
+            .await
+        })
         .await
     }
 
@@ -418,7 +439,9 @@ where
         value: &Encrypted<T, Envelope>,
         algorithm: AeadAlgorithm,
     ) -> KeyringResult<T> {
-        spans::in_span(spans::decrypt_envelope_for_migration(self.id()), async {
+        let call =
+            KeyringCall::envelope_migration(self.cache.keyring_attribute(), B::NAME, algorithm);
+        let open = spans::in_span(spans::decrypt_envelope_for_migration(self.id()), async {
             let (bare, encrypted_dek) = value.separate()?;
             let cipher = AeadCipher::<B>::new(algorithm)?;
             let (opened, outcome) = self
@@ -429,8 +452,8 @@ where
                 .await?;
             spans::record_dek_cache(outcome);
             Ok(opened?)
-        })
-        .await
+        });
+        call.opened(value, open).await
     }
 }
 

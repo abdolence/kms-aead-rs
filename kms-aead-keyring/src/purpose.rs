@@ -31,6 +31,14 @@ pub enum Purpose {
 }
 
 impl Purpose {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Purpose::Randomized => "randomized",
+            Purpose::Deterministic => "deterministic",
+            Purpose::Beacon => "beacon",
+        }
+    }
+
     /// Every purpose, for the record's checks per purpose.
     pub(crate) const ALL: [Purpose; 3] =
         [Purpose::Randomized, Purpose::Deterministic, Purpose::Beacon];
@@ -77,14 +85,11 @@ impl Purpose {
     }
 }
 
-/// `randomized`, `deterministic`, `beacon`: the values of the `purpose` span field.
+/// `randomized`, `deterministic`, `beacon`: the values of the `purpose` span field and metric
+/// attribute.
 impl Display for Purpose {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Purpose::Randomized => "randomized",
-            Purpose::Deterministic => "deterministic",
-            Purpose::Beacon => "beacon",
-        })
+        f.write_str(self.as_str())
     }
 }
 

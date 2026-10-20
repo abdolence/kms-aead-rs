@@ -30,6 +30,7 @@ The crate has no default features.
 | `serde-json` | `Json`, a typed field's plaintext of any serde type, stored as its JSON |
 | `postgres` | `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for tokio-postgres |
 | `sqlx` | sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS stack |
+| `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value sealed and opened, and the time each call, KMS request and keyring store read takes, see [Metrics](./observability.md#metrics) |
 
 The local KMS provider, `LocalKmsProvider`, is in every build and needs no feature.
 
@@ -69,6 +70,7 @@ The crate has no default features.
 | `s3` | the S3 keyring store |
 | `sqlx` | `Encrypted` and `SealMarker` in sqlx on PostgreSQL, as `BYTEA` |
 | `bigquery-export` | `admin`, and `export_bigquery_keyset`, see [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery) |
+| `opentelemetry` | kms-aead's `opentelemetry`, with the keyring's calls recorded per keyring and key version, see [Metrics](./observability.md#metrics) |
 
 Beacons need no feature, and `export_tink_keyset` needs `admin` only. The KMS providers come from
 kms-aead and its provider features, and secret-vault-value's `SecretValue` is what an application
