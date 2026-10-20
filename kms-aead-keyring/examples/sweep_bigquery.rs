@@ -7,6 +7,9 @@
 //! field BigQuery reads is re-sealed without a Rust loop and without a value leaving BigQuery, so
 //! the sweep is that statement rather than `sweep::run`.
 //!
+//! The sweep is `sweep_users`. `seed_test_data`, `count_readable_users` and `delete_test_data`, at
+//! the end of the file, only write the example's users before it, check them after, and drop them.
+//!
 //! A sweep is a job that runs on a schedule, and again until it re-seals no row. Retiring the
 //! previous version is a separate administrative step, see
 //! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
@@ -30,7 +33,7 @@ use std::time::Instant;
 
 use bigquery::{
     BigQueryDatasetId, BigQueryDb, BigQueryFieldType, BigQueryLocation, BigQueryQueryOutcome,
-    BigQueryTableId, BigQueryWriteSummary,
+    BigQueryResult, BigQueryTableId, BigQueryWriteSummary,
 };
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
@@ -62,6 +65,8 @@ const USERS: BigQueryTableId = BigQueryTableId::from_static("users");
 /// The rows one sealer seals, which share its marker. The writer sends rows in requests of up to
 /// 19 MB whatever this is, so it bounds only how long one sealer is held.
 const SEAL_ROWS: usize = 1000;
+/// The type of the `@keyset` parameter, the serialised keyset.
+const KEYSET_PARAM_TYPE: BigQueryFieldType = BigQueryFieldType::Bytes { max_length: None };
 const DEFAULT_USERS: u32 = 100;
 
 /// The application's email type, sealed as the UTF-8 of the address, which BigQuery reads as a
@@ -93,7 +98,38 @@ struct Count {
     count: u64,
 }
 
-/// Writes `count` users, rotates, and sweeps.
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let count: u32 = match std::env::args().nth(1) {
+        Some(count) => count.parse()?,
+        None => DEFAULT_USERS,
+    };
+    let project = std::env::var("PROJECT_ID")?;
+    let location = std::env::var("PROJECT_LOCATION")?;
+    let db = BigQueryDb::new(&project).await?;
+    let key_ref = GcpKmsKeyRef::new(
+        project,
+        location.clone(),
+        std::env::var("KMS_KEY_RING")?,
+        std::env::var("KMS_KEY")?,
+    );
+    let dataset =
+        BigQueryDatasetId::new(format!("sweep_example_{}", uuid::Uuid::now_v7().simple()))?;
+    db.fluent()
+        .schema()
+        .dataset(dataset.clone())
+        .create()
+        .location(BigQueryLocation::new(location)?)
+        .execute()
+        .await?;
+
+    let outcome = run(&db, &dataset, &key_ref, count).await;
+    delete_test_data(&db, &dataset).await?;
+    outcome
+}
+
+/// Seeds `count` users, rotates, sweeps, prints the rows the sweep re-sealed, and checks that
+/// BigQuery reads every user.
 async fn run(
     db: &BigQueryDb,
     dataset: &BigQueryDatasetId,
@@ -112,6 +148,93 @@ async fn run(
         )
         .await?;
     let keyring: &UsersKeyring = admin.keyring();
+    seed_test_data(db, dataset, keyring, count).await?;
+
+    // One process rotates and sweeps, so the promotion need not wait for other processes'
+    // records to revalidate.
+    admin
+        .promote_now(admin.rotate(Purpose::Randomized).await?)
+        .await?;
+
+    // Exported after the promotion: the keyset's primary is the active version, and its marker
+    // is the one the statement stores beside the values it seals.
+    let started = Instant::now();
+    let keyset: EncryptedKeyset<BigQuery> = admin
+        .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
+        .await?;
+    let swept: BigQueryQueryOutcome = sweep_users(db, dataset, &keyset).await?;
+    println!(
+        "swept to seal marker {} in {:.2?}: resealed {}",
+        keyset.seal_marker(),
+        started.elapsed(),
+        swept
+            .num_dml_affected_rows
+            .map_or_else(|| "unknown".to_string(), |rows| rows.to_string())
+    );
+
+    let readable: u64 = count_readable_users(db, dataset, &keyset).await?;
+    if readable != u64::from(count) {
+        return Err(format!("{readable} of {count} users read back in BigQuery").into());
+    }
+    println!("BigQuery reads all {readable} users");
+    registry.shutdown().await?;
+    Ok(())
+}
+
+/// Re-seals, in one `UPDATE` through `keyset`, every user whose marker is below the keyset's,
+/// leaving out envelope values, which do not open under a keyring's keyset.
+async fn sweep_users(
+    db: &BigQueryDb,
+    dataset: &BigQueryDatasetId,
+    keyset: &EncryptedKeyset<BigQuery>,
+) -> BigQueryResult<BigQueryQueryOutcome> {
+    db.fluent()
+        .query(
+            "UPDATE users
+             SET email = AEAD.ENCRYPT(
+                   KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                   AEAD.DECRYPT_BYTES(
+                     KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                     email,
+                     CAST(CONCAT('user/', id, '/email') AS BYTES)
+                   ),
+                   CAST(CONCAT('user/', id, '/email') AS BYTES)
+                 ),
+                 seal = @seal
+             WHERE seal < @seal AND seal > @envelope",
+        )
+        .default_dataset(dataset.clone())
+        .param("kms_key", keyset.key_uri())
+        .param_as("keyset", KEYSET_PARAM_TYPE, keyset.value())
+        .param("seal", keyset.seal_marker())
+        .param("envelope", SealMarker::ENVELOPE)
+        .execute()
+        .await
+}
+
+// The example's own data, not part of a sweep: its users table, written before the sweep, read
+// back after it, and dropped with the dataset at the end.
+
+/// Creates the users table and writes users `1..=count` to it through the Storage Write API,
+/// [`SEAL_ROWS`] at a time through one sealer.
+async fn seed_test_data(
+    db: &BigQueryDb,
+    dataset: &BigQueryDatasetId,
+    keyring: &UsersKeyring,
+    count: u32,
+) -> Result<(), Box<dyn Error>> {
+    db.fluent()
+        .schema()
+        .table(dataset.table(USERS))
+        .columns(|columns| {
+            columns.fields([
+                columns.field("id").string().required(),
+                columns.field("email").bytes().required(),
+                columns.field("seal").bytes().required(),
+            ])
+        })
+        .sync()
+        .await?;
 
     let started = Instant::now();
     // The table's default stream, whose rows an `UPDATE` can modify as soon as they are
@@ -143,53 +266,16 @@ async fn run(
         keyring.record().seal_marker(),
         started.elapsed()
     );
+    Ok(())
+}
 
-    // One process rotates and sweeps, so the promotion need not wait for other processes'
-    // records to revalidate.
-    admin
-        .promote_now(admin.rotate(Purpose::Randomized).await?)
-        .await?;
-
-    // Exported after the promotion: the keyset's primary is the active version, and its marker
-    // is the one the statement stores beside the values it seals.
-    let started = Instant::now();
-    let keyset: EncryptedKeyset<BigQuery> = admin
-        .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
-        .await?;
-    let keyset_bytes = BigQueryFieldType::Bytes { max_length: None };
-    let swept: BigQueryQueryOutcome = db
-        .fluent()
-        .query(
-            "UPDATE users
-             SET email = AEAD.ENCRYPT(
-                   KEYS.KEYSET_CHAIN(@kms_key, @keyset),
-                   AEAD.DECRYPT_BYTES(
-                     KEYS.KEYSET_CHAIN(@kms_key, @keyset),
-                     email,
-                     CAST(CONCAT('user/', id, '/email') AS BYTES)
-                   ),
-                   CAST(CONCAT('user/', id, '/email') AS BYTES)
-                 ),
-                 seal = @seal
-             WHERE seal < @seal AND seal > @envelope",
-        )
-        .default_dataset(dataset.clone())
-        .param("kms_key", keyset.key_uri())
-        .param_as("keyset", keyset_bytes.clone(), keyset.value())
-        .param("seal", keyset.seal_marker())
-        .param("envelope", SealMarker::ENVELOPE)
-        .execute()
-        .await?;
-    println!(
-        "swept to seal marker {} in {:.2?}: resealed {}",
-        keyset.seal_marker(),
-        started.elapsed(),
-        swept
-            .num_dml_affected_rows
-            .map_or_else(|| "unknown".to_string(), |rows| rows.to_string())
-    );
-
-    let readable: u64 = db
+/// The users whose email BigQuery decrypts through `keyset` to the address the seeding wrote.
+async fn count_readable_users(
+    db: &BigQueryDb,
+    dataset: &BigQueryDatasetId,
+    keyset: &EncryptedKeyset<BigQuery>,
+) -> Result<u64, Box<dyn Error>> {
+    let readable: Count = db
         .fluent()
         .query(
             "SELECT COUNTIF(
@@ -199,66 +285,22 @@ async fn run(
         )
         .default_dataset(dataset.clone())
         .param("kms_key", keyset.key_uri())
-        .param_as("keyset", keyset_bytes, keyset.value())
+        .param_as("keyset", KEYSET_PARAM_TYPE, keyset.value())
         .obj::<Count>()
         .query()
         .await?
         .pop()
-        .ok_or("the count returned no row")?
-        .count;
-    if readable != u64::from(count) {
-        return Err(format!("{readable} of {count} users read back in BigQuery").into());
-    }
-    println!("BigQuery reads all {readable} users");
-    registry.shutdown().await?;
-    Ok(())
+        .ok_or("the count returned no row")?;
+    Ok(readable.count)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let count: u32 = match std::env::args().nth(1) {
-        Some(count) => count.parse()?,
-        None => DEFAULT_USERS,
-    };
-    let project = std::env::var("PROJECT_ID")?;
-    let location = std::env::var("PROJECT_LOCATION")?;
-    let db = BigQueryDb::new(&project).await?;
-    let key_ref = GcpKmsKeyRef::new(
-        project,
-        location.clone(),
-        std::env::var("KMS_KEY_RING")?,
-        std::env::var("KMS_KEY")?,
-    );
-    let dataset =
-        BigQueryDatasetId::new(format!("sweep_example_{}", uuid::Uuid::now_v7().simple()))?;
-    db.fluent()
-        .schema()
-        .dataset(dataset.clone())
-        .create()
-        .location(BigQueryLocation::new(location)?)
-        .execute()
-        .await?;
-    let outcome = async {
-        db.fluent()
-            .schema()
-            .table(dataset.table(USERS))
-            .columns(|columns| {
-                columns.fields([
-                    columns.field("id").string().required(),
-                    columns.field("email").bytes().required(),
-                    columns.field("seal").bytes().required(),
-                ])
-            })
-            .sync()
-            .await?;
-        run(&db, &dataset, &key_ref, count).await
-    }
-    .await;
+/// Drops the example's dataset with the users table in it.
+async fn delete_test_data(db: &BigQueryDb, dataset: &BigQueryDatasetId) -> BigQueryResult<()> {
     db.fluent()
         .schema()
         .dataset(dataset.clone())
         .dangerously_delete_with_contents()
         .await?;
     println!("dropped the example's dataset {dataset}");
-    outcome
+    Ok(())
 }

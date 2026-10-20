@@ -5,6 +5,9 @@
 //! sweep's report. The re-seal is the one of
 //! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#firestore) in the book.
 //!
+//! The sweep is `sweep_users` and `reseal_batch`. `seed_test_data` and `delete_test_data`, at the
+//! end of the file, only write the example's users before it and delete them after.
+//!
 //! A sweep is a job that runs on a schedule, and again until its report shows nothing scanned.
 //! Retiring the previous version is a separate administrative step, see
 //! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
@@ -110,13 +113,6 @@ struct UserFields {
     seal: SealMarker,
 }
 
-/// The id of any document, for the cleanup.
-#[derive(Deserialize)]
-struct DocId {
-    #[serde(rename = "_firestore_id")]
-    id: String,
-}
-
 /// Why the sweep failed on a document or a batch: an error of the keyring or of the users
 /// collection, or the status of a document's write in a batch, `None` for a status the batch did
 /// not return.
@@ -166,14 +162,110 @@ impl Display for UserDoc {
     }
 }
 
-/// Adds `count` users to `done`, and prints the total each time it passes a multiple of
-/// [`PROGRESS_EVERY`].
-fn count_progress(done: &AtomicUsize, count: usize, what: &str) {
-    let before: usize = done.fetch_add(count, Ordering::Relaxed);
-    let after: usize = before + count;
-    if before / PROGRESS_EVERY != after / PROGRESS_EVERY {
-        println!("{what} {after} users");
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let count: u32 = match std::env::args().nth(1) {
+        Some(count) => count.parse()?,
+        None => DEFAULT_USERS,
+    };
+    let suffix = uuid::Uuid::now_v7().simple();
+    let keyrings = FirestoreCollectionId::new(format!("sweep_example_keyrings_{suffix}"))?;
+    let users = FirestoreCollectionId::new(format!("sweep_example_users_{suffix}"))?;
+    let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
+    let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
+        FirestoreKeyringStore::new(db.clone()).with_collection(keyrings.clone()),
+        KeyringRegistryOptions::new(),
+    )?;
+    let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+
+    let outcome = run(&registry, &writer, &users, count).await;
+    registry.shutdown().await?;
+    delete_test_data(&writer, &[&users, &keyrings]).await?;
+    outcome
+}
+
+/// Seeds `count` users, rotates, sweeps and prints the sweep's report.
+async fn run(
+    registry: &KeyringRegistry<FirestoreKeyringStore, Ring>,
+    writer: &FirestoreSimpleBatchWriter,
+    users: &FirestoreCollectionId,
+    count: u32,
+) -> Result<(), Box<dyn Error>> {
+    let admin: KeyringAdmin<FirestoreKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+        .create(
+            LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?,
+            TENANT,
+            KeyringAlgorithms::new(),
+        )
+        .await?;
+    let keyring: &UsersKeyring = admin.keyring();
+    seed_test_data(keyring, writer, users, count).await?;
+
+    // One process rotates and sweeps, so the promotion need not wait for other processes'
+    // records to revalidate.
+    admin
+        .promote_now(admin.rotate(Purpose::Randomized).await?)
+        .await?;
+
+    let started = Instant::now();
+    let report: SweepReport = sweep_users(keyring, writer, users).await?;
+    println!(
+        "swept to seal marker {} in {:.2?}: scanned {}, resealed {} ({} from a compromised \
+         version), skipped {}, failed {}",
+        keyring.record().seal_marker(),
+        started.elapsed(),
+        report.scanned,
+        report.resealed,
+        report.resealed_from_compromised,
+        report.skipped,
+        report.failed
+    );
+    if report.failed > 0 {
+        return Err(format!("{} users failed; the next run retries them", report.failed).into());
     }
+    Ok(())
+}
+
+/// Re-seals every user whose marker is below the current one, in batches of [`BATCH_SIZE`] with
+/// [`CONCURRENCY`] in flight, and returns the sweep's report.
+async fn sweep_users(
+    keyring: &UsersKeyring,
+    writer: &FirestoreSimpleBatchWriter,
+    users: &FirestoreCollectionId,
+) -> Result<SweepReport, FirestoreError> {
+    let current: SealMarker = keyring.record().seal_marker();
+    // One query, streamed in the order of the `seal` index with the fields the sweep reads. A
+    // document that does not read is a failed candidate, and the sweep goes on.
+    let candidates = writer
+        .db
+        .fluent()
+        .select()
+        .fields(paths!(UserFields::{email, seal}))
+        .from(users.as_str())
+        .filter(|q| q.field("seal").less_than(current))
+        .obj::<UserDoc>()
+        .stream_query_with_errors()
+        .await?
+        .err_into::<SweepError>();
+    let swept = AtomicUsize::new(0);
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        candidates,
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |docs: Vec<UserDoc>| {
+            let swept = &swept;
+            async move {
+                let batch_count = docs.len();
+                let outcomes = reseal_batch(keyring, writer, users, docs).await;
+                count_progress(swept, batch_count, "swept");
+                outcomes
+            }
+        },
+    )
+    .await;
+    Ok(report)
 }
 
 /// Re-seals a batch of documents through one sealer and writes them back in one `BatchWrite`,
@@ -249,80 +341,29 @@ async fn reseal_batch(
     Ok(done)
 }
 
-/// Fails unless every write of a seeding or cleanup batch succeeded, with the code of the first
-/// that did not.
-fn every_write_succeeded(response: &FirestoreBatchWriteResponse) -> Result<(), Box<dyn Error>> {
-    match response
-        .statuses
-        .iter()
-        .map(|status| Code::try_from(status.code))
-        .find(|code| *code != Ok(Code::Ok))
-    {
-        Some(code) => Err(format!("a write of a batch failed with {code:?}").into()),
-        None => Ok(()),
+/// Adds `count` users to `done`, and prints the total each time it passes a multiple of
+/// [`PROGRESS_EVERY`].
+fn count_progress(done: &AtomicUsize, count: usize, what: &str) {
+    let before: usize = done.fetch_add(count, Ordering::Relaxed);
+    let after: usize = before + count;
+    if before / PROGRESS_EVERY != after / PROGRESS_EVERY {
+        println!("{what} {after} users");
     }
 }
 
-/// Deletes every document of `collection` in batches of [`BATCH_SIZE`], and returns how many
-/// there were.
-async fn delete_all(
-    writer: &FirestoreSimpleBatchWriter,
-    collection: &FirestoreCollectionId,
-) -> Result<usize, Box<dyn Error>> {
-    writer
-        .db
-        .fluent()
-        .select()
-        .from(collection.as_str())
-        .obj::<DocId>()
-        .stream_query_with_errors()
-        .await?
-        .try_chunks(BATCH_SIZE.get())
-        .map_err(
-            |error: TryChunksError<DocId, FirestoreError>| -> Box<dyn Error> { error.1.into() },
-        )
-        .map_ok(|docs: Vec<DocId>| async move {
-            let mut batch = writer.new_batch();
-            for doc in &docs {
-                writer
-                    .db
-                    .fluent()
-                    .delete()
-                    .from(collection.as_str())
-                    .document_id(&doc.id)
-                    .add_to_batch(&mut batch)?;
-            }
-            every_write_succeeded(&batch.write().await?)?;
-            Ok::<usize, Box<dyn Error>>(docs.len())
-        })
-        .try_buffer_unordered(CONCURRENCY.get())
-        .try_fold(0, |deleted: usize, count: usize| async move {
-            Ok(deleted + count)
-        })
-        .await
-}
+// The example's own data, not part of a sweep: its users and keyring record, written before the
+// sweep and deleted after it.
 
-/// Writes `count` users, rotates, and sweeps.
-async fn run(
-    registry: &KeyringRegistry<FirestoreKeyringStore, Ring>,
+/// Writes users `1..=count`, a batch of [`BATCH_SIZE`] at a time through one sealer and in one
+/// `BatchWrite`, with [`CONCURRENCY`] batches in flight.
+async fn seed_test_data(
+    keyring: &UsersKeyring,
     writer: &FirestoreSimpleBatchWriter,
     users: &FirestoreCollectionId,
     count: u32,
 ) -> Result<(), Box<dyn Error>> {
-    let db: &FirestoreDb = &writer.db;
-    let admin: KeyringAdmin<FirestoreKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
-        .create(
-            LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?,
-            TENANT,
-            KeyringAlgorithms::new(),
-        )
-        .await?;
-    let keyring: &UsersKeyring = admin.keyring();
-
     let started = Instant::now();
     let written = AtomicUsize::new(0);
-    // Only the batches in flight are in memory: each is sealed through one sealer and
-    // created in one `BatchWrite`.
     stream::iter(1..=count)
         .chunks(BATCH_SIZE.get())
         .map(Ok)
@@ -344,7 +385,9 @@ async fn run(
                             .await?,
                         seal,
                     };
-                    db.fluent()
+                    writer
+                        .db
+                        .fluent()
                         .update()
                         .in_col(users.as_str())
                         .precondition(FirestoreWritePrecondition::Exists(false))
@@ -363,84 +406,74 @@ async fn run(
         keyring.record().seal_marker(),
         started.elapsed()
     );
-
-    // One process rotates and sweeps, so the promotion need not wait for other processes'
-    // records to revalidate.
-    admin
-        .promote_now(admin.rotate(Purpose::Randomized).await?)
-        .await?;
-
-    let started = Instant::now();
-    let current: SealMarker = keyring.record().seal_marker();
-    // One query, streamed in the order of the `seal` index with the fields the sweep reads. A
-    // document that does not read is a failed candidate, and the sweep goes on.
-    let candidates = db
-        .fluent()
-        .select()
-        .fields(paths!(UserFields::{email, seal}))
-        .from(users.as_str())
-        .filter(|q| q.field("seal").less_than(current))
-        .obj::<UserDoc>()
-        .stream_query_with_errors()
-        .await?
-        .err_into::<SweepError>();
-    let swept = AtomicUsize::new(0);
-    let report: SweepReport = sweep::run_batched(
-        keyring.id(),
-        candidates,
-        BatchedSweepOptions::new()
-            .with_batch_size(BATCH_SIZE)
-            .with_concurrency(CONCURRENCY),
-        |docs: Vec<UserDoc>| {
-            let swept = &swept;
-            async move {
-                let batch_count = docs.len();
-                let outcomes = reseal_batch(keyring, writer, users, docs).await;
-                count_progress(swept, batch_count, "swept");
-                outcomes
-            }
-        },
-    )
-    .await;
-    println!(
-        "swept to seal marker {current} in {:.2?}: scanned {}, resealed {} ({} from a compromised \
-         version), skipped {}, failed {}",
-        started.elapsed(),
-        report.scanned,
-        report.resealed,
-        report.resealed_from_compromised,
-        report.skipped,
-        report.failed
-    );
-    if report.failed > 0 {
-        return Err(format!("{} users failed; the next run retries them", report.failed).into());
-    }
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let count: u32 = match std::env::args().nth(1) {
-        Some(count) => count.parse()?,
-        None => DEFAULT_USERS,
-    };
-    let suffix = uuid::Uuid::now_v7().simple();
-    let keyrings = FirestoreCollectionId::new(format!("sweep_example_keyrings_{suffix}"))?;
-    let users = FirestoreCollectionId::new(format!("sweep_example_users_{suffix}"))?;
-    let db = FirestoreDb::new(std::env::var("PROJECT_ID")?).await?;
+/// The id of any document, for the cleanup.
+#[derive(Deserialize)]
+struct DocId {
+    #[serde(rename = "_firestore_id")]
+    id: String,
+}
 
-    let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
-        FirestoreKeyringStore::new(db.clone()).with_collection(keyrings.clone()),
-        KeyringRegistryOptions::new(),
-    )?;
-    let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
-    let outcome = run(&registry, &writer, &users, count).await;
-    registry.shutdown().await?;
+/// Deletes every document of `collections`, streaming the ids of each into batches of
+/// [`BATCH_SIZE`] deletes with [`CONCURRENCY`] in flight.
+async fn delete_test_data(
+    writer: &FirestoreSimpleBatchWriter,
+    collections: &[&FirestoreCollectionId],
+) -> Result<(), Box<dyn Error>> {
     let started = Instant::now();
-    let deleted = delete_all(&writer, &users).await? + delete_all(&writer, &keyrings).await?;
+    let mut deleted: usize = 0;
+    for collection in collections {
+        deleted += writer
+            .db
+            .fluent()
+            .select()
+            .from(collection.as_str())
+            .obj::<DocId>()
+            .stream_query_with_errors()
+            .await?
+            .try_chunks(BATCH_SIZE.get())
+            .map_err(
+                |error: TryChunksError<DocId, FirestoreError>| -> Box<dyn Error> { error.1.into() },
+            )
+            .map_ok(|docs: Vec<DocId>| async move {
+                let mut batch = writer.new_batch();
+                for doc in &docs {
+                    writer
+                        .db
+                        .fluent()
+                        .delete()
+                        .from(collection.as_str())
+                        .document_id(&doc.id)
+                        .add_to_batch(&mut batch)?;
+                }
+                every_write_succeeded(&batch.write().await?)?;
+                Ok::<usize, Box<dyn Error>>(docs.len())
+            })
+            .try_buffer_unordered(CONCURRENCY.get())
+            .try_fold(0, |deleted: usize, count: usize| async move {
+                Ok(deleted + count)
+            })
+            .await?;
+    }
     println!(
         "deleted the example's {deleted} documents in {:.2?}",
         started.elapsed()
     );
-    outcome
+    Ok(())
+}
+
+/// Fails unless every write of a seeding or cleanup batch succeeded, with the code of the first
+/// that did not.
+fn every_write_succeeded(response: &FirestoreBatchWriteResponse) -> Result<(), Box<dyn Error>> {
+    match response
+        .statuses
+        .iter()
+        .map(|status| Code::try_from(status.code))
+        .find(|code| *code != Ok(Code::Ok))
+    {
+        Some(code) => Err(format!("a write of a batch failed with {code:?}").into()),
+        None => Ok(()),
+    }
 }

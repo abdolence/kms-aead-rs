@@ -381,38 +381,42 @@ use std::sync::Mutex;
 
 use futures_util::stream;
 use kms_aead::backends::Ring;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
+use kms_aead::providers::LocalKmsProvider;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
-    KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext,
-    Purpose, Resealed,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringResult,
+    Resealed,
 };
-use secret_vault_value::SecretValue;
+# use kms_aead::providers::LocalKekId;
+# use kms_aead::KmsAeadResult;
+# use kms_aead_keyring::{
+#     KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+#     Plaintext, Purpose,
+# };
+# use secret_vault_value::SecretValue;
 
 type UsersKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>;
 
-const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
     FieldName::from_static("email"),
 );
-
-#[derive(Clone)]
-struct Email(String);
-
-impl Plaintext for Email {
-    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
+# const TENANT: KeyringId = KeyringId::from_static("tenant-42");
+#
+# #[derive(Clone)]
+# struct Email(String);
+#
+# impl Plaintext for Email {
+#     fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
+#         self.0.to_plaintext()
+#     }
+#
+#     fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
+#         String::from_plaintext(plaintext).map(Email)
+#     }
+# }
 
 #[derive(Clone)]
 struct UserRow {
@@ -422,26 +426,6 @@ struct UserRow {
 
 /// The users table, by user id.
 type Table = Mutex<BTreeMap<String, UserRow>>;
-
-/// The application's write of a user: every field sealed through one sealer, and the marker of
-/// the sealer's record.
-async fn write_user(
-    keyring: &UsersKeyring,
-    table: &Table,
-    user: &str,
-    email: &Email,
-) -> KeyringResult<()> {
-    let sealer = keyring.sealer().await;
-    let email = sealer
-        .encrypt(&EMAIL.aad(&EntityId::try_from(user)?), email)
-        .await?;
-    let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, seal });
-    Ok(())
-}
 
 /// Re-seals the row of `user` under the active version, with the marker of the sealer's record.
 async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ResealOutcome> {
@@ -479,17 +463,18 @@ async fn reseal(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRes
 #     .create(provider, TENANT, KeyringAlgorithms::new())
 #     .await?;
 # let keyring: &UsersKeyring = admin.keyring();
-let table = Table::default();
-for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-    write_user(keyring, &table, user, &Email(email.to_string())).await?;
-}
-
-// The administrative job stages a version, and promotes it after the wait for every process to
-// see it; `promote_now` stands in for the wait here
-let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
-admin.promote_now(staged).await?;
-
-// The sweep, on the data-plane handle: every row whose marker is below the keyring's
+# let table = Table::default();
+# for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
+#     let sealer = keyring.sealer().await;
+#     let email = sealer
+#         .encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &Email(email.to_string()))
+#         .await?;
+#     let seal: SealMarker = sealer.record().seal_marker();
+#     table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
+# }
+# let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
+# admin.promote_now(staged).await?;
+// Every row whose marker is below the keyring's
 let current: SealMarker = keyring.record().seal_marker();
 let candidates = table
     .lock()
@@ -591,22 +576,25 @@ use std::num::NonZeroUsize;
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreDb, FirestoreSimpleBatchWriter,
-    FirestoreTimestamp, FirestoreWritePrecondition,
+    paths, FirestoreBatchWriteResponse, FirestoreSimpleBatchWriter, FirestoreTimestamp,
+    FirestoreWritePrecondition,
 };
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, KeyringResult, Plaintext, Resealed, Sealer,
+    KeyringResult, Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
+# use firestore::FirestoreDb;
+# use kms_aead::providers::GcpKmsKeyRef;
+# use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
 
 type UsersKeyring = Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>;
 type UsersSealer<'k> = Sealer<'k, FirestoreKeyringStore, GcpKmsProvider, Ring>;
@@ -701,6 +689,35 @@ impl Display for SweepError {
             SweepError::Write(None) => f.write_str("its write returned no status"),
         }
     }
+}
+
+/// Re-seals every user whose marker is below the current one, in batches of [`BATCH_SIZE`] with
+/// [`CONCURRENCY`] in flight, and returns the sweep's report.
+async fn sweep_users(
+    keyring: &UsersKeyring,
+    writer: &FirestoreSimpleBatchWriter,
+) -> Result<SweepReport, FirestoreError> {
+    let current: SealMarker = keyring.record().seal_marker();
+    let candidates = writer
+        .db
+        .fluent()
+        .select()
+        .from(USERS)
+        .filter(|q| q.field("seal").less_than(current))
+        .obj::<UserDoc>()
+        .stream_query_with_errors()
+        .await?
+        .err_into::<SweepError>();
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        candidates,
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |docs: Vec<UserDoc>| reseal_batch(keyring, writer, docs),
+    )
+    .await;
+    Ok(report)
 }
 
 /// The AAD the application gave its envelope values.
@@ -805,37 +822,18 @@ async fn reseal_batch(
 #     "my-key-ring".to_string(),
 #     "my-key".to_string(),
 # );
-let db = FirestoreDb::new("my-project").await?;
-let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
-let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
-    FirestoreKeyringStore::new(db.clone()),
-    KeyringRegistryOptions::new(),
-)?;
-let keyring: UsersKeyring = registry
-    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
-    .await?;
-
-let current: SealMarker = keyring.record().seal_marker();
-let candidates = db
-    .fluent()
-    .select()
-    .from(USERS)
-    .filter(|q| q.field("seal").less_than(current))
-    .obj::<UserDoc>()
-    .stream_query_with_errors()
-    .await?
-    .err_into::<SweepError>();
-let report: SweepReport = sweep::run_batched(
-    keyring.id(),
-    candidates,
-    BatchedSweepOptions::new()
-        .with_batch_size(BATCH_SIZE)
-        .with_concurrency(CONCURRENCY),
-    |docs: Vec<UserDoc>| reseal_batch(&keyring, &writer, docs),
-)
-.await;
+# let db = FirestoreDb::new("my-project").await?;
+# let writer: FirestoreSimpleBatchWriter = db.create_simple_batch_writer().await?;
+# let registry = KeyringRegistry::<FirestoreKeyringStore, Ring>::new(
+#     FirestoreKeyringStore::new(db.clone()),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: UsersKeyring = registry
+#     .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
+#     .await?;
+let report: SweepReport = sweep_users(&keyring, &writer).await?;
 println!("{report:?}");
-registry.shutdown().await?;
+# registry.shutdown().await?;
 # Ok(())
 # }
 ```
@@ -886,17 +884,20 @@ use std::num::NonZeroUsize;
 
 use futures_util::StreamExt;
 use kms_aead::backends::Ring;
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::providers::GcpKmsProvider;
 use kms_aead::{AeadAlgorithm, KmsAeadResult};
 use kms_aead_keyring::formats::{Envelope, Randomized};
 use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Resealed, Sealer,
+    Plaintext, Resealed, Sealer,
 };
 use secret_vault_value::SecretValue;
-use tokio_postgres::{Client, Config, NoTls, Row};
+use tokio_postgres::{Client, NoTls, Row};
+# use kms_aead::providers::GcpKmsKeyRef;
+# use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
+# use tokio_postgres::Config;
 
 type UsersKeyring = Keyring<PostgresKeyringStore<NoTls>, GcpKmsProvider, Ring>;
 type UsersSealer<'k> = Sealer<'k, PostgresKeyringStore<NoTls>, GcpKmsProvider, Ring>;
@@ -967,6 +968,38 @@ impl Display for SweepError {
             },
         }
     }
+}
+
+/// Re-seals every user whose marker is below the current one, read through `reader` and written
+/// back through `writer` in batches of [`BATCH_SIZE`] with [`CONCURRENCY`] in flight, and returns
+/// the sweep's report.
+async fn sweep_users(
+    keyring: &UsersKeyring,
+    reader: &Client,
+    writer: &Client,
+) -> Result<SweepReport, tokio_postgres::Error> {
+    let current: SealMarker = keyring.record().seal_marker();
+    // A row whose id does not read is a failed candidate; an error of the stream itself ends it.
+    let candidates = reader
+        .query_raw("SELECT id, email, seal FROM users WHERE seal < $1", [current])
+        .await?
+        .map(|row: Result<Row, tokio_postgres::Error>| {
+            let row: Row = row?;
+            Ok::<UserRow, SweepError>(UserRow {
+                id: row.try_get("id")?,
+                row,
+            })
+        });
+    let report: SweepReport = sweep::run_batched(
+        keyring.id(),
+        candidates,
+        BatchedSweepOptions::new()
+            .with_batch_size(BATCH_SIZE)
+            .with_concurrency(CONCURRENCY),
+        |batch: Vec<UserRow>| reseal_batch(keyring, writer, batch),
+    )
+    .await;
+    Ok(report)
 }
 
 /// The AAD the application gave its envelope values.
@@ -1066,42 +1099,21 @@ async fn reseal_batch(
 #     "my-key-ring".to_string(),
 #     "my-key".to_string(),
 # );
-let config: Config = "postgres://app@localhost/app".parse()?;
-let (client, connection) = config.connect(NoTls).await?;
-tokio::spawn(connection);
-let (reader, connection) = config.connect(NoTls).await?;
-tokio::spawn(connection);
-let registry = KeyringRegistry::<PostgresKeyringStore<NoTls>, Ring>::new(
-    PostgresKeyringStore::new(config, NoTls),
-    KeyringRegistryOptions::new(),
-)?;
-let keyring: UsersKeyring = registry
-    .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
-    .await?;
-
-let current: SealMarker = keyring.record().seal_marker();
-// A row whose id does not read is a failed candidate; an error of the stream itself ends it.
-let candidates = reader
-    .query_raw("SELECT id, email, seal FROM users WHERE seal < $1", [current])
-    .await?
-    .map(|row: Result<Row, tokio_postgres::Error>| {
-        let row: Row = row?;
-        Ok::<UserRow, SweepError>(UserRow {
-            id: row.try_get("id")?,
-            row,
-        })
-    });
-let report: SweepReport = sweep::run_batched(
-    keyring.id(),
-    candidates,
-    BatchedSweepOptions::new()
-        .with_batch_size(BATCH_SIZE)
-        .with_concurrency(CONCURRENCY),
-    |batch: Vec<UserRow>| reseal_batch(&keyring, &client, batch),
-)
-.await;
+# let config: Config = "postgres://app@localhost/app".parse()?;
+# let (client, connection) = config.connect(NoTls).await?;
+# tokio::spawn(connection);
+# let (reader, connection) = config.connect(NoTls).await?;
+# tokio::spawn(connection);
+# let registry = KeyringRegistry::<PostgresKeyringStore<NoTls>, Ring>::new(
+#     PostgresKeyringStore::new(config, NoTls),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let keyring: UsersKeyring = registry
+#     .open(GcpKmsProvider::new(&key_ref).await?, KeyringId::from_static("tenant-42"))
+#     .await?;
+let report: SweepReport = sweep_users(&keyring, &reader, &client).await?;
 println!("{report:?}");
-registry.shutdown().await?;
+# registry.shutdown().await?;
 # Ok(())
 # }
 ```
