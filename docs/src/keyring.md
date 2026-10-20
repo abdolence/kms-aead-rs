@@ -81,4 +81,19 @@ names the versions they are under, see [The seal marker](./operations/sweeps.md#
 Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is
 in the DEK cache, see [Record cache](./keyring/record-cache.md).
 
+A keyring stays open until the registry shuts down. Where the store has push, the registry follows
+the change signals of each open keyring with a task on the current tokio runtime.
+`registry.shutdown()` stops those tasks and the store's listener and waits for them:
+
+- a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
+  stop at once;
+- the open keyrings' keys are evicted from the DEK cache, and no other key is;
+- the handles keep serving from their cached records, which their TTL revalidates without push,
+  and later opens work too, with no watch.
+
+Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
+aborts them and logs a `WARN`. `shutdown_with_timeout(timeout)` aborts what still runs after
+`timeout`, with a `WARN` that counts the aborted tasks, and an abort leaves no half-written state.
+Both return `Ok` whatever the tasks did.
+
 The bytes of values, key ids and records are in [Formats](./formats.md).

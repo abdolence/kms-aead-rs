@@ -12,7 +12,7 @@ The administrative job runs a rotation in steps, on its `KeyringAdmin`, see
 [Applications and administration](../keyring/deployment.md):
 
 1. `rotate(purpose)`;
-2. export the `Readable` BigQuery keysets again, which then hold the pending version;
+2. export the `Readable` BigQuery and Tink keysets again, which then hold the pending version;
 3. wait the longest time any process may run without a successful refresh of its record, counted
    from `staged_at()`, and check that no process logged "The keyring record could not be
    revalidated" meanwhile;
@@ -42,9 +42,9 @@ After a promotion, export the `Single` BigQuery keysets of the new deterministic
 a pending version has none.
 
 Rotation does not touch values already written. A [sweep](./sweeps.md) re-seals them: a job that runs
-on a schedule until its `SweepReport` shows nothing scanned. Retiring the old version is a separate
-step of the administrative job, once the sweep is done and the old version's
-[range query](./sweeps.md#records-under-a-version) returns nothing: `retire`, and later `destroy`.
+on a schedule until its `SweepReport` shows nothing scanned. Retiring and destroying the old version
+are separate steps of the administrative job, see
+[Retiring the old version](./sweeps.md#retiring-the-old-version).
 
 ### Alerting on volume
 
@@ -167,14 +167,12 @@ The whole procedure, with the application's own DEKs and keysets, is in
 
 A `None` among the versions in use stands for the DEKs whose KMS reported no version: every DEK
 under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application's
-own provider that returns none. `reencrypt_deks` keeps such a DEK at `None`, so the check before the
-disable never passes, and the check once the old version is disabled is the only one:
+own provider that returns none. A Cloud KMS or Vault Transit response without a key version is
+logged at `WARN`, see [Events](../observability.md#events). `reencrypt_deks` keeps such a DEK at
+`None`, so the check before the disable never passes. The procedure in
+[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation)
+then goes from step 2 to step 4, and the check after the disable, step 6, is the only one.
 
-1. run `reencrypt_deks` after the rotation;
-2. disable the old version in the KMS;
-3. run `reencrypt_deks` again. It decrypts every DEK through the KMS, so an error is a DEK the KMS
-   no longer decrypts: enable the old version again, and go back to step 1.
-
-Between steps 2 and 3, a DEK still under the old version fails in the application too, once its
-DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
+Between the disable and that check, a DEK still under the old version fails in the application too,
+once its DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
 [AWS KMS](../providers/aws.md#key-versions-and-rotation).

@@ -69,6 +69,7 @@ The library's codes:
 | `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
+| `AWS_ERROR` | encryption | an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see [AWS KMS](./providers/aws.md#errors) |
 | `INVALID_LOCAL_KEK_ID`, `LOCAL_*` | system, encryption | the [local KMS](./providers/local.md#errors) |
 | `AZURE_*` | system, encryption | the [Azure provider](./providers/azure.md#errors) |
 | `VAULT_*` | system, network, encryption | the [Vault Transit provider](./providers/hc-vault-transit.md#errors) |
@@ -88,13 +89,65 @@ The variant per provider:
 | Provider | `NetworkError` | `EncryptionError` |
 |---|---|---|
 | Google Cloud KMS | gRPC `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, `Internal`, `Unknown`, `Cancelled` | any other gRPC code, such as `PermissionDenied`, `Unauthenticated`, `NotFound`, `InvalidArgument`, `FailedPrecondition` |
-| AWS KMS | `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException`, `KeyUnavailableException`, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read | any other AWS error code, such as `AccessDeniedException`, `NotFoundException`, `IncorrectKeyException`, `InvalidCiphertextException`, `DisabledException`, `KMSInvalidStateException`, and a request that could not be built or signed |
+| AWS KMS | `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException`, `KeyUnavailableException`, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read | any other AWS error code, such as `AccessDeniedException`, `NotFoundException`, `IncorrectKeyException`, `InvalidCiphertextException`, `DisabledException`, `KMSInvalidStateException`, a request that could not be built or signed, and `AWS_ERROR` |
 | Azure Key Vault | a 5xx or 429 status, a connection or I/O failure | any other status, such as `Forbidden` or `KeyNotFound`, and a response that does not parse |
 | Vault Transit | `VAULT_STATUS_5xx`, `VAULT_STATUS_429`, `VAULT_HTTP`, `VAULT_TIMEOUT` | any other `VAULT_STATUS_<status>`, `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE`, `VAULT_CIPHERTEXT` |
 
 Google's client libraries retry the Cloud KMS `Encrypt` and `Decrypt` calls on `Unavailable` and
 `DeadlineExceeded` only. Keep a retry on the other Google Cloud KMS network codes to a few
 attempts.
+
+## Keyring errors
+
+Every fallible call of kms-aead-keyring returns `KeyringResult<T>`, whose error is
+`KeyringError`, also `#[non_exhaustive]`. `code()` returns kms-aead's code for `KmsAead`, such as
+`DECRYPT` or a KMS's code, and the variant's name in upper snake case otherwise, such as
+`KEY_VERSION_COMPROMISED`. It is the `error_code` field of the keyring's spans and the
+`error.type` of its metrics. Match on the variant and its fields, or on the code: the `Display`
+text may change in any release.
+
+| Variant | Code | Meaning |
+|---|---|---|
+| `KmsAead` | kms-aead's | a KMS call, a decryption or an encoding failed, see [Codes](#codes) |
+| `Store` | `STORE` | the keyring store failed: `store`, `operation`, and the client's error as `root_cause` and `source()` |
+| `InvalidIdentifier` | `INVALID_IDENTIFIER` | a keyring id, an AAD part or a store name that breaks the rule of its type |
+| `RecordMissing` | `RECORD_MISSING` | no record for the keyring, at `open` or before an administrative write |
+| `RecordExists` | `RECORD_EXISTS` | `create` found a record |
+| `RecordInvalid` | `RECORD_INVALID` | a record that breaks a size cap or an invariant, see [Keyring records](./formats.md#keyring-records) |
+| `RecordRegressed` | `RECORD_REGRESSED` | a record that moves a version backwards from the one this process holds, from `reload` and before an administrative write |
+| `RecordConflict` | `RECORD_CONFLICT` | an administrative write lost every compare-and-swap, `attempts` of them |
+| `KekMismatch` | `KEK_MISMATCH` | the provider's KEK is not the one the record names |
+| `NoActiveVersion` | `NO_ACTIVE_VERSION` | no active version of the purpose, so nothing new is sealed under it |
+| `NoAlgorithm` | `NO_ALGORITHM` | the record names no algorithm for the purpose, so no version of it is created: `change_algorithm` sets one |
+| `KeyVersionUnknown` | `KEY_VERSION_UNKNOWN` | no version with the value's key id, also after a reload |
+| `KeyVersionRetired` | `KEY_VERSION_RETIRED` | the value's version is retired; `reinstate` brings it back |
+| `KeyVersionDestroyed` | `KEY_VERSION_DESTROYED` | the value's version is destroyed |
+| `KeyVersionPending` | `KEY_VERSION_PENDING` | a pending version selected as the primary of a keyset export |
+| `KeyVersionCompromised` | `KEY_VERSION_COMPROMISED` | the value's version is compromised under the `Block` policy |
+| `SealerOutdated` | `SEALER_OUTDATED` | a value under a version newer than the sealer's record |
+| `KeyPurposeMismatch` | `KEY_PURPOSE_MISMATCH` | a key id of another purpose than the call's |
+| `InvalidTransition` | `INVALID_TRANSITION` | a lifecycle call that does not apply to the version's state, see [States](./keyring/lifecycle.md#states) |
+| `PromotionTooEarly` | `PROMOTION_TOO_EARLY` | a promotion before `record_ttl` has passed since the version was staged |
+| `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero, or both purpose bits set |
+| `DeterministicDisabled` | `DETERMINISTIC_DISABLED` | a deterministic version created without the `deterministic` feature |
+| `Interop` | `INTEROP` | a seal or a keyset export that a field's `Interop` reader would not read |
+| `CustomAadUnsupported` | `CUSTOM_AAD_UNSUPPORTED` | `custom_aad` on a field BigQuery decrypts |
+| `ExportAlgorithmUnsupported` | `EXPORT_ALGORITHM_UNSUPPORTED` | a version in an export whose algorithm the keyset's reader does not read |
+| `UnknownKeyVersionState` | `UNKNOWN_KEY_VERSION_STATE` | `FromStr` of a name that is no `KeyVersionState` |
+| `InvalidSealMarker` | `INVALID_SEAL_MARKER` | stored bytes that are not a `SealMarker` |
+
+Besides the retry policies of the store clients, such as aws-sdk-s3's, the keyring retries only an
+administrative write's compare-and-swap, up to `cas_retries` times. What a caller may run again:
+
+- `KmsAead`: as in [Retries](#retries), a `NetworkError` with a backoff;
+- `Store`: the library does not classify a store's errors, so the decision follows the client's
+  error in `root_cause`;
+- `RecordConflict`: the administrative call, which reads the record again;
+- `SealerOutdated`: the write, with a new sealer from `Keyring::sealer`, see
+  [Re-sealing a value](./operations/sweeps.md#re-sealing-a-value);
+- `PromotionTooEarly`: the promotion, once its `remaining` has passed.
+
+The other variants fail the same way until the record, the configuration or the call changes.
 
 ## What errors never carry
 

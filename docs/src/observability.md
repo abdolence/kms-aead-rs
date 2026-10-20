@@ -128,6 +128,17 @@ left unrecorded, never recorded as `0` or an empty string.
 Its children are a `KMS decrypt DEK` under the version that encrypted the DEK and a `KMS encrypt DEK`
 under the current one.
 
+### KMS AEAD beacon
+
+| Field | Value |
+|---|---|
+| `algorithm` | `hmac-sha256` |
+| `backend` | `ring`, `aws-lc` or `rustcrypto` |
+| `dek_cache` | `disabled` for an envelope without a cache; `hit` or `miss` with one, a failed decryption of the beacon key recording `miss` |
+| `error_code` | the code of the error the call returned |
+
+A beacon key the cache did not hold shows its `KMS decrypt DEK` as a child.
+
 ### KMS encrypt DEK, KMS decrypt DEK and KMS random
 
 | Field | Value |

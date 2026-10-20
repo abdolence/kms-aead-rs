@@ -1,7 +1,9 @@
 # Operations
 
 Running a keyring in production: how often to rotate, how sweeps move values to the active
-versions, the migration from envelope values, and what to do when a key leaks.
+versions, the migration from envelope values, and what to do when a key leaks. The tasks, step by
+step with their checks and alerts, are in [Rotate keys and re-encrypt values](./use-cases/rotation.md)
+and [A leaked key or a shredded tenant](./use-cases/incidents.md).
 
 ## Rotation cadence
 

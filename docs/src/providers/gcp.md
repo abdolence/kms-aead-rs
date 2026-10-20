@@ -89,8 +89,10 @@ disabled", for several hours in exceptional cases. So:
 - run the check only once the disable has propagated, and run it again before destroying the
   version. A check inside that window passes on DEKs that are still under the old version.
 
-Enabling a version is strongly consistent: an enabled version is available at once, so enabling
-the old version again after a failed check takes effect immediately.
+Enabling a version is strongly consistent, see
+[Cloud KMS resource consistency](https://docs.cloud.google.com/kms/docs/consistency): an enabled
+version is available at once, so enabling the old version again after a failed check takes effect
+immediately.
 
 ## Errors
 

@@ -28,7 +28,8 @@ Or is suspected to have.
    the flag yet;
 4. export the BigQuery keysets again: a `Readable` keyset leaves the compromised version out.
    Delete the `Single` keyset of the compromised version once the sweep is done;
-5. `retire` the version once the sweep is done and its range query returns nothing.
+5. retire and later destroy the version as in
+   [Retiring the old version](./sweeps.md#retiring-the-old-version).
 
 Rotation protects nothing already copied: backups, point-in-time recovery and data exports still
 hold values the leaked DEK opens. Treat them as exposed and revoke the secrets inside them.
@@ -61,7 +62,9 @@ store.
 
 1. If the version is active, `mark_compromised` it, so that nothing new is sealed under it from
    each process's next refresh. If it is pending, `destroy` it;
-2. `retire` and then `destroy` the version, after a sweep if values were sealed under it;
+2. retire and destroy the version as in
+   [Retiring the old version](./sweeps.md#retiring-the-old-version), after a sweep if values were
+   sealed under it;
 3. check the KMS audit log for the `Encrypt` call that encrypted its DEK. None means its encrypted
    DEK was copied or relabelled from another version, of this keyring or of another under the
    same KEK, which the KMS decrypts as it would the original; one from a principal other than the
@@ -90,14 +93,23 @@ table.
 To make a scope's values unrecoverable:
 
 - with a KEK per scope: destroy the KEK's versions in the KMS. Every encrypted DEK of the scope is
-  then unrecoverable, backups included;
+  then unrecoverable, backups of the record and keysets exported from it included, since the KEK
+  encrypts both;
 - with a shared KEK: `dangerously_destroy_all_versions`, which destroys every version of the
-  keyring in one write, so that it encrypts and decrypts nothing from then on. A backup of the
-  record still holds the encrypted DEKs, which the KMS opens as long as the KEK version that
-  encrypted them exists, so then either delete the record and every backup of it, or destroy that
-  KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, `reencrypt_deks` every
-  other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
-  never destroyed, so only the deletion of the KMS key itself shreds.
+  keyring in one write, so that it encrypts and decrypts nothing from then on. Two copies outside
+  the record still hold its keys, and the KMS opens both as long as a KEK version that encrypted
+  them exists: every backup of the record, and every BigQuery and Tink keyset exported from the
+  keyring, see [Keyring limits](../security.md#keyring-limits). So then either delete the record,
+  every backup of it and every copy of those keysets, or destroy every KEK version that encrypted
+  them: on GCP, Vault Transit and the local KMS, rotate the KEK, re-encrypt every other keyring
+  under it as in
+  [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+  then destroy every previous KEK version, the ones an earlier rotation left disabled included. On AWS rotated key material is never destroyed, so only
+  the deletion of the KMS key itself shreds. Azure Key Vault deletes a key with all its versions
+  and never one version alone, so there too only the deletion of the key shreds. A vault with soft
+  delete keeps a deleted key recoverable until it is purged, and with purge protection on, no purge
+  is possible until the vault's retention period of 7 to 90 days has passed, see
+  [Azure Key Vault soft-delete](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview).
 
 A deployment that needs shredding guarantees uses a KEK per scope.
 

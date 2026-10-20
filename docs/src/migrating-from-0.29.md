@@ -7,6 +7,16 @@ with the deprecated `legacy-formats` feature, which also rewrites them in the ne
 [Old values](#old-values). The default algorithm of the envelope is AES-256-GCM, see
 [Default algorithm](#default-algorithm).
 
+0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:
+
+- typed fields: `Encrypted<T, F>` takes any type that implements `Plaintext`, such as an
+  application newtype, where the tables below name `SecretValue`, see
+  [Stored values](./stored-values.md);
+- beacons, for lookups of randomised fields, see [Beacons](./beacons.md);
+- the `kms-aead-keyring` crate, with key versions kept in a store, staged rotation and sweeps, see
+  [Keyring and field encryption](./keyring.md). Envelope values move to it with a sweep, see
+  [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md).
+
 ## Features
 
 | 0.29 | 0.30 |
@@ -20,8 +30,8 @@ with the deprecated `legacy-formats` feature, which also rewrites them in the ne
 
 ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
-no second crypto library to a cloud provider build, see [Choosing a
-backend](./getting-started.md#choosing-a-backend).
+no second crypto library to a cloud provider build, see [Choose a provider and a
+backend](./use-cases/choosing.md#crypto-backends).
 
 The crate declares `rust-version = "1.99"`.
 

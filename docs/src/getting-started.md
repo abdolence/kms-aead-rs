@@ -20,25 +20,10 @@ Every feature of both crates is in [Cargo features](./features.md).
 
 ## Choosing a backend
 
-The default features of the four cloud providers already build aws-lc-rs for TLS, so `aws-lc` is
-the backend that adds no second crypto library to a provider build. `ring` and `rustcrypto` work
-with every provider too, and a build may enable several backends at once. Each feature adds a type
-to `kms_aead::backends`, `Ring`, `AwsLc` or `RustCrypto`, and every type that seals or encrypts
-takes one as its backend type parameter:
-
-```rust
-# fn example() -> kms_aead::KmsAeadResult<()> {
-use kms_aead::backends::AwsLc;
-use kms_aead::{AeadAlgorithm, AeadCipher};
-
-let cipher = AeadCipher::<AwsLc>::new(AeadAlgorithm::Aes256Gcm)?;
-# let _ = cipher;
-# Ok(())
-# }
-```
-
-There is no default backend. Code generic over the backend bounds it with `B: AeadBackend` and
-nothing else, see [Crypto backends](./crypto-backends.md#code-generic-over-the-backend).
+There is no default backend: each backend feature adds a type to `kms_aead::backends`, `Ring`,
+`AwsLc` or `RustCrypto`, and every type that seals or encrypts takes one as its backend type
+parameter. Which one fits a build, FIPS and the C toolchain included, is in
+[Choose a provider and a backend](./use-cases/choosing.md#crypto-backends).
 
 ## With an envelope
 

@@ -202,8 +202,9 @@ pending version if the purpose has one: `promote` would refuse with `PromotionTo
 `record_ttl` from the staging. A compromised flag is never held back by the KMS.
 
 `destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
-backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
-that encrypted them exists, see
+backup of the record still holds them, and a keyset exported while the version decrypted holds its
+key under the same KEK. The KMS opens both as long as the KEK version that encrypted them exists,
+see
 [Crypto-shredding](../operations/runbook.md#crypto-shredding).
 
 ## Reading a compromised version
