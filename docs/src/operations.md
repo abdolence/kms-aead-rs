@@ -32,6 +32,6 @@ telling the two layouts apart and a sweep re-sealing the envelope values. See
 
 ## Emergency runbook
 
-What to do when a plaintext DEK, an encrypted DEK or the record leaks, after a KMS IAM over-grant,
-a version the administrative job did not create, a deleted or corrupted record and a KMS outage,
+What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant,
+a version the administrative job did not create, a deleted or corrupted record or a KMS outage,
 and how to crypto-shred a scope. See [Emergency runbook](./operations/runbook.md).

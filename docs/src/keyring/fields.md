@@ -23,8 +23,8 @@ The plaintext types and their encodings are in [Stored values](../stored-values.
 
 ## In application records
 
-With the `serde` feature `Encrypted` serialises as bytes: a Firestore `bytes` value, and in
-serde_json an array of numbers.
+`Encrypted` is stored as bytes, with the `serde`, `postgres` and `sqlx` features, see
+[Storing](../stored-values.md#storing). A field of a serde record:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -94,8 +94,7 @@ assert_eq!(email, alice);
 
 ### PostgreSQL
 
-With the `postgres` feature `Encrypted` binds and decodes in tokio-postgres as a `BYTEA`, and a
-slice of values as a `BYTEA[]` for `= ANY($1)`:
+A `BYTEA` column, with tokio-postgres:
 
 ```rust,no_run
 use kms_aead::backends::Ring;

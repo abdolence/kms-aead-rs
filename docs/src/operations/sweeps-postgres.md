@@ -2,9 +2,7 @@
 
 A sweep of a PostgreSQL table: the seal marker as a column, the query for the rows behind, and the
 conditional write back. The mechanism is in [Sweeps](./sweeps.md), and the example has the five
-properties of [Sweeps by store](./sweeps.md#sweeps-by-store): it resumes without a checkpoint, a
-concurrent writer wins, `concurrency` bounds the load, each write stores the marker of its sealer,
-and it runs on a schedule until a run scans nothing.
+properties of [Sweeps by store](./sweeps.md#sweeps-by-store).
 
 The marker is a `BYTEA` column with a btree index. Its default, the bytes of
 `SealMarker::ENVELOPE`, gives the rows written before the column a marker too:

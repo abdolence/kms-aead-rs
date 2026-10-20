@@ -2,9 +2,7 @@
 
 A sweep of a Firestore collection: the seal marker as a field, the query for the documents behind,
 and the conditional write back. The mechanism is in [Sweeps](./sweeps.md), and the example has the
-five properties of [Sweeps by store](./sweeps.md#sweeps-by-store): it resumes without a checkpoint,
-a concurrent writer wins, `concurrency` bounds the load, each write stores the marker of its sealer,
-and it runs on a schedule until a run scans nothing.
+five properties of [Sweeps by store](./sweeps.md#sweeps-by-store).
 
 The marker is a `bytes` field, `seal`, and the query is one range filter on it. Firestore indexes a
 field ascending and descending by default, and the query needs the ascending index only, so an

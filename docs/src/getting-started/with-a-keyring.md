@@ -7,8 +7,9 @@ Cargo.toml:
 ```toml
 [dependencies]
 kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "admin", "firestore"] }
 secret-vault-value = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 A keyring on the memory store with a local KEK, for an application type `Email`. It needs no
