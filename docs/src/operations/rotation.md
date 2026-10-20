@@ -55,16 +55,19 @@ in PromQL over the Prometheus export, with the range covering the version's life
 
 ```promql
 sum by (keyring, key_id) (
-  increase(kms_aead_keyring_values_total{operation="encrypt", purpose="randomized"}[90d])
+  increase(kms_aead_values_total{mode="keyring", operation="encrypt", purpose="randomized"}[90d])
 ) > 0.5 * 2^32
 
 sum by (keyring, key_id) (
-  increase(kms_aead_keyring_plaintext_bytes_total{operation="encrypt", purpose="randomized"}[90d])
+  increase(kms_aead_plaintext_bytes_total{
+    mode="keyring", operation="encrypt", algorithm=~"aes-(128|256)-gcm"
+  }[90d])
 ) > 0.5 * 2^38
 ```
 
 A counter starts at zero in every new process, and `increase()` counts across those restarts. The
-bytes alert is for AES-GCM versions only. Rotate the version the alert names, as above.
+bytes alert keeps to AES-GCM versions, the only ones with a volume bound. Rotate the version the
+alert names, as above.
 
 ## Rotating the KEK
 
