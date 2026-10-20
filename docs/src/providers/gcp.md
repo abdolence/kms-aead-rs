@@ -85,7 +85,7 @@ disabled", for several hours in exceptional cases. So:
   name the version Cloud KMS encrypted with, the `N` of `cryptoKeyVersions/N`, see
   [Observability](../observability.md). A keyring whose `reencrypt_deks` ran before the new
   primary version had propagated still lists the old version among its `kek_versions_in_use`:
-  run `reencrypt_deks` again, see [Rotating the KEK](../operations.md#rotating-the-kek);
+  run `reencrypt_deks` again, see [Rotating the KEK](../operations/rotation.md#rotating-the-kek);
 - run the check only once the disable has propagated, and run it again before destroying the
   version. A check inside that window passes on DEKs that are still under the old version.
 

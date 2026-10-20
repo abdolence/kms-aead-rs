@@ -1,7 +1,7 @@
 # Azure Key Vault
 
 Feature `azure-kms-encryption`, or one of the TLS variants in
-[Getting started](../getting-started.md#features).
+[Cargo features](../features.md).
 
 `AzureKmsKeyRef` names the key by the vault URL and the key name. Without a key version, the
 latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the

@@ -653,7 +653,7 @@ record that `Keyring::reload` returns must list the new version alone. Under Clo
 listed. A `None` there is a version the KMS did not report, so the first check fails on it. Once the
 old version is disabled, `KeyringAdmin::reencrypt_deks` runs again: it decrypts every DEK in the
 record through the provider, and fails on one still under the old version. See
-[Rotating the KEK](./operations.md#rotating-the-kek). An application that stores the `kek_version`
+[Rotating the KEK](./operations/rotation.md#rotating-the-kek). An application that stores the `kek_version`
 of its own DEKs beside them checks those the same way.
 
 Under the local KMS the check needs no disable. A provider that lists the new version alone, as

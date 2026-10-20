@@ -103,31 +103,8 @@ backups included.
 
 ## Keyring deployment
 
-A [keyring](./keyring.md) record decides which versions are read and which one seals new values,
-and nothing signs it: its integrity rests on the keyring store's access control. So a deployment
-splits the two sides of
-[Applications and administration](./keyring.md#applications-and-administration) into two
-principals:
-
-- **Application**: builds without the `admin` feature, and calls `Keyring` only: encryption,
-  decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
-  store. None of its calls asks the KMS to encrypt, so it needs nothing more;
-- **Administration**: builds with the `admin` feature, and calls the registry's `create`,
-  `open_or_create` and `admin`, and the `KeyringAdmin` they return: `rotate`, `promote`,
-  `change_algorithm`, `mark_compromised`, `retire`, `reinstate`, `destroy`,
-  `dangerously_destroy_all_versions`, `reencrypt_deks`, `export_bigquery_keyset` and
-  `export_tink_keyset`. It needs KMS encrypt and decrypt on the KEK, and is the only principal
-  with write access to the keyring store. It runs in a job or in infrastructure automation, never
-  in a request handler.
-
-| KMS | Application | Administration |
-|---|---|---|
-| GCP | `roles/cloudkms.cryptoKeyDecrypter` | `roles/cloudkms.cryptoKeyEncrypterDecrypter` |
-| AWS | `kms:Decrypt` on the key | `kms:Encrypt` and `kms:Decrypt` on the key, plus `kms:GenerateRandom` with the KMS random generator |
-| Azure Key Vault | a role with `keys/unwrap/action` on the key | a role with `keys/wrap/action` and `keys/unwrap/action` on the key |
-| Vault Transit | `update` on `transit/decrypt/<key>` | `update` on `transit/encrypt/<key>` and `transit/decrypt/<key>` |
-
-The permissions of each store are in [Keyring stores](./keyring/stores.md).
+The two principals of a deployment and their rights are in
+[Applications and administration](./keyring/deployment.md).
 
 A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
 or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
@@ -167,13 +144,13 @@ version.
   values through it. Keep it in the read path for the migration only;
 - **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
   record holds encrypted DEKs the KMS still opens, see
-  [Crypto-shredding](./operations.md#crypto-shredding);
+  [Crypto-shredding](./operations/runbook.md#crypto-shredding);
 - **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
   BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export
   again after every rotation and every `mark_compromised`;
 - **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are
   decided per record before a sweep re-seals them, see
-  [The trust of re-sealed values](./operations.md#the-trust-of-re-sealed-values);
+  [The trust of re-sealed values](./operations/sweeps.md#the-trust-of-re-sealed-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
   [Deterministic fields](./keyring/deterministic.md#what-they-leak);

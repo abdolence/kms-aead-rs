@@ -15,19 +15,11 @@ Every store keeps the record as the same [JSON document](../formats.md#keyring-r
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
 
-The store's access control is what the record's integrity rests on: only the administration
-writes the record, and the applications read it and listen to its changes, see
-[Applications and administration](../keyring.md#applications-and-administration):
-
-| Store | Application | Administration |
-|---|---|---|
-| Firestore | read of the keyring documents, which the listener uses too, such as `roles/datastore.viewer` | read and write of the keyring documents, such as `roles/datastore.user` |
-| PostgreSQL | `SELECT` on the table, and `LISTEN`, which needs no grant | `SELECT`, `INSERT` and `UPDATE` on the table; each write also sends the `NOTIFY` |
-| Cloud Storage | `storage.objects.get` | `storage.objects.get`, `storage.objects.create`, and `storage.objects.delete`, since a write replaces the object |
-| S3 | `s3:GetObject` | `s3:GetObject` and `s3:PutObject` |
+The rights of the application and the administration on each store are in
+[Store rights](./deployment.md#store-rights).
 
 Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
-in the record, see [the runbook](../operations.md#the-keyring-record-was-deleted-or-corrupted).
+in the record, see [the runbook](../operations/runbook.md#the-keyring-record-was-deleted-or-corrupted).
 
 ## Memory
 

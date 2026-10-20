@@ -191,7 +191,7 @@ versions give no probe. The probes go into the query:
 
 After a promotion the list has two probes until a sweep re-seals every row and the old version is
 retired. That is why deterministic versions are rotated rarely, and every rotation is followed by
-a full sweep, see [Rotation cadence](../operations.md#rotation-cadence).
+a full sweep, see [Rotation cadence](../operations/rotation.md#rotation-cadence).
 
 Be aware a query with several probes puts the values of one plaintext under each version side by
 side, so a reader of the query log links a value's history across a rotation.

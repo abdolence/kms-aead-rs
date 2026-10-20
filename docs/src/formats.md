@@ -379,13 +379,13 @@ PostgreSQL and BigQuery compare them. `SealMarker::ENVELOPE`, `01 00 00 00 00`, 
 marker of a record of envelope values. `SealMarker::try_from` fails with `InvalidSealMarker` on
 bytes of any other length or first byte. The `serde` feature stores a marker as bytes, an array of
 numbers in serde_json, and the `postgres` and `sqlx` features as `BYTEA`. See
-[Sweeps](./operations.md#sweeps) for the query it serves.
+[Sweeps](./operations/sweeps.md) for the query it serves.
 
 `KeyVersion::seal_range()` returns the markers of a version's `seal_epochs` as a `SealRange`:
 `start()`, and `end()`, `None` while the range is open. A record whose fields were sealed through
 one `Sealer`, and which stores the marker of the sealer's record, lies in the range of every
 version its fields are under. See
-[Records under a version](./operations.md#records-under-a-version) for the query it serves.
+[Records under a version](./operations/sweeps.md#records-under-a-version) for the query it serves.
 
 ## Telling layouts apart
 
