@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -293,7 +293,7 @@ assert_eq!(value.key_id(), KeyId::new(1));
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The registry, its handles and the sealer are in

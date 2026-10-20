@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -227,7 +227,7 @@ use kms_aead_keyring::{Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptio
 let keyring: Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt; = registry
     .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
     .await?;
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The registry takes the store and the backend as the type parameters of <code>KeyringRegistry&lt;S, B&gt;</code>,
@@ -248,7 +248,7 @@ Neither calls the store while the cached record is fresh, nor the KMS while the 
 in the DEK cache, see <a href="./keyring/record-cache.html">Record cache</a>.</p>
 <p>A keyring stays open until the registry shuts down. Where the store has push, the registry follows
 the change signals of each open keyring with a task on the current tokio runtime.
-<code>registry.shutdown()</code> stops those tasks and the store’s listener and waits for them:</p>
+<code>registry.shutdown(None)</code> stops those tasks and the store’s listener and waits for them:</p>
 <ul>
 <li>a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
 stop at once;</li>
@@ -257,9 +257,8 @@ stop at once;</li>
 and later opens work too, with no watch.</li>
 </ul>
 <p>Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
-aborts them and logs a <code>WARN</code>. <code>shutdown_with_timeout(timeout)</code> aborts what still runs after
-<code>timeout</code>, with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.
-Both return <code>Ok</code> whatever the tasks did.</p>
+aborts them and logs a <code>WARN</code>. <code>shutdown(Some(timeout))</code> aborts what still runs after <code>timeout</code>,
+with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.</p>
 <p>The bytes of values, key ids and records are in <a href="./formats.html">Formats</a>.</p>
 
                     </main>

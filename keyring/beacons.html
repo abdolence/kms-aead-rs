@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -266,7 +266,7 @@ let probes: Vec&lt;Beacon&lt;Email&gt;&gt; = keyring
     .await?;
 assert!(probes.contains(&amp;beacon));
 assert_eq!(keyring.decrypt(&amp;aad, &amp;encrypted).await?, email);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The probes go into the query as the probes of a deterministic field do:</p>
@@ -461,7 +461,7 @@ let report: SweepReport = sweep::run(
 println!("{report:?}");
 <span class="boring">assert_eq!(report.resealed, 2);
 </span><span class="boring">assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
-</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>A deterministic field is re-sealed the same way, with <code>reseal_deterministic</code>, under the

@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -410,7 +410,7 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope};
 </span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
 </span>let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
 
-let stored: Vec&lt;u8&gt; = encrypted_dek.value().clone();
+let stored: Vec&lt;u8&gt; = encrypted_dek.value().to_vec();
 let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
 
 let stored_hex: String = encrypted_dek.to_hex_string();

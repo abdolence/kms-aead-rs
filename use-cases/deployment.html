@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -190,7 +190,7 @@ included, see <a href="../keyring/deployment.html#kms-rights">KMS rights</a> and
 <a href="../keyring/deployment.html#store-rights">Store rights</a>;</li>
 <li>calls <code>KeyringRegistry::open</code>, and on the <code>Keyring</code> it returns <code>sealer</code>, <code>decrypt</code> and the
 probes, and runs the sweeps;</li>
-<li>awaits <code>registry.shutdown()</code> before it exits.</li>
+<li>awaits <code>registry.shutdown(None)</code> before it exits.</li>
 </ul>
 <h2 id="the-administration"><a class="header" href="#the-administration">The administration</a></h2>
 <ul>
@@ -223,7 +223,7 @@ and <a href="../observability.html#events">Events</a>, and the metrics need the 
 <tr><td><code>WARN</code>: a compromised flag written without a rotation</td><td>the KMS could not encrypt a new DEK, so <code>encrypt</code> fails with <code>NoActiveVersion</code></td><td><code>rotate</code> and <code>promote_now</code> once the KMS answers, see <a href="../keyring/lifecycle.html#compromised-versions">Compromised versions</a></td></tr>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="../operations/runbook.html#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
-<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown()</code> before the exit</td></tr>
+<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown(None)</code> before the exit</td></tr>
 <tr><td><code>WARN</code>: a record a sweep could not re-seal, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="../errors.html">Error handling</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="../errors.html#retries">Retries</a> for the codes of each KMS</td></tr>

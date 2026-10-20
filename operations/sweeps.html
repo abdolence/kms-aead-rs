@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -503,7 +503,7 @@ let report: SweepReport = sweep::run(
 .await;
 println!("{report:?}");
 <span class="boring">assert_eq!(report.resealed, 2);
-</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>resealed</code>, <code>skipped</code> or

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -249,7 +249,7 @@ let second: Encrypted&lt;Email, Deterministic&gt; =
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
 assert_eq!(keyring.decrypt_deterministic(&amp;aad, &amp;first).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>A deterministic value is an <code>Encrypted&lt;T, Deterministic&gt;</code>, a type of its own, so it is never
@@ -318,7 +318,7 @@ admin.promote_now(staged).await?;
 let probes: Vec&lt;Encrypted&lt;Email, Deterministic&gt;&gt; = keyring.deterministic_probes(&amp;aad, &amp;alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&amp;before));
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>deterministic_probes</code> returns one probe per pending, active or decrypt-only deterministic version,

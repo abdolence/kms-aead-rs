@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -414,7 +414,7 @@ assert_eq!(value.key_id(), KeyId::new(1));
 let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 admin.promote_now(staged).await?;
 assert_eq!(keyring.decrypt(&amp;aad, &amp;value).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The registry, its handles and the sealer are in
@@ -516,7 +516,7 @@ other providers are built once per keyring;</li>
 has DEKs of its own, see <a href="#encrypted-fields-and-aad">Encrypted fields and AAD</a>;</li>
 <li>on every write, <code>keyring.sealer()</code> and its <code>encrypt</code>, and the seal marker it gives, see
 <a href="#the-seal-marker">The seal marker</a>; on every read, <code>keyring.decrypt</code>;</li>
-<li><code>registry.shutdown()</code> before the process exits, see
+<li><code>registry.shutdown(None)</code> before the process exits, see
 <a href="#the-registry-and-its-handles">The registry and its handles</a>.</li>
 </ol>
 <p>Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
@@ -906,7 +906,7 @@ included, see <a href="#kms-rights">KMS rights</a> and
 <a href="#store-rights">Store rights</a>;</li>
 <li>calls <code>KeyringRegistry::open</code>, and on the <code>Keyring</code> it returns <code>sealer</code>, <code>decrypt</code> and the
 probes, and runs the sweeps;</li>
-<li>awaits <code>registry.shutdown()</code> before it exits.</li>
+<li>awaits <code>registry.shutdown(None)</code> before it exits.</li>
 </ul>
 <h2 id="the-administration"><a class="header" href="#the-administration">The administration</a></h2>
 <ul>
@@ -939,7 +939,7 @@ and <a href="#events">Events</a>, and the metrics need the <code>opentelemetry</
 <tr><td><code>WARN</code>: a compromised flag written without a rotation</td><td>the KMS could not encrypt a new DEK, so <code>encrypt</code> fails with <code>NoActiveVersion</code></td><td><code>rotate</code> and <code>promote_now</code> once the KMS answers, see <a href="#compromised-versions">Compromised versions</a></td></tr>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
-<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown()</code> before the exit</td></tr>
+<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown(None)</code> before the exit</td></tr>
 <tr><td><code>WARN</code>: a record a sweep could not re-seal, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="#running-a-sweep">Running a sweep</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="#error-handling">Error handling</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="#retries">Retries</a> for the codes of each KMS</td></tr>
@@ -1194,8 +1194,8 @@ backend</a>.</p>
 <tr><td><code>KmsAeadRingEnvelopeEncryptionOptions</code></td><td><code>KmsAeadEnvelopeOptions</code></td></tr>
 <tr><td><code>KmsAeadRingEncryptionProvider</code></td><td><code>KmsAeadEncryptionProvider</code>, see <a href="#your-own-provider">Your own provider</a></td></tr>
 <tr><td>module <code>kms_aead::ring_encryption</code></td><td>removed; <code>AeadCipher&lt;Ring&gt;</code>, with <code>AeadCipher</code> at the crate root and <code>Ring</code> in <code>kms_aead::backends</code></td></tr>
-<tr><td><code>RingAeadEncryption::new()</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)</code></td></tr>
-<tr><td><code>RingAeadEncryption::with_algorithm(&amp;ring::aead::AES_256_GCM, rand)</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)</code></td></tr>
+<tr><td><code>RingAeadEncryption::new()</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?</code></td></tr>
+<tr><td><code>RingAeadEncryption::with_algorithm(&amp;ring::aead::AES_256_GCM, rand)</code></td><td><code>AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?</code></td></tr>
 <tr><td><code>RingAeadEncryption::with_rand</code>, <code>with_options</code>, <code>with_algorithm_options</code></td><td>removed; the backend owns its CSPRNG, and the random nonce was the only option</td></tr>
 <tr><td><code>RingAeadEncryptionOptions</code>, <code>RingAeadEncryptionNonceKind</code></td><td>removed</td></tr>
 <tr><td><code>RingAeadEncryption.algo</code></td><td><code>AeadCipher::algorithm()</code></td></tr>
@@ -1207,12 +1207,13 @@ backend</a>.</p>
 <tr><td><code>cipher_text.to_hex_string()</code></td><td><code>value.to_hex_string()</code>, read back with <code>Encrypted::try_from_hex_string</code></td></tr>
 <tr><td><code>cipher_text == other</code></td><td><code>value.value() == other.value()</code></td></tr>
 <tr><td><code>EncryptedDataEncryptionKey::new(encrypted, key_version)</code></td><td><code>EncryptedDataEncryptionKey::new(bytes)</code>: the provider’s bytes, which carry the key version where the KMS needs one; a provider adds the KEK version the KMS reported with <code>with_kek_version</code></td></tr>
-<tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code> and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
+<tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code>, a <code>&amp;[u8]</code>, and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
 <tr><td><code>encrypted_dek.to_hex_string()?</code></td><td><code>encrypted_dek.to_hex_string()</code>, infallible</td></tr>
 <tr><td><code>encrypted_dek.key_version()</code></td><td><code>encrypted_dek.kek_version()</code>, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and <code>None</code> on one read back from the bytes; the <code>kek_version</code> field of the KMS spans</td></tr>
 <tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
-<tr><td><code>AzureKmsKeyRef::with_key_version</code></td><td><code>AzureKmsKeyRef::with_kek_version</code></td></tr>
-<tr><td><code>DataEncryptionKey(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
+<tr><td><code>AzureKmsKeyRef::with_key_version</code>, <code>opt_key_version</code>, <code>without_key_version</code>, <code>key_version</code>, <code>mopt_key_version</code>, <code>reset_key_version</code></td><td><code>AzureKmsKeyRef::with_kek_version</code>, <code>opt_kek_version</code>, <code>without_kek_version</code>, <code>kek_version</code>, <code>mopt_kek_version</code>, <code>reset_kek_version</code></td></tr>
+<tr><td><code>AzureKmsKeyRef.key_version</code></td><td><code>AzureKmsKeyRef.kek_version</code></td></tr>
+<tr><td><code>DataEncryptionKey(secret)</code>, <code>DataEncryptionKey::new(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
 <tr><td><code>errors::BoxedError</code></td><td>removed</td></tr>
 </tbody>
 </table>
@@ -1232,6 +1233,9 @@ backend</a>.</p>
 </tbody>
 </table>
 </div>
+<p><code>GcpKmsProviderOptions</code>, <code>AwsKmsProviderOptions</code> and <code>AzureKmsProviderOptions</code> are
+<code>#[non_exhaustive]</code>, so a struct literal of one fails to compile. Build them with <code>new()</code> and the
+<code>with_*</code> setters.</p>
 <h2 id="traits-replaced-by-inherent-methods"><a class="header" href="#traits-replaced-by-inherent-methods">Traits replaced by inherent methods</a></h2>
 <p><code>AeadEncryption</code> and <code>KmsAeadEnvelopeEncryption</code> are gone. Their methods are inherent methods of
 <code>AeadCipher</code> and <code>KmsAeadEnvelope</code>, so delete the trait imports. The AAD is any
@@ -1276,6 +1280,11 @@ decrypt gets it from those bytes, as the Azure provider’s do.</li>
 <p><code>KmsAeadError</code> is <code>#[non_exhaustive]</code>, so an exhaustive <code>match</code> on it needs a <code>_</code> arm. It has two
 new variants, <code>UnsupportedAlgorithm</code> and <code>LegacyFormat</code>. <code>code()</code> returns the code of any variant,
 and <code>source()</code> returns the root cause.</p>
+<p><code>KmsAeadSystemError</code>, <code>KmsAeadNetworkError</code>, <code>KmsAeadEncryptionError</code> and the type of their
+<code>public</code> field, <code>KmsAeadErrorPublicGenericDetails</code>, are <code>#[non_exhaustive]</code> too, so a struct
+literal of one fails to compile, and a pattern on one needs <code>..</code>. Build the errors with
+<code>create(code, message)</code>, or with <code>new(public, message)</code> and, where it has one, <code>with_root_cause</code>,
+and the details with <code>KmsAeadErrorPublicGenericDetails::new(code)</code>.</p>
 <p>The <code>From</code> conversions of SDK errors into <code>KmsAeadError</code> are gone: <code>gcloud_sdk::error::Error</code>,
 <code>gcloud_sdk::tonic::Status</code>, the AWS <code>SdkError</code>, the hyper client error, <code>azure_core::Error</code> and
 <code>SystemTimeError</code>. Map an SDK error in the application.</p>
@@ -1566,7 +1575,7 @@ use kms_aead::{Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, KeyId};
 </span><span class="boring">}
 </span>
 <span class="boring">fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span>let mac = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256);
+</span>let mac = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)?;
 let beacon_key = mac.generate_dek()?;
 
 let email = Email("alice@example.com".to_string());
@@ -1956,7 +1965,7 @@ use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEnvelope};
 </span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
 </span>let (_dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
 
-let stored: Vec&lt;u8&gt; = encrypted_dek.value().clone();
+let stored: Vec&lt;u8&gt; = encrypted_dek.value().to_vec();
 let read_back_encrypted_dek = EncryptedDataEncryptionKey::from(stored);
 
 let stored_hex: String = encrypted_dek.to_hex_string();
@@ -2652,7 +2661,7 @@ impl Plaintext for Email {
 </span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
 
 // Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)
+let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)?
     .generate_encrypted_dek(envelope.provider())
     .await?;
 
@@ -3507,7 +3516,7 @@ use kms_aead_keyring::{Keyring, KeyringId, KeyringRegistry, KeyringRegistryOptio
 let keyring: Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt; = registry
     .open(GcpKmsProvider::new(&amp;key_ref).await?, KeyringId::from_static("tenant-42"))
     .await?;
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The registry takes the store and the backend as the type parameters of <code>KeyringRegistry&lt;S, B&gt;</code>,
@@ -3528,7 +3537,7 @@ Neither calls the store while the cached record is fresh, nor the KMS while the 
 in the DEK cache, see <a href="#record-cache">Record cache</a>.</p>
 <p>A keyring stays open until the registry shuts down. Where the store has push, the registry follows
 the change signals of each open keyring with a task on the current tokio runtime.
-<code>registry.shutdown()</code> stops those tasks and the store’s listener and waits for them:</p>
+<code>registry.shutdown(None)</code> stops those tasks and the store’s listener and waits for them:</p>
 <ul>
 <li>a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
 stop at once;</li>
@@ -3537,9 +3546,8 @@ stop at once;</li>
 and later opens work too, with no watch.</li>
 </ul>
 <p>Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
-aborts them and logs a <code>WARN</code>. <code>shutdown_with_timeout(timeout)</code> aborts what still runs after
-<code>timeout</code>, with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.
-Both return <code>Ok</code> whatever the tasks did.</p>
+aborts them and logs a <code>WARN</code>. <code>shutdown(Some(timeout))</code> aborts what still runs after <code>timeout</code>,
+with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.</p>
 <p>The bytes of values, key ids and records are in <a href="#formats">Formats</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="applications-and-administration-1"><a class="header" href="#applications-and-administration-1">Applications and administration</a></h1>
@@ -3813,7 +3821,7 @@ assert!(matches!(
 let rotation: Rotation = admin.promote_now(staged).await?;
 assert_eq!(rotation.current, staged);
 assert_eq!(rotation.previous, Some(KeyId::new(1)));
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h2 id="compromised-versions"><a class="header" href="#compromised-versions">Compromised versions</a></h2>
@@ -3906,7 +3914,7 @@ let keyring: Keyring&lt;FirestoreKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
     .open(provider, KeyringId::try_from("tenant-42".to_string())?)
     .await?;
 <span class="boring">let _ = keyring;
-</span>registry.shutdown().await?;
+</span>registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
@@ -3983,7 +3991,7 @@ tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</c
 <a href="#postgresql-1">Encrypted fields</a>.</p>
 <h2 id="cloud-storage"><a class="header" href="#cloud-storage">Cloud Storage</a></h2>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket, through the
-<code>google.storage.v2</code> gRPC API. <code>with_prefix</code> sets another prefix than
+<code>google.storage.v2</code> gRPC API. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
 <code>GcsKeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A write is
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.</p>
@@ -4016,10 +4024,11 @@ features from the application, or one of:</p>
 </ul>
 <h2 id="s3"><a class="header" href="#s3">S3</a></h2>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket of Amazon S3 or of an
-S3-compatible server. <code>with_prefix</code> sets another prefix than <code>S3KeyringStore::DEFAULT_PREFIX</code>; one
-that should read as a folder ends with <code>/</code>. A create is conditional on no object existing
-(<code>If-None-Match: *</code>), an update on the ETag the writer read (<code>If-Match</code>), and a revalidation reads
-the object only when its ETag changed (<code>If-None-Match</code> on the read).</p>
+S3-compatible server. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
+<code>S3KeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A create is
+conditional on no object existing (<code>If-None-Match: *</code>), an update on the ETag the writer read
+(<code>If-Match</code>), and a revalidation reads the object only when its ETag changed (<code>If-None-Match</code> on
+the read).</p>
 <ul>
 <li>the rights of the application and the administration on the objects are in
 <a href="#store-rights">Store rights</a>;</li>
@@ -4276,7 +4285,7 @@ let stored: Vec&lt;u8&gt; = serde_json::to_vec(&amp;user)?;
 let read: User = serde_json::from_slice(&amp;stored)?;
 let email: Email = keyring.decrypt(&amp;EMAIL.aad(&amp;id), &amp;read.email).await?;
 assert_eq!(email, alice);
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h3 id="postgresql-1"><a class="header" href="#postgresql-1">PostgreSQL</a></h3>
@@ -4457,7 +4466,7 @@ assert!(matches!(
     bigquery_email.custom_aad(b"signup/4711"),
     Err(KeyringError::CustomAadUnsupported(Interop::BigQuery))
 ));
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -4533,7 +4542,7 @@ let second: Encrypted&lt;Email, Deterministic&gt; =
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
 assert_eq!(keyring.decrypt_deterministic(&amp;aad, &amp;first).await?, alice);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>A deterministic value is an <code>Encrypted&lt;T, Deterministic&gt;</code>, a type of its own, so it is never
@@ -4602,7 +4611,7 @@ admin.promote_now(staged).await?;
 let probes: Vec&lt;Encrypted&lt;Email, Deterministic&gt;&gt; = keyring.deterministic_probes(&amp;aad, &amp;alice).await?;
 assert_eq!(probes.len(), 2);
 assert!(probes.contains(&amp;before));
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>deterministic_probes</code> returns one probe per pending, active or decrypt-only deterministic version,
@@ -4717,7 +4726,7 @@ let probes: Vec&lt;Beacon&lt;Email&gt;&gt; = keyring
     .await?;
 assert!(probes.contains(&amp;beacon));
 assert_eq!(keyring.decrypt(&amp;aad, &amp;encrypted).await?, email);
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The probes go into the query as the probes of a deterministic field do:</p>
@@ -4912,7 +4921,7 @@ let report: SweepReport = sweep::run(
 println!("{report:?}");
 <span class="boring">assert_eq!(report.resealed, 2);
 </span><span class="boring">assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
-</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>A deterministic field is re-sealed the same way, with <code>reseal_deterministic</code>, under the
@@ -5019,7 +5028,7 @@ assert!(matches!(
         ..
     }))
 ));
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h2 id="fields-tink-reads"><a class="header" href="#fields-tink-reads">Fields Tink reads</a></h2>
@@ -5075,7 +5084,7 @@ let keyset: EncryptedKeyset&lt;encodings::BigQuery&gt; = admin
 let kms_key: &amp;str = keyset.key_uri();
 let keyset_bytes: &amp;[u8] = keyset.value();
 <span class="boring">let _ = (kms_key, keyset_bytes);
-</span>registry.shutdown().await?;
+</span>registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The selection:</p>
@@ -5213,7 +5222,7 @@ let keyset: EncryptedKeyset&lt;encodings::Tink&gt; = admin
     .await?;
 std::fs::write("tenant-42.keyset", keyset.value())?;
 println!("{}", keyset.key_uri());
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>Tink for Python reads the keyset with the KMS client of that URI, and opens a randomised value
@@ -5755,7 +5764,7 @@ let report: SweepReport = sweep::run(
 .await;
 println!("{report:?}");
 <span class="boring">assert_eq!(report.resealed, 2);
-</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>resealed</code>, <code>skipped</code> or
@@ -6144,7 +6153,7 @@ let writer: FirestoreSimpleBatchWriter = db
 </span><span class="boring">    .await?;
 </span>let report: SweepReport = sweep_users(&amp;keyring, &amp;writer).await?;
 println!("{report:?}");
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
@@ -6430,7 +6439,7 @@ async fn reseal_batch(
 </span><span class="boring">    .await?;
 </span>let report: SweepReport = sweep_users(&amp;keyring, &amp;reader, &amp;client).await?;
 println!("{report:?}");
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>SealMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code> feature,

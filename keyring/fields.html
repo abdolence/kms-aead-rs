@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -260,7 +260,7 @@ let stored: Vec&lt;u8&gt; = serde_json::to_vec(&amp;user)?;
 let read: User = serde_json::from_slice(&amp;stored)?;
 let email: Email = keyring.decrypt(&amp;EMAIL.aad(&amp;id), &amp;read.email).await?;
 assert_eq!(email, alice);
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h3 id="postgresql"><a class="header" href="#postgresql">PostgreSQL</a></h3>
@@ -441,7 +441,7 @@ assert!(matches!(
     bigquery_email.custom_aad(b"signup/4711"),
     Err(KeyringError::CustomAadUnsupported(Interop::BigQuery))
 ));
-<span class="boring">registry.shutdown().await?;
+<span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 

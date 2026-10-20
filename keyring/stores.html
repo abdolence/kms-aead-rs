@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -234,7 +234,7 @@ let keyring: Keyring&lt;FirestoreKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
     .open(provider, KeyringId::try_from("tenant-42".to_string())?)
     .await?;
 <span class="boring">let _ = keyring;
-</span>registry.shutdown().await?;
+</span>registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
@@ -311,7 +311,7 @@ tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</c
 <a href="./fields.html#postgresql">Encrypted fields</a>.</p>
 <h2 id="cloud-storage"><a class="header" href="#cloud-storage">Cloud Storage</a></h2>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket, through the
-<code>google.storage.v2</code> gRPC API. <code>with_prefix</code> sets another prefix than
+<code>google.storage.v2</code> gRPC API. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
 <code>GcsKeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A write is
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.</p>
@@ -344,10 +344,11 @@ features from the application, or one of:</p>
 </ul>
 <h2 id="s3"><a class="header" href="#s3">S3</a></h2>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket of Amazon S3 or of an
-S3-compatible server. <code>with_prefix</code> sets another prefix than <code>S3KeyringStore::DEFAULT_PREFIX</code>; one
-that should read as a folder ends with <code>/</code>. A create is conditional on no object existing
-(<code>If-None-Match: *</code>), an update on the ETag the writer read (<code>If-Match</code>), and a revalidation reads
-the object only when its ETag changed (<code>If-None-Match</code> on the read).</p>
+S3-compatible server. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
+<code>S3KeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A create is
+conditional on no object existing (<code>If-None-Match: *</code>), an update on the ETag the writer read
+(<code>If-Match</code>), and a revalidation reads the object only when its ETag changed (<code>If-None-Match</code> on
+the read).</p>
 <ul>
 <li>the rights of the application and the administration on the objects are in
 <a href="./deployment.html#store-rights">Store rights</a>;</li>

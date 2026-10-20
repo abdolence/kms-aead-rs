@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -220,7 +220,7 @@ impl Plaintext for Email {
 </span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
 
 // Once, by an administrative job: the beacon key, stored beside the application's settings
-let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)
+let (_, encrypted_dek) = BeaconMac::&lt;Ring&gt;::new(BeaconAlgorithm::HmacSha256)?
     .generate_encrypted_dek(envelope.provider())
     .await?;
 

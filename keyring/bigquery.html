@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-984e79bd.js";
+            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -276,7 +276,7 @@ assert!(matches!(
         ..
     }))
 ));
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h2 id="fields-tink-reads"><a class="header" href="#fields-tink-reads">Fields Tink reads</a></h2>
@@ -332,7 +332,7 @@ let keyset: EncryptedKeyset&lt;encodings::BigQuery&gt; = admin
 let kms_key: &amp;str = keyset.key_uri();
 let keyset_bytes: &amp;[u8] = keyset.value();
 <span class="boring">let _ = (kms_key, keyset_bytes);
-</span>registry.shutdown().await?;
+</span>registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The selection:</p>
@@ -470,7 +470,7 @@ let keyset: EncryptedKeyset&lt;encodings::Tink&gt; = admin
     .await?;
 std::fs::write("tenant-42.keyset", keyset.value())?;
 println!("{}", keyset.key_uri());
-registry.shutdown().await?;
+registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>Tink for Python reads the keyset with the KMS client of that URI, and opens a randomised value
