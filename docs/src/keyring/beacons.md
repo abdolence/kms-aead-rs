@@ -109,8 +109,7 @@ The probes go into the query as the probes of a deterministic field do:
 | PostgreSQL | `WHERE email_beacon = ANY($1)`, with the probes bound as a `BYTEA[]` |
 | Firestore | an `in` filter on the field, which takes up to 30 values |
 
-With the `postgres` feature, `Beacon` binds and decodes in tokio-postgres as a `BYTEA`, and with
-the `serde` feature it serialises as bytes, as `Encrypted` does.
+`Beacon` is stored as `Encrypted` is, see [Stored values](../stored-values.md#beacont).
 
 ## Bits
 

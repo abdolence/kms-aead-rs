@@ -98,8 +98,8 @@ answer, whose values the frequencies give away.
 
 ## Bits
 
-`BeaconBits` sets how many bits of the HMAC a beacon keeps, 1 to 256, `BeaconBits::DEFAULT`, 16,
-unless set. With `n` distinct values in a column and `b` bits, about `n / 2^b` values share each
+`BeaconBits` sets how many bits of the HMAC a beacon keeps, 1 to 256; `BeaconBits::DEFAULT` is 16.
+With `n` distinct values in a column and `b` bits, about `n / 2^b` values share each
 beacon:
 
 - fewer bits: more values share a beacon, so a lookup returns more rows, which the application

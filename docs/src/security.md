@@ -86,10 +86,8 @@ Some copies are out of the library's reach:
 - the KMS SDKs and HTTP clients the providers use keep copies of each plaintext DEK in request and
   response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
   stack;
-- ring does not zeroise its expanded key schedules, so they stay in freed memory after each call;
-- aws-lc-rs clears its key context through AWS-LC's allocator, as long as the application leaves
-  that allocator in place. The record keys AES-256-GCM-SIV derives for each call stay on the stack;
-- the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;
+- the copies of a key inside a crypto backend: what each backend clears is in its section of
+  [Crypto backends](./crypto-backends.md#ring);
 - an expired DEK stays in the cache's memory until the next call on the cache or
   `purge_expired`;
 - `decrypt` returns the application's own `T: Plaintext`. Only `SecretValue` as `T` is zeroised on
@@ -167,7 +165,7 @@ version.
   [The trust of re-sealed values](./operations/sweeps.md#the-trust-of-re-sealed-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
-  [What it leaks](./deterministic.md#what-it-leaks);
+  [Queries across rotations](./keyring/deterministic.md#queries-across-rotations);
 - **beacons leak likely equality and frequency**, as far as their bits tell values apart, see
   [What a beacon leaks](./beacons.md#what-a-beacon-leaks);
 - **a promotion's guard covers healthy processes only.** `promote` refuses until `record_ttl` has

@@ -95,5 +95,6 @@ missing is imported again.
 ## Errors
 
 An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyException` or
-`NotFoundException`, and the message AWS KMS returned, and its root cause is the SDK error. Which
+`NotFoundException`, and the message AWS KMS returned. An `EncryptionError` keeps the SDK error as
+its root cause. Which
 errors are a `NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries).
