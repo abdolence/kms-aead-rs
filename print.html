@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -340,8 +340,9 @@ the code stays the same.</p>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
 kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "admin", "firestore"] }
 secret-vault-value = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 </code></pre>
 <p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
 cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>
@@ -1986,8 +1987,8 @@ See <a href="#beacons-3">Formats</a> for its bytes.</p>
 external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
 answer, whose values the frequencies give away.</p>
 <h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
-<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256, <code>BeaconBits::DEFAULT</code>, 16,
-unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
+<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256; <code>BeaconBits::DEFAULT</code> is 16.
+With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
 beacon:</p>
 <ul>
 <li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application
@@ -2408,7 +2409,8 @@ DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own 
 missing is imported again.</p>
 <h2 id="errors-2"><a class="header" href="#errors-2">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
-<code>NotFoundException</code>, and the message AWS KMS returned, and its root cause is the SDK error. Which
+<code>NotFoundException</code>, and the message AWS KMS returned. An <code>EncryptionError</code> keeps the SDK error as
+its root cause. Which
 errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="azure-key-vault"><a class="header" href="#azure-key-vault">Azure Key Vault</a></h1>
@@ -2592,8 +2594,9 @@ older versions for good.</p>
 <p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are
 for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code> and
 <code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
-<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>. Invalid options fail at creation with <code>VAULT_INVALID_OPTIONS</code>,
-or <code>VAULT_TLS</code> when the TLS configuration cannot be built.</p>
+<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>. Invalid options
+fail at creation with <code>VAULT_INVALID_OPTIONS</code>, or <code>VAULT_TLS</code> when the TLS configuration cannot be
+built.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="local-kms"><a class="header" href="#local-kms">Local KMS</a></h1>
 <p><code>LocalKmsProvider</code> encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
@@ -3494,8 +3497,8 @@ differ.</li>
 </ul>
 <p>The plaintext types and their encodings are in <a href="#plaintext">Stored values</a>.</p>
 <h2 id="in-application-records"><a class="header" href="#in-application-records">In application records</a></h2>
-<p>With the <code>serde</code> feature <code>Encrypted</code> serialises as bytes: a Firestore <code>bytes</code> value, and in
-serde_json an array of numbers.</p>
+<p><code>Encrypted</code> is stored as bytes, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, see
+<a href="#storing">Storing</a>. A field of a serde record:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
@@ -3560,8 +3563,7 @@ assert_eq!(email, alice);
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h3 id="postgresql-1"><a class="header" href="#postgresql-1">PostgreSQL</a></h3>
-<p>With the <code>postgres</code> feature <code>Encrypted</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and a
-slice of values as a <code>BYTEA[]</code> for <code>= ANY($1)</code>:</p>
+<p>A <code>BYTEA</code> column, with tokio-postgres:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
 use kms_aead_keyring::formats::Randomized;
@@ -4012,8 +4014,7 @@ registry.shutdown().await?;
 </tbody>
 </table>
 </div>
-<p>With the <code>postgres</code> feature, <code>Beacon</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and with
-the <code>serde</code> feature it serialises as bytes, as <code>Encrypted</code> does.</p>
+<p><code>Beacon</code> is stored as <code>Encrypted</code> is, see <a href="#beacont">Stored values</a>.</p>
 <h2 id="bits-1"><a class="header" href="#bits-1">Bits</a></h2>
 <p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep,
 <code>BeaconBits::DEFAULT</code>, 16, unless set; what the bits trade is in <a href="#bits">Bits</a>. The
@@ -4390,8 +4391,8 @@ store have the queries and writes of <a href="#sweeps-on-firestore">Firestore</a
 telling the two layouts apart and a sweep re-sealing the envelope values. See
 <a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</p>
 <h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
-<p>What to do when a plaintext DEK, an encrypted DEK or the record leaks, after a KMS IAM over-grant,
-a version the administrative job did not create, a deleted or corrupted record and a KMS outage,
+<p>What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant,
+a version the administrative job did not create, a deleted or corrupted record or a KMS outage,
 and how to crypto-shred a scope. See <a href="#emergency-runbook-1">Emergency runbook</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="rotation"><a class="header" href="#rotation">Rotation</a></h1>
@@ -4925,9 +4926,7 @@ fewer on the <a href="#sweeps-on-bigquery">BigQuery <code>MERGE</code> path</a>,
 <h1 id="sweeps-on-firestore"><a class="header" href="#sweeps-on-firestore">Sweeps on Firestore</a></h1>
 <p>A sweep of a Firestore collection: the seal marker as a field, the query for the documents behind,
 and the conditional write back. The mechanism is in <a href="#sweeps-1">Sweeps</a>, and the example has the
-five properties of <a href="#sweeps-by-store">Sweeps by store</a>: it resumes without a checkpoint,
-a concurrent writer wins, <code>concurrency</code> bounds the load, each write stores the marker of its sealer,
-and it runs on a schedule until a run scans nothing.</p>
+five properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
 <p>The marker is a <code>bytes</code> field, <code>seal</code>, and the query is one range filter on it. Firestore indexes a
 field ascending and descending by default, and the query needs the ascending index only, so an
 exemption keeps just that one:</p>
@@ -5236,9 +5235,7 @@ marker, and the next run of the sweep finds them.</p>
 <h1 id="sweeps-on-postgresql"><a class="header" href="#sweeps-on-postgresql">Sweeps on PostgreSQL</a></h1>
 <p>A sweep of a PostgreSQL table: the seal marker as a column, the query for the rows behind, and the
 conditional write back. The mechanism is in <a href="#sweeps-1">Sweeps</a>, and the example has the five
-properties of <a href="#sweeps-by-store">Sweeps by store</a>: it resumes without a checkpoint, a
-concurrent writer wins, <code>concurrency</code> bounds the load, each write stores the marker of its sealer,
-and it runs on a schedule until a run scans nothing.</p>
+properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
 <p>The marker is a <code>BYTEA</code> column with a btree index. Its default, the bytes of
 <code>SealMarker::ENVELOPE</code>, gives the rows written before the column a marker too:</p>
 <pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTEA NOT NULL DEFAULT '\x0100000000';
@@ -6903,10 +6900,8 @@ holds it.</p>
 <li>the KMS SDKs and HTTP clients the providers use keep copies of each plaintext DEK in request and
 response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
 stack;</li>
-<li>ring does not zeroise its expanded key schedules, so they stay in freed memory after each call;</li>
-<li>aws-lc-rs clears its key context through AWS-LC’s allocator, as long as the application leaves
-that allocator in place. The record keys AES-256-GCM-SIV derives for each call stay on the stack;</li>
-<li>the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;</li>
+<li>the copies of a key inside a crypto backend: what each backend clears is in its section of
+<a href="#ring">Crypto backends</a>;</li>
 <li>an expired DEK stays in the cache’s memory until the next call on the cache or
 <code>purge_expired</code>;</li>
 <li><code>decrypt</code> returns the application’s own <code>T: Plaintext</code>. Only <code>SecretValue</code> as <code>T</code> is zeroised on
@@ -6979,7 +6974,7 @@ decided per record before a sweep re-seals them, see
 <a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
 <li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
 links a value’s history for whoever reads the query, see
-<a href="#what-it-leaks">What it leaks</a>;</li>
+<a href="#queries-across-rotations">Queries across rotations</a>;</li>
 <li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
 <a href="#what-a-beacon-leaks">What a beacon leaks</a>;</li>
 <li><strong>a promotion’s guard covers healthy processes only.</strong> <code>promote</code> refuses until <code>record_ttl</code> has

@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "../searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -253,7 +253,8 @@ DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own 
 missing is imported again.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
-<code>NotFoundException</code>, and the message AWS KMS returned, and its root cause is the SDK error. Which
+<code>NotFoundException</code>, and the message AWS KMS returned. An <code>EncryptionError</code> keeps the SDK error as
+its root cause. Which
 errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>.</p>
 
                     </main>

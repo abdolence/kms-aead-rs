@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "../searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -281,8 +281,7 @@ registry.shutdown().await?;
 </tbody>
 </table>
 </div>
-<p>With the <code>postgres</code> feature, <code>Beacon</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and with
-the <code>serde</code> feature it serialises as bytes, as <code>Encrypted</code> does.</p>
+<p><code>Beacon</code> is stored as <code>Encrypted</code> is, see <a href="../stored-values.html#beacont">Stored values</a>.</p>
 <h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
 <p><code>FieldSpec::with_beacon_bits</code> sets how many bits of the HMAC the field’s beacons keep,
 <code>BeaconBits::DEFAULT</code>, 16, unless set; what the bits trade is in <a href="../beacons.html#bits">Bits</a>. The

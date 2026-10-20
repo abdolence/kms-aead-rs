@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -240,8 +240,9 @@ the code stays the same.</p>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
 kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+kms-aead-keyring = { version = "0.30", features = ["ring", "admin", "firestore"] }
 secret-vault-value = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 </code></pre>
 <p>A keyring on the memory store with a local KEK, for an application type <code>Email</code>. It needs no
 cloud credentials, and needs the <code>admin</code> feature for <code>create</code>, <code>rotate</code> and <code>promote</code>:</p>

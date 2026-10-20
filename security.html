@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -254,10 +254,8 @@ holds it.</p>
 <li>the KMS SDKs and HTTP clients the providers use keep copies of each plaintext DEK in request and
 response buffers, which kms-aead cannot zeroise. The same holds for the Vault token in the HTTP
 stack;</li>
-<li>ring does not zeroise its expanded key schedules, so they stay in freed memory after each call;</li>
-<li>aws-lc-rs clears its key context through AWS-LC’s allocator, as long as the application leaves
-that allocator in place. The record keys AES-256-GCM-SIV derives for each call stay on the stack;</li>
-<li>the RustCrypto backend zeroises its key objects and the per-call Poly1305 and POLYVAL keys;</li>
+<li>the copies of a key inside a crypto backend: what each backend clears is in its section of
+<a href="./crypto-backends.html#ring">Crypto backends</a>;</li>
 <li>an expired DEK stays in the cache’s memory until the next call on the cache or
 <code>purge_expired</code>;</li>
 <li><code>decrypt</code> returns the application’s own <code>T: Plaintext</code>. Only <code>SecretValue</code> as <code>T</code> is zeroised on
@@ -330,7 +328,7 @@ decided per record before a sweep re-seals them, see
 <a href="./operations/sweeps.html#the-trust-of-re-sealed-values">The trust of re-sealed values</a>;</li>
 <li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
 links a value’s history for whoever reads the query, see
-<a href="./deterministic.html#what-it-leaks">What it leaks</a>;</li>
+<a href="./keyring/deterministic.html#queries-across-rotations">Queries across rotations</a>;</li>
 <li><strong>beacons leak likely equality and frequency</strong>, as far as their bits tell values apart, see
 <a href="./beacons.html#what-a-beacon-leaks">What a beacon leaks</a>;</li>
 <li><strong>a promotion’s guard covers healthy processes only.</strong> <code>promote</code> refuses until <code>record_ttl</code> has

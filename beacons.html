@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-01e5055c.js"></script>
@@ -268,8 +268,8 @@ See <a href="./formats.html#beacons">Formats</a> for its bytes.</p>
 external ids. Do not use them for low-cardinality fields, such as a status, a country or a yes/no
 answer, whose values the frequencies give away.</p>
 <h2 id="bits"><a class="header" href="#bits">Bits</a></h2>
-<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256, <code>BeaconBits::DEFAULT</code>, 16,
-unless set. With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
+<p><code>BeaconBits</code> sets how many bits of the HMAC a beacon keeps, 1 to 256; <code>BeaconBits::DEFAULT</code> is 16.
+With <code>n</code> distinct values in a column and <code>b</code> bits, about <code>n / 2^b</code> values share each
 beacon:</p>
 <ul>
 <li>fewer bits: more values share a beacon, so a lookup returns more rows, which the application

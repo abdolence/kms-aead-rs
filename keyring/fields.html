@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-52c031d6.js";
+            window.path_to_searchindex_js = "../searchindex-7b9fc3bc.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-01e5055c.js"></script>
@@ -198,8 +198,8 @@ differ.</li>
 </ul>
 <p>The plaintext types and their encodings are in <a href="../stored-values.html#plaintext">Stored values</a>.</p>
 <h2 id="in-application-records"><a class="header" href="#in-application-records">In application records</a></h2>
-<p>With the <code>serde</code> feature <code>Encrypted</code> serialises as bytes: a Firestore <code>bytes</code> value, and in
-serde_json an array of numbers.</p>
+<p><code>Encrypted</code> is stored as bytes, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code> features, see
+<a href="../stored-values.html#storing">Storing</a>. A field of a serde record:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::KmsAeadResult;
@@ -264,8 +264,7 @@ assert_eq!(email, alice);
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h3 id="postgresql"><a class="header" href="#postgresql">PostgreSQL</a></h3>
-<p>With the <code>postgres</code> feature <code>Encrypted</code> binds and decodes in tokio-postgres as a <code>BYTEA</code>, and a
-slice of values as a <code>BYTEA[]</code> for <code>= ANY($1)</code>:</p>
+<p>A <code>BYTEA</code> column, with tokio-postgres:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
 use kms_aead_keyring::formats::Randomized;
