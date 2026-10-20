@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -244,6 +244,7 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
 <tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
 <tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+<tr><td><code>AWS_ERROR</code></td><td>encryption</td><td>an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see <a href="./providers/aws.html#errors">AWS KMS</a></td></tr>
 <tr><td><code>INVALID_LOCAL_KEK_ID</code>, <code>LOCAL_*</code></td><td>system, encryption</td><td>the <a href="./providers/local.html#errors">local KMS</a></td></tr>
 <tr><td><code>AZURE_*</code></td><td>system, encryption</td><td>the <a href="./providers/azure.html#errors">Azure provider</a></td></tr>
 <tr><td><code>VAULT_*</code></td><td>system, network, encryption</td><td>the <a href="./providers/hc-vault-transit.html#errors">Vault Transit provider</a></td></tr>
@@ -265,7 +266,7 @@ The variant per provider:</p>
 </thead>
 <tbody>
 <tr><td>Google Cloud KMS</td><td>gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code></td><td>any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>, <code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code></td></tr>
-<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, and a request that could not be built or signed</td></tr>
+<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code></td></tr>
 <tr><td>Azure Key Vault</td><td>a 5xx or 429 status, a connection or I/O failure</td><td>any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that does not parse</td></tr>
 <tr><td>Vault Transit</td><td><code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code></td><td>any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code></td></tr>
 </tbody>
@@ -274,6 +275,61 @@ The variant per provider:</p>
 <p>Google’s client libraries retry the Cloud KMS <code>Encrypt</code> and <code>Decrypt</code> calls on <code>Unavailable</code> and
 <code>DeadlineExceeded</code> only. Keep a retry on the other Google Cloud KMS network codes to a few
 attempts.</p>
+<h2 id="keyring-errors"><a class="header" href="#keyring-errors">Keyring errors</a></h2>
+<p>Every fallible call of kms-aead-keyring returns <code>KeyringResult&lt;T&gt;</code>, whose error is
+<code>KeyringError</code>, also <code>#[non_exhaustive]</code>. <code>code()</code> returns kms-aead’s code for <code>KmsAead</code>, such as
+<code>DECRYPT</code> or a KMS’s code, and the variant’s name in upper snake case otherwise, such as
+<code>KEY_VERSION_COMPROMISED</code>. It is the <code>error_code</code> field of the keyring’s spans and the
+<code>error.type</code> of its metrics. Match on the variant and its fields, or on the code: the <code>Display</code>
+text may change in any release.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KmsAead</code></td><td>kms-aead’s</td><td>a KMS call, a decryption or an encoding failed, see <a href="#codes">Codes</a></td></tr>
+<tr><td><code>Store</code></td><td><code>STORE</code></td><td>the keyring store failed: <code>store</code>, <code>operation</code>, and the client’s error as <code>root_cause</code> and <code>source()</code></td></tr>
+<tr><td><code>InvalidIdentifier</code></td><td><code>INVALID_IDENTIFIER</code></td><td>a keyring id, an AAD part or a store name that breaks the rule of its type</td></tr>
+<tr><td><code>RecordMissing</code></td><td><code>RECORD_MISSING</code></td><td>no record for the keyring, at <code>open</code> or before an administrative write</td></tr>
+<tr><td><code>RecordExists</code></td><td><code>RECORD_EXISTS</code></td><td><code>create</code> found a record</td></tr>
+<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, see <a href="./formats.html#keyring-records">Keyring records</a></td></tr>
+<tr><td><code>RecordRegressed</code></td><td><code>RECORD_REGRESSED</code></td><td>a record that moves a version backwards from the one this process holds, from <code>reload</code> and before an administrative write</td></tr>
+<tr><td><code>RecordConflict</code></td><td><code>RECORD_CONFLICT</code></td><td>an administrative write lost every compare-and-swap, <code>attempts</code> of them</td></tr>
+<tr><td><code>KekMismatch</code></td><td><code>KEK_MISMATCH</code></td><td>the provider’s KEK is not the one the record names</td></tr>
+<tr><td><code>NoActiveVersion</code></td><td><code>NO_ACTIVE_VERSION</code></td><td>no active version of the purpose, so nothing new is sealed under it</td></tr>
+<tr><td><code>NoAlgorithm</code></td><td><code>NO_ALGORITHM</code></td><td>the record names no algorithm for the purpose, so no version of it is created: <code>change_algorithm</code> sets one</td></tr>
+<tr><td><code>KeyVersionUnknown</code></td><td><code>KEY_VERSION_UNKNOWN</code></td><td>no version with the value’s key id, also after a reload</td></tr>
+<tr><td><code>KeyVersionRetired</code></td><td><code>KEY_VERSION_RETIRED</code></td><td>the value’s version is retired; <code>reinstate</code> brings it back</td></tr>
+<tr><td><code>KeyVersionDestroyed</code></td><td><code>KEY_VERSION_DESTROYED</code></td><td>the value’s version is destroyed</td></tr>
+<tr><td><code>KeyVersionPending</code></td><td><code>KEY_VERSION_PENDING</code></td><td>a pending version selected as the primary of a keyset export</td></tr>
+<tr><td><code>KeyVersionCompromised</code></td><td><code>KEY_VERSION_COMPROMISED</code></td><td>the value’s version is compromised under the <code>Block</code> policy</td></tr>
+<tr><td><code>SealerOutdated</code></td><td><code>SEALER_OUTDATED</code></td><td>a value under a version newer than the sealer’s record</td></tr>
+<tr><td><code>KeyPurposeMismatch</code></td><td><code>KEY_PURPOSE_MISMATCH</code></td><td>a key id of another purpose than the call’s</td></tr>
+<tr><td><code>InvalidTransition</code></td><td><code>INVALID_TRANSITION</code></td><td>a lifecycle call that does not apply to the version’s state, see <a href="./keyring/lifecycle.html#states">States</a></td></tr>
+<tr><td><code>PromotionTooEarly</code></td><td><code>PROMOTION_TOO_EARLY</code></td><td>a promotion before <code>record_ttl</code> has passed since the version was staged</td></tr>
+<tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero, or both purpose bits set</td></tr>
+<tr><td><code>DeterministicDisabled</code></td><td><code>DETERMINISTIC_DISABLED</code></td><td>a deterministic version created without the <code>deterministic</code> feature</td></tr>
+<tr><td><code>Interop</code></td><td><code>INTEROP</code></td><td>a seal or a keyset export that a field’s <code>Interop</code> reader would not read</td></tr>
+<tr><td><code>CustomAadUnsupported</code></td><td><code>CUSTOM_AAD_UNSUPPORTED</code></td><td><code>custom_aad</code> on a field BigQuery decrypts</td></tr>
+<tr><td><code>ExportAlgorithmUnsupported</code></td><td><code>EXPORT_ALGORITHM_UNSUPPORTED</code></td><td>a version in an export whose algorithm the keyset’s reader does not read</td></tr>
+<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
+<tr><td><code>InvalidSealMarker</code></td><td><code>INVALID_SEAL_MARKER</code></td><td>stored bytes that are not a <code>SealMarker</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Besides the retry policies of the store clients, such as aws-sdk-s3’s, the keyring retries only an
+administrative write’s compare-and-swap, up to <code>cas_retries</code> times. What a caller may run again:</p>
+<ul>
+<li><code>KmsAead</code>: as in <a href="#retries">Retries</a>, a <code>NetworkError</code> with a backoff;</li>
+<li><code>Store</code>: the library does not classify a store’s errors, so the decision follows the client’s
+error in <code>root_cause</code>;</li>
+<li><code>RecordConflict</code>: the administrative call, which reads the record again;</li>
+<li><code>SealerOutdated</code>: the write, with a new sealer from <code>Keyring::sealer</code>, see
+<a href="./operations/sweeps.html#re-sealing-a-value">Re-sealing a value</a>;</li>
+<li><code>PromotionTooEarly</code>: the promotion, once its <code>remaining</code> has passed.</li>
+</ul>
+<p>The other variants fail the same way until the record, the configuration or the call changes.</p>
 <h2 id="what-errors-never-carry"><a class="header" href="#what-errors-never-carry">What errors never carry</a></h2>
 <p>No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in <code>Display</code> or in <code>Debug</code>. An application can log errors with <code>{}</code> and <code>{:?}</code>.</p>

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,21 +192,10 @@ other:</p>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
 <p>Every feature of both crates is in <a href="./features.html">Cargo features</a>.</p>
 <h2 id="choosing-a-backend"><a class="header" href="#choosing-a-backend">Choosing a backend</a></h2>
-<p>The default features of the four cloud providers already build aws-lc-rs for TLS, so <code>aws-lc</code> is
-the backend that adds no second crypto library to a provider build. <code>ring</code> and <code>rustcrypto</code> work
-with every provider too, and a build may enable several backends at once. Each feature adds a type
-to <code>kms_aead::backends</code>, <code>Ring</code>, <code>AwsLc</code> or <code>RustCrypto</code>, and every type that seals or encrypts
-takes one as its backend type parameter:</p>
-<pre><code class="language-rust"><span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
-</span>use kms_aead::backends::AwsLc;
-use kms_aead::{AeadAlgorithm, AeadCipher};
-
-let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
-<span class="boring">let _ = cipher;
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
-nothing else, see <a href="./crypto-backends.html#code-generic-over-the-backend">Crypto backends</a>.</p>
+<p>There is no default backend: each backend feature adds a type to <code>kms_aead::backends</code>, <code>Ring</code>,
+<code>AwsLc</code> or <code>RustCrypto</code>, and every type that seals or encrypts takes one as its backend type
+parameter. Which one fits a build, FIPS and the C toolchain included, is in
+<a href="./use-cases/choosing.html#crypto-backends">Choose a provider and a backend</a>.</p>
 <h2 id="with-an-envelope"><a class="header" href="#with-an-envelope">With an envelope</a></h2>
 <p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:</p>
@@ -323,7 +312,7 @@ run it with <code>cargo run -p kms-aead-keyring --example local_kms --features r
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="use-cases/envelope-to-keyring.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="use-cases/encrypt-fields.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -337,7 +326,7 @@ run it with <code>cargo run -p kms-aead-keyring --example local_kms --features r
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="use-cases/envelope-to-keyring.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="use-cases/encrypt-fields.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

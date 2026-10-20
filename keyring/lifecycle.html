@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -361,8 +361,9 @@ is promoted. Once the KMS answers, <code>rotate</code> and <code>promote_now</co
 pending version if the purpose has one: <code>promote</code> would refuse with <code>PromotionTooEarly</code> for up to
 <code>record_ttl</code> from the staging. A compromised flag is never held back by the KMS.</p>
 <p><code>destroy</code> and <code>dangerously_destroy_all_versions</code> remove encrypted DEKs from this record only. A
-backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
-that encrypted them exists, see
+backup of the record still holds them, and a keyset exported while the version decrypted holds its
+key under the same KEK. The KMS opens both as long as the KEK version that encrypted them exists,
+see
 <a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>.</p>
 <h2 id="reading-a-compromised-version"><a class="header" href="#reading-a-compromised-version">Reading a compromised version</a></h2>
 <p><code>KeyringOptions::compromised_reads</code> decides what <code>decrypt</code> does with a value under a compromised

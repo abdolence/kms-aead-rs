@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -317,8 +317,9 @@ async fn email_of(
 }
 <span class="boring">fn main() {}</span></code></pre>
 <p>A column holding a value that is no keyring value fails in the decode, before any decryption.
-kms-aead’s <code>sqlx</code> feature binds <code>Encrypted</code> in sqlx the same way, see
-<a href="../stored-values.html#storing">Stored values</a>.</p>
+The keyring’s <code>sqlx</code> feature binds <code>Encrypted</code> and <code>SealMarker</code> in sqlx the same way, as <code>BYTEA</code>
+on PostgreSQL, and turns on kms-aead’s <code>sqlx</code> feature, so the application needs no kms-aead
+dependency line for it, see <a href="../stored-values.html#storing">Stored values</a>.</p>
 <h2 id="aad"><a class="header" href="#aad">AAD</a></h2>
 <p>The default AAD of a value is its place in the application’s model, <code>&lt;kind&gt;/&lt;id&gt;/&lt;field&gt;</code>, such
 as <code>user/42/email</code>:</p>

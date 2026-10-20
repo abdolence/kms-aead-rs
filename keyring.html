@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -246,6 +246,20 @@ every encrypted field of the record through it, so that the seal marker it store
 names the versions they are under, see <a href="./operations/sweeps.html#the-seal-marker">The seal marker</a>.
 Neither calls the store while the cached record is fresh, nor the KMS while the version’s DEK is
 in the DEK cache, see <a href="./keyring/record-cache.html">Record cache</a>.</p>
+<p>A keyring stays open until the registry shuts down. Where the store has push, the registry follows
+the change signals of each open keyring with a task on the current tokio runtime.
+<code>registry.shutdown()</code> stops those tasks and the store’s listener and waits for them:</p>
+<ul>
+<li>a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
+stop at once;</li>
+<li>the open keyrings’ keys are evicted from the DEK cache, and no other key is;</li>
+<li>the handles keep serving from their cached records, which their TTL revalidates without push,
+and later opens work too, with no watch.</li>
+</ul>
+<p>Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
+aborts them and logs a <code>WARN</code>. <code>shutdown_with_timeout(timeout)</code> aborts what still runs after
+<code>timeout</code>, with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.
+Both return <code>Ok</code> whatever the tasks did.</p>
 <p>The bytes of values, key ids and records are in <a href="./formats.html">Formats</a>.</p>
 
                     </main>

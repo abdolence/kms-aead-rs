@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,7 +184,7 @@ CLI or a Kubernetes Job, never a task inside the library: only the application k
 its queries and its write rules. The job runs on a schedule, and again until its <code>SweepReport</code>
 shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
 next run’s marker query returns exactly the records it did not write. Retiring the old version is
-a separate step of the administrative job, see <a href="./rotation.html#rotation-cadence">Rotation cadence</a>.</p>
+a separate step of the administrative job, see <a href="#retiring-the-old-version">Retiring the old version</a>.</p>
 <h2 id="the-seal-marker"><a class="header" href="#the-seal-marker">The seal marker</a></h2>
 <p>A keyring record counts a seal epoch, which moves on by one with every administrative write that
 makes a version active:</p>
@@ -325,8 +325,8 @@ run without a successful refresh of its record has passed since the compromise, 
 of the last of them. A version flagged compromised after it stopped being active moves no epoch,
 and keeps the range it had;</li>
 <li>before <code>retire</code>, and again before <code>destroy</code>, the query of the version returning nothing shows
-that no record holds a value under it. That check needs one record at most: <code>limit(1)</code> in
-Firestore, <code>EXISTS</code> in SQL.</li>
+that no record holds a value under it, see <a href="#retiring-the-old-version">Retiring the old version</a>.
+That check needs one record at most: <code>limit(1)</code> in Firestore, <code>EXISTS</code> in SQL.</li>
 </ul>
 <p>One epoch counts the activations of every purpose of the keyring, so a range can match a record
 with no field of the version’s purpose, such as a record without beacons in the range of a beacon
@@ -433,6 +433,7 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
         return Ok(ResealOutcome::Skipped);
     };
+    let read: Vec&lt;u8&gt; = row.email.value().to_vec();
     let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
     let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;row.email).await?;
@@ -445,11 +446,16 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
         None =&gt; (row.email, ResealOutcome::Skipped),
     };
     let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, seal });
-    Ok(outcome)
+    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
+    // own value, which it sealed under the active versions anyway.
+    let mut table = table.lock().unwrap();
+    match table.get_mut(user) {
+        Some(stored) if stored.email.value() == read.as_slice() =&gt; {
+            *stored = UserRow { email, seal };
+            Ok(outcome)
+        }
+        _ =&gt; Ok(ResealOutcome::Skipped),
+    }
 }
 
 <span class="boring">#[tokio::main]
@@ -513,17 +519,47 @@ fails in every run instead. A candidate is the application’s own type, such as
 struct of key columns or the record itself, and its <code>Display</code> names the record and nothing else. A
 record id is often an entity id, so read the sweep’s log as an administrative log.</p>
 <p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-seal <code>Result&lt;ResealOutcome, E&gt;</code>, with the
-application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it return a <code>KeyringError</code>, and a <code>From</code>
-impl on the application’s error lets <code>?</code> convert it, as the examples on
-<a href="./sweeps-firestore.html">Firestore</a>, <a href="./sweeps-postgres.html">PostgreSQL</a> and
-<a href="./sweeps-bigquery.html">BigQuery</a> do with an error of their data store; a re-seal with no errors of its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as
-above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
+application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it
+return a <code>KeyringError</code>, and a <code>From</code> impl on the application’s error lets <code>?</code> convert it, as the
+examples on <a href="./sweeps-firestore.html">Firestore</a>, <a href="./sweeps-postgres.html">PostgreSQL</a> and
+<a href="./sweeps-bigquery.html">BigQuery</a> do with an error of their data store; a re-seal with no errors of
+its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.</p>
-<p>Retiring the old version is not the sweep’s: once a run reports nothing scanned and the range
-query of the old version returns nothing, the administrative job <code>retire</code>s it, see
-<a href="./rotation.html#rotation-cadence">Rotation cadence</a>. Keep it retired for a while before <code>destroy</code>: <code>reinstate</code> brings a retired version back for a value that
-turned up after all, while a destroyed one is gone.</p>
+<h2 id="retiring-the-old-version"><a class="header" href="#retiring-the-old-version">Retiring the old version</a></h2>
+<p>Once the sweep is done, the administrative job retires the version a promotion replaced, and later
+destroys it, on its <code>KeyringAdmin</code>:</p>
+<ol>
+<li>wait, from the promotion, the longest time any process may run without a successful refresh of
+its record, see <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation</a>, and check that no
+process logged “The keyring record could not be revalidated” meanwhile. Until then a process
+on the old record seals under the old version and stamps the old epoch, see
+<a href="#finding-records-behind">Finding records behind</a>;</li>
+<li>run the sweep until a run reports nothing scanned and nothing failed;</li>
+<li>run the old version’s <a href="#records-under-a-version">range query</a>. When it returns nothing,
+<code>retire(key_id)</code>. Reads under the version fail with <code>KeyVersionRetired</code> from then on, logged at
+<code>WARN</code>;</li>
+<li>export the <code>Readable</code> BigQuery and Tink keysets again, which leave a retired version out, and
+write them where the old ones are kept, see
+<a href="../keyring/bigquery.html">BigQuery and Tink interop</a>. A keyset exported before keeps reading
+values under the retired version in SQL and in Tink;</li>
+<li>keep the version retired for as long as the backups of the stored values taken before the
+sweep are kept. A destroyed version makes the values in them unreadable, as a destroyed KEK
+version does, see
+<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+and only a backup of the record from before the destroy still opens them, see below.
+A value the sweep missed fails with <code>KeyVersionRetired</code>: <code>reinstate(key_id)</code>, export the
+keysets again, sweep again, and go back to step 3;</li>
+<li>run the range query again. When it still returns nothing, delete every copy of the keysets
+whose <code>key_ids()</code> include the retired version, then <code>destroy(key_id)</code>. The other keysets, such
+as the <code>Single</code> keyset of the active deterministic version and the <code>Readable</code> keysets of other
+purposes, keep reading their values in SQL and in Tink. No call brings a destroyed version
+back.</li>
+</ol>
+<p><code>destroy</code> removes the encrypted DEK from the record only. A backup of the record still holds it,
+and so does every copy of a keyset exported while the version decrypted, both opened by the KMS as
+long as the KEK version that encrypted them exists, see
+<a href="./runbook.html#crypto-shredding">Crypto-shredding</a>.</p>
 <h2 id="sweeps-by-store"><a class="header" href="#sweeps-by-store">Sweeps by store</a></h2>
 <p>At millions of records a sweep streams its candidates from the store in one query and never holds
 its result in memory, and it writes them back in batches. Every example, on
@@ -543,7 +579,7 @@ for every value and never cached;</li>
 range of every version it is under;</li>
 <li>it runs on a schedule until a run reports nothing scanned. The <code>retire</code>, and later the
 <code>destroy</code>, of the old version are the administrative job’s, see
-<a href="./rotation.html#rotation-cadence">Rotation cadence</a>.</li>
+<a href="#retiring-the-old-version">Retiring the old version</a>.</li>
 </ul>
 <p>The examples keep one keyring’s records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring’s id beside the marker, and

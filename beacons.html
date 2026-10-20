@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -281,7 +281,7 @@ column then leaks which rows hold equal values as a deterministic column does.</
 compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
 never match: after a change of a column’s bits, its stored beacons match no lookup until a
 re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
-<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<a href="./use-cases/equality-lookups.html">Find rows by an encrypted value</a>.</p>
 <h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
 <p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
 <code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
@@ -295,25 +295,6 @@ a beacon. It matches beacons the application calculated and passed in as query p
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
 beacon. kms-aead-keyring does this with key versions, see <a href="./keyring/beacons.html">Beacons</a>.</p>
-<h2 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h2>
-<p>A <a href="./deterministic.html">deterministic field</a> also finds rows by equality, by its cipher text:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
-</thead>
-<tbody>
-<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
-<tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
-<tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
-<tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
-<tr><td>BigQuery</td><td>SQL cannot calculate a beacon; it matches beacons the application calculated</td><td>SQL decrypts the field and searches it by equality</td></tr>
-</tbody>
-</table>
-</div>
-<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
-emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
-about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.</p>
 
                     </main>
 

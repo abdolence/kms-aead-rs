@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -274,6 +274,27 @@ it as bytes, so a column of secrets needs no store of its own. See
 <a href="#stored-values">Stored values</a>.</p>
 <p><code>AeadCipher</code> and <code>DeterministicCipher</code> work without a KMS at all, with keys the application
 holds.</p>
+<h2 id="where-to-start"><a class="header" href="#where-to-start">Where to start</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>To</th><th>Read</th></tr>
+</thead>
+<tbody>
+<tr><td>Encrypt a few fields or secrets with a cloud KMS and no store</td><td><a href="#encrypt-fields-with-a-kms">Encrypt fields with a KMS</a></td></tr>
+<tr><td>Give each tenant its own keys</td><td><a href="#a-keyring-per-tenant">A keyring per tenant</a></td></tr>
+<tr><td>Find rows by an encrypted value</td><td><a href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a></td></tr>
+<tr><td>Read the values in BigQuery or with Tink</td><td><a href="#read-values-in-bigquery-or-tink">Read values in BigQuery or Tink</a></td></tr>
+<tr><td>Rotate the DEKs and the KEK without downtime</td><td><a href="#rotate-keys-and-re-encrypt-values">Rotate keys and re-encrypt values</a></td></tr>
+<tr><td>Respond to a leaked key, or shred a tenant</td><td><a href="#a-leaked-key-or-a-shredded-tenant">A leaked key or a shredded tenant</a></td></tr>
+<tr><td>Run the applications and the administration with their own rights, and alert on both</td><td><a href="#applications-and-administration-apart">Applications and administration apart</a></td></tr>
+<tr><td>Pick a KMS and a crypto backend, FIPS included</td><td><a href="#choose-a-provider-and-a-backend">Choose a provider and a backend</a></td></tr>
+<tr><td>Develop and test without a cloud account</td><td><a href="#develop-and-test-without-a-cloud">Develop and test without a cloud</a></td></tr>
+<tr><td>Move envelope values to a keyring</td><td><a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a></td></tr>
+<tr><td>Upgrade from 0.29</td><td><a href="#migrating-from-029">Migrating from 0.29</a></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="licence"><a class="header" href="#licence">Licence</a></h2>
 <p>Apache Software License (ASL)</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -292,21 +313,10 @@ other:</p>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
 <p>Every feature of both crates is in <a href="#cargo-features">Cargo features</a>.</p>
 <h2 id="choosing-a-backend"><a class="header" href="#choosing-a-backend">Choosing a backend</a></h2>
-<p>The default features of the four cloud providers already build aws-lc-rs for TLS, so <code>aws-lc</code> is
-the backend that adds no second crypto library to a provider build. <code>ring</code> and <code>rustcrypto</code> work
-with every provider too, and a build may enable several backends at once. Each feature adds a type
-to <code>kms_aead::backends</code>, <code>Ring</code>, <code>AwsLc</code> or <code>RustCrypto</code>, and every type that seals or encrypts
-takes one as its backend type parameter:</p>
-<pre><code class="language-rust"><span class="boring">fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
-</span>use kms_aead::backends::AwsLc;
-use kms_aead::{AeadAlgorithm, AeadCipher};
-
-let cipher = AeadCipher::&lt;AwsLc&gt;::new(AeadAlgorithm::Aes256Gcm)?;
-<span class="boring">let _ = cipher;
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>There is no default backend. Code generic over the backend bounds it with <code>B: AeadBackend</code> and
-nothing else, see <a href="#code-generic-over-the-backend">Crypto backends</a>.</p>
+<p>There is no default backend: each backend feature adds a type to <code>kms_aead::backends</code>, <code>Ring</code>,
+<code>AwsLc</code> or <code>RustCrypto</code>, and every type that seals or encrypts takes one as its backend type
+parameter. Which one fits a build, FIPS and the C toolchain included, is in
+<a href="#crypto-backends">Choose a provider and a backend</a>.</p>
 <h2 id="with-an-envelope"><a class="header" href="#with-an-envelope">With an envelope</a></h2>
 <p>The local KMS needs no cloud account, so it is the quickest way to try the library. An
 ephemeral KEK lives as long as the process:</p>
@@ -330,7 +340,7 @@ let decrypted: SecretValue = envelope.decrypt(aad, &amp;encrypted).await?;
 assert_eq!(decrypted, secret);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>To move to a cloud KMS, replace the provider, see <a href="#kms-providers">KMS providers</a>. The rest of
+<p>To move to a cloud KMS, replace the provider, see <a href="#kms-providers-1">KMS providers</a>. The rest of
 the code stays the same.</p>
 <h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
 <!-- The included file compiles as a doctest of kms-aead-keyring, see its src/book.rs. -->
@@ -415,6 +425,686 @@ run it with <code>cargo run -p kms-aead-keyring --example local_kms --features r
 <h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
 <p>The minimum supported Rust version is 1.99, for every feature.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="encrypt-fields-with-a-kms"><a class="header" href="#encrypt-fields-with-a-kms">Encrypt fields with a KMS</a></h1>
+<p>A field or a secret in the application’s own table, sealed under a DEK that a cloud KMS encrypts,
+with no keyring store. Every value carries its encrypted DEK, so nothing is stored apart from the
+values. For central rotation, deterministic fields across rotations or BigQuery reads across
+rotations, see <a href="#choosing-a-mode">Choosing a mode</a> and the keyring.</p>
+<h2 id="which-mode"><a class="header" href="#which-mode">Which mode</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Values are</th><th>Mode</th><th>See</th></tr>
+</thead>
+<tbody>
+<tr><td>written rarely, such as secrets and configuration</td><td>per-call envelope: a new DEK for every value, one KMS call to encrypt it</td><td><a href="#envelope-encryption-1">Envelope encryption</a></td></tr>
+<tr><td>written at a high rate</td><td>store-less DEK reuse: one DEK for many values, renewed by age, count and bytes</td><td><a href="#store-less-dek-reuse">Store-less DEK reuse</a></td></tr>
+<tr><td>grouped, such as a file in chunks or a tenant’s rows, with one DEK the application keeps</td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, with the encrypted DEK stored apart</td><td><a href="#working-with-deks-yourself">Working with DEKs yourself</a></td></tr>
+<tr><td>sealed with a key the application holds, with no KMS</td><td><code>AeadCipher</code></td><td><a href="#aead-without-a-kms">AEAD without a KMS</a></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="the-path"><a class="header" href="#the-path">The path</a></h2>
+<ol>
+<li>A provider for the KMS, such as <code>GcpKmsProvider::new(&amp;key_ref)</code>, with the rights of
+<a href="#kms-rights">KMS rights</a>: decrypt for a reader, encrypt too for a
+writer, see <a href="#kms-providers-1">KMS providers</a>;</li>
+<li><code>KmsAeadEnvelope::new(provider)</code>, or <code>with_options</code> with a <code>DekReusePolicy</code> for store-less DEK
+reuse and a <code>DekCache</code> for repeated reads, see <a href="#dek-caching-and-reuse">DEK caching and reuse</a>;</li>
+<li>a newtype per field, such as <code>Email</code>, that implements <code>Plaintext</code>, and normalises the value if
+it is ever looked up, see <a href="#plaintext"><code>Plaintext</code></a>;</li>
+<li>the AAD that ties the value to its place, <code>&lt;table&gt;/&lt;row id&gt;/&lt;column&gt;</code>, so a value copied into
+another row fails to open, see <a href="#aad">AAD</a>;</li>
+<li><code>envelope.encrypt(aad, &amp;value)</code> into an <code>Encrypted&lt;Email, Envelope&gt;</code>, stored as a serde field, a
+<code>BYTEA</code> column through tokio-postgres or sqlx, or hex in a <code>TEXT</code> column, see
+<a href="#storing">Storing</a>;</li>
+<li><code>envelope.decrypt(aad, &amp;encrypted)</code> with the same AAD, rebuilt from the row.</li>
+</ol>
+<p>A first example, with the local KMS, is in <a href="#with-an-envelope">With an envelope</a>.</p>
+<h2 id="lookups-readers-and-rotation"><a class="header" href="#lookups-readers-and-rotation">Lookups, readers and rotation</a></h2>
+<ul>
+<li>Finding rows by an encrypted field needs a deterministic field or a beacon, see
+<a href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a>;</li>
+<li>Tink reads envelope values on Cloud KMS and AWS KMS keys, and BigQuery does not, see
+<a href="#read-values-in-bigquery-or-tink">Read values in BigQuery or Tink</a>;</li>
+<li>the KEK rotates in the KMS, and the stored DEKs are encrypted again before the old version is
+disabled, see <a href="#with-kms-aead-alone-1">Rotate keys and re-encrypt values</a>;</li>
+<li>values move to a keyring later with a sweep, see
+<a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="a-keyring-per-tenant"><a class="header" href="#a-keyring-per-tenant">A keyring per tenant</a></h1>
+<p>A multi-tenant application gives each tenant a keyring of its own: its own key versions, rotated,
+flagged and destroyed apart from the others, in one keyring store such as Firestore or
+PostgreSQL. The keyring id names the tenant, see
+<a href="#the-record">The record</a> for the ids it takes.</p>
+<h2 id="one-kek-per-tenant-or-one-shared-kek"><a class="header" href="#one-kek-per-tenant-or-one-shared-kek">One KEK per tenant or one shared KEK</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>A KEK per tenant</th><th>One shared KEK</th></tr>
+</thead>
+<tbody>
+<tr><td>A DEK copied into another tenant’s record</td><td>fails at the KMS, which decrypts with the tenant’s own KEK</td><td>decrypts, since the KMS opens it for any principal allowed to decrypt with the KEK</td></tr>
+<tr><td>KMS rights</td><td>per tenant, so a principal can be limited to some tenants</td><td>one grant covers every tenant</td></tr>
+<tr><td>Crypto-shredding a tenant</td><td>destroying its KEK, backups of the record and exported keysets included</td><td><code>dangerously_destroy_all_versions</code>, and then deleting the record’s backups and exported keysets, or a KEK rotation for every other keyring</td></tr>
+<tr><td>KMS keys to manage</td><td>one per tenant</td><td>one</td></tr>
+</tbody>
+</table>
+</div>
+<p>The first row is the store-writer threat of <a href="#keyring-deployment">Keyring deployment</a>,
+and the third the two routes of <a href="#crypto-shredding">Crypto-shredding</a>. A deployment
+that needs either guarantee uses a KEK per tenant.</p>
+<h2 id="creating-the-keyrings"><a class="header" href="#creating-the-keyrings">Creating the keyrings</a></h2>
+<p>An application opens only keyrings that exist, so each tenant’s keyring is created first:</p>
+<ul>
+<li>by the administrative job, as part of onboarding a tenant, with <code>create</code> or <code>open_or_create</code>;</li>
+<li>or by the application on the tenant’s first request, with <code>open_or_create</code>. Such an application
+builds with the <code>admin</code> feature and runs with the administrative rights, so it is trusted as the
+administration is, see <a href="#applications-and-administration-1">Applications and administration</a> and
+<a href="#keyring-limits">Keyring limits</a>.</li>
+</ul>
+<h2 id="the-path-through-the-api"><a class="header" href="#the-path-through-the-api">The path through the API</a></h2>
+<ol>
+<li>One <code>KeyringRegistry</code> per process and store, with the store and the backend, see
+<a href="#the-registry-and-its-handles">The registry and its handles</a>;</li>
+<li><code>registry.open(provider, keyring_id)</code> for each tenant the process serves. A second open of an
+open keyring reads nothing from the store and shares the first one’s record and watch. The call
+takes the provider by value: <code>GcpKmsProvider</code> and <code>HcVaultTransitProvider</code> are <code>Clone</code>, and the
+other providers are built once per keyring;</li>
+<li>a <code>FieldSpec</code> constant per encrypted field, the same for every tenant, since each keyring
+has DEKs of its own, see <a href="#encrypted-fields-and-aad">Encrypted fields and AAD</a>;</li>
+<li>on every write, <code>keyring.sealer()</code> and its <code>encrypt</code>, and the seal marker it gives, see
+<a href="#the-seal-marker">The seal marker</a>; on every read, <code>keyring.decrypt</code>;</li>
+<li><code>registry.shutdown()</code> before the process exits, see
+<a href="#the-registry-and-its-handles">The registry and its handles</a>.</li>
+</ol>
+<p>Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
+<a href="#rotate-keys-and-re-encrypt-values">Rotate keys and re-encrypt values</a>.</p>
+<h2 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h2>
+<p>A keyring stays open until the registry shuts down, so a process holds every keyring it opened:</p>
+<ul>
+<li><strong>store reads</strong>: one at the first <code>open</code>, and one revalidation per keyring per <code>record_ttl</code>, or
+per change signal, see <a href="#how-the-record-is-refreshed">How the record is refreshed</a>;</li>
+<li><strong>connections</strong>: on Firestore, one listen stream per store, with a target on each keyring’s
+document; on PostgreSQL, at most two connections per store, however many keyrings, see
+<a href="#keyring-stores">Keyring stores</a>;</li>
+<li><strong>the DEK cache</strong>: one per registry, shared by its keyrings, with an entry per version in use per
+keyring. It holds <code>DekCacheOptions::DEFAULT_MAX_ENTRIES</code>, 1024, by default, and an entry evicted
+for capacity is decrypted through the KMS again on its next use, so size it above the tenants a
+process serves times the versions each uses, see <a href="#sizing">Sizing</a>;</li>
+<li><strong>KMS calls</strong>: one decryption per version per DEK cache TTL in every process, and two per version
+in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring under the KEK, see
+<a href="#the-kms-decrypt-burst">The KMS decrypt burst</a>;</li>
+<li><strong>metrics</strong>: the plaintext size histogram has a series per keyring and version, see
+<a href="#metrics">Metrics</a> for its cardinality limit.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="find-rows-by-an-encrypted-value"><a class="header" href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a></h1>
+<p>A randomised value is different every time it is sealed, so a data store cannot find a row by it.
+Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
+for equal plaintexts, and a beacon, a truncated HMAC stored beside a field that stays randomised.
+Both leak which rows hold the same value, see
+<a href="#what-it-leaks">What it leaks</a> and
+<a href="#what-a-beacon-leaks">What a beacon leaks</a>. Neither suits a field with few distinct
+values, such as a status or a country.</p>
+<h2 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
+</thead>
+<tbody>
+<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
+<tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
+<tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
+<tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
+<tr><td>BigQuery</td><td>SQL cannot calculate a beacon; it matches beacons the application calculated</td><td>SQL decrypts the field and searches it by equality</td></tr>
+<tr><td>FIPS</td><td>HMAC-SHA256 on the configured backend</td><td>AES-SIV, which is not FIPS-approved</td></tr>
+</tbody>
+</table>
+</div>
+<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
+emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
+about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.
+How the bits trade rows to filter against what the column leaks is in
+<a href="#bits">Bits</a>.</p>
+<h2 id="with-kms-aead-alone"><a class="header" href="#with-kms-aead-alone">With kms-aead alone</a></h2>
+<p>The application keeps the key itself, as a key id and the key encrypted by the KMS, such as in its
+settings, and rotates it by hand:</p>
+<ul>
+<li>a deterministic field: <code>DeterministicCipher</code> with a key the KMS encrypts once, see
+<a href="#keys-encrypted-by-a-kms">Deterministic encryption</a>;</li>
+<li>a beacon: <code>KmsAeadEnvelope::beacon</code> or <code>BeaconMac</code>, see <a href="#beacons-1">Beacons</a>. A rotation
+keeps both keys and queries with a beacon under each until a re-index, see
+<a href="#rotating-a-beacon-key">Rotating a beacon key</a>.</li>
+</ul>
+<h2 id="with-a-keyring-1"><a class="header" href="#with-a-keyring-1">With a keyring</a></h2>
+<p>Each purpose has its own key versions, rotated centrally, and a lookup matches every version that
+still decrypts:</p>
+<ul>
+<li>a deterministic field: a sealer’s <code>encrypt_deterministic</code> on every write, and
+<code>Keyring::deterministic_probes</code> for a lookup, under the <code>deterministic</code> feature, see
+<a href="#deterministic-fields">Deterministic fields</a>;</li>
+<li>a beacon: a sealer’s <code>encrypt</code> and <code>beacon</code> in the same write, and <code>Keyring::beacon_probes</code> for a
+lookup, see <a href="#beacons-2">Beacons</a>.</li>
+</ul>
+<p>Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
+<a href="#rotation-cadence-1">Rotation cadence</a>.</p>
+<h2 id="a-lookup"><a class="header" href="#a-lookup">A lookup</a></h2>
+<ol>
+<li>Normalise the value in its newtype, such as a lowercased email, so that the write and the lookup
+encode the same bytes, see <a href="#normalisation">Normalisation</a>;</li>
+<li>compute the probes of the value looked for, one per key that still decrypts: with kms-aead
+alone one, or two during a rotation by hand until the re-index; with a keyring one per version;</li>
+<li>query by them: <code>WHERE email_beacon = ANY($1)</code> on PostgreSQL with the probes bound as a
+<code>BYTEA[]</code>, an <code>in</code> filter on Firestore, which takes up to 30 values, see
+<a href="#queries-across-rotations">Queries across rotations</a>;</li>
+<li>for a beacon, decrypt every row found and keep the ones whose plaintext equals the value: an
+equal beacon never proves an equal value.</li>
+</ol>
+<p>A deterministic field in BigQuery is queried in SQL, with one <code>DETERMINISTIC_ENCRYPT</code> per version,
+see <a href="#queries">Queries</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="read-values-in-bigquery-or-tink"><a class="header" href="#read-values-in-bigquery-or-tink">Read values in BigQuery or Tink</a></h1>
+<p>Values the library writes are in Tink’s formats, so Tink in another language and BigQuery’s SQL
+read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
+whether the key rotates:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Envelope values</th><th>One fixed key</th><th>Keyring</th></tr>
+</thead>
+<tbody>
+<tr><td>Written by</td><td><code>KmsAeadEnvelope::encrypt</code>, per call or store-less</td><td><code>AeadCipher::encrypt</code> or <code>DeterministicCipher::encrypt</code>, with a key the KMS encrypts once</td><td>a sealer’s <code>encrypt</code> or <code>encrypt_deterministic</code></td></tr>
+<tr><td>A value carries</td><td>its encrypted DEK</td><td>a 4-byte key id</td><td>a 4-byte key id</td></tr>
+<tr><td>Tink reads with</td><td><code>KmsEnvelopeAead</code>, on a Cloud KMS or AWS KMS key</td><td>a keyset of the key, as <code>TinkKeyset</code> builds it</td><td><code>export_tink_keyset</code>, on a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault Transit key for Tink for Go</td></tr>
+<tr><td>BigQuery reads with</td><td>nothing: SQL has no KMS envelope</td><td><code>KEYS.KEYSET_CHAIN</code> over the keyset encrypted by a Cloud KMS key</td><td><code>KEYS.KEYSET_CHAIN</code> over <code>export_bigquery_keyset</code>, on a Cloud KMS key</td></tr>
+<tr><td>Algorithms BigQuery reads</td><td>none</td><td>AES-256-GCM and AES-SIV</td><td>AES-256-GCM and AES-SIV</td></tr>
+<tr><td>Rotation</td><td>the KEK in the KMS</td><td>none: a second key needs a second key id and a keyset of both</td><td>central, with a new export after each rotation</td></tr>
+<tr><td>See</td><td><a href="#tinks-kms-envelope">Tink’s KMS envelope</a></td><td><a href="#one-fixed-key">One fixed key</a></td><td><a href="#bigquery-and-tink-interop">BigQuery and Tink interop</a></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="the-aad"><a class="header" href="#the-aad">The AAD</a></h2>
+<p>The reader opens a value only with the AAD it was sealed with, so the AAD is one the reader can
+build:</p>
+<ul>
+<li>envelope values and one fixed key: the application’s own bytes, which a Tink reader passes as
+they are, and SQL builds from the row when they are text, see
+<a href="#aad">AAD</a>;</li>
+<li>a keyring: the field’s default AAD, <code>&lt;kind&gt;/&lt;id&gt;/&lt;field&gt;</code> for a randomised field, which SQL
+rebuilds from the row as UTF-8 text, see <a href="#aad-in-sql">AAD in SQL</a>. A
+custom AAD fails on a field declared for BigQuery.</li>
+</ul>
+<h2 id="with-a-keyring-2"><a class="header" href="#with-a-keyring-2">With a keyring</a></h2>
+<ol>
+<li>
+<p>Declare each field the reader decrypts with <code>FieldSpec::with_interop(Interop::BigQuery)</code> or
+<code>Interop::Tink</code>: the keyring then refuses to seal it under an algorithm or a KEK the reader does
+not read, see <a href="#fields-bigquery-reads">Fields BigQuery reads</a> and
+<a href="#fields-tink-reads">Fields Tink reads</a>;</p>
+</li>
+<li>
+<p>the administrative job exports the keyset, with <code>export_bigquery_keyset</code> under the
+<code>bigquery-export</code> feature or <code>export_tink_keyset</code> under <code>admin</code>, and writes its bytes where the
+query or the reader takes them;</p>
+</li>
+<li>
+<p>the job exports again:</p>
+<ul>
+<li>the <code>Readable</code> keysets after every <code>rotate</code>, before the promotion, and after every <code>retire</code>,
+every <code>mark_compromised</code> and every KEK rotation;</li>
+<li>the <code>Single</code> keyset of a new deterministic version after its promotion, since a pending
+version has none. Until then, an equality lookup in SQL computes no probe under the new
+version and misses the rows sealed under it, with no error.</li>
+</ul>
+<p>See <a href="#rotation-cadence-1">Rotation cadence</a>,
+<a href="#retiring-the-old-version">Retiring the old version</a> and
+<a href="#encrypted-keysets">Encrypted keysets</a>.</p>
+</li>
+</ol>
+<p>Full example of a Tink export available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs">here</a>,
+and of a BigQuery sweep in SQL
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs">here</a>.</p>
+<p>An exported keyset holds the keys of the versions it selects, so treat it as a copy of the
+record’s readable versions, see <a href="#keyring-limits">Keyring limits</a>. BigQuery cannot
+calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
+<a href="#bigquery">BigQuery</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="rotate-keys-and-re-encrypt-values"><a class="header" href="#rotate-keys-and-re-encrypt-values">Rotate keys and re-encrypt values</a></h1>
+<p>Two keys rotate, on their own schedules:</p>
+<ul>
+<li>a DEK seals values. A new DEK changes nothing already written, so the values under the old one
+are re-sealed by a sweep before the old DEK is retired;</li>
+<li>the KEK encrypts DEKs in the KMS. A new KEK version changes no value: the DEKs are encrypted
+again under it before the old version is disabled.</li>
+</ul>
+<p>Both run without downtime, since the old key keeps decrypting until one of the last steps
+retires or disables it, and a check runs before that step. This page walks through each rotation
+and links to the procedure of each step. How often to rotate is in
+<a href="#rotation-cadence-1">Rotation cadence</a>.</p>
+<h2 id="dek-rotation"><a class="header" href="#dek-rotation">DEK rotation</a></h2>
+<p>On a keyring, a DEK rotation is a new key version of a purpose, staged before it seals anything.
+The administrative job runs every call on its <code>KeyringAdmin</code>, and the application runs the sweep,
+see <a href="#applications-and-administration-1">Applications and administration</a>. In order:</p>
+<ol>
+<li><strong>stage and promote</strong> the new version: <code>rotate</code>, export the keysets again, wait until every
+process has the pending version, <code>promote</code>. The steps and the waits are in
+<a href="#rotation-cadence-1">Rotation cadence</a>, and why the wait is needed in
+<a href="#staged-rotation">Staged rotation</a>;</li>
+<li><strong>sweep</strong> the records whose seal marker is below the keyring’s current one. They are the records
+that can hold a value under an older version, and records with no value of the rotated purpose,
+whose re-seal writes the marker alone, see <a href="#sweeps-1">Sweeps</a>. The query and the
+write per database:
+<ul>
+<li><a href="#sweeps-on-firestore">Firestore</a>;</li>
+<li><a href="#sweeps-on-postgresql">PostgreSQL</a>;</li>
+<li><a href="#sweeps-on-bigquery">BigQuery</a>, in SQL;</li>
+<li>beacons and deterministic fields: <a href="#rotating-beacon-versions">Rotating beacon versions</a>
+and <a href="#queries-across-rotations">Queries across rotations</a>;</li>
+</ul>
+</li>
+<li><strong>retire, then destroy</strong> the old version, once every process has refreshed since the promotion
+and no record is left under it, see
+<a href="#retiring-the-old-version">Retiring the old version</a>.</li>
+</ol>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/rotate.rs"><code>rotate</code> example</a>
+runs the whole cycle on the memory store and the local KMS:
+<code>cargo run -p kms-aead-keyring --example rotate --features ring,admin</code>.</p>
+<h3 id="why-nothing-stops"><a class="header" href="#why-nothing-stops">Why nothing stops</a></h3>
+<ul>
+<li>A pending version decrypts in every process that has seen it and seals nothing, so by the
+promotion every process that reads a value under it already knows it;</li>
+<li>a process that has not taken the promotion yet seals under the previous version, which stays
+<code>DecryptOnly</code>, so its values decrypt everywhere;</li>
+<li>the sweep reads a value under the old version and writes it under the new one, conditional on
+the record as it read it, so a write of the application in between is never overwritten;</li>
+<li><code>retire</code> is the first step that refuses a read, and <code>reinstate</code> undoes it.</li>
+</ul>
+<h3 id="what-can-go-wrong"><a class="header" href="#what-can-go-wrong">What can go wrong</a></h3>
+<ul>
+<li><strong>A process left behind</strong> by a promotion meets a value under the new version and reloads its
+record, see <a href="#staged-rotation">Staged rotation</a>;</li>
+<li><strong>a re-seal that fails</strong> is counted and logged, and some failures repeat in every run, see
+<a href="#running-a-sweep">Running a sweep</a>;</li>
+<li><strong>a retire too early</strong> refuses a value the sweep missed, see
+<a href="#retiring-the-old-version">Retiring the old version</a>;</li>
+<li><strong>a stale keyset</strong> misses the values under the new version in SQL, see
+<a href="#with-a-keyring-2">Read values in BigQuery or Tink</a>;</li>
+<li><strong>a destroy</strong> is final, apart from the copies of the DEK that backups of the record and earlier
+keyset exports keep, see <a href="#crypto-shredding-1">Crypto-shredding</a>.</li>
+</ul>
+<h3 id="what-to-alert-on"><a class="header" href="#what-to-alert-on">What to alert on</a></h3>
+<ul>
+<li>“The keyring record could not be revalidated”, from the rotation until the old version is
+retired: a process that logs it is one a promotion can leave behind, and one that can still seal
+under the old version;</li>
+<li><code>error.type</code> <code>KEY_VERSION_UNKNOWN</code> on <code>kms_aead.operation.duration</code>, a read that met a version
+its process could not load, and <code>KEY_VERSION_RETIRED</code> once the old version is retired;</li>
+<li><code>SweepReport::failed</code> above zero, and the sweep’s <code>WARN</code> per record;</li>
+<li>the values and bytes per version, which say when the next rotation is due, see
+<a href="#alerting-on-volume">Alerting on volume</a>.</li>
+</ul>
+<p>The metrics need the <code>opentelemetry</code> feature, see <a href="#metrics">Metrics</a>.</p>
+<h2 id="kek-rotation"><a class="header" href="#kek-rotation">KEK rotation</a></h2>
+<p>A KEK rotation is a new version of the key in the KMS. In order:</p>
+<ol>
+<li><strong>rotate the KEK in the KMS</strong>, as its provider page describes under “Key versions and
+rotation”: <a href="#key-versions-and-rotation">Google Cloud KMS</a>,
+<a href="#key-versions-and-rotation-1">AWS KMS</a>,
+<a href="#key-versions-and-rotation-2">Azure Key Vault</a>,
+<a href="#key-versions-and-rotation-3">Vault Transit</a> or the
+<a href="#key-versions-and-rotation-4">local KMS</a>;</li>
+<li><strong>re-encrypt, check, disable, check again and destroy</strong>, as in
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>.
+A keyring’s part, <code>reencrypt_deks</code> and <code>kek_versions_in_use</code>, is in
+<a href="#rotating-the-kek-1">Rotating the KEK</a>, with a sample.</li>
+</ol>
+<h3 id="why-nothing-stops-1"><a class="header" href="#why-nothing-stops-1">Why nothing stops</a></h3>
+<p>No value changes, and the old KEK version decrypts every DEK until it is disabled. The disable
+waits until no process holds an encrypted DEK from before the re-encryption, so by then every
+process reads through DEKs under the new version. A DEK the re-encryption missed fails in the
+application from the disable on, once its DEK cache entry expires, and the check after the disable
+finds it. Enabling the old version again restores every DEK under it, at once under Cloud KMS, see
+<a href="#key-versions-and-rotation">Google Cloud KMS</a>.</p>
+<h3 id="the-kms-decrypt-burst"><a class="header" href="#the-kms-decrypt-burst">The KMS decrypt burst</a></h3>
+<p><code>reencrypt_deks</code> gives every DEK new encrypted bytes, and the DEK cache keys its entries by those
+bytes. Each process that takes the refreshed record evicts the old entries, so its next call under
+each version decrypts that version’s DEK through the KMS again: one KMS decryption per process, per
+keyring and per version in use, within the bound of
+<a href="#how-late-a-change-is-seen">How late a change is seen</a> after each
+<code>reencrypt_deks</code>. With a keyring per tenant, re-encrypt the keyrings in batches below the KMS’s
+request quota, with room for that burst, see <a href="#pacing">Pacing</a>. A sweep or
+an application over the quota fails with the KMS’s error, such as <code>ResourceExhausted</code> on Google
+Cloud KMS or <code>ThrottlingException</code> on AWS KMS, both a <code>NetworkError</code>.</p>
+<h3 id="what-can-go-wrong-1"><a class="header" href="#what-can-go-wrong-1">What can go wrong</a></h3>
+<ul>
+<li><strong>An early re-encryption or check</strong> under Cloud KMS, inside the propagation of the new primary
+version or of the disable, see <a href="#key-versions-and-rotation">Google Cloud KMS</a>;</li>
+<li><strong>a pinned Azure version</strong> re-encrypts under the old version, see
+<a href="#key-versions-and-rotation-2">Azure Key Vault</a>;</li>
+<li><strong>an early disable</strong> fails the reads of a process that still holds the old encrypted DEKs, see
+<a href="#the-check">The check</a>;</li>
+<li><strong>Vault Transit’s <code>min_decryption_version</code></strong> disables every version below it at once, see
+<a href="#rotating-the-kek-1">Rotating the KEK</a>;</li>
+<li><strong>AWS KMS key material</strong> cannot be disabled when generated, and leaves the key unusable when
+imported material is deleted or expires, see <a href="#key-versions-and-rotation-1">AWS KMS</a>;</li>
+<li><strong>a destroyed old version</strong> makes every backup taken before the re-encryption unreadable.</li>
+</ul>
+<h3 id="what-to-alert-on-1"><a class="header" href="#what-to-alert-on-1">What to alert on</a></h3>
+<ul>
+<li>“The keyring record could not be revalidated”, from the re-encryption until the disable: a
+process that logs it keeps the old encrypted DEKs, and its reads fail after the disable once its
+DEK cache entries expire;</li>
+<li><code>error.type</code> on <code>kms_aead.kms.duration</code> with <code>kms_aead.operation</code> <code>decrypt_dek</code>, after the
+disable: a DEK the re-encryption missed, or a process that still holds old bytes;</li>
+<li>the rate of <code>kms_aead.kms.duration</code> with <code>decrypt_dek</code>, and <code>ResourceExhausted</code> or
+<code>ThrottlingException</code> in its <code>error.type</code>, during the burst;</li>
+<li>an <code>error_code</code> on the <code>Keyring re-encrypt DEKs</code> span of the administrative job.</li>
+</ul>
+<h2 id="with-kms-aead-alone-1"><a class="header" href="#with-kms-aead-alone-1">With kms-aead alone</a></h2>
+<h3 id="deks"><a class="header" href="#deks">DEKs</a></h3>
+<p>Without a keyring there is no version to stage, and the DEK rotates with the mode:</p>
+<ul>
+<li><strong>per-call envelope</strong>: every value has a DEK of its own, so there is no DEK to rotate;</li>
+<li><strong>store-less DEK reuse</strong>: the envelope renews its DEK by age, count and bytes, as its
+<code>DekReusePolicy</code> sets, and the values keep their encrypted DEK, so the renewal is the rotation
+and needs no sweep, see <a href="#store-less-dek-reuse">Store-less DEK reuse</a>;</li>
+<li><strong>one fixed key</strong>, a deterministic key or a beacon key the application keeps: a second key under
+a second key id, both kept for reads, and a re-index of the values or beacons under the old one,
+see <a href="#one-fixed-key">One fixed key</a> and
+<a href="#rotating-a-beacon-key">Rotating a beacon key</a>.</li>
+</ul>
+<p>A DEK that leaked keeps opening every value sealed under it, whatever the KEK. To retire it:</p>
+<ol>
+<li>stop sealing under it: a store-less writer renews its DEK after <code>invalidate</code> of that DEK, or
+<code>clear</code>, on its envelope’s DEK cache, in every process, see
+<a href="#the-dek-lives-in-the-cache">The DEK lives in the cache</a>;</li>
+<li>read each value under it with <code>decrypt</code> and seal it again with <code>encrypt</code>, which takes a new
+DEK, and write it back only where the stored bytes are still the ones read;</li>
+<li>treat backups and exports that hold the old values as exposed, see
+<a href="#what-rotation-does-not-protect">What rotation does not protect</a>.</li>
+</ol>
+<h3 id="the-kek"><a class="header" href="#the-kek">The KEK</a></h3>
+<p>The KEK rotates in the KMS, and before the old version is disabled, the DEKs stored in the values
+and apart from them are encrypted again under its new version with <code>reencrypt_encrypted_dek</code>, once
+per distinct encrypted DEK, and the application’s own encrypted keysets through the provider. No
+value is opened. The procedure, when the sweep starts, its pacing, the checks and a rollback are in
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+and the alerts are those of the keyring’s KEK rotation above, on <code>kms_aead.kms.duration</code>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="a-leaked-key-or-a-shredded-tenant"><a class="header" href="#a-leaked-key-or-a-shredded-tenant">A leaked key or a shredded tenant</a></h1>
+<p>The <a href="#emergency-runbook-1">emergency runbook</a> has the steps for a keyring. This page is the
+entry point, with the cases kms-aead alone adds.</p>
+<h2 id="with-a-keyring-3"><a class="header" href="#with-a-keyring-3">With a keyring</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>What happened</th><th>Runbook</th></tr>
+</thead>
+<tbody>
+<tr><td>A plaintext DEK leaked, or may have</td><td><a href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
+<tr><td>A principal got KMS rights it should not have</td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+<tr><td>An encrypted DEK or a keyring record leaked</td><td><a href="#an-encrypted-dek-or-the-keyring-record-leaked">An encrypted DEK or the keyring record leaked</a></td></tr>
+<tr><td>A refused record moving backwards, logged at <code>ERROR</code>, or a version the job did not create</td><td><a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
+<tr><td>A keyring record was deleted or corrupted</td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
+<tr><td>The KMS is down</td><td><a href="#a-kms-outage">A KMS outage</a></td></tr>
+<tr><td>A tenant’s values must become unreadable</td><td><a href="#crypto-shredding">Crypto-shredding</a></td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="a-leaked-dek-of-envelope-values"><a class="header" href="#a-leaked-dek-of-envelope-values">A leaked DEK of envelope values</a></h2>
+<p>A DEK that leaked opens every value sealed under it, and a KEK rotation does not change that. With
+a per-call envelope it is the DEK of one value, and with store-less DEK reuse of every value the
+writer sealed until it renewed the DEK. The values are re-sealed under new DEKs, as in
+<a href="#deks">With kms-aead alone</a>, and the DEK is invalidated in every DEK cache that holds
+it.</p>
+<p>A DEK the application keeps itself, such as the key of <a href="#one-fixed-key">One fixed key</a>
+or a beacon key, is replaced by a key under a new key id, and the values or beacons under the old
+one are sealed or computed again.</p>
+<p>Backups, point-in-time recovery and data exports still hold the values the leaked DEK opens:
+treat them as exposed.</p>
+<h2 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h2>
+<p>A scope’s values become unreadable once nothing can decrypt their DEKs. With kms-aead alone, the
+DEKs are encrypted by the KEK, so shredding is the destruction of the KEK’s versions that encrypted
+them, backups included. Per KMS:</p>
+<ul>
+<li><strong>Google Cloud KMS</strong>: destroy the key versions. Cloud KMS schedules the destruction, 30 days
+later by default, and until then a version can be restored, see
+<a href="#key-versions-and-rotation">Google Cloud KMS</a>;</li>
+<li><strong>AWS KMS</strong>: delete the key. Rotated key material is never destroyed on its own, see
+<a href="#key-versions-and-rotation-1">AWS KMS</a>;</li>
+<li><strong>Azure Key Vault</strong>: delete the key, which deletes it with all its versions: Key Vault never
+deletes one version alone, see <a href="#key-versions-and-rotation-2">Azure Key Vault</a>.
+Soft delete and purge protection delay the shredding, see
+<a href="#crypto-shredding-1">Crypto-shredding</a>;</li>
+<li><strong>Vault Transit</strong>: <code>min_available_version</code> and a trim of the key delete the versions below it, see
+<a href="#key-versions-and-rotation-3">Vault Transit</a>, and a deletion of
+the key, once its configuration sets <code>deletion_allowed</code>, deletes every version;</li>
+<li><strong>local KMS</strong>: destroy every copy of the KEK version, backups included, see
+<a href="#key-versions-and-rotation-4">Local KMS</a>.</li>
+</ul>
+<p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
+Vault needs a key per scope. With a keyring, a shared KEK has a second route,
+<code>dangerously_destroy_all_versions</code>, which leaves the keys in every backup of the record and in
+every keyset exported from it, see <a href="#crypto-shredding-1">Crypto-shredding</a>.
+A deployment that needs shredding guarantees uses a KEK per scope, see
+<a href="#a-keyring-per-tenant">A keyring per tenant</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="applications-and-administration-apart"><a class="header" href="#applications-and-administration-apart">Applications and administration apart</a></h1>
+<p>A keyring deployment has two sides, which build, run and are granted differently. The concepts
+and the rights tables are in <a href="#applications-and-administration-1">Applications and administration</a>; this
+page is the checklist of each side, and what to alert on in production.</p>
+<h2 id="the-application"><a class="header" href="#the-application">The application</a></h2>
+<ul>
+<li>Builds without the <code>admin</code> feature, with <code>cargo build -p &lt;application&gt;</code>, since Cargo unifies
+the features of every package one command builds;</li>
+<li>runs as a principal with KMS decrypt on the KEK and read access to the keyring store, listen
+included, see <a href="#kms-rights">KMS rights</a> and
+<a href="#store-rights">Store rights</a>;</li>
+<li>calls <code>KeyringRegistry::open</code>, and on the <code>Keyring</code> it returns <code>sealer</code>, <code>decrypt</code> and the
+probes, and runs the sweeps;</li>
+<li>awaits <code>registry.shutdown()</code> before it exits.</li>
+</ul>
+<h2 id="the-administration"><a class="header" href="#the-administration">The administration</a></h2>
+<ul>
+<li>Builds with the <code>admin</code> feature, and <code>bigquery-export</code> where it exports BigQuery keysets;</li>
+<li>runs in a job or in infrastructure automation, never in a request handler, as the only principal
+with KMS encrypt on the KEK and write access to the keyring store;</li>
+<li>calls <code>create</code> or <code>open_or_create</code> for each new keyring, and on the <code>KeyringAdmin</code> the lifecycle
+calls, <code>reencrypt_deks</code> and the keyset exports, see
+<a href="#key-versions-and-lifecycle">Key versions and lifecycle</a>;</li>
+<li>logs every call it makes, since a version its log does not show is the start of
+<a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a>;</li>
+<li>opens its registry with the longest <code>record_ttl</code> in the fleet, which the promotion guard waits.</li>
+</ul>
+<p>An application that creates keyrings lazily, such as one per tenant on its first request, is both
+sides at once, see <a href="#creating-the-keyrings">A keyring per tenant</a>.</p>
+<h2 id="what-to-alert-on-2"><a class="header" href="#what-to-alert-on-2">What to alert on</a></h2>
+<p>The events are logged through tracing, see <a href="#keyring-events">Keyring events</a>
+and <a href="#events">Events</a>, and the metrics need the <code>opentelemetry</code> feature, see
+<a href="#metrics">Metrics</a>.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>What it means</th><th>Next step</th></tr>
+</thead>
+<tbody>
+<tr><td><code>ERROR</code>: a refreshed record refused because it moves a version backwards</td><td>something other than the administrative job rewrote or restored the record</td><td><a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
+<tr><td><code>WARN</code>: “The keyring record could not be revalidated; the cached record stays in use”</td><td>the process misses every change, a promotion or a compromised flag included, until the store answers</td><td>fix the process’s access to the store before the next promotion</td></tr>
+<tr><td><code>WARN</code>: a record the store no longer holds</td><td>the record was deleted; new processes fail at <code>open</code> with <code>RecordMissing</code></td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
+<tr><td><code>WARN</code>: the store’s listener disconnected or did not start, or a keyring opened with no tokio runtime</td><td>changes reach the process within <code>record_ttl</code> instead of seconds</td><td>check the listener’s connection and the runtime</td></tr>
+<tr><td><code>WARN</code>: a compromised flag written without a rotation</td><td>the KMS could not encrypt a new DEK, so <code>encrypt</code> fails with <code>NoActiveVersion</code></td><td><code>rotate</code> and <code>promote_now</code> once the KMS answers, see <a href="#compromised-versions">Compromised versions</a></td></tr>
+<tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
+<tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
+<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown()</code> before the exit</td></tr>
+<tr><td><code>WARN</code>: a record a sweep could not re-seal, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="#running-a-sweep">Running a sweep</a></td></tr>
+<tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="#error-handling">Error handling</a></td></tr>
+<tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="#retries">Retries</a> for the codes of each KMS</td></tr>
+<tr><td><code>error.type</code> on <code>kms_aead.store.duration</code></td><td>keyring store reads that fail</td><td>the store’s own monitoring</td></tr>
+<tr><td>values and bytes per keyring version</td><td>a version near the limits of its algorithm</td><td><a href="#alerting-on-volume">Alerting on volume</a></td></tr>
+<tr><td>an <code>Encrypt</code> in the KMS audit log by a principal other than the administration</td><td>an IAM over-grant, or a version the job did not create. Cloud KMS logs <code>Encrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+<tr><td>a <code>Decrypt</code> in the KMS audit log by a principal other than the application, the administration and the keyset readers: every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a Tink reader through its own KMS client, see <a href="#queries">Queries</a> and <a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a></td><td>an IAM over-grant, or an encrypted DEK or a keyset opened outside the deployment. Cloud KMS logs <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+<tr><td><code>WARN</code>, inside the KMS span: a Cloud KMS or Vault Transit response without a key version</td><td>the KMS reported no version, so <code>kek_versions_in_use</code> lists a <code>None</code> and the check before a KEK disable never passes</td><td><a href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></td></tr>
+<tr><td><code>WARN</code>, once per process: the first read of a layout of 0.29 or earlier</td><td>values not yet upgraded</td><td><a href="#upgrading-stored-values">Upgrading stored values</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>Without a keyring, the rows of kms-aead apply: <code>error.type</code> on <code>kms_aead.operation.duration</code> and
+<code>kms_aead.kms.duration</code>, the KMS audit log, and the <code>WARN</code> of old layouts.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="choose-a-provider-and-a-backend"><a class="header" href="#choose-a-provider-and-a-backend">Choose a provider and a backend</a></h1>
+<p>A build makes two choices that do not constrain each other: the KMS that holds the KEK, and the
+crypto backend that runs the AEAD algorithms. Both are Cargo features, see
+<a href="#cargo-features">Cargo features</a>.</p>
+<h2 id="kms-providers"><a class="header" href="#kms-providers">KMS providers</a></h2>
+<p>The KMS decides who else reads the values, what a rotation takes and how a scope is
+crypto-shredded:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th>Google Cloud KMS</th><th>AWS KMS</th><th>Azure Key Vault</th><th>Vault Transit</th><th>Local KMS</th></tr>
+</thead>
+<tbody>
+<tr><td>Tink reads envelope values</td><td>yes</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td>Tink reads keyring keysets</td><td>yes</td><td>yes, with a key named by its ARN</td><td>no</td><td>Tink for Go only</td><td>no</td></tr>
+<tr><td>BigQuery reads</td><td>yes</td><td>no</td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td>KMS random generator</td><td>yes, at the HSM protection level</td><td>yes</td><td>no</td><td>no</td><td>no</td></tr>
+<tr><td>KEK version on each encrypted DEK</td><td>yes</td><td>no, <code>None</code></td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>Disabling an old KEK version</td><td>yes, eventually consistent</td><td>no, for key material AWS KMS generated</td><td>yes</td><td>yes, with <code>min_decryption_version</code></td><td>yes, by dropping it from the list</td></tr>
+<tr><td>Crypto-shredding a scope</td><td>destroying its KEK versions</td><td>deleting the key</td><td>deleting the key, with all its versions</td><td>deleting its key versions</td><td>destroying every copy of the KEK</td></tr>
+</tbody>
+</table>
+</div>
+<p>Notes on the table:</p>
+<ul>
+<li>Tink reads envelope values with <code>KmsEnvelopeAead</code> and its own KMS client, see
+<a href="#tinks-kms-envelope">Tink’s KMS envelope</a>, and keyring keysets with
+<code>KeysetHandle.read</code>, see <a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>;</li>
+<li>BigQuery’s <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only, see
+<a href="#read-values-in-bigquery-or-tink">Read values in BigQuery or Tink</a>;</li>
+<li>the KEK version decides how a KEK rotation is checked before the old version is disabled, see
+<a href="#kek-rotation">Rotate keys and re-encrypt values</a>. Each provider page has its
+rotation, under “Key versions and rotation”: <a href="#google-cloud-kms">Google Cloud KMS</a>,
+<a href="#aws-kms">AWS KMS</a>, <a href="#azure-key-vault">Azure Key Vault</a>,
+<a href="#hashicorp-vault-transit">Vault Transit</a> and <a href="#local-kms">Local KMS</a>;</li>
+<li>with an RSA key on Azure Key Vault the encryption is a public-key operation, so whoever holds the
+public key encrypts a DEK of their own into a keyring record. Use an AES key from Managed HSM,
+with <code>algorithm</code> set to <code>A256Kw</code>, see <a href="#options">Azure Key Vault</a> and
+<a href="#keyring-limits">Keyring limits</a>;</li>
+<li>the local KMS has no IAM, no audit log and no HSM, see <a href="#limits-1">Local KMS</a>;</li>
+<li>crypto-shredding per KMS is in <a href="#crypto-shredding">A leaked key or a shredded tenant</a>.</li>
+</ul>
+<p>The TLS root store and the TLS crypto provider are a feature choice for Google Cloud KMS, Azure and
+Vault Transit, with the rules in <a href="#feature-rules">Feature rules</a>.</p>
+<h2 id="crypto-backends"><a class="header" href="#crypto-backends">Crypto backends</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th></th><th><code>ring</code></th><th><code>aws-lc</code></th><th><code>aws-lc-fips</code></th><th><code>rustcrypto</code></th></tr>
+</thead>
+<tbody>
+<tr><td>AES-256-GCM-SIV</td><td>no</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>FIPS module</td><td>no</td><td>no</td><td>yes</td><td>no</td></tr>
+<tr><td>Needs a C toolchain</td><td>yes</td><td>yes</td><td>yes, with CMake and Go</td><td>no</td></tr>
+<tr><td>A second crypto library beside a cloud provider</td><td>yes</td><td>no</td><td>no</td><td>yes</td></tr>
+<tr><td>Key schedules zeroised</td><td>no</td><td>yes, by AWS-LC’s allocator</td><td>yes, by AWS-LC’s allocator</td><td>yes</td></tr>
+</tbody>
+</table>
+</div>
+<p>Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the same bytes, and opens
+the values of any other, so a move from one backend to another needs no migration of the data, see
+<a href="#cross-backend-compatibility">Cross-backend compatibility</a>.</p>
+<ul>
+<li><strong>No second crypto library</strong>: the default features of the four cloud providers already build
+aws-lc-rs for TLS, so <code>aws-lc</code> adds nothing to a provider build;</li>
+<li><strong>FIPS</strong>: <code>aws-lc-fips</code> runs the backend on the AWS-LC FIPS module and moves every user of
+aws-lc-rs in the build to it, the rustls provider included. AES-256-GCM is the algorithm for a
+FIPS deployment. AES-SIV, the deterministic algorithm, is not FIPS-approved and runs on RustCrypto
+whatever the backend, so deterministic fields stay outside the validated boundary, see
+<a href="#aws-lc-rs-and-fips">aws-lc-rs and FIPS</a>;</li>
+<li><strong>No C toolchain</strong>: <code>rustcrypto</code> is pure Rust, with <code>getrandom</code> as the CSPRNG;</li>
+<li><strong>Zeroisation</strong>: what each backend leaves in freed memory is in
+<a href="#ring">Crypto backends</a>.</li>
+</ul>
+<p>A build may enable several backends at once, and code generic over the backend bounds it with
+<code>B: AeadBackend</code> and nothing else, see
+<a href="#code-generic-over-the-backend">Code generic over the backend</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="develop-and-test-without-a-cloud"><a class="header" href="#develop-and-test-without-a-cloud">Develop and test without a cloud</a></h1>
+<p>The local KMS, the memory store and local servers for the other stores run the same code paths as
+production, with no cloud account. What each one keeps, and for how long, decides where it fits.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Piece</th><th>For</th><th>Keeps its keys</th></tr>
+</thead>
+<tbody>
+<tr><td><code>LocalKmsProvider::ephemeral</code></td><td>tests</td><td>for the life of the provider</td></tr>
+<tr><td><code>LocalKmsProvider::new</code> with <code>LocalKek::from_env</code> or <code>from_file</code></td><td>a development database</td><td>as long as the variable or the file</td></tr>
+<tr><td><code>MemoryKeyringStore</code></td><td>tests</td><td>for the life of the process</td></tr>
+<tr><td>a Firestore emulator, a local PostgreSQL or an S3-compatible server</td><td>a development keyring store</td><td>as long as the server’s data</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="the-kms"><a class="header" href="#the-kms">The KMS</a></h2>
+<ul>
+<li><strong>Tests</strong>: <code>LocalKmsProvider::ephemeral</code> has one random KEK that lives as long as the provider.
+Every DEK it encrypts, and so every value, is unreadable once the process exits, see
+<a href="#tests-and-development">Tests and development</a>;</li>
+<li><strong>a development environment</strong> whose data outlives a run keeps a KEK in a variable or a file,
+with <code>LocalKek::from_env</code> or <code>LocalKek::from_file</code>, see the same section. A value written with
+the local KMS never opens under a cloud KMS, so a development database starts again empty on the
+move to one.</li>
+</ul>
+<p>The provider is in every build, with no feature, and logs its KEK id and where each version came
+from at <code>INFO</code> when it is created.</p>
+<h2 id="the-keyring-store"><a class="header" href="#the-keyring-store">The keyring store</a></h2>
+<ul>
+<li>
+<p><strong>Tests</strong>: <code>MemoryKeyringStore</code>, in <code>kms_aead_keyring::testing</code>, loses its records, and with them
+every DEK, when the process exits. A test that creates keyrings in it enables <code>admin</code> in
+<code>[dev-dependencies]</code> only, see <a href="#applications-and-administration-1">Applications and administration</a>;</p>
+</li>
+<li>
+<p><strong>Firestore</strong>: the emulator of the Google Cloud CLI, <code>gcloud emulators firestore start</code>, and
+<code>FIRESTORE_EMULATOR_HOST</code> set to its address. <code>FirestoreDb::new</code> connects to the emulator while
+the variable is set, so the store needs no change. The
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs"><code>sweep_firestore</code> example</a>
+runs on it:</p>
+<pre><code class="language-sh">docker run --rm -d --name kms-aead-firestore -p 8687:8687 \
+  gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
+  gcloud emulators firestore start --host-port=0.0.0.0:8687
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8687 PROJECT_ID=kms-aead-emulator \
+  cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,serde,firestore
+</code></pre>
+</li>
+<li>
+<p><strong>PostgreSQL</strong>: a local server, the table of <a href="#postgresql">PostgreSQL</a>, and
+a connection with <code>NoTls</code>. The
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs"><code>sweep_postgres</code> example</a>
+reads its connection string from <code>KMS_AEAD_KEYRING_POSTGRES_URL</code>;</p>
+</li>
+<li>
+<p><strong>S3</strong>: an S3-compatible server such as MinIO, once it passes the store conformance suite, see
+<a href="#s3-compatible-servers">S3-compatible servers</a>.</p>
+</li>
+</ul>
+<p>Cloud Storage has no local server in the store’s tests.</p>
+<h2 id="a-first-run"><a class="header" href="#a-first-run">A first run</a></h2>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/local_kms.rs"><code>local_kms</code> example</a>
+creates a keyring on the memory store with a local KEK, rotates it and reads a value written
+before the rotation: <code>cargo run -p kms-aead-keyring --example local_kms --features ring,admin</code>.
+The same with kms-aead alone is in <a href="#with-an-envelope">With an envelope</a>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>The local KMS has no IAM and no audit log, and the KEK in a variable stays in the process
+environment, see <a href="#limits-1">Local KMS</a>;</li>
+<li>values sealed under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS only.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="move-envelope-values-to-a-keyring"><a class="header" href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a></h1>
 <p>Values that kms-aead’s <code>KmsAeadEnvelope</code> wrote, per call or store-less, move to keyring values in
 five steps:</p>
@@ -459,6 +1149,16 @@ Tink’s KMS envelope format for every provider, so values written by 0.29 and e
 with the deprecated <code>legacy-formats</code> feature, which also rewrites them in the new format, see
 <a href="#old-values">Old values</a>. The default algorithm of the envelope is AES-256-GCM, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
+<p>0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:</p>
+<ul>
+<li>typed fields: <code>Encrypted&lt;T, F&gt;</code> takes any type that implements <code>Plaintext</code>, such as an
+application newtype, where the tables below name <code>SecretValue</code>, see
+<a href="#stored-values">Stored values</a>;</li>
+<li>beacons, for lookups of randomised fields, see <a href="#beacons-1">Beacons</a>;</li>
+<li>the <code>kms-aead-keyring</code> crate, with key versions kept in a store, staged rotation and sweeps, see
+<a href="#keyring-and-field-encryption">Keyring and field encryption</a>. Envelope values move to it with a sweep, see
+<a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</li>
+</ul>
 <h2 id="features-1"><a class="header" href="#features-1">Features</a></h2>
 <div class="table-wrapper">
 <table>
@@ -477,7 +1177,7 @@ with the deprecated <code>legacy-formats</code> feature, which also rewrites the
 </div>
 <p>ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
 “kms-aead needs a crypto backend for its KMS providers”, so add a backend feature. <code>aws-lc</code> adds
-no second crypto library to a cloud provider build, see <a href="#choosing-a-backend">Choosing a
+no second crypto library to a cloud provider build, see <a href="#crypto-backends">Choose a provider and a
 backend</a>.</p>
 <p>The crate declares <code>rust-version = "1.99"</code>.</p>
 <h2 id="names"><a class="header" href="#names">Names</a></h2>
@@ -1049,7 +1749,7 @@ let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(
 </span><span class="boring">}</span></code></pre>
 <p>The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
-<a href="#crypto-backends">Crypto backends</a>. The default, AES-256-GCM, is read by every Tink
+<a href="#crypto-backends-1">Crypto backends</a>. The default, AES-256-GCM, is read by every Tink
 implementation too, see <a href="#tinks-kms-envelope">Formats</a>. Values that 0.29 and earlier
 sealed under their default open only with ChaCha20-Poly1305 configured, see
 <a href="#default-algorithm">Migrating from 0.29</a>.</p>
@@ -1293,19 +1993,35 @@ it keeps decrypting with the old version only. <code>reencrypt_encrypted_dek</co
 stored DEK to the current version, so the old version can be retired while the application keeps
 reading and writing:</p>
 <ol>
-<li>rotate the KEK in the KMS, as the page of each provider describes;</li>
+<li>rotate the KEK in the KMS, as the page of each provider describes. Under Cloud KMS, wait until
+the new primary version has propagated, see
+<a href="#key-versions-and-rotation">Google Cloud KMS</a>. Then wait until every
+store-less writer has renewed its DEK. Until then a writer keeps sealing under its current DEK,
+encrypted under the old version, so the sweep of step 2 misses the values it writes, the check
+of step 3 does not see them, and they first fail at the check of step 6, after the disable. A
+writer renews its DEK when its <code>DekReusePolicy</code> says so, and at the latest when the DEK leaves
+its cache, at the cache’s <code>DekCacheOptions::ttl</code>, <code>DekCacheOptions::DEFAULT_TTL</code> of 15 minutes
+by default, see <a href="#the-dek-lives-in-the-cache">The DEK lives in the cache</a>;</li>
 <li>re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
 values, and the record of each keyring under the KEK with <code>KeyringAdmin::reencrypt_deks</code>. Then
 export the keyrings’ keysets again and re-encrypt the application’s own encrypted keysets, see
-<a href="#encrypted-keysets">Encrypted keysets</a>;</li>
-<li>check that the <code>kek_versions_in_use</code> of every keyring record lists the new version alone. Then,
-once no process holds an encrypted DEK from before step 2, disable the old version, and check
-that the KMS decrypts every stored DEK, every keyring’s DEKs with <code>reencrypt_deks</code>, and every
-encrypted keyset. A DEK or a keyset it refuses is one the sweep missed: enable the old version
-again, sweep again and check again. When to disable, and how the local KMS checks before it,
-are in <a href="#the-check">The check</a>;</li>
-<li>keep the old version disabled for as long as the backups of the stored values are kept, check
-once more, then destroy it.</li>
+<a href="#encrypted-keysets">Encrypted keysets</a>, and replace the old keyset bytes wherever they are
+kept, see <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>;</li>
+<li>check that the <code>kek_versions_in_use</code> of every keyring record lists the new version alone, and so
+does the KEK version an application stores beside its own DEKs. A <code>None</code> never passes this
+check, see <a href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a>;</li>
+<li>wait until no process holds an encrypted DEK from before step 2: the longest <code>record_ttl</code> in the
+fleet after the last <code>reencrypt_deks</code>, with no process logging “The keyring record could not
+be revalidated” meanwhile, and every process has read its DEKs stored apart from their values
+again, see <a href="#the-check">The check</a>;</li>
+<li>disable the old version, and wait until the disable has propagated in the KMS: under Cloud KMS
+typically up to a minute, and several hours in exceptional cases;</li>
+<li>check that the KMS decrypts every stored DEK, every keyring’s DEKs with <code>reencrypt_deks</code>, and
+every encrypted keyset, see <a href="#the-check">The check</a>. A DEK or a keyset it refuses is one the
+sweep missed: enable the old version again, sweep again, and go back to step 3;</li>
+<li>keep the old version disabled for as long as the backups of the stored values and of the
+keyring records are kept. Immediately before destroying it, run the check of step 6 again, and
+destroy it only when it passes.</li>
 </ol>
 <p>A backup taken before the sweep holds the DEKs under the old version, so destroying the old version
 makes every such backup unreadable for good. Keyring records are the same, see
@@ -1405,7 +2121,7 @@ where
 such as <code>UPDATE orders SET card = $new WHERE id = $id AND card = $read</code>, or the store’s own
 conditional write. An unconditional write puts back the value the sweep read over one the
 application wrote in the meantime, which is then lost. A row the application rewrote keeps its new
-value, and the check in step 3 finds it if its DEK is still under the old version.</p>
+value, and the checks of steps 3 and 6 find it if its DEK is still under the old version.</p>
 <p><code>reencrypt_dek</code> does the same for one value. It gives each value an encrypted DEK of its own, so
 values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
 each on a cache miss afterwards. The same <code>reencrypt_encrypted_dek</code> re-encrypts the DEKs stored
@@ -1561,26 +2277,23 @@ of its own DEKs beside them checks those the same way.</p>
 <p>Under the local KMS the check needs no disable. A provider that lists the new version alone, as
 the sample above builds it, refuses every DEK under the old version, so the check runs before the
 deploy that drops the old version from the list, and a missed DEK costs no outage and no redeploy.</p>
-<p>Three things keep using the old version after a rotation, and each sets when to sweep or to
-disable:</p>
+<p>Besides the store-less writers that step 1 of
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a> waits for, two
+things keep using the old version after a rotation, and each sets when to disable it:</p>
 <ul>
-<li>a store-less writer keeps sealing under its current DEK, encrypted under the old version, until
-its reuse policy renews the DEK or the DEK leaves its cache, at the cache’s TTL of 15 minutes by
-default. Start the sweep once every writer has renewed its DEK after the rotation took effect,
-under Cloud KMS once the new primary version had propagated, or the check finds the values
-written meanwhile;</li>
 <li>every DEK cache serves the DEKs it holds, without a KMS call, until their entries expire. A value
 the sweep missed fails to decrypt in the application only once its entry has expired, see
 <a href="#dek-caching-and-reuse">DEK caching</a>. The check does not wait for that, since it never reads a cache;</li>
 <li>a process keeps the encrypted DEKs it read before the sweep. A keyring’s cached record holds the
 ones it had before <code>reencrypt_deks</code> until it is refreshed, at a change signal of the store or
 once it is older than <code>record_ttl</code>, 5 minutes by default, and Cloud Storage and S3 send no
-signal, see <a href="#how-late-a-change-is-seen">Record cache</a>. An encrypted DEK
+signal, see <a href="#how-late-a-change-is-seen">Record cache</a>. A process whose
+revalidations fail keeps its record for as long as they fail, and logs “The keyring record could
+not be revalidated; the cached record stays in use” at <code>WARN</code> on each failure. An encrypted DEK
 the application read from its settings at startup, as in <a href="#one-fixed-key">One fixed key</a>, stays
 as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
-decrypts the old bytes again and fails under a disabled old version, with no reload. Disable the
-old version no sooner than one <code>record_ttl</code> after the last <code>reencrypt_deks</code>, and only once every
-process has read its DEKs stored apart from their values again.</li>
+decrypts the old bytes again and fails under a disabled old version, with no reload. This is the
+wait of step 4 in <a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>.</li>
 </ul>
 <p>A KMS whose changes take time to propagate, such as Cloud KMS, can keep encrypting under the old
 version for a while after the rotation and keep decrypting under it for a while after it is
@@ -1807,7 +2520,7 @@ the RustCrypto <code>aes-siv</code> crate, so a value sealed under one backend o
 validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the FIPS module’s DRBG.</p>
 <p>Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
 a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
-<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<a href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a>.</p>
 <h2 id="what-it-leaks"><a class="header" href="#what-it-leaks">What it leaks</a></h2>
 <p>Be aware what equal cipher texts tell a reader of the stored data, without any key:</p>
 <ul>
@@ -2000,7 +2713,7 @@ column then leaks which rows hold equal values as a deterministic column does.</
 compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
 never match: after a change of a column’s bits, its stored beacons match no lookup until a
 re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
-<a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<a href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a>.</p>
 <h2 id="normalisation"><a class="header" href="#normalisation">Normalisation</a></h2>
 <p>A beacon is the HMAC of the bytes the <code>Plaintext</code> type encodes, so <code>Alice@Example.com</code> and
 <code>alice@example.com</code> give different beacons unless the type normalises the value. Normalising is the
@@ -2014,27 +2727,8 @@ a beacon. It matches beacons the application calculated and passed in as query p
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
 beacon. kms-aead-keyring does this with key versions, see <a href="#beacons-2">Beacons</a>.</p>
-<h2 id="beacon-or-deterministic-field"><a class="header" href="#beacon-or-deterministic-field">Beacon or deterministic field</a></h2>
-<p>A <a href="#deterministic-encryption">deterministic field</a> also finds rows by equality, by its cipher text:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
-</thead>
-<tbody>
-<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
-<tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
-<tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
-<tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
-<tr><td>BigQuery</td><td>SQL cannot calculate a beacon; it matches beacons the application calculated</td><td>SQL decrypts the field and searches it by equality</td></tr>
-</tbody>
-</table>
-</div>
-<p>With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
-emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
-about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="crypto-backends"><a class="header" href="#crypto-backends">Crypto backends</a></h1>
+<h1 id="crypto-backends-1"><a class="header" href="#crypto-backends-1">Crypto backends</a></h1>
 <p>The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
 a type to <code>kms_aead::backends</code>, and <code>AeadCipher</code>, <code>DeterministicCipher</code>, <code>KmsAeadEnvelope</code> and <code>LocalKmsProvider</code> take
 that type as their backend type parameter <code>B</code>. A build may enable any number of backends, and
@@ -2185,7 +2879,7 @@ them.</p>
 feature turns on the crates’ <code>zeroize</code> features, so their key objects, and the Poly1305 and
 POLYVAL keys each call derives, are zeroised when dropped.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="kms-providers"><a class="header" href="#kms-providers">KMS providers</a></h1>
+<h1 id="kms-providers-1"><a class="header" href="#kms-providers-1">KMS providers</a></h1>
 <p>A provider encrypts and decrypts data encryption keys with one key encryption key (KEK). Each one is
 a type in <code>kms_aead::providers</code>, enabled by its feature:</p>
 <div class="table-wrapper">
@@ -2326,8 +3020,10 @@ run <code>reencrypt_deks</code> again, see <a href="#rotating-the-kek-1">Rotatin
 <li>run the check only once the disable has propagated, and run it again before destroying the
 version. A check inside that window passes on DEKs that are still under the old version.</li>
 </ul>
-<p>Enabling a version is strongly consistent: an enabled version is available at once, so enabling
-the old version again after a failed check takes effect immediately.</p>
+<p>Enabling a version is strongly consistent, see
+<a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>: an enabled
+version is available at once, so enabling the old version again after a failed check takes effect
+immediately.</p>
 <h2 id="errors-1"><a class="header" href="#errors-1">Errors</a></h2>
 <p>The code of a failed KMS call is the gRPC status code, such as <code>PermissionDenied</code> or <code>NotFound</code>.
 Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in
@@ -2410,7 +3106,8 @@ missing is imported again.</p>
 <h2 id="errors-2"><a class="header" href="#errors-2">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
 <code>NotFoundException</code>, and the message AWS KMS returned. An <code>EncryptionError</code> keeps the SDK error as
-its root cause. Which
+its root cause. A response without the encrypted DEK, the plaintext DEK or the random bytes it was
+asked for fails with <code>AWS_ERROR</code>, an <code>EncryptionError</code>. Which
 errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="azure-key-vault"><a class="header" href="#azure-key-vault">Azure Key Vault</a></h1>
@@ -2596,7 +3293,8 @@ for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <c
 <code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
 <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="#retries">Retries</a>. Invalid options
 fail at creation with <code>VAULT_INVALID_OPTIONS</code>, or <code>VAULT_TLS</code> when the TLS configuration cannot be
-built.</p>
+built. A request body that cannot be serialised fails with <code>VAULT_REQUEST</code>, a <code>SystemError</code>,
+before any request is sent.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="local-kms"><a class="header" href="#local-kms">Local KMS</a></h1>
 <p><code>LocalKmsProvider</code> encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
@@ -2737,7 +3435,7 @@ and check with a provider that lists the new version alone, before the deploy th
 version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
 the old version from the list disables it, and listing it again restores it. Destroying it means
 destroying every copy of its material, backups included.</p>
-<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<h2 id="limits-1"><a class="header" href="#limits-1">Limits</a></h2>
 <ul>
 <li>No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
 operator’s job;</li>
@@ -2828,6 +3526,20 @@ every encrypted field of the record through it, so that the seal marker it store
 names the versions they are under, see <a href="#the-seal-marker">The seal marker</a>.
 Neither calls the store while the cached record is fresh, nor the KMS while the version’s DEK is
 in the DEK cache, see <a href="#record-cache">Record cache</a>.</p>
+<p>A keyring stays open until the registry shuts down. Where the store has push, the registry follows
+the change signals of each open keyring with a task on the current tokio runtime.
+<code>registry.shutdown()</code> stops those tasks and the store’s listener and waits for them:</p>
+<ul>
+<li>a revalidation read in flight finishes and is taken; waits, retry delays and connection attempts
+stop at once;</li>
+<li>the open keyrings’ keys are evicted from the DEK cache, and no other key is;</li>
+<li>the handles keep serving from their cached records, which their TTL revalidates without push,
+and later opens work too, with no watch.</li>
+</ul>
+<p>Await it before the last clone of the registry is dropped: a registry dropped while its tasks run
+aborts them and logs a <code>WARN</code>. <code>shutdown_with_timeout(timeout)</code> aborts what still runs after
+<code>timeout</code>, with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no half-written state.
+Both return <code>Ok</code> whatever the tasks did.</p>
 <p>The bytes of values, key ids and records are in <a href="#formats">Formats</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="applications-and-administration-1"><a class="header" href="#applications-and-administration-1">Applications and administration</a></h1>
@@ -2929,6 +3641,10 @@ writes the record, and the applications read it and listen to its changes, see a
 </tbody>
 </table>
 </div>
+<h2 id="what-to-alert-on-3"><a class="header" href="#what-to-alert-on-3">What to alert on</a></h2>
+<p>Each side logs events an operator acts on, such as a refused record, a failed revalidation or a
+re-seal that failed, and records metrics with the <code>opentelemetry</code> feature. The list, with the
+next step for each, is in <a href="#what-to-alert-on-2">What to alert on</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="key-versions-and-lifecycle"><a class="header" href="#key-versions-and-lifecycle">Key versions and lifecycle</a></h1>
 <h2 id="the-record"><a class="header" href="#the-record">The record</a></h2>
@@ -3114,9 +3830,10 @@ is promoted. Once the KMS answers, <code>rotate</code> and <code>promote_now</co
 pending version if the purpose has one: <code>promote</code> would refuse with <code>PromotionTooEarly</code> for up to
 <code>record_ttl</code> from the staging. A compromised flag is never held back by the KMS.</p>
 <p><code>destroy</code> and <code>dangerously_destroy_all_versions</code> remove encrypted DEKs from this record only. A
-backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
-that encrypted them exists, see
-<a href="#crypto-shredding">Crypto-shredding</a>.</p>
+backup of the record still holds them, and a keyset exported while the version decrypted holds its
+key under the same KEK. The KMS opens both as long as the KEK version that encrypted them exists,
+see
+<a href="#crypto-shredding-1">Crypto-shredding</a>.</p>
 <h2 id="reading-a-compromised-version"><a class="header" href="#reading-a-compromised-version">Reading a compromised version</a></h2>
 <p><code>KeyringOptions::compromised_reads</code> decides what <code>decrypt</code> does with a value under a compromised
 version:</p>
@@ -3616,8 +4333,9 @@ async fn email_of(
 }
 <span class="boring">fn main() {}</span></code></pre>
 <p>A column holding a value that is no keyring value fails in the decode, before any decryption.
-kms-aead’s <code>sqlx</code> feature binds <code>Encrypted</code> in sqlx the same way, see
-<a href="#storing">Stored values</a>.</p>
+The keyring’s <code>sqlx</code> feature binds <code>Encrypted</code> and <code>SealMarker</code> in sqlx the same way, as <code>BYTEA</code>
+on PostgreSQL, and turns on kms-aead’s <code>sqlx</code> feature, so the application needs no kms-aead
+dependency line for it, see <a href="#storing">Stored values</a>.</p>
 <h2 id="aad-1"><a class="header" href="#aad-1">AAD</a></h2>
 <p>The default AAD of a value is its place in the application’s model, <code>&lt;kind&gt;/&lt;id&gt;/&lt;field&gt;</code>, such
 as <code>user/42/email</code>:</p>
@@ -3919,7 +4637,7 @@ matches by equality. The keyring computes beacons under its beacon versions, of 
 and <code>BeaconBits</code>, with keys the application keeps itself, and <a href="#beacons-3">Formats</a> its
 bytes.</p>
 <p>A <a href="#deterministic-fields">deterministic field</a> also finds rows by equality, by its encrypted value,
-see <a href="#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+see <a href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a>.</p>
 <h2 id="what-a-beacon-leaks-1"><a class="header" href="#what-a-beacon-leaks-1">What a beacon leaks</a></h2>
 <p>A beacon column leaks likely equality and frequency to anyone who reads it, and a leaked beacon
 key lets its holder test candidate values offline, see
@@ -4046,8 +4764,161 @@ of its sealer and writes the sealer’s marker; a row without a beacon gets the 
 its probe drops out of every lookup.</li>
 </ol>
 <p><code>beacon.key_id()</code> reads the key id of a stored beacon, so that the sweep recomputes only the beacons
-under an older version. Beacon versions are rotated by policy and on compromise only: each one adds
-a probe to every lookup until the re-index is done.</p>
+under an older version. Here a re-index over an in-memory table, run by <code>sweep::run</code> as any sweep
+is, see <a href="#running-a-sweep">Running a sweep</a>. A beacon under the active
+version keeps its bytes and only the value is re-sealed; any other gives both again from the
+plaintext:</p>
+<pre><code class="language-rust">use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
+
+use futures_util::stream;
+use kms_aead::backends::Ring;
+use kms_aead::providers::LocalKmsProvider;
+use kms_aead::{Beacon, BeaconBits};
+use kms_aead_keyring::formats::Randomized;
+use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring,
+    KeyringResult, Purpose,
+};
+<span class="boring">use kms_aead::providers::LocalKekId;
+</span><span class="boring">use kms_aead::{BeaconAlgorithm, KmsAeadResult};
+</span><span class="boring">use kms_aead_keyring::{
+</span><span class="boring">    KeyId, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+</span><span class="boring">    Plaintext,
+</span><span class="boring">};
+</span><span class="boring">use secret_vault_value::SecretValue;
+</span>
+type UsersKeyring = Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt;;
+
+const EMAIL: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("user"),
+    FieldName::from_static("email"),
+)
+.with_beacon_bits(BeaconBits::DEFAULT);
+<span class="boring">
+</span><span class="boring">#[derive(Debug, Clone, PartialEq)]
+</span><span class="boring">struct Email(String);
+</span><span class="boring">
+</span><span class="boring">impl Plaintext for Email {
+</span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+</span><span class="boring">        self.0.to_plaintext()
+</span><span class="boring">    }
+</span><span class="boring">
+</span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
+</span><span class="boring">    }
+</span><span class="boring">}
+</span>
+#[derive(Clone)]
+struct UserRow {
+    email: Encrypted&lt;Email, Randomized&gt;,
+    email_beacon: Beacon&lt;Email&gt;,
+    seal: SealMarker,
+}
+
+/// The users table, by user id.
+type Table = Mutex&lt;BTreeMap&lt;String, UserRow&gt;&gt;;
+
+/// Computes the beacon of the row of `user` again under the active beacon version, and re-seals
+/// its value under the active randomised version, with the marker of the sealer's record.
+async fn reindex(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ResealOutcome&gt; {
+    let Some(row) = table.lock().unwrap().get(user).cloned() else {
+        return Ok(ResealOutcome::Skipped);
+    };
+    let read: Vec&lt;u8&gt; = row.email.value().to_vec();
+    let sealer = keyring.sealer().await;
+    let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
+    let (email, email_beacon, outcome) = if sealer.is_current(row.email_beacon.key_id()).await? {
+        match sealer.reseal(&amp;aad, &amp;row.email).await? {
+            Some(resealed) =&gt; {
+                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
+                let outcome = ResealOutcome::Resealed { from_compromised };
+                (resealed.value, row.email_beacon, outcome)
+            }
+            None =&gt; (row.email, row.email_beacon, ResealOutcome::Skipped),
+        }
+    } else {
+        let decrypted: Decrypted&lt;Email&gt; = keyring.decrypt_with_trust(&amp;aad, &amp;row.email).await?;
+        let from_compromised = matches!(decrypted.trust, KeyTrust::Compromised(_));
+        let email = sealer.encrypt(&amp;aad, &amp;decrypted.value).await?;
+        let email_beacon = sealer.beacon(&amp;EMAIL, &amp;decrypted.value).await?;
+        (email, email_beacon, ResealOutcome::Resealed { from_compromised })
+    };
+    let seal: SealMarker = sealer.record().seal_marker();
+    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
+    // own value, which it sealed under the active versions anyway.
+    let mut table = table.lock().unwrap();
+    match table.get_mut(user) {
+        Some(stored) if stored.email.value() == read.as_slice() =&gt; {
+            *stored = UserRow { email, email_beacon, seal };
+            Ok(outcome)
+        }
+        _ =&gt; Ok(ResealOutcome::Skipped),
+    }
+}
+
+<span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let provider =
+</span><span class="boring">    LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+</span><span class="boring">let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+</span><span class="boring">    MemoryKeyringStore::new(),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = registry
+</span><span class="boring">    .create(
+</span><span class="boring">        provider,
+</span><span class="boring">        KeyringId::from_static("tenant-42"),
+</span><span class="boring">        KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
+</span><span class="boring">    )
+</span><span class="boring">    .await?;
+</span><span class="boring">let keyring: &amp;UsersKeyring = admin.keyring();
+</span><span class="boring">let table = Table::default();
+</span><span class="boring">for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
+</span><span class="boring">    let sealer = keyring.sealer().await;
+</span><span class="boring">    let email = Email(email.to_string());
+</span><span class="boring">    let row = UserRow {
+</span><span class="boring">        email: sealer.encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;email).await?,
+</span><span class="boring">        email_beacon: sealer.beacon(&amp;EMAIL, &amp;email).await?,
+</span><span class="boring">        seal: sealer.record().seal_marker(),
+</span><span class="boring">    };
+</span><span class="boring">    table.lock().unwrap().insert(user.to_string(), row);
+</span><span class="boring">}
+</span><span class="boring">let staged: KeyId = admin.rotate(Purpose::Beacon).await?;
+</span><span class="boring">admin.promote_now(staged).await?;
+</span>// Every row whose marker is below the keyring's, after the promotion of a beacon version
+let current: SealMarker = keyring.record().seal_marker();
+let candidates = table
+    .lock()
+    .unwrap()
+    .iter()
+    .filter(|(_, row)| row.seal &lt; current)
+    .map(|(user, _)| user.clone())
+    .collect::&lt;Vec&lt;String&gt;&gt;();
+
+let report: SweepReport = sweep::run(
+    keyring.id(),
+    stream::iter(candidates.into_iter().map(Ok)),
+    NonZeroUsize::new(8).unwrap(),
+    |candidate| {
+        let table = &amp;table;
+        async move { reindex(keyring, table, &amp;candidate).await }
+    },
+)
+.await;
+println!("{report:?}");
+<span class="boring">assert_eq!(report.resealed, 2);
+</span><span class="boring">assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
+</span><span class="boring">registry.shutdown().await?;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A deterministic field is re-sealed the same way, with <code>reseal_deterministic</code>, under the
+<code>deterministic</code> feature.</p>
+<p>Beacon versions are rotated by policy and on compromise only: each one adds a probe to every lookup
+until the re-index is done.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="bigquery-and-tink-interop"><a class="header" href="#bigquery-and-tink-interop">BigQuery and Tink interop</a></h1>
 <p>Keyring values are in Tink’s wire format, so Tink and BigQuery’s AEAD functions read the values the
@@ -4367,10 +5238,16 @@ def decrypt_email(value: bytes, user_id: str) -&gt; str:
 <p>The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of <a href="#fields-tink-reads">Fields Tink reads</a>: a selected ChaCha20-Poly1305 or
 beacon version fails with <code>ExportAlgorithmUnsupported</code>, before any KMS call.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs">here</a>:
+it exports a keyset for each Cloud KMS or AWS KMS key whose variables are set, and Tink for Python
+opens a value sealed before the rotation with it, through <code>tests/tink_interop.py read-keysets</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="operations"><a class="header" href="#operations">Operations</a></h1>
 <p>Running a keyring in production: how often to rotate, how sweeps move values to the active
-versions, the migration from envelope values, and what to do when a key leaks.</p>
+versions, the migration from envelope values, and what to do when a key leaks. The tasks, step by
+step with their checks and alerts, are in <a href="#rotate-keys-and-re-encrypt-values">Rotate keys and re-encrypt values</a>
+and <a href="#a-leaked-key-or-a-shredded-tenant">A leaked key or a shredded tenant</a>.</p>
 <h2 id="rotation-cadence"><a class="header" href="#rotation-cadence">Rotation cadence</a></h2>
 <p>A rotation is staged: <code>rotate</code>, export the BigQuery keysets again, wait for every process to see
 the pending version, then <code>promote</code>. How often to rotate follows from the nonce and volume bounds
@@ -4406,7 +5283,7 @@ the previous version until their record refreshes, and those values decrypt.</p>
 <a href="#applications-and-administration-1">Applications and administration</a>:</p>
 <ol>
 <li><code>rotate(purpose)</code>;</li>
-<li>export the <code>Readable</code> BigQuery keysets again, which then hold the pending version;</li>
+<li>export the <code>Readable</code> BigQuery and Tink keysets again, which then hold the pending version;</li>
 <li>wait the longest time any process may run without a successful refresh of its record, counted
 from <code>staged_at()</code>, and check that no process logged “The keyring record could not be
 revalidated” meanwhile;</li>
@@ -4434,9 +5311,9 @@ re-index, see <a href="#rotating-beacon-versions">Rotating beacon versions</a>.<
 <p>After a promotion, export the <code>Single</code> BigQuery keysets of the new deterministic version, since
 a pending version has none.</p>
 <p>Rotation does not touch values already written. A <a href="#sweeps-1">sweep</a> re-seals them: a job that runs
-on a schedule until its <code>SweepReport</code> shows nothing scanned. Retiring the old version is a separate
-step of the administrative job, once the sweep is done and the old version’s
-<a href="#records-under-a-version">range query</a> returns nothing: <code>retire</code>, and later <code>destroy</code>.</p>
+on a schedule until its <code>SweepReport</code> shows nothing scanned. Retiring and destroying the old version
+are separate steps of the administrative job, see
+<a href="#retiring-the-old-version">Retiring the old version</a>.</p>
 <h3 id="alerting-on-volume"><a class="header" href="#alerting-on-volume">Alerting on volume</a></h3>
 <p>With the <code>opentelemetry</code> feature, the keyring records the plaintext size of each value it seals
 under each version, see <a href="#metrics">Metrics</a>: the histogram’s count is the
@@ -4543,16 +5420,13 @@ the new version alone.</p>
 <h3 id="a-kek-version-the-kms-did-not-report"><a class="header" href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></h3>
 <p>A <code>None</code> among the versions in use stands for the DEKs whose KMS reported no version: every DEK
 under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application’s
-own provider that returns none. <code>reencrypt_deks</code> keeps such a DEK at <code>None</code>, so the check before the
-disable never passes, and the check once the old version is disabled is the only one:</p>
-<ol>
-<li>run <code>reencrypt_deks</code> after the rotation;</li>
-<li>disable the old version in the KMS;</li>
-<li>run <code>reencrypt_deks</code> again. It decrypts every DEK through the KMS, so an error is a DEK the KMS
-no longer decrypts: enable the old version again, and go back to step 1.</li>
-</ol>
-<p>Between steps 2 and 3, a DEK still under the old version fails in the application too, once its
-DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
+own provider that returns none. A Cloud KMS or Vault Transit response without a key version is
+logged at <code>WARN</code>, see <a href="#events">Events</a>. <code>reencrypt_deks</code> keeps such a DEK at
+<code>None</code>, so the check before the disable never passes. The procedure in
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>
+then goes from step 2 to step 4, and the check after the disable, step 6, is the only one.</p>
+<p>Between the disable and that check, a DEK still under the old version fails in the application too,
+once its DEK cache entry has expired. Under AWS KMS only imported key material can be removed, see
 <a href="#key-versions-and-rotation-1">AWS KMS</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-1"><a class="header" href="#sweeps-1">Sweeps</a></h1>
@@ -4562,7 +5436,7 @@ CLI or a Kubernetes Job, never a task inside the library: only the application k
 its queries and its write rules. The job runs on a schedule, and again until its <code>SweepReport</code>
 shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
 next run’s marker query returns exactly the records it did not write. Retiring the old version is
-a separate step of the administrative job, see <a href="#rotation-cadence-1">Rotation cadence</a>.</p>
+a separate step of the administrative job, see <a href="#retiring-the-old-version">Retiring the old version</a>.</p>
 <h2 id="the-seal-marker"><a class="header" href="#the-seal-marker">The seal marker</a></h2>
 <p>A keyring record counts a seal epoch, which moves on by one with every administrative write that
 makes a version active:</p>
@@ -4703,8 +5577,8 @@ run without a successful refresh of its record has passed since the compromise, 
 of the last of them. A version flagged compromised after it stopped being active moves no epoch,
 and keeps the range it had;</li>
 <li>before <code>retire</code>, and again before <code>destroy</code>, the query of the version returning nothing shows
-that no record holds a value under it. That check needs one record at most: <code>limit(1)</code> in
-Firestore, <code>EXISTS</code> in SQL.</li>
+that no record holds a value under it, see <a href="#retiring-the-old-version">Retiring the old version</a>.
+That check needs one record at most: <code>limit(1)</code> in Firestore, <code>EXISTS</code> in SQL.</li>
 </ul>
 <p>One epoch counts the activations of every purpose of the keyring, so a range can match a record
 with no field of the version’s purpose, such as a record without beacons in the range of a beacon
@@ -4811,6 +5685,7 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
         return Ok(ResealOutcome::Skipped);
     };
+    let read: Vec&lt;u8&gt; = row.email.value().to_vec();
     let sealer = keyring.sealer().await;
     let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
     let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;row.email).await?;
@@ -4823,11 +5698,16 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
         None =&gt; (row.email, ResealOutcome::Skipped),
     };
     let seal: SealMarker = sealer.record().seal_marker();
-    table
-        .lock()
-        .unwrap()
-        .insert(user.to_string(), UserRow { email, seal });
-    Ok(outcome)
+    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
+    // own value, which it sealed under the active versions anyway.
+    let mut table = table.lock().unwrap();
+    match table.get_mut(user) {
+        Some(stored) if stored.email.value() == read.as_slice() =&gt; {
+            *stored = UserRow { email, seal };
+            Ok(outcome)
+        }
+        _ =&gt; Ok(ResealOutcome::Skipped),
+    }
 }
 
 <span class="boring">#[tokio::main]
@@ -4891,17 +5771,47 @@ fails in every run instead. A candidate is the application’s own type, such as
 struct of key columns or the record itself, and its <code>Display</code> names the record and nothing else. A
 record id is often an entity id, so read the sweep’s log as an administrative log.</p>
 <p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-seal <code>Result&lt;ResealOutcome, E&gt;</code>, with the
-application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it return a <code>KeyringError</code>, and a <code>From</code>
-impl on the application’s error lets <code>?</code> convert it, as the examples on
-<a href="#sweeps-on-firestore">Firestore</a>, <a href="#sweeps-on-postgresql">PostgreSQL</a> and
-<a href="#sweeps-on-bigquery">BigQuery</a> do with an error of their data store; a re-seal with no errors of its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as
-above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
+application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it
+return a <code>KeyringError</code>, and a <code>From</code> impl on the application’s error lets <code>?</code> convert it, as the
+examples on <a href="#sweeps-on-firestore">Firestore</a>, <a href="#sweeps-on-postgresql">PostgreSQL</a> and
+<a href="#sweeps-on-bigquery">BigQuery</a> do with an error of their data store; a re-seal with no errors of
+its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.</p>
-<p>Retiring the old version is not the sweep’s: once a run reports nothing scanned and the range
-query of the old version returns nothing, the administrative job <code>retire</code>s it, see
-<a href="#rotation-cadence-1">Rotation cadence</a>. Keep it retired for a while before <code>destroy</code>: <code>reinstate</code> brings a retired version back for a value that
-turned up after all, while a destroyed one is gone.</p>
+<h2 id="retiring-the-old-version"><a class="header" href="#retiring-the-old-version">Retiring the old version</a></h2>
+<p>Once the sweep is done, the administrative job retires the version a promotion replaced, and later
+destroys it, on its <code>KeyringAdmin</code>:</p>
+<ol>
+<li>wait, from the promotion, the longest time any process may run without a successful refresh of
+its record, see <a href="#staged-rotation">Staged rotation</a>, and check that no
+process logged “The keyring record could not be revalidated” meanwhile. Until then a process
+on the old record seals under the old version and stamps the old epoch, see
+<a href="#finding-records-behind">Finding records behind</a>;</li>
+<li>run the sweep until a run reports nothing scanned and nothing failed;</li>
+<li>run the old version’s <a href="#records-under-a-version">range query</a>. When it returns nothing,
+<code>retire(key_id)</code>. Reads under the version fail with <code>KeyVersionRetired</code> from then on, logged at
+<code>WARN</code>;</li>
+<li>export the <code>Readable</code> BigQuery and Tink keysets again, which leave a retired version out, and
+write them where the old ones are kept, see
+<a href="#bigquery-and-tink-interop">BigQuery and Tink interop</a>. A keyset exported before keeps reading
+values under the retired version in SQL and in Tink;</li>
+<li>keep the version retired for as long as the backups of the stored values taken before the
+sweep are kept. A destroyed version makes the values in them unreadable, as a destroyed KEK
+version does, see
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+and only a backup of the record from before the destroy still opens them, see below.
+A value the sweep missed fails with <code>KeyVersionRetired</code>: <code>reinstate(key_id)</code>, export the
+keysets again, sweep again, and go back to step 3;</li>
+<li>run the range query again. When it still returns nothing, delete every copy of the keysets
+whose <code>key_ids()</code> include the retired version, then <code>destroy(key_id)</code>. The other keysets, such
+as the <code>Single</code> keyset of the active deterministic version and the <code>Readable</code> keysets of other
+purposes, keep reading their values in SQL and in Tink. No call brings a destroyed version
+back.</li>
+</ol>
+<p><code>destroy</code> removes the encrypted DEK from the record only. A backup of the record still holds it,
+and so does every copy of a keyset exported while the version decrypted, both opened by the KMS as
+long as the KEK version that encrypted them exists, see
+<a href="#crypto-shredding-1">Crypto-shredding</a>.</p>
 <h2 id="sweeps-by-store"><a class="header" href="#sweeps-by-store">Sweeps by store</a></h2>
 <p>At millions of records a sweep streams its candidates from the store in one query and never holds
 its result in memory, and it writes them back in batches. Every example, on
@@ -4921,7 +5831,7 @@ for every value and never cached;</li>
 range of every version it is under;</li>
 <li>it runs on a schedule until a run reports nothing scanned. The <code>retire</code>, and later the
 <code>destroy</code>, of the old version are the administrative job’s, see
-<a href="#rotation-cadence-1">Rotation cadence</a>.</li>
+<a href="#retiring-the-old-version">Retiring the old version</a>.</li>
 </ul>
 <p>The examples keep one keyring’s records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring’s id beside the marker, and
@@ -5802,7 +6712,8 @@ every process has had time to refresh its record, for the writes of processes th
 the flag yet;</li>
 <li>export the BigQuery keysets again: a <code>Readable</code> keyset leaves the compromised version out.
 Delete the <code>Single</code> keyset of the compromised version once the sweep is done;</li>
-<li><code>retire</code> the version once the sweep is done and its range query returns nothing.</li>
+<li>retire and later destroy the version as in
+<a href="#retiring-the-old-version">Retiring the old version</a>.</li>
 </ol>
 <p>Rotation protects nothing already copied: backups, point-in-time recovery and data exports still
 hold values the leaked DEK opens. Treat them as exposed and revoke the secrets inside them.</p>
@@ -5831,7 +6742,9 @@ store.</p>
 <ol>
 <li>If the version is active, <code>mark_compromised</code> it, so that nothing new is sealed under it from
 each process’s next refresh. If it is pending, <code>destroy</code> it;</li>
-<li><code>retire</code> and then <code>destroy</code> the version, after a sweep if values were sealed under it;</li>
+<li>retire and destroy the version as in
+<a href="#retiring-the-old-version">Retiring the old version</a>, after a sweep if values were
+sealed under it;</li>
 <li>check the KMS audit log for the <code>Encrypt</code> call that encrypted its DEK. None means its encrypted
 DEK was copied or relabelled from another version, of this keyring or of another under the
 same KEK, which the KMS decrypts as it would the original; one from a principal other than the
@@ -5853,18 +6766,27 @@ the administrative job’s log, before starting new processes.</li>
 <code>ERROR</code>, while new processes take it. Values are never lost with the record as long as a copy of
 it exists. Without any copy they are gone, so keep versioning on the bucket and back up the
 table.</p>
-<h2 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h2>
+<h2 id="crypto-shredding-1"><a class="header" href="#crypto-shredding-1">Crypto-shredding</a></h2>
 <p>To make a scope’s values unrecoverable:</p>
 <ul>
 <li>with a KEK per scope: destroy the KEK’s versions in the KMS. Every encrypted DEK of the scope is
-then unrecoverable, backups included;</li>
+then unrecoverable, backups of the record and keysets exported from it included, since the KEK
+encrypts both;</li>
 <li>with a shared KEK: <code>dangerously_destroy_all_versions</code>, which destroys every version of the
-keyring in one write, so that it encrypts and decrypts nothing from then on. A backup of the
-record still holds the encrypted DEKs, which the KMS opens as long as the KEK version that
-encrypted them exists, so then either delete the record and every backup of it, or destroy that
-KEK version: on GCP, Vault Transit and the local KMS, rotate the KEK, <code>reencrypt_deks</code> every
-other keyring under it, then destroy the previous KEK version. On AWS rotated key material is
-never destroyed, so only the deletion of the KMS key itself shreds.</li>
+keyring in one write, so that it encrypts and decrypts nothing from then on. Two copies outside
+the record still hold its keys, and the KMS opens both as long as a KEK version that encrypted
+them exists: every backup of the record, and every BigQuery and Tink keyset exported from the
+keyring, see <a href="#keyring-limits">Keyring limits</a>. So then either delete the record,
+every backup of it and every copy of those keysets, or destroy every KEK version that encrypted
+them: on GCP, Vault Transit and the local KMS, rotate the KEK, re-encrypt every other keyring
+under it as in
+<a href="#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+then destroy every previous KEK version, the ones an earlier rotation left disabled included. On AWS rotated key material is never destroyed, so only
+the deletion of the KMS key itself shreds. Azure Key Vault deletes a key with all its versions
+and never one version alone, so there too only the deletion of the key shreds. A vault with soft
+delete keeps a deleted key recoverable until it is purged, and with purge protection on, no purge
+is possible until the vault’s retention period of 7 to 90 days has passed, see
+<a href="https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview">Azure Key Vault soft-delete</a>.</li>
 </ul>
 <p>A deployment that needs shredding guarantees uses a KEK per scope.</p>
 <h2 id="a-kms-outage"><a class="header" href="#a-kms-outage">A KMS outage</a></h2>
@@ -5896,7 +6818,7 @@ flag.</p>
 <tr><td><code>hashicorp-vault-transit-kms-encryption-tls-webpki</code></td><td>Vault Transit with the bundled WebPKI roots</td></tr>
 <tr><td><code>hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs</code></td><td>Vault Transit with the aws-lc-rs crypto provider</td></tr>
 <tr><td><code>hashicorp-vault-transit-kms-encryption-tls-ring</code></td><td>Vault Transit with the ring crypto provider</td></tr>
-<tr><td><code>ring</code></td><td>the ring backend, see <a href="#crypto-backends">Crypto backends</a></td></tr>
+<tr><td><code>ring</code></td><td>the ring backend, see <a href="#crypto-backends-1">Crypto backends</a></td></tr>
 <tr><td><code>aws-lc</code></td><td>the aws-lc-rs backend</td></tr>
 <tr><td><code>aws-lc-fips</code></td><td>the aws-lc-rs backend on the AWS-LC FIPS module. Needs CMake and Go to build</td></tr>
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed</td></tr>
@@ -5935,7 +6857,7 @@ seals or encrypts can be constructed, since no type implements <code>AeadBackend
 <tr><th>Feature</th><th>What it adds</th></tr>
 </thead>
 <tbody>
-<tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="#crypto-backends">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
+<tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="#crypto-backends-1">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
 <tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="#applications-and-administration-1">Applications and administration</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, <code>encrypt_deterministic</code> and <code>reseal_deterministic</code> on a <code>Sealer</code>, and <code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see <a href="#deterministic-fields">Deterministic fields</a>. The deterministic types exist in every build, so a process without the feature keeps a record’s deterministic versions intact</td></tr>
 <tr><td><code>serde</code></td><td><code>Serialize</code> and <code>Deserialize</code> for <code>Encrypted</code> and <code>SealMarker</code>, as bytes</td></tr>
@@ -6543,6 +7465,7 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
 <tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
 <tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+<tr><td><code>AWS_ERROR</code></td><td>encryption</td><td>an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see <a href="#errors-2">AWS KMS</a></td></tr>
 <tr><td><code>INVALID_LOCAL_KEK_ID</code>, <code>LOCAL_*</code></td><td>system, encryption</td><td>the <a href="#errors-5">local KMS</a></td></tr>
 <tr><td><code>AZURE_*</code></td><td>system, encryption</td><td>the <a href="#errors-3">Azure provider</a></td></tr>
 <tr><td><code>VAULT_*</code></td><td>system, network, encryption</td><td>the <a href="#errors-4">Vault Transit provider</a></td></tr>
@@ -6564,7 +7487,7 @@ The variant per provider:</p>
 </thead>
 <tbody>
 <tr><td>Google Cloud KMS</td><td>gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code></td><td>any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>, <code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code></td></tr>
-<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, and a request that could not be built or signed</td></tr>
+<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code></td></tr>
 <tr><td>Azure Key Vault</td><td>a 5xx or 429 status, a connection or I/O failure</td><td>any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that does not parse</td></tr>
 <tr><td>Vault Transit</td><td><code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code></td><td>any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code></td></tr>
 </tbody>
@@ -6573,6 +7496,61 @@ The variant per provider:</p>
 <p>Google’s client libraries retry the Cloud KMS <code>Encrypt</code> and <code>Decrypt</code> calls on <code>Unavailable</code> and
 <code>DeadlineExceeded</code> only. Keep a retry on the other Google Cloud KMS network codes to a few
 attempts.</p>
+<h2 id="keyring-errors"><a class="header" href="#keyring-errors">Keyring errors</a></h2>
+<p>Every fallible call of kms-aead-keyring returns <code>KeyringResult&lt;T&gt;</code>, whose error is
+<code>KeyringError</code>, also <code>#[non_exhaustive]</code>. <code>code()</code> returns kms-aead’s code for <code>KmsAead</code>, such as
+<code>DECRYPT</code> or a KMS’s code, and the variant’s name in upper snake case otherwise, such as
+<code>KEY_VERSION_COMPROMISED</code>. It is the <code>error_code</code> field of the keyring’s spans and the
+<code>error.type</code> of its metrics. Match on the variant and its fields, or on the code: the <code>Display</code>
+text may change in any release.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KmsAead</code></td><td>kms-aead’s</td><td>a KMS call, a decryption or an encoding failed, see <a href="#codes">Codes</a></td></tr>
+<tr><td><code>Store</code></td><td><code>STORE</code></td><td>the keyring store failed: <code>store</code>, <code>operation</code>, and the client’s error as <code>root_cause</code> and <code>source()</code></td></tr>
+<tr><td><code>InvalidIdentifier</code></td><td><code>INVALID_IDENTIFIER</code></td><td>a keyring id, an AAD part or a store name that breaks the rule of its type</td></tr>
+<tr><td><code>RecordMissing</code></td><td><code>RECORD_MISSING</code></td><td>no record for the keyring, at <code>open</code> or before an administrative write</td></tr>
+<tr><td><code>RecordExists</code></td><td><code>RECORD_EXISTS</code></td><td><code>create</code> found a record</td></tr>
+<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, see <a href="#keyring-records">Keyring records</a></td></tr>
+<tr><td><code>RecordRegressed</code></td><td><code>RECORD_REGRESSED</code></td><td>a record that moves a version backwards from the one this process holds, from <code>reload</code> and before an administrative write</td></tr>
+<tr><td><code>RecordConflict</code></td><td><code>RECORD_CONFLICT</code></td><td>an administrative write lost every compare-and-swap, <code>attempts</code> of them</td></tr>
+<tr><td><code>KekMismatch</code></td><td><code>KEK_MISMATCH</code></td><td>the provider’s KEK is not the one the record names</td></tr>
+<tr><td><code>NoActiveVersion</code></td><td><code>NO_ACTIVE_VERSION</code></td><td>no active version of the purpose, so nothing new is sealed under it</td></tr>
+<tr><td><code>NoAlgorithm</code></td><td><code>NO_ALGORITHM</code></td><td>the record names no algorithm for the purpose, so no version of it is created: <code>change_algorithm</code> sets one</td></tr>
+<tr><td><code>KeyVersionUnknown</code></td><td><code>KEY_VERSION_UNKNOWN</code></td><td>no version with the value’s key id, also after a reload</td></tr>
+<tr><td><code>KeyVersionRetired</code></td><td><code>KEY_VERSION_RETIRED</code></td><td>the value’s version is retired; <code>reinstate</code> brings it back</td></tr>
+<tr><td><code>KeyVersionDestroyed</code></td><td><code>KEY_VERSION_DESTROYED</code></td><td>the value’s version is destroyed</td></tr>
+<tr><td><code>KeyVersionPending</code></td><td><code>KEY_VERSION_PENDING</code></td><td>a pending version selected as the primary of a keyset export</td></tr>
+<tr><td><code>KeyVersionCompromised</code></td><td><code>KEY_VERSION_COMPROMISED</code></td><td>the value’s version is compromised under the <code>Block</code> policy</td></tr>
+<tr><td><code>SealerOutdated</code></td><td><code>SEALER_OUTDATED</code></td><td>a value under a version newer than the sealer’s record</td></tr>
+<tr><td><code>KeyPurposeMismatch</code></td><td><code>KEY_PURPOSE_MISMATCH</code></td><td>a key id of another purpose than the call’s</td></tr>
+<tr><td><code>InvalidTransition</code></td><td><code>INVALID_TRANSITION</code></td><td>a lifecycle call that does not apply to the version’s state, see <a href="#states">States</a></td></tr>
+<tr><td><code>PromotionTooEarly</code></td><td><code>PROMOTION_TOO_EARLY</code></td><td>a promotion before <code>record_ttl</code> has passed since the version was staged</td></tr>
+<tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero, or both purpose bits set</td></tr>
+<tr><td><code>DeterministicDisabled</code></td><td><code>DETERMINISTIC_DISABLED</code></td><td>a deterministic version created without the <code>deterministic</code> feature</td></tr>
+<tr><td><code>Interop</code></td><td><code>INTEROP</code></td><td>a seal or a keyset export that a field’s <code>Interop</code> reader would not read</td></tr>
+<tr><td><code>CustomAadUnsupported</code></td><td><code>CUSTOM_AAD_UNSUPPORTED</code></td><td><code>custom_aad</code> on a field BigQuery decrypts</td></tr>
+<tr><td><code>ExportAlgorithmUnsupported</code></td><td><code>EXPORT_ALGORITHM_UNSUPPORTED</code></td><td>a version in an export whose algorithm the keyset’s reader does not read</td></tr>
+<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
+<tr><td><code>InvalidSealMarker</code></td><td><code>INVALID_SEAL_MARKER</code></td><td>stored bytes that are not a <code>SealMarker</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>Besides the retry policies of the store clients, such as aws-sdk-s3’s, the keyring retries only an
+administrative write’s compare-and-swap, up to <code>cas_retries</code> times. What a caller may run again:</p>
+<ul>
+<li><code>KmsAead</code>: as in <a href="#retries">Retries</a>, a <code>NetworkError</code> with a backoff;</li>
+<li><code>Store</code>: the library does not classify a store’s errors, so the decision follows the client’s
+error in <code>root_cause</code>;</li>
+<li><code>RecordConflict</code>: the administrative call, which reads the record again;</li>
+<li><code>SealerOutdated</code>: the write, with a new sealer from <code>Keyring::sealer</code>, see
+<a href="#re-sealing-a-value">Re-sealing a value</a>;</li>
+<li><code>PromotionTooEarly</code>: the promotion, once its <code>remaining</code> has passed.</li>
+</ul>
+<p>The other variants fail the same way until the record, the configuration or the call changes.</p>
 <h2 id="what-errors-never-carry"><a class="header" href="#what-errors-never-carry">What errors never carry</a></h2>
 <p>No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in <code>Display</code> or in <code>Debug</code>. An application can log errors with <code>{}</code> and <code>{:?}</code>.</p>
@@ -6704,6 +7682,21 @@ left unrecorded, never recorded as <code>0</code> or an empty string.</p>
 </div>
 <p>Its children are a <code>KMS decrypt DEK</code> under the version that encrypted the DEK and a <code>KMS encrypt DEK</code>
 under the current one.</p>
+<h3 id="kms-aead-beacon"><a class="header" href="#kms-aead-beacon">KMS AEAD beacon</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>algorithm</code></td><td><code>hmac-sha256</code></td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> with one, a failed decryption of the beacon key recording <code>miss</code></td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>A beacon key the cache did not hold shows its <code>KMS decrypt DEK</code> as a child.</p>
 <h3 id="kms-encrypt-dek-kms-decrypt-dek-and-kms-random"><a class="header" href="#kms-encrypt-dek-kms-decrypt-dek-and-kms-random">KMS encrypt DEK, KMS decrypt DEK and KMS random</a></h3>
 <div class="table-wrapper">
 <table>
@@ -7007,7 +8000,7 @@ copied across it fails to decrypt;</li>
 <li>the KMS audit log of decrypt calls, turned on where the KMS leaves it off by default, shows
 which principal decrypted which key.</li>
 </ul>
-<p>The local KMS has no IAM, no audit log and no HSM, see its <a href="#limits">limits</a>.</p>
+<p>The local KMS has no IAM, no audit log and no HSM, see its <a href="#limits-1">limits</a>.</p>
 <h2 id="nonces"><a class="header" href="#nonces">Nonces</a></h2>
 <p>Every AEAD algorithm takes a random 96-bit nonce from the backend’s CSPRNG for each value, and
 writes it in front of the cipher text. NIST SP 800-38D allows 2^32 encryptions under one key with
@@ -7119,8 +8112,9 @@ Use an AES key, from Managed HSM;</li>
 carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
 values through it. Keep it in the read path for the migration only;</li>
 <li><strong>a destroyed version’s DEK lives as long as the KEK version that encrypted it.</strong> A backup of the
-record holds encrypted DEKs the KMS still opens, see
-<a href="#crypto-shredding">Crypto-shredding</a>;</li>
+record holds encrypted DEKs the KMS still opens, and a keyset exported before the destroy holds
+the version’s key under the same KEK, see
+<a href="#crypto-shredding-1">Crypto-shredding</a>;</li>
 <li><strong>an exported BigQuery keyset holds the versions’ keys</strong>, encrypted with no associated data, since
 BigQuery decrypts it with none. Treat it as a copy of the record’s readable versions, and export
 again after every rotation and every <code>mark_compromised</code>;</li>

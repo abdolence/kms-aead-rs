@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -273,6 +273,27 @@ it as bytes, so a column of secrets needs no store of its own. See
 <a href="./stored-values.html">Stored values</a>.</p>
 <p><code>AeadCipher</code> and <code>DeterministicCipher</code> work without a KMS at all, with keys the application
 holds.</p>
+<h2 id="where-to-start"><a class="header" href="#where-to-start">Where to start</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>To</th><th>Read</th></tr>
+</thead>
+<tbody>
+<tr><td>Encrypt a few fields or secrets with a cloud KMS and no store</td><td><a href="./use-cases/encrypt-fields.html">Encrypt fields with a KMS</a></td></tr>
+<tr><td>Give each tenant its own keys</td><td><a href="./use-cases/keyring-per-tenant.html">A keyring per tenant</a></td></tr>
+<tr><td>Find rows by an encrypted value</td><td><a href="./use-cases/equality-lookups.html">Find rows by an encrypted value</a></td></tr>
+<tr><td>Read the values in BigQuery or with Tink</td><td><a href="./use-cases/bigquery-and-tink.html">Read values in BigQuery or Tink</a></td></tr>
+<tr><td>Rotate the DEKs and the KEK without downtime</td><td><a href="./use-cases/rotation.html">Rotate keys and re-encrypt values</a></td></tr>
+<tr><td>Respond to a leaked key, or shred a tenant</td><td><a href="./use-cases/incidents.html">A leaked key or a shredded tenant</a></td></tr>
+<tr><td>Run the applications and the administration with their own rights, and alert on both</td><td><a href="./use-cases/deployment.html">Applications and administration apart</a></td></tr>
+<tr><td>Pick a KMS and a crypto backend, FIPS included</td><td><a href="./use-cases/choosing.html">Choose a provider and a backend</a></td></tr>
+<tr><td>Develop and test without a cloud account</td><td><a href="./use-cases/local-development.html">Develop and test without a cloud</a></td></tr>
+<tr><td>Move envelope values to a keyring</td><td><a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a></td></tr>
+<tr><td>Upgrade from 0.29</td><td><a href="./migrating-from-0.29.html">Migrating from 0.29</a></td></tr>
+</tbody>
+</table>
+</div>
 <h2 id="licence"><a class="header" href="#licence">Licence</a></h2>
 <p>Apache Software License (ASL)</p>
 

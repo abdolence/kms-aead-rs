@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,6 +184,16 @@ Tink’s KMS envelope format for every provider, so values written by 0.29 and e
 with the deprecated <code>legacy-formats</code> feature, which also rewrites them in the new format, see
 <a href="#old-values">Old values</a>. The default algorithm of the envelope is AES-256-GCM, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
+<p>0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:</p>
+<ul>
+<li>typed fields: <code>Encrypted&lt;T, F&gt;</code> takes any type that implements <code>Plaintext</code>, such as an
+application newtype, where the tables below name <code>SecretValue</code>, see
+<a href="./stored-values.html">Stored values</a>;</li>
+<li>beacons, for lookups of randomised fields, see <a href="./beacons.html">Beacons</a>;</li>
+<li>the <code>kms-aead-keyring</code> crate, with key versions kept in a store, staged rotation and sweeps, see
+<a href="./keyring.html">Keyring and field encryption</a>. Envelope values move to it with a sweep, see
+<a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</li>
+</ul>
 <h2 id="features"><a class="header" href="#features">Features</a></h2>
 <div class="table-wrapper">
 <table>
@@ -202,7 +212,7 @@ with the deprecated <code>legacy-formats</code> feature, which also rewrites the
 </div>
 <p>ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
 “kms-aead needs a crypto backend for its KMS providers”, so add a backend feature. <code>aws-lc</code> adds
-no second crypto library to a cloud provider build, see <a href="./getting-started.html#choosing-a-backend">Choosing a
+no second crypto library to a cloud provider build, see <a href="./use-cases/choosing.html#crypto-backends">Choose a provider and a
 backend</a>.</p>
 <p>The crate declares <code>rust-version = "1.99"</code>.</p>
 <h2 id="names"><a class="header" href="#names">Names</a></h2>

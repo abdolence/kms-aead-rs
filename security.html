@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -318,7 +318,8 @@ Use an AES key, from Managed HSM;</li>
 carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
 values through it. Keep it in the read path for the migration only;</li>
 <li><strong>a destroyed version’s DEK lives as long as the KEK version that encrypted it.</strong> A backup of the
-record holds encrypted DEKs the KMS still opens, see
+record holds encrypted DEKs the KMS still opens, and a keyset exported before the destroy holds
+the version’s key under the same KEK, see
 <a href="./operations/runbook.html#crypto-shredding">Crypto-shredding</a>;</li>
 <li><strong>an exported BigQuery keyset holds the versions’ keys</strong>, encrypted with no associated data, since
 BigQuery decrypts it with none. Treat it as a copy of the record’s readable versions, and export

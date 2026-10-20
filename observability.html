@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -300,6 +300,21 @@ left unrecorded, never recorded as <code>0</code> or an empty string.</p>
 </div>
 <p>Its children are a <code>KMS decrypt DEK</code> under the version that encrypted the DEK and a <code>KMS encrypt DEK</code>
 under the current one.</p>
+<h3 id="kms-aead-beacon"><a class="header" href="#kms-aead-beacon">KMS AEAD beacon</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>algorithm</code></td><td><code>hmac-sha256</code></td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> with one, a failed decryption of the beacon key recording <code>miss</code></td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>A beacon key the cache did not hold shows its <code>KMS decrypt DEK</code> as a child.</p>
 <h3 id="kms-encrypt-dek-kms-decrypt-dek-and-kms-random"><a class="header" href="#kms-encrypt-dek-kms-decrypt-dek-and-kms-random">KMS encrypt DEK, KMS decrypt DEK and KMS random</a></h3>
 <div class="table-wrapper">
 <table>

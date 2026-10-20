@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -495,6 +495,10 @@ def decrypt_email(value: bytes, user_id: str) -&gt; str:
 <p>The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of <a href="#fields-tink-reads">Fields Tink reads</a>: a selected ChaCha20-Poly1305 or
 beacon version fails with <code>ExportAlgorithmUnsupported</code>, before any KMS call.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs">here</a>:
+it exports a keyset for each Cloud KMS or AWS KMS key whose variables are set, and Tink for Python
+opens a value sealed before the rotation with it, through <code>tests/tink_interop.py read-keysets</code>.</p>
 
                     </main>
 

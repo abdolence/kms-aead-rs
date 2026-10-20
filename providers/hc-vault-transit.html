@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -269,7 +269,8 @@ for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <c
 <code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
 <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. Invalid options
 fail at creation with <code>VAULT_INVALID_OPTIONS</code>, or <code>VAULT_TLS</code> when the TLS configuration cannot be
-built.</p>
+built. A request body that cannot be serialised fails with <code>VAULT_REQUEST</code>, a <code>SystemError</code>,
+before any request is sent.</p>
 
                     </main>
 

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "../searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-01e5055c.js"></script>
+        <script src="../toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -254,8 +254,10 @@ run <code>reencrypt_deks</code> again, see <a href="../operations/rotation.html#
 <li>run the check only once the disable has propagated, and run it again before destroying the
 version. A check inside that window passes on DEKs that are still under the old version.</li>
 </ul>
-<p>Enabling a version is strongly consistent: an enabled version is available at once, so enabling
-the old version again after a failed check takes effect immediately.</p>
+<p>Enabling a version is strongly consistent, see
+<a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>: an enabled
+version is available at once, so enabling the old version again after a failed check takes effect
+immediately.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>The code of a failed KMS call is the gRPC status code, such as <code>PermissionDenied</code> or <code>NotFound</code>.
 Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in

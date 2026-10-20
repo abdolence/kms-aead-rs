@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-077e19e1.js";
+            window.path_to_searchindex_js = "searchindex-1ec9ff46.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-01e5055c.js"></script>
+        <script src="toc-7da9b6c9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -190,7 +190,7 @@ the RustCrypto <code>aes-siv</code> crate, so a value sealed under one backend o
 validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the FIPS module’s DRBG.</p>
 <p>Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
 a field only needs lookups and its stored value should stay randomised, a beacon fits instead, see
-<a href="./beacons.html#beacon-or-deterministic-field">Beacon or deterministic field</a>.</p>
+<a href="./use-cases/equality-lookups.html">Find rows by an encrypted value</a>.</p>
 <h2 id="what-it-leaks"><a class="header" href="#what-it-leaks">What it leaks</a></h2>
 <p>Be aware what equal cipher texts tell a reader of the stored data, without any key:</p>
 <ul>
