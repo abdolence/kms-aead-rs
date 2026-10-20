@@ -305,10 +305,23 @@ println!("{report:?}");
 
 The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
 candidate query included: a `BatchWrite` attempt fails after the timeout, and the query stream fails
-once it waits that long for its next document. Over 300,000 documents on the emulator, the
-`sweep_firestore` example with these limits printed its report 30 s after the emulator was paused
-mid-sweep, and 10 s after it was stopped. The timeout is the client's, so the keyring store built
-on it has it as well.
+once it waits that long for its next document. A `BatchWrite` attempt that takes longer than the
+retry limit is not retried.
+
+- Against a Firestore that stops answering mid-stream, a run reports after about three request
+  timeouts: the batches in flight fail first, then the batches cut from documents the client had
+  already received while the stream waits for its next one, then the last partial batch.
+- A run whose candidate query never starts fails after four request timeouts plus the backoff
+  between them, because firestore-rs resends a query that never starts up to its `max_retries`
+  times, 3 by default.
+- Against a Firestore that refuses connections, every write fails with `Unavailable` instead of a
+  deadline, and the batch retry limit is what ends the writes.
+
+Over 300,000 documents on the emulator, the `sweep_firestore` example with these limits printed its
+report 30 s after the emulator was paused mid-sweep, three 10 s request timeouts, and 9.5 s after
+it was stopped, two waves of writes each retried for up to the 5 s retry limit. A query start
+against the paused emulator failed after 40.4 s. The keyring store built on the client uses its
+timeout as well.
 
 A range filter never matches a document without the field. `#[serde(default)]` reads a document
 written before the marker as `SealMarker::ENVELOPE`, and the query finds it only once its `seal`

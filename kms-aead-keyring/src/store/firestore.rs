@@ -33,8 +33,9 @@ mod listener;
 /// credentials it chooses, and the store's revision is Firestore's timestamp. firestore-rs's
 /// version is part of this crate's API under the `firestore` feature.
 ///
-/// The store's reads and writes keep the client's `request_timeout`, if the application sets one,
-/// and its listen stream has no timeout either way.
+/// The store's reads and writes use the client's
+/// [`request_timeout`](::firestore::FirestoreDbOptions::request_timeout), if the application sets
+/// one, and its listen stream has no timeout either way.
 ///
 /// firestore-rs logs every listen event at `trace` level on its `firestore` target, documents
 /// included, so that level writes encrypted DEKs to the log. Keep it off where the log leaves the
