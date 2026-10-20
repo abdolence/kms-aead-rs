@@ -115,10 +115,6 @@ mod recorded {
                 std::sync::Arc::<str>::from(id.as_str()),
             ))
         }
-
-        fn key_value(&self) -> KeyValue {
-            self.0.clone()
-        }
     }
 
     impl KeyringCall<'_> {
@@ -184,7 +180,7 @@ mod recorded {
                 .map(|purpose| KeyValue::new(PURPOSE, purpose.as_str()));
             record_operation(
                 &call,
-                std::iter::once(self.keyring.key_value()).chain(purpose),
+                std::iter::once(self.keyring.0.clone()).chain(purpose),
                 elapsed,
                 outcome,
             );
@@ -201,7 +197,7 @@ mod recorded {
     ) {
         kms_aead::__instruments::record_store_load(
             [
-                keyring.key_value(),
+                keyring.0.clone(),
                 KeyValue::new(STORE, store.to_string()),
                 KeyValue::new(REASON, reason.as_str()),
             ],

@@ -107,6 +107,8 @@ impl FormatLayout for Envelope {
     }
 
     fn plaintext_len(value: &[u8]) -> usize {
+        // `check` passed on `value` and splits it as `bare` does, so the split cannot fail here
+        // and the 0 is never recorded.
         Envelope::bare(value).map_or(0, Bare::plaintext_len)
     }
 }
@@ -126,13 +128,18 @@ impl Envelope {
     }
 }
 
+impl Bare {
+    /// The bytes of a bare value besides its cipher text: the nonce and the tag.
+    const OVERHEAD: usize = AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN;
+}
+
 impl Format for Bare {}
 impl private::Sealed for Bare {}
 impl FormatLayout for Bare {
     type FramedKeyId = ();
 
     fn check(value: &[u8]) -> KmsAeadResult<()> {
-        if value.len() < AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN {
+        if value.len() < Self::OVERHEAD {
             return Err(KmsAeadEncryptionError::create(
                 "INVALID_CIPHER_TEXT_FORMAT",
                 &format!(
@@ -145,9 +152,7 @@ impl FormatLayout for Bare {
     }
 
     fn plaintext_len(value: &[u8]) -> usize {
-        value
-            .len()
-            .saturating_sub(AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN)
+        value.len().saturating_sub(Self::OVERHEAD)
     }
 }
 
@@ -157,15 +162,13 @@ impl FormatLayout for Randomized {
     type FramedKeyId = KeyId;
 
     fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
-        check_tink_prefixed(
-            value,
-            "a nonce and a tag",
-            AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN,
-        )
+        check_tink_prefixed(value, "a nonce and a tag", Bare::OVERHEAD)
     }
 
     fn plaintext_len(value: &[u8]) -> usize {
-        Bare::plaintext_len(value).saturating_sub(TINK_OUTPUT_PREFIX_LEN)
+        value
+            .len()
+            .saturating_sub(TINK_OUTPUT_PREFIX_LEN + Bare::OVERHEAD)
     }
 }
 

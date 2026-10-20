@@ -162,7 +162,7 @@ impl KeyAlgorithm {
     }
 
     /// The name [`Display`] writes, such as `aes-256-gcm`.
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             KeyAlgorithm::Randomized(algorithm) => algorithm.as_str(),
             KeyAlgorithm::Deterministic(algorithm) => algorithm.as_str(),
