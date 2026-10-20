@@ -140,6 +140,7 @@ features = [
     "gcs-tls-roots",
     "s3",
     "bigquery-export",
+    "opentelemetry",
 ]
 
 [[example]]

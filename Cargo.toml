@@ -27,7 +27,7 @@ async-trait = "0.1"
 bytes = "1"
 gcloud-sdk = { version = "0.33", default-features = false }
 opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
-opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "testing"] }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "testing"] }
 proptest = "1.4"
 rsb_derive = "0.5"
 secret-vault-value = { version = "1.0.4", features = ["base64"] }
@@ -130,6 +130,8 @@ rustls = "0.23"
 azure_identity = { version = "1.0", default-features = false }
 tokio-postgres = "0.7"
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
+# The meter provider of the metrics chapter's code.
+opentelemetry_sdk = { workspace = true }
 
 [features]
 default = []
@@ -224,7 +226,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry"]
 
 [[example]]
 name = "aws_kms"

@@ -34,14 +34,14 @@ jobs:
           - name: gcp, aws on aws-lc
             features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc
             absent: ring
-          - name: vault roots, aws-lc-rs TLS on aws-lc
-            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs
-            absent: ring
+          - name: vault roots, aws-lc-rs TLS on aws-lc, opentelemetry
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs,opentelemetry
+            absent: ring opentelemetry_sdk
           - name: vault webpki, ring TLS on ring, legacy formats
             features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
-          - name: azure native-tls on aws-lc
-            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-native-tls
-            absent: ring
+          - name: azure native-tls on aws-lc, opentelemetry
+            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-native-tls,opentelemetry
+            absent: ring opentelemetry_sdk
           - name: azure rustls aws-lc-rs on aws-lc
             features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-tls-aws-lc-rs
             absent: ring
@@ -118,7 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
       - name: cargo doc with minimal feature sets
         run: |
           cargo doc --no-deps
@@ -127,7 +127,7 @@ jobs:
       # to the administrative items.
       - name: cargo doc of the keyring
         run: |
-          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
           cargo doc --no-deps -p kms-aead-keyring
           cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3"
   # The book's code compiles as doctests only with each crate's docs.rs feature set, which no build
@@ -142,8 +142,8 @@ jobs:
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: '0.5.4'
-      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
       - run: cd docs && mdbook build
   # `rust-version` in the workspace's Cargo.toml: each crate's docs.rs feature set builds on it, on
   # dependencies resolved for it.
@@ -156,8 +156,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
-      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption"
-      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export"
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
+      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -356,8 +356,8 @@ jobs:
           - ring,admin
           - aws-lc,admin
           - rustcrypto,admin
-          - ring,admin,deterministic,serde-json
-          - ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3
+          - ring,admin,deterministic,serde-json,opentelemetry
+          - ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,opentelemetry
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -378,8 +378,8 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
-      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export
-      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption
+      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry
       ABSENT: firestore sqlx tokio-postgres aws-sdk-s3
     steps:
       - uses: actions/checkout@v7

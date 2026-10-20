@@ -27,13 +27,14 @@ runs the whole cycle, and a KEK re-encryption after it, on the memory store and 
 How often:
 
 - A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
-  [Nonces](../security.md#nonces). The library cannot count the values a fleet seals, so estimate
-  them: at 550 values per second a version reaches 2^32 in 90 days. Rotate every 30 to 90 days,
+  [Nonces](../security.md#nonces). Estimate the values a fleet seals, or measure them, see
+  [Alerting on volume](#alerting-on-volume): at 550 values per second a version reaches 2^32 in
+  90 days. Rotate every 30 to 90 days,
   sooner at higher rates. AES-128-GCM, AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all
   take a 12-byte nonce, so the same cadence applies to each;
 - AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
-  for an AE advantage of about 2^-57. The keyring does not count bytes, since its DEKs are shared
-  across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
+  for an AE advantage of about 2^-57. The keyring does not stop at a byte count, since its DEKs
+  are shared across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
   default [`max_bytes`](../dek-caching.md#volume-limit) of a store-less envelope. AES-256-GCM-SIV
   and ChaCha20-Poly1305 need no volume bound beyond the count of values;
 - a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
@@ -50,6 +51,26 @@ Rotation does not touch values already written. A [sweep](./sweeps.md) re-seals 
 on a schedule until its `SweepReport` shows nothing scanned. Retiring the old version is a separate
 step of the administrative job, once the sweep is done and the old version's
 [range query](./sweeps.md#records-under-a-version) returns nothing: `retire`, and later `destroy`.
+
+### Alerting on volume
+
+With the `opentelemetry` feature, the keyring counts the values and plaintext bytes it seals
+under each version, see [Metrics](../observability.md#metrics). Each process counts its own, and
+the alert sums them across the fleet. Here at half of 2^32 values and of 2^38 bytes per version,
+in PromQL over the Prometheus export, with the range covering the version's life:
+
+```promql
+sum by (keyring, key_id) (
+  increase(kms_aead_keyring_values_total{operation="encrypt", purpose="randomized"}[90d])
+) > 0.5 * 2^32
+
+sum by (keyring, key_id) (
+  increase(kms_aead_keyring_plaintext_bytes_total{operation="encrypt", purpose="randomized"}[90d])
+) > 0.5 * 2^38
+```
+
+A counter starts at zero in every new process, and `increase()` counts across those restarts. The
+bytes alert is for AES-GCM versions only. Rotate the version the alert names, as above.
 
 ## Rotating the KEK
 

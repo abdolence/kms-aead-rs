@@ -304,7 +304,8 @@ pub mod providers;
     feature = "gcp-kms-encryption",
     feature = "aws-kms-encryption",
     feature = "azure-kms-encryption",
-    feature = "hashicorp-vault-transit-kms-encryption"
+    feature = "hashicorp-vault-transit-kms-encryption",
+    feature = "opentelemetry"
 ))]
 mod book;
 

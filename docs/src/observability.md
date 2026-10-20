@@ -240,6 +240,85 @@ The keyring's spans, events and errors leave out everything kms-aead's do, liste
 rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
 `EntityId` appears anywhere. Key ids, keyring ids and store names are identifiers and appear.
 
+## Metrics
+
+With the `opentelemetry` feature of each crate, kms-aead and kms-aead-keyring record OpenTelemetry
+metrics. They depend on the `opentelemetry` API crate only: the application installs the SDK and
+an exporter, such as OTLP with `opentelemetry-otlp` or Prometheus with `opentelemetry-prometheus`.
+Without the feature neither crate depends on OpenTelemetry.
+
+Each crate takes its meter from the global meter provider, with an instrumentation scope named
+after the crate and its version, the first time it records, and keeps it for the life of the
+process. Be aware to install the provider before the first KMS or keyring call, otherwise the
+instruments record nothing:
+
+```rust
+use opentelemetry::Key;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::{Instrument, SdkMeterProvider, Stream};
+
+fn install_meter_provider(exporter: impl PushMetricExporter) -> SdkMeterProvider {
+    let provider = SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        // Optional: the keyring durations without the `keyring` attribute, see below.
+        .with_view(|instrument: &Instrument| {
+            let kept: &[&'static str] = match instrument.name() {
+                "kms_aead_keyring.operation.duration" => &["purpose", "operation", "error_code"],
+                "kms_aead_keyring.store.duration" => &["store", "reason", "error_code"],
+                _ => return None,
+            };
+            Stream::builder()
+                .with_allowed_attribute_keys(kept.iter().map(|key| Key::from_static_str(key)))
+                .build()
+                .ok()
+        })
+        .build();
+    opentelemetry::global::set_meter_provider(provider.clone());
+    provider
+}
+# let provider = install_meter_provider(opentelemetry_sdk::metrics::InMemoryMetricExporter::default());
+# provider.shutdown().unwrap();
+```
+
+| Instrument | Type | Unit | Attributes |
+|---|---|---|---|
+| `kms_aead_keyring.values` | counter | `{value}` | `keyring`, `purpose`, `key_id`, `operation` |
+| `kms_aead_keyring.plaintext` | counter | `By` | `keyring`, `purpose`, `key_id`, `operation` |
+| `kms_aead_keyring.operation.duration` | histogram | `s` | `keyring`, `purpose`, `operation`, `error_code` |
+| `kms_aead_keyring.store.duration` | histogram | `s` | `keyring`, `store`, `reason`, `error_code` |
+| `kms_aead.kms.duration` | histogram | `s` | `provider`, `operation`, `outcome` |
+
+- `kms_aead_keyring.values` counts the values sealed and opened under each key version, and
+  `kms_aead_keyring.plaintext` their plaintext bytes. `operation` is `encrypt` for a sealer's
+  `encrypt` and `encrypt_deterministic`, and so for every re-seal, and `decrypt` for `decrypt`,
+  `decrypt_with_trust` and their deterministic pair. `key_id` is the version's key id, as a
+  number;
+- a failed call counts no value. Its duration carries `error_code`, the code of the error; a
+  successful call has no `error_code`;
+- deterministic probes and beacons count no value. A probe is never stored, and a beacon is an
+  HMAC-SHA256 output: HMAC takes no nonce, and its bound as a PRF is far beyond the values one key
+  version can seal. `deterministic_probes` is timed, with `operation` `probe`;
+- `kms_aead_keyring.store.duration` covers every read of a record, with the `store` and `reason`
+  of the `Keyring load` span;
+- `kms_aead.kms.duration` covers the request to the KMS only, as the span's `response_time` does.
+  `operation` is `encrypt_dek`, `decrypt_dek` or `random`, `provider` is the span's `provider`,
+  and `outcome` is `success` or `failure`; the error code is on the span. The KEK name is left
+  out;
+- `decrypt_envelope_for_migration` and the calls of `KmsAeadEnvelope` record their KMS requests
+  only: their values are not under a keyring version.
+
+A Prometheus exporter adds the unit to the name: `kms_aead_keyring_values_total`,
+`kms_aead_keyring_plaintext_bytes_total`, `kms_aead_keyring_operation_duration_seconds`, and so
+on. For an alert on the values and bytes under one version, see
+[Alerting on volume](./operations/rotation.md#alerting-on-volume).
+
+The counters have one time series per keyring, purpose, key version and operation. With a keyring
+per tenant, that is a series per tenant and version, and a version keeps its series for as long
+as its values are read. Key ids are numbered per keyring, so the counters keep `keyring`: without
+it, version 1 of every keyring would add up to one series. The duration histograms do not need
+it, and with their buckets they cost the most series, so the view above drops it from them. The
+view's `with_allowed_attribute_keys` needs the SDK's `spec_unstable_metrics_views` feature.
+
 ## What is never logged
 
 No span field or event carries:
@@ -250,6 +329,10 @@ No span field or event carries:
 - the length of a value or of its AAD. For AES-256-GCM the plaintext length is the value's length
   minus a fixed overhead, and a length tells short values such as `yes`, `no` or a country code
   apart.
+
+The `kms_aead_keyring.plaintext` counter is the exception: it adds up plaintext lengths. A keyring
+that seals one value per export interval gives that value's length to whoever reads the metrics,
+so treat the counter like the values themselves in a keyring with little traffic.
 
 Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
 project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
