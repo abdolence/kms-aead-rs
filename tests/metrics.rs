@@ -262,6 +262,33 @@ async fn beacons_new_deks_and_reencryptions_are_timed() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "deterministic")]
+#[tokio::test]
+async fn a_new_deterministic_dek_and_its_decryption_are_timed() -> TestResult {
+    let envelope = envelope(KmsAeadEnvelopeOptions::new())?;
+    let algorithm = kms_aead::DeterministicAlgorithm::Aes256Siv;
+    let (_, encrypted_dek) = envelope
+        .generate_encrypted_deterministic_dek(algorithm)
+        .await?;
+    envelope
+        .decrypt_deterministic_dek(algorithm, &encrypted_dek)
+        .await?;
+
+    let siv = [KeyValue::new("kms_aead.algorithm", "aes-256-siv")];
+    let timed = points("kms_aead.operation.duration", &siv)?
+        .into_iter()
+        .map(|point| (point.attributes, point.count))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        timed,
+        [
+            (call("decrypt_dek", "caller_dek", Some("aes-256-siv")), 1),
+            (call("generate_dek", "caller_dek", Some("aes-256-siv")), 1),
+        ]
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_kms_call_is_timed_by_provider_and_operation_with_its_error_type() -> TestResult {
     let envelope = envelope(KmsAeadEnvelopeOptions::new())?;

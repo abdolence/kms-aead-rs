@@ -756,7 +756,7 @@ where
     }
 
     /// The `mode` span field of `encrypt` and `decrypt`.
-    fn mode(&self) -> &'static str {
+    pub(crate) fn mode(&self) -> &'static str {
         if self.dek_reuse.is_some() {
             "store_less"
         } else {
@@ -775,7 +775,7 @@ where
     }
 
     /// The metric attributes of a re-encryption in `mode`, in which the algorithm plays no part.
-    fn reencrypt_call(&self, mode: &'static str) -> metrics::Call {
+    pub(crate) fn reencrypt_call(&self, mode: &'static str) -> metrics::Call {
         metrics::Call {
             operation: "reencrypt_dek",
             mode,

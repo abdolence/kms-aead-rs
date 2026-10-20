@@ -8,6 +8,7 @@ use super::{decrypt_dek, encrypt_dek, Envelope};
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
+use crate::metrics::Measurement;
 use crate::providers::kek_version::read_kek_version;
 use crate::providers::KekVersion;
 use crate::types::checked_key_bytes;
@@ -234,29 +235,35 @@ where
         aad: &(impl AsRef<[u8]> + ?Sized),
         value: &Encrypted<T, Envelope>,
     ) -> KmsAeadResult<Option<Encrypted<T, Envelope>>> {
-        let stored = StoredEnvelope::split(value.value())?;
-        let encrypted_dek = stored.encrypted_dek(self.provider.kek().provider())?;
-        let (dek, legacy_format) = decrypt_dek(&encrypted_dek, &self.provider).await?;
-        if legacy_format.is_none() && stored.layout == EnvelopeLayout::Tink {
-            return Ok(None);
+        let measurement = Measurement::start(self.reencrypt_call(self.mode()));
+        let upgraded = async {
+            let stored = StoredEnvelope::split(value.value())?;
+            let encrypted_dek = stored.encrypted_dek(self.provider.kek().provider())?;
+            let (dek, legacy_format) = decrypt_dek(&encrypted_dek, &self.provider).await?;
+            if legacy_format.is_none() && stored.layout == EnvelopeLayout::Tink {
+                return Ok(None);
+            }
+            // A raw key records no algorithm, and every algorithm with its length takes it, so only
+            // opening the value shows that the Tink key type written below is the right one.
+            self.cipher.open(
+                aad.as_ref(),
+                stored.bare,
+                0,
+                dek.value().ref_sensitive_value(),
+            )?;
+            let upgraded_encrypted_dek = match legacy_format {
+                Some(_) => encrypt_dek(&dek, self.algorithm().into(), &self.provider).await?,
+                None => encrypted_dek,
+            };
+            Encrypted::join(
+                &Encrypted::try_from(stored.bare.to_vec())?,
+                &upgraded_encrypted_dek,
+            )
+            .map(Some)
         }
-        // A raw key records no algorithm, and every algorithm with its length takes it, so only
-        // opening the value shows that the Tink key type written below is the right one.
-        self.cipher.open(
-            aad.as_ref(),
-            stored.bare,
-            0,
-            dek.value().ref_sensitive_value(),
-        )?;
-        let upgraded_encrypted_dek = match legacy_format {
-            Some(_) => encrypt_dek(&dek, self.algorithm().into(), &self.provider).await?,
-            None => encrypted_dek,
-        };
-        Encrypted::join(
-            &Encrypted::try_from(stored.bare.to_vec())?,
-            &upgraded_encrypted_dek,
-        )
-        .map(Some)
+        .await;
+        measurement.finished(&upgraded);
+        upgraded
     }
 
     /// `encrypted_dek`, an encrypted key stored by 0.29 or earlier, encrypted again as Tink
@@ -285,19 +292,25 @@ where
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Option<EncryptedDataEncryptionKey>> {
-        let (dek, legacy) = decrypt_dek(encrypted_dek, &self.provider).await?;
-        if legacy.is_none() {
-            return Ok(None);
+        let measurement = Measurement::start(self.reencrypt_call("caller_dek"));
+        let upgraded = async {
+            let (dek, legacy) = decrypt_dek(encrypted_dek, &self.provider).await?;
+            if legacy.is_none() {
+                return Ok(None);
+            }
+            let algorithm = self.algorithm();
+            checked_key_bytes(
+                dek.value().ref_sensitive_value(),
+                algorithm,
+                algorithm.key_len(),
+            )?;
+            encrypt_dek(&dek, algorithm.into(), &self.provider)
+                .await
+                .map(Some)
         }
-        let algorithm = self.algorithm();
-        checked_key_bytes(
-            dek.value().ref_sensitive_value(),
-            algorithm,
-            algorithm.key_len(),
-        )?;
-        encrypt_dek(&dek, algorithm.into(), &self.provider)
-            .await
-            .map(Some)
+        .await;
+        measurement.finished(&upgraded);
+        upgraded
     }
 }
 
