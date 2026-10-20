@@ -27,6 +27,7 @@ const DEK_CACHE_BYPASSED: &str = "bypassed";
 /// The spans of the calls to a KMS, which the providers open.
 pub(crate) mod kms {
     use std::future::Future;
+    use std::pin::Pin;
     use std::time::Instant;
 
     use tracing::{debug_span, field, Span};
@@ -107,13 +108,14 @@ pub(crate) mod kms {
     pub(crate) fn timed<'a, T: 'a>(
         operation: &'static str,
         provider: &'a KekProvider,
-        request: impl Future<Output = KmsAeadResult<T>> + 'a,
+        request: impl Future<Output = KmsAeadResult<T>> + Send + 'a,
     ) -> impl Future<Output = KmsAeadResult<T>> + 'a {
-        // Boxed before the returned future holds it, which keeps the SDK's future type out of the
-        // layout of every future that calls a provider. With the AWS SDK's inline, an
-        // application's `main` that calls an envelope goes past the compiler's default query
-        // depth.
-        let request = Box::pin(request);
+        // Boxed as a trait object before the returned future holds it, which keeps the SDK's
+        // future type out of both the layout and the `Send` check of every future that calls a
+        // provider. With the AWS SDK's inline future, a spawned call behind a few layers of
+        // `async fn` goes past the compiler's default recursion limit.
+        let request: Pin<Box<dyn Future<Output = KmsAeadResult<T>> + Send + 'a>> =
+            Box::pin(request);
         async move {
             let started = Instant::now();
             let response = request.await;

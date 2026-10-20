@@ -269,6 +269,11 @@ name = "azure_kms_responses"
 path = "tests/azure_kms_responses.rs"
 required-features = ["azure-kms-encryption-base"]
 
+[[test]]
+name = "aws_spawned_call"
+path = "tests/aws_spawned_call.rs"
+required-features = ["aws-kms-encryption", "aws-lc"]
+
 [[example]]
 name = "tink_interop"
 path = "examples/tink_interop.rs"
