@@ -2,6 +2,8 @@
 //! The memory store, for tests, is
 //! [`testing::MemoryKeyringStore`](crate::testing::MemoryKeyringStore).
 
+#[cfg(any(feature = "gcs", feature = "s3"))]
+use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::time::Duration;
@@ -35,29 +37,24 @@ pub use s3::*;
 
 /// The prefix of the object names of an object store's records, such as `kms-keyrings/`: the
 /// object of a keyring is `<prefix><keyring id>.json`. A prefix that should read as a folder ends
-/// with `/`, and an empty one puts the records at the top of the bucket. It does not start with
-/// `/` and holds no control character. The length limit of an object name is the service's to
-/// check.
+/// with `/`, and an empty one puts the records at the top of the bucket. The characters and the
+/// length an object name allows are the service's to check.
 #[cfg(any(feature = "gcs", feature = "s3"))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ObjectPrefix(String);
+pub struct ObjectPrefix(Cow<'static, str>);
 
 #[cfg(any(feature = "gcs", feature = "s3"))]
-impl TryFrom<String> for ObjectPrefix {
-    type Error = crate::KeyringError;
+impl ObjectPrefix {
+    /// `prefix`, for a constant.
+    pub const fn from_static(prefix: &'static str) -> Self {
+        Self(Cow::Borrowed(prefix))
+    }
+}
 
-    /// # Errors
-    ///
-    /// [`KeyringError::InvalidIdentifier`](crate::KeyringError::InvalidIdentifier) naming the
-    /// rule `prefix` breaks.
-    fn try_from(prefix: String) -> KeyringResult<Self> {
-        if prefix.starts_with('/') || prefix.chars().any(char::is_control) {
-            return Err(crate::KeyringError::invalid_identifier(
-                crate::errors::Identifier::ObjectPrefix,
-                crate::errors::IdentifierRule::Character,
-            ));
-        }
-        Ok(Self(prefix))
+#[cfg(any(feature = "gcs", feature = "s3"))]
+impl From<String> for ObjectPrefix {
+    fn from(prefix: String) -> Self {
+        Self(Cow::Owned(prefix))
     }
 }
 
@@ -306,35 +303,5 @@ impl Display for StoreOperation {
             StoreOperation::CompareAndSwap => "compare and swap",
             StoreOperation::Watch => "watch",
         })
-    }
-}
-
-#[cfg(all(test, any(feature = "gcs", feature = "s3")))]
-mod tests {
-    use super::*;
-    use crate::errors::{Identifier, IdentifierRule, InvalidIdentifierError};
-    use crate::KeyringError;
-
-    #[test]
-    fn an_object_prefix_starts_with_no_slash_and_holds_no_control_character() {
-        for accepted in ["", "kms-keyrings/", "tenants/eu/keyrings-"] {
-            assert!(
-                ObjectPrefix::try_from(accepted.to_string()).is_ok(),
-                "{accepted:?}"
-            );
-        }
-        for refused in ["/kms-keyrings/", "/", "kms\nkeyrings/", "kms-keyrings/\0"] {
-            assert!(
-                matches!(
-                    ObjectPrefix::try_from(refused.to_string()),
-                    Err(KeyringError::InvalidIdentifier(InvalidIdentifierError {
-                        identifier: Identifier::ObjectPrefix,
-                        rule: IdentifierRule::Character,
-                        ..
-                    }))
-                ),
-                "{refused:?}"
-            );
-        }
     }
 }

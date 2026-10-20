@@ -157,8 +157,7 @@ tokio-postgres's `ToSql` and `FromSql` as `BYTEA`, see
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through the
 `google.storage.v2` gRPC API. `with_prefix` sets another `ObjectPrefix` than
-`GcsKeyringStore::DEFAULT_PREFIX`; one that should read as a folder ends with `/`, and none starts
-with `/`. A write is
+`GcsKeyringStore::DEFAULT_PREFIX`; one that should read as a folder ends with `/`. A write is
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.
 
@@ -195,10 +194,10 @@ features from the application, or one of:
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket of Amazon S3 or of an
 S3-compatible server. `with_prefix` sets another `ObjectPrefix` than
-`S3KeyringStore::DEFAULT_PREFIX`; one that should read as a folder ends with `/`, and none starts
-with `/`. A create is conditional on no object existing
-(`If-None-Match: *`), an update on the ETag the writer read (`If-Match`), and a revalidation reads
-the object only when its ETag changed (`If-None-Match` on the read).
+`S3KeyringStore::DEFAULT_PREFIX`; one that should read as a folder ends with `/`. A create is
+conditional on no object existing (`If-None-Match: *`), an update on the ETag the writer read
+(`If-Match`), and a revalidation reads the object only when its ETag changed (`If-None-Match` on
+the read).
 
 - the rights of the application and the administration on the objects are in
   [Store rights](./deployment.md#store-rights);

@@ -91,7 +91,7 @@ pub struct GcsKeyringStore {
 impl GcsKeyringStore {
     /// The prefix of [`new`](Self::new): the object of a keyring is
     /// `kms-keyrings/<keyring id>.json`.
-    pub const DEFAULT_PREFIX: &'static str = "kms-keyrings/";
+    pub const DEFAULT_PREFIX: ObjectPrefix = ObjectPrefix::from_static("kms-keyrings/");
 
     /// A store of the records in `bucket` under [`DEFAULT_PREFIX`](Self::DEFAULT_PREFIX), that
     /// sends its requests with `client`.
@@ -131,7 +131,7 @@ impl GcsKeyringStore {
             client,
             bucket,
             routing,
-            prefix: ObjectPrefix(Self::DEFAULT_PREFIX.to_owned()),
+            prefix: Self::DEFAULT_PREFIX,
         })
     }
 

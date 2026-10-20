@@ -456,8 +456,6 @@ pub enum Identifier {
     GcsBucketName,
     /// The bucket name of the S3 store.
     S3BucketName,
-    /// The object prefix of the GCS and S3 stores.
-    ObjectPrefix,
 }
 
 impl Display for Identifier {
@@ -470,7 +468,6 @@ impl Display for Identifier {
             Identifier::PostgresTable => "PostgreSQL table name",
             Identifier::GcsBucketName => "GCS bucket name",
             Identifier::S3BucketName => "S3 bucket name",
-            Identifier::ObjectPrefix => "object prefix",
         })
     }
 }

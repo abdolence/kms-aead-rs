@@ -63,9 +63,9 @@ The crate declares `rust-version = "1.99"`.
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
 | `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
-| `AzureKmsKeyRef::with_key_version` | `AzureKmsKeyRef::with_kek_version` |
+| `AzureKmsKeyRef::with_key_version`, `opt_key_version`, `without_key_version`, `key_version`, `mopt_key_version`, `reset_key_version` | `AzureKmsKeyRef::with_kek_version`, `opt_kek_version`, `without_kek_version`, `kek_version`, `mopt_kek_version`, `reset_kek_version` |
 | `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
-| `DataEncryptionKey(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
+| `DataEncryptionKey(secret)`, `DataEncryptionKey::new(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
 | `errors::BoxedError` | removed |
 
 HashiCorp Vault Transit types have the `Hc` prefix:
@@ -127,9 +127,11 @@ The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 new variants, `UnsupportedAlgorithm` and `LegacyFormat`. `code()` returns the code of any variant,
 and `source()` returns the root cause.
 
-`KmsAeadSystemError`, `KmsAeadNetworkError` and `KmsAeadEncryptionError` are `#[non_exhaustive]`
-too, so a struct literal of one fails to compile, and a pattern on one needs `..`. Build them with
-`create(code, message)`, or with `new(public, message)` and, where it has one, `with_root_cause`.
+`KmsAeadSystemError`, `KmsAeadNetworkError`, `KmsAeadEncryptionError` and the type of their
+`public` field, `KmsAeadErrorPublicGenericDetails`, are `#[non_exhaustive]` too, so a struct
+literal of one fails to compile, and a pattern on one needs `..`. Build the errors with
+`create(code, message)`, or with `new(public, message)` and, where it has one, `with_root_cause`,
+and the details with `KmsAeadErrorPublicGenericDetails::new(code)`.
 
 The `From` conversions of SDK errors into `KmsAeadError` are gone: `gcloud_sdk::error::Error`,
 `gcloud_sdk::tonic::Status`, the AWS `SdkError`, the hyper client error, `azure_core::Error` and

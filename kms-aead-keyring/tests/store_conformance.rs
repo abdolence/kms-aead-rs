@@ -1084,10 +1084,10 @@ mod gcs {
             GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
                 .await?;
         Ok(
-            GcsKeyringStore::new(client, bucket)?.with_prefix(ObjectPrefix::try_from(format!(
+            GcsKeyringStore::new(client, bucket)?.with_prefix(ObjectPrefix::from(format!(
                 "kms-keyrings-conformance/{}/",
                 uuid::Uuid::now_v7()
-            ))?),
+            ))),
         )
     }
 
@@ -1104,7 +1104,7 @@ mod gcs {
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
         let failing = store()
             .await?
-            .with_prefix(ObjectPrefix::try_from("x".repeat(1100))?);
+            .with_prefix(ObjectPrefix::from("x".repeat(1100)));
         super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 
@@ -1145,7 +1145,7 @@ mod gcs {
         );
         client.get().write_object(request).await?;
         let store = GcsKeyringStore::new(client, GcsBucketName::try_from(bucket)?)?
-            .with_prefix(ObjectPrefix::try_from(prefix)?);
+            .with_prefix(ObjectPrefix::from(prefix));
         assert!(matches!(
             store.load(&id).await,
             Err(KeyringError::RecordInvalid(RecordInvalidError {
@@ -1195,7 +1195,7 @@ mod s3 {
 
     async fn store() -> Result<S3KeyringStore, Box<dyn std::error::Error>> {
         Ok(S3KeyringStore::new(client().await?, bucket()?)
-            .with_prefix(ObjectPrefix::try_from(run_prefix())?))
+            .with_prefix(ObjectPrefix::from(run_prefix())))
     }
 
     #[tokio::test]
@@ -1211,7 +1211,7 @@ mod s3 {
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
         let failing = store()
             .await?
-            .with_prefix(ObjectPrefix::try_from("x".repeat(1100))?);
+            .with_prefix(ObjectPrefix::from("x".repeat(1100)));
         super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 
@@ -1230,8 +1230,7 @@ mod s3 {
             .body(ByteStream::from(vec![b' '; (1 << 20) + 1]))
             .send()
             .await?;
-        let store =
-            S3KeyringStore::new(client, bucket).with_prefix(ObjectPrefix::try_from(prefix)?);
+        let store = S3KeyringStore::new(client, bucket).with_prefix(ObjectPrefix::from(prefix));
         assert!(matches!(
             store.load(&id).await,
             Err(KeyringError::RecordInvalid(RecordInvalidError {

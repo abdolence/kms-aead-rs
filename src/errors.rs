@@ -269,6 +269,7 @@ impl std::error::Error for KmsAeadError {
 /// The part of an error that is safe to return to an application's own callers.
 #[derive(Debug, Eq, PartialEq, Clone, Builder)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[non_exhaustive]
 pub struct KmsAeadErrorPublicGenericDetails {
     /// A code a caller can match on: one of the crate's codes or the code a KMS returned.
     pub code: String,
