@@ -310,7 +310,8 @@ jobs:
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
   # only, as keyring-gcs does. The keyring lives in the memory store, the test's queries read
-  # parameters, and the `sweep_bigquery` example creates a dataset of its own and drops it.
+  # parameters. The `sweep_bigquery` example is compiled by clippy and not run, because it creates
+  # a dataset of its own.
   keyring-bigquery:
     name: keyring-bigquery
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
@@ -339,7 +340,6 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
-      - run: cargo run -p kms-aead-keyring --example sweep_bigquery --features "$FEATURES" -- 50
   # The keyring without a store, one row per AEAD backend alone so that one backend never hides a
   # missing feature gate in another, plus the optional encodings. The unit tests create keyrings,
   # so these rows build `admin`. The last row is an application's build: every store and encoding
