@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e4c06dcf.js";
+            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -5879,8 +5879,26 @@ fewer on the <a href="#sweeps-on-bigquery">BigQuery <code>MERGE</code> path</a>,
 and the conditional write back. The mechanism is in <a href="#sweeps-1">Sweeps</a>, and the example has the
 five properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
 <p>The marker is a <code>bytes</code> field, <code>seal</code>, and the query is one range filter on it. Firestore indexes a
-field ascending and descending by default, and the query needs the ascending index only, so an
-exemption keeps just that one:</p>
+field ascending and descending by default, and the query needs the ascending index only, so a
+field override keeps just that one. firestore-rs declares it with its index management, behind its
+<code>admin</code> feature:</p>
+<pre><code class="language-rust ignore">use firestore::{FirestoreDb, FirestoreIndexSyncReport, FirestoreResult};
+
+/// Keeps the ascending index of `seal` in the `users` collection group, and drops the descending
+/// one.
+async fn sync_users_indexes(db: &amp;FirestoreDb) -&gt; FirestoreResult&lt;FirestoreIndexSyncReport&gt; {
+    db.fluent()
+        .indexes()
+        .collection_group("users")
+        .field_overrides(|f| f.fields([f.field("seal").indexes([f.ascending()])]))
+        .sync()
+        .await
+}</code></pre>
+<p>The declaration runs from an administrative job, such as a deploy step, since <code>.sync()</code> needs the
+Firestore Admin API and <code>roles/datastore.indexAdmin</code>; the application that sweeps does not run it.
+The <a href="https://firestore-rust.abdolence.dev/index-management.html">index management chapter</a> of
+firestore-rs covers <code>.plan()</code>, <code>.sync()</code> and running them from a deploy.</p>
+<p>A project that manages its indexes outside Rust sets the same override with <code>gcloud</code>:</p>
 <pre><code class="language-sh">gcloud firestore indexes fields update seal --collection-group=users --index=order=ASCENDING
 </code></pre>
 <p>The query streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a
