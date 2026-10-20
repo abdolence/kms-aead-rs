@@ -37,7 +37,8 @@ impl AeadAlgorithm {
     /// Every algorithm takes a nonce of this length.
     pub(crate) const NONCE_LEN: usize = 12;
 
-    pub(crate) fn as_str(self) -> &'static str {
+    /// The name [`Display`] writes, such as `aes-256-gcm`.
+    pub fn as_str(self) -> &'static str {
         match self {
             AeadAlgorithm::ChaCha20Poly1305 => "chacha20-poly1305",
             AeadAlgorithm::Aes128Gcm => "aes-128-gcm",

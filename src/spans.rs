@@ -32,7 +32,7 @@ pub(crate) mod kms {
     use tracing::{debug_span, field, Span};
 
     use super::FIELD_ERROR_CODE;
-    use crate::{KekProvider, KekRef};
+    use crate::{KekProvider, KekRef, KmsAeadResult};
 
     const FIELD_PROVIDER: &str = "/kms_aead/provider";
     const FIELD_KEY: &str = "/kms_aead/key";
@@ -100,15 +100,15 @@ pub(crate) mod kms {
         Span::current().record(FIELD_KEK_VERSION, kek_version);
     }
 
-    /// Sends a request to `provider`'s KMS and records on the current span how long it took, in
-    /// milliseconds, and with the `opentelemetry` feature in the duration histogram, under
-    /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`.
-    #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-    pub(crate) async fn timed<T, E>(
+    /// Sends a request to `provider`'s KMS and records how long it took on the current span, in
+    /// milliseconds, and with the `opentelemetry` feature in the KMS duration histogram, under
+    /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`. `request` maps the KMS's error, so
+    /// that the histogram records its code.
+    pub(crate) async fn timed<T>(
         operation: &'static str,
         provider: &KekProvider,
-        request: impl Future<Output = Result<T, E>>,
-    ) -> Result<T, E> {
+        request: impl Future<Output = KmsAeadResult<T>>,
+    ) -> KmsAeadResult<T> {
         let started = Instant::now();
         let response = request.await;
         let elapsed = started.elapsed();
@@ -116,13 +116,7 @@ pub(crate) mod kms {
             FIELD_RESPONSE_TIME,
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         );
-        #[cfg(feature = "opentelemetry")]
-        crate::metrics::instruments::record_kms_call(
-            operation,
-            provider,
-            elapsed,
-            response.is_err(),
-        );
+        crate::metrics::record_kms_call(operation, provider, elapsed, &response);
         response
     }
 }

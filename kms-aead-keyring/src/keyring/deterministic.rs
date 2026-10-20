@@ -12,9 +12,10 @@ use kms_aead::{
 };
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
+use crate::metrics::{self, KeyringCall};
 use crate::record_cache::VersionLookup;
+use crate::spans;
 use crate::store::KeyringStore;
-use crate::{metrics, spans};
 use crate::{
     Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
     Purpose, Resealed, Sealer,
@@ -55,8 +56,9 @@ where
     ) -> KeyringResult<Encrypted<T, Deterministic>> {
         let keyring = self.keyring;
         let span = spans::encrypt(keyring.id(), Purpose::Deterministic, None);
-        let call = metrics::Call::new(
-            keyring.cache.metrics(),
+        let call = KeyringCall::new(
+            keyring.cache.keyring_attribute(),
+            "encrypt",
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
@@ -76,7 +78,7 @@ where
             spans::record_dek_cache(outcome);
             Ok(sealed)
         });
-        metrics::encrypt(&call, seal).await
+        call.sealed(seal).await
     }
 
     /// `value` sealed again with `aad` under the record's active deterministic version, with the
@@ -97,18 +99,27 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
-        let key_id = Purpose::Deterministic.check(value.key_id())?;
-        if self.is_current(key_id).await? {
-            return Ok(None);
-        }
-        let decrypted = self
-            .keyring
-            .decrypt_deterministic_with_trust(aad, value)
-            .await?;
-        Ok(Some(Resealed {
-            value: self.encrypt_deterministic(aad, &decrypted.value).await?,
-            trust: decrypted.trust,
-        }))
+        let call = KeyringCall::new(
+            self.keyring.cache.keyring_attribute(),
+            "reseal",
+            Purpose::Deterministic,
+            metrics::DETERMINISTIC_BACKEND,
+        );
+        call.timed(async {
+            let key_id = Purpose::Deterministic.check(value.key_id())?;
+            if self.is_current(key_id).await? {
+                return Ok(None);
+            }
+            let decrypted = self
+                .keyring
+                .decrypt_deterministic_with_trust(aad, value)
+                .await?;
+            Ok(Some(Resealed {
+                value: self.encrypt_deterministic(aad, &decrypted.value).await?,
+                trust: decrypted.trust,
+            }))
+        })
+        .await
     }
 }
 
@@ -132,31 +143,35 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<T> {
-        let key_id = Purpose::Deterministic.check(value.key_id())?;
-        let call = metrics::Call::new(
-            self.cache.metrics(),
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "decrypt",
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        let open = spans::in_span(
-            spans::decrypt(self.id(), Purpose::Deterministic, key_id),
-            async {
-                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
-                spans::record_reload(reload);
-                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
-                call.version(version);
-                self.apply_read_policy(version, compromise)?;
-                let cipher = self.deterministic_cipher(version)?;
-                let (opened, outcome) = self
-                    .with_cached_dek(&record, key_id, encrypted_dek, |dek| {
-                        cipher.decrypt(&aad.bytes, value, dek)
-                    })
-                    .await?;
-                spans::record_dek_cache(outcome);
-                Ok(opened?)
-            },
-        );
-        metrics::decrypt(&call, value, open).await
+        call.opened(value, async {
+            let key_id = Purpose::Deterministic.check(value.key_id())?;
+            spans::in_span(
+                spans::decrypt(self.id(), Purpose::Deterministic, key_id),
+                async {
+                    let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
+                    spans::record_reload(reload);
+                    let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                    call.version(version);
+                    self.apply_read_policy(version, compromise)?;
+                    let cipher = self.deterministic_cipher(version)?;
+                    let (opened, outcome) = self
+                        .with_cached_dek(&record, key_id, encrypted_dek, |dek| {
+                            cipher.decrypt(&aad.bytes, value, dek)
+                        })
+                        .await?;
+                    spans::record_dek_cache(outcome);
+                    Ok(opened?)
+                },
+            )
+            .await
+        })
+        .await
     }
 
     /// Opens `value` with `aad` and reports which version opened it and whether that version is
@@ -174,42 +189,46 @@ where
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
     ) -> KeyringResult<Decrypted<T>> {
-        let key_id = Purpose::Deterministic.check(value.key_id())?;
-        let call = metrics::Call::new(
-            self.cache.metrics(),
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "decrypt",
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        let open = spans::in_span(
-            spans::decrypt(self.id(), Purpose::Deterministic, key_id),
-            async {
-                let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
-                spans::record_reload(reload);
-                let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
-                call.version(version);
-                let cipher = self.deterministic_cipher(version)?;
-                let open = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
-                let (opened, trust) = match compromise {
-                    None => {
-                        let (opened, outcome) = self
-                            .with_cached_dek(&record, key_id, encrypted_dek, open)
-                            .await?;
-                        spans::record_dek_cache(outcome);
-                        (opened?, KeyTrust::Trusted)
-                    }
-                    Some(compromise) => (
-                        self.with_uncached_dek(encrypted_dek, open).await??,
-                        KeyTrust::Compromised(compromise.clone()),
-                    ),
-                };
-                Ok(Decrypted {
-                    value: opened,
-                    key_id,
-                    trust,
-                })
-            },
-        );
-        metrics::decrypt(&call, value, open).await
+        call.opened(value, async {
+            let key_id = Purpose::Deterministic.check(value.key_id())?;
+            spans::in_span(
+                spans::decrypt(self.id(), Purpose::Deterministic, key_id),
+                async {
+                    let (record, reload) = self.cache.find(key_id, VersionLookup::Any).await;
+                    spans::record_reload(reload);
+                    let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
+                    call.version(version);
+                    let cipher = self.deterministic_cipher(version)?;
+                    let open = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
+                    let (opened, trust) = match compromise {
+                        None => {
+                            let (opened, outcome) = self
+                                .with_cached_dek(&record, key_id, encrypted_dek, open)
+                                .await?;
+                            spans::record_dek_cache(outcome);
+                            (opened?, KeyTrust::Trusted)
+                        }
+                        Some(compromise) => (
+                            self.with_uncached_dek(encrypted_dek, open).await??,
+                            KeyTrust::Compromised(compromise.clone()),
+                        ),
+                    };
+                    Ok(Decrypted {
+                        value: opened,
+                        key_id,
+                        trust,
+                    })
+                },
+            )
+            .await
+        })
+        .await
     }
 
     /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
@@ -269,12 +288,13 @@ where
             }
             Ok(probes)
         });
-        let call = metrics::Call::new(
-            self.cache.metrics(),
+        let call = KeyringCall::new(
+            self.cache.keyring_attribute(),
+            "probe",
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        metrics::probe(&call, probes).await
+        call.timed(probes).await
     }
 
     fn deterministic_cipher(&self, version: &KeyVersion) -> KeyringResult<DeterministicCipher<B>> {

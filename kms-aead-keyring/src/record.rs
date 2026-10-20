@@ -160,17 +160,22 @@ impl KeyAlgorithm {
             KeyAlgorithm::Beacon(_) => Purpose::Beacon,
         }
     }
+
+    /// The name [`Display`] writes, such as `aes-256-gcm`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            KeyAlgorithm::Randomized(algorithm) => algorithm.as_str(),
+            KeyAlgorithm::Deterministic(algorithm) => algorithm.as_str(),
+            KeyAlgorithm::Beacon(algorithm) => algorithm.as_str(),
+        }
+    }
 }
 
 /// The algorithm's name in kms-aead, such as `aes-256-gcm`: the value of the `algorithm` span
 /// field and of the record's JSON.
 impl Display for KeyAlgorithm {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            KeyAlgorithm::Randomized(algorithm) => Display::fmt(algorithm, f),
-            KeyAlgorithm::Deterministic(algorithm) => Display::fmt(algorithm, f),
-            KeyAlgorithm::Beacon(algorithm) => Display::fmt(algorithm, f),
-        }
+        f.write_str(self.as_str())
     }
 }
 

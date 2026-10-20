@@ -201,13 +201,14 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_request = encrypt_request(self.kek.key(), dek)?;
 
-            let encrypt_response = kms::timed(
-                "encrypt_dek",
-                self.kek.provider(),
-                self.client.get().encrypt(encrypt_request),
-            )
-            .await
-            .map_err(KmsAeadError::from_gcp_status)?;
+            let encrypt_response = kms::timed("encrypt_dek", self.kek.provider(), async {
+                self.client
+                    .get()
+                    .encrypt(encrypt_request)
+                    .await
+                    .map_err(KmsAeadError::from_gcp_status)
+            })
+            .await?;
             let EncryptResponse {
                 name, ciphertext, ..
             } = encrypt_response.into_inner();
@@ -233,13 +234,14 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
             let decrypt_request = decrypt_request(self.kek.key(), encrypted_dek)?;
-            let decrypt_response = kms::timed(
-                "decrypt_dek",
-                self.kek.provider(),
-                self.client.get().decrypt(decrypt_request),
-            )
-            .await
-            .map_err(KmsAeadError::from_gcp_status)?;
+            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
+                self.client
+                    .get()
+                    .decrypt(decrypt_request)
+                    .await
+                    .map_err(KmsAeadError::from_gcp_status)
+            })
+            .await?;
 
             Ok(DataEncryptionKey::from(
                 decrypt_response.into_inner().plaintext,
@@ -270,13 +272,14 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                 "RANDOM_GENERATOR",
             )?;
 
-            let response = kms::timed(
-                "random",
-                self.kek.provider(),
-                self.client.get().generate_random_bytes(request),
-            )
-            .await
-            .map_err(KmsAeadError::from_gcp_status)?;
+            let response = kms::timed("random", self.kek.provider(), async {
+                self.client
+                    .get()
+                    .generate_random_bytes(request)
+                    .await
+                    .map_err(KmsAeadError::from_gcp_status)
+            })
+            .await?;
             Ok(Some(SecretValue::new(response.into_inner().data)))
         })
         .await

@@ -47,7 +47,7 @@ pub(crate) struct RecordCache<S: KeyringStore> {
     /// The reloads for key ids that `find` missed so far, read before waiting for `refresh`, so
     /// that a caller can tell that a reload ran while it waited.
     lookup_reloads: AtomicU64,
-    metrics: KeyringAttribute,
+    keyring_attribute: KeyringAttribute,
 }
 
 struct Cached<R> {
@@ -70,7 +70,7 @@ impl<S: KeyringStore> RecordCache<S> {
         Self {
             store,
             id: stored.record.id().clone(),
-            metrics: KeyringAttribute::new(stored.record.id()),
+            keyring_attribute: KeyringAttribute::new(stored.record.id()),
             kek,
             dek_cache,
             record_ttl,
@@ -89,9 +89,9 @@ impl<S: KeyringStore> RecordCache<S> {
         &self.id
     }
 
-    /// The `keyring` attribute of this keyring's metrics.
-    pub(crate) fn metrics(&self) -> &KeyringAttribute {
-        &self.metrics
+    /// The `kms_aead.keyring` attribute of this keyring's metrics.
+    pub(crate) fn keyring_attribute(&self) -> &KeyringAttribute {
+        &self.keyring_attribute
     }
 
     pub(crate) fn dek_cache(&self) -> &DekCache {
@@ -161,9 +161,14 @@ impl<S: KeyringStore> RecordCache<S> {
         let refresh = self.refresh.lock().await;
         let span = spans::load(&self.id, S::KIND, reason);
         spans::in_span(span, async {
-            let stored = spans::timed(&self.metrics, S::KIND, reason, self.store.load(&self.id))
-                .await?
-                .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
+            let stored = spans::timed(
+                &self.keyring_attribute,
+                S::KIND,
+                reason,
+                self.store.load(&self.id),
+            )
+            .await?
+            .ok_or_else(|| KeyringError::RecordMissing(self.id.clone()))?;
             let revision = stored.revision.clone();
             match self.accept(&refresh, stored) {
                 Ok(()) => {
@@ -208,7 +213,7 @@ impl<S: KeyringStore> RecordCache<S> {
         let span = spans::load(&self.id, S::KIND, reason);
         let result = spans::in_span(span, async {
             match spans::timed(
-                &self.metrics,
+                &self.keyring_attribute,
                 S::KIND,
                 reason,
                 self.store.revalidate(&self.id, &revision),
@@ -352,7 +357,7 @@ impl<S: KeyringStore> RecordCache<S> {
         let span = spans::load(&self.id, S::KIND, LoadReason::Admin);
         spans::in_span(span, async {
             let stored = spans::timed(
-                &self.metrics,
+                &self.keyring_attribute,
                 S::KIND,
                 LoadReason::Admin,
                 self.store.load(&self.id),

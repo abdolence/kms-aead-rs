@@ -24,7 +24,8 @@ impl DeterministicAlgorithm {
     /// Every algorithm writes this synthetic IV before the cipher text.
     pub(crate) const SYNTHETIC_IV_LEN: usize = 16;
 
-    pub(crate) fn as_str(self) -> &'static str {
+    /// The name [`Display`] writes, `aes-256-siv`.
+    pub fn as_str(self) -> &'static str {
         match self {
             DeterministicAlgorithm::Aes256Siv => "aes-256-siv",
         }

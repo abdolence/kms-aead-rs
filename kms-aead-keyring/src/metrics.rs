@@ -1,260 +1,269 @@
-//! The keyring's measurements, of the `opentelemetry` feature, recorded into kms-aead's
-//! instruments with `mode` `keyring` and the keyring's own attributes. A keyring call runs
-//! kms-aead's ciphers and never its envelope, so each call is recorded once, here.
+//! The keyring's calls and store reads in kms-aead's instruments, of the `opentelemetry` feature:
+//! `kms_aead.mode` `keyring`, with the keyring's own attributes `kms_aead.keyring` and
+//! `kms_aead.purpose`. A keyring call runs kms-aead's ciphers and never its envelope, so each call
+//! is recorded once, here.
 //!
-//! Without the feature every call here runs the operation it is given and nothing else.
+//! Without the feature nothing here records or reads a clock.
 
-use std::future::Future;
+use std::sync::OnceLock;
 
-use kms_aead::formats::{Deterministic, Format, Randomized};
+use kms_aead::AeadAlgorithm;
 
-use crate::errors::KeyringResult;
-use crate::spans::LoadReason;
-use crate::store::StoreKind;
-use crate::{Encrypted, KeyId, KeyVersion, KeyringId, Purpose};
+use crate::{KeyId, KeyVersion, Purpose};
 
-/// The formats of the values a keyring version seals.
-pub(crate) trait VersionedFormat: Format + Sized {
-    /// The version `value` is sealed under, and the length of its plaintext: the value's length
-    /// less Tink's 5-byte output prefix and the algorithm's own overhead.
-    #[cfg_attr(not(feature = "opentelemetry"), allow(dead_code))]
-    fn version_and_plaintext_len<T>(value: &Encrypted<T, Self>) -> (KeyId, usize);
-}
-
-/// The 12-byte nonce and the 16-byte tag of every randomised algorithm.
-impl VersionedFormat for Randomized {
-    fn version_and_plaintext_len<T>(value: &Encrypted<T, Self>) -> (KeyId, usize) {
-        let overhead = 5 + 12 + 16;
-        (value.key_id(), value.value().len().saturating_sub(overhead))
-    }
-}
-
-/// The 16-byte synthetic IV of AES-SIV.
-impl VersionedFormat for Deterministic {
-    fn version_and_plaintext_len<T>(value: &Encrypted<T, Self>) -> (KeyId, usize) {
-        let overhead = 5 + 16;
-        (value.key_id(), value.value().len().saturating_sub(overhead))
-    }
-}
-
-/// The `keyring` attribute of one keyring, built once when the keyring is opened so that a call
-/// does not copy the id.
-#[derive(Debug)]
-pub(crate) struct KeyringAttribute {
-    #[cfg(feature = "opentelemetry")]
-    value: opentelemetry::StringValue,
-}
-
-impl KeyringAttribute {
-    #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-    pub(crate) fn new(id: &KeyringId) -> Self {
-        Self {
-            #[cfg(feature = "opentelemetry")]
-            value: std::sync::Arc::<str>::from(id.as_str()).into(),
-        }
-    }
-}
-
-/// One keyring call of `purpose`: what its measurements carry. The call names the version it
-/// seals or opens under with [`version`](Self::version) once it has found it.
-#[cfg_attr(not(feature = "opentelemetry"), allow(dead_code))]
-pub(crate) struct Call<'k> {
-    keyring: &'k KeyringAttribute,
-    purpose: Purpose,
-    backend: &'static str,
-    algorithm: std::sync::OnceLock<&'static str>,
-}
-
-impl<'k> Call<'k> {
-    /// A call on the backend named `backend`: the keyring's for a randomised call, and
-    /// `rustcrypto` for a deterministic one, whose AES-SIV runs on RustCrypto whatever the
-    /// keyring's backend.
-    pub(crate) fn new(
-        keyring: &'k KeyringAttribute,
-        purpose: Purpose,
-        backend: &'static str,
-    ) -> Self {
-        Self {
-            keyring,
-            purpose,
-            backend,
-            algorithm: std::sync::OnceLock::new(),
-        }
-    }
-
-    /// Names `version`, the version the call seals or opens under.
-    #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-    pub(crate) fn version(&self, version: &KeyVersion) {
-        #[cfg(feature = "opentelemetry")]
-        if let Some(name) = instruments::algorithm_name(version.algorithm()) {
-            let _ = self.algorithm.set(name);
-        }
-    }
-}
+#[cfg(feature = "opentelemetry")]
+pub(crate) use recorded::{record_store_load, KeyringAttribute};
+#[cfg(not(feature = "opentelemetry"))]
+pub(crate) use unrecorded::{record_store_load, KeyringAttribute};
 
 /// The backend of every deterministic call: AES-SIV runs on RustCrypto whatever the keyring's
 /// backend.
 #[cfg(feature = "deterministic")]
 pub(crate) const DETERMINISTIC_BACKEND: &str = "rustcrypto";
 
-/// Runs `seal`, a seal of one value, and with the feature records its duration and, when it
-/// succeeds, the value and its plaintext bytes under the version it names.
-#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-pub(crate) async fn encrypt<T, F: VersionedFormat>(
-    call: &Call<'_>,
-    seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
-) -> KeyringResult<Encrypted<T, F>> {
-    #[cfg(feature = "opentelemetry")]
-    let started = std::time::Instant::now();
-    let result = seal.await;
-    #[cfg(feature = "opentelemetry")]
-    instruments::record_call(
-        call,
-        "encrypt",
-        started.elapsed(),
-        result.as_ref().ok(),
-        &result,
-    );
-    result
+/// One keyring call: what its measurements carry. The call names the version it seals, opens or
+/// derives under with [`version`](Self::version) once it has found it.
+#[cfg_attr(
+    not(feature = "opentelemetry"),
+    expect(
+        dead_code,
+        reason = "only the `opentelemetry` feature records the attributes"
+    )
+)]
+pub(crate) struct KeyringCall<'k> {
+    keyring: &'k KeyringAttribute,
+    operation: &'static str,
+    purpose: Option<Purpose>,
+    backend: &'static str,
+    algorithm: OnceLock<&'static str>,
+    key_id: OnceLock<KeyId>,
 }
 
-/// Runs `open`, the opening of `value`, and with the feature records its duration and, when it
-/// succeeds, the value and its plaintext bytes under the version `value` names.
-#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-pub(crate) async fn decrypt<T, F: VersionedFormat, R>(
-    call: &Call<'_>,
-    value: &Encrypted<T, F>,
-    open: impl Future<Output = KeyringResult<R>>,
-) -> KeyringResult<R> {
-    #[cfg(feature = "opentelemetry")]
-    let started = std::time::Instant::now();
-    let result = open.await;
-    #[cfg(feature = "opentelemetry")]
-    instruments::record_call(
-        call,
-        "decrypt",
-        started.elapsed(),
-        result.is_ok().then_some(value),
-        &result,
-    );
-    result
-}
+impl<'k> KeyringCall<'k> {
+    /// A call of `operation` on a value of `purpose`, on the backend named `backend`: the
+    /// keyring's, or [`DETERMINISTIC_BACKEND`] for a deterministic one.
+    pub(crate) fn new(
+        keyring: &'k KeyringAttribute,
+        operation: &'static str,
+        purpose: Purpose,
+        backend: &'static str,
+    ) -> Self {
+        Self {
+            keyring,
+            operation,
+            purpose: Some(purpose),
+            backend,
+            algorithm: OnceLock::new(),
+            key_id: OnceLock::new(),
+        }
+    }
 
-/// Runs `probes`, the deterministic probes of one plaintext, and with the feature records its
-/// duration. Probes are not stored, so they count no value.
-#[cfg(feature = "deterministic")]
-#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-pub(crate) async fn probe<R>(
-    call: &Call<'_>,
-    probes: impl Future<Output = KeyringResult<R>>,
-) -> KeyringResult<R> {
-    #[cfg(feature = "opentelemetry")]
-    let started = std::time::Instant::now();
-    let result = probes.await;
-    #[cfg(feature = "opentelemetry")]
-    instruments::record_call::<(), Deterministic, R>(
-        call,
-        "probe",
-        started.elapsed(),
-        None,
-        &result,
-    );
-    result
-}
+    /// The opening of an envelope value under `algorithm` for its migration into the keyring:
+    /// a `decrypt` of no purpose and no version.
+    pub(crate) fn envelope_migration(
+        keyring: &'k KeyringAttribute,
+        backend: &'static str,
+        algorithm: AeadAlgorithm,
+    ) -> Self {
+        Self {
+            keyring,
+            operation: "decrypt",
+            purpose: None,
+            backend,
+            algorithm: OnceLock::from(algorithm.as_str()),
+            key_id: OnceLock::new(),
+        }
+    }
 
-/// With the feature, records one store read of `keyring` for `reason` that took `elapsed`.
-#[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
-pub(crate) fn record_store_load<T>(
-    keyring: &KeyringAttribute,
-    store: StoreKind,
-    reason: LoadReason,
-    elapsed: std::time::Duration,
-    result: &KeyringResult<T>,
-) {
-    #[cfg(feature = "opentelemetry")]
-    kms_aead::__instruments::record_store_load(
-        &[
-            instruments::keyring(keyring),
-            opentelemetry::KeyValue::new("store", store.to_string()),
-            opentelemetry::KeyValue::new("reason", reason.as_str()),
-        ],
-        elapsed,
-        result.as_ref().err().map(|error| error.code()),
-    );
+    /// Names `version`, the version the call runs under.
+    pub(crate) fn version(&self, version: &KeyVersion) {
+        let _ = self.algorithm.set(version.algorithm().as_str());
+        let _ = self.key_id.set(version.id());
+    }
 }
 
 #[cfg(feature = "opentelemetry")]
-mod instruments {
-    use std::time::Duration;
+mod recorded {
+    use std::future::Future;
+    use std::time::{Duration, Instant};
 
-    use kms_aead::__instruments::{
-        aead_algorithm_name, deterministic_algorithm_name, record_operation, record_value,
-    };
+    use kms_aead::__instruments::{record_operation, Call, Outcome};
+    use kms_aead::formats::Format;
     use opentelemetry::KeyValue;
 
-    use super::{Call, KeyringAttribute, VersionedFormat};
+    use super::KeyringCall;
     use crate::errors::KeyringResult;
-    use crate::{Encrypted, KeyAlgorithm};
+    use crate::spans::LoadReason;
+    use crate::store::StoreKind;
+    use crate::{Encrypted, KeyringError, KeyringId};
 
-    /// The `mode` of every keyring call, beside the `per_call`, `store_less` and `caller_dek` of
-    /// kms-aead's envelope.
     const MODE: &str = "keyring";
+    const KEYRING: &str = "kms_aead.keyring";
+    const PURPOSE: &str = "kms_aead.purpose";
+    const STORE: &str = "kms_aead.store";
+    const REASON: &str = "kms_aead.reason";
 
-    pub(super) fn keyring(keyring: &KeyringAttribute) -> KeyValue {
-        KeyValue::new("keyring", keyring.value.clone())
-    }
+    /// The `kms_aead.keyring` attribute of one keyring, built once when the keyring is opened so
+    /// that a call does not copy the id.
+    #[derive(Debug)]
+    pub(crate) struct KeyringAttribute(KeyValue);
 
-    pub(super) fn algorithm_name(algorithm: KeyAlgorithm) -> Option<&'static str> {
-        match algorithm {
-            KeyAlgorithm::Randomized(algorithm) => Some(aead_algorithm_name(algorithm)),
-            KeyAlgorithm::Deterministic(algorithm) => Some(deterministic_algorithm_name(algorithm)),
-            KeyAlgorithm::Beacon(_) => None,
+    impl KeyringAttribute {
+        pub(crate) fn new(id: &KeyringId) -> Self {
+            Self(KeyValue::new(
+                KEYRING,
+                std::sync::Arc::<str>::from(id.as_str()),
+            ))
+        }
+
+        fn key_value(&self) -> KeyValue {
+            self.0.clone()
         }
     }
 
-    /// Records the duration of `call`'s `operation`, and `counted`, the value it sealed or
-    /// opened, when there is one.
-    pub(super) fn record_call<T, F: VersionedFormat, R>(
-        call: &Call<'_>,
-        operation: &'static str,
-        elapsed: Duration,
-        counted: Option<&Encrypted<T, F>>,
-        result: &KeyringResult<R>,
-    ) {
-        let algorithm = call.algorithm.get().copied();
-        let attributes = [
-            KeyValue::new("operation", operation),
-            KeyValue::new("mode", MODE),
-            KeyValue::new("backend", call.backend),
-            keyring(call.keyring),
-            KeyValue::new("purpose", call.purpose.as_str()),
-            KeyValue::new("algorithm", algorithm.unwrap_or_default()),
-        ];
-        // A call that failed before it found its version has no algorithm.
-        let known = match algorithm {
-            Some(_) => &attributes[..],
-            None => &attributes[..attributes.len() - 1],
-        };
-        record_operation(
-            known,
-            elapsed,
-            result.as_ref().err().map(|error| error.code()),
-        );
-        if let Some(value) = counted {
-            let (key_id, plaintext_len) = F::version_and_plaintext_len(value);
-            let [operation, mode, backend, keyring, purpose, algorithm] = attributes;
-            record_value(
-                &[
-                    operation,
-                    mode,
-                    backend,
-                    keyring,
-                    purpose,
-                    algorithm,
-                    KeyValue::new("key_id", i64::from(key_id.as_u32())),
-                ],
-                plaintext_len,
+    impl KeyringCall<'_> {
+        /// Runs `seal` and records the call, with the plaintext size of the value it seals.
+        pub(crate) async fn sealed<T, F: Format>(
+            &self,
+            seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
+        ) -> KeyringResult<Encrypted<T, F>> {
+            let started = Instant::now();
+            let sealed = seal.await;
+            self.record(started.elapsed(), &sealed, |sealed| {
+                Outcome::value(sealed, self.key_id.get().copied())
+            });
+            sealed
+        }
+
+        /// Runs `open`, the opening of `value`, and records the call, with `value`'s plaintext
+        /// size.
+        pub(crate) async fn opened<T, F: Format, R>(
+            &self,
+            value: &Encrypted<T, F>,
+            open: impl Future<Output = KeyringResult<R>>,
+        ) -> KeyringResult<R> {
+            let started = Instant::now();
+            let opened = open.await;
+            self.record(started.elapsed(), &opened, |_| {
+                Outcome::value(value, self.key_id.get().copied())
+            });
+            opened
+        }
+
+        /// Runs `operation` and records the call, which holds no value to count.
+        pub(crate) async fn timed<R>(
+            &self,
+            operation: impl Future<Output = KeyringResult<R>>,
+        ) -> KeyringResult<R> {
+            let started = Instant::now();
+            let result = operation.await;
+            self.record(started.elapsed(), &result, |_| Outcome::Succeeded);
+            result
+        }
+
+        fn record<'a, R>(
+            &self,
+            elapsed: Duration,
+            result: &'a KeyringResult<R>,
+            succeeded: impl FnOnce(&'a R) -> Outcome<'a>,
+        ) {
+            let outcome = match result {
+                Ok(value) => succeeded(value),
+                Err(error) => Outcome::Failed {
+                    error_type: error.code(),
+                },
+            };
+            let call = Call {
+                operation: self.operation,
+                mode: MODE,
+                backend: self.backend,
+                algorithm: self.algorithm.get().copied(),
+            };
+            let purpose = self
+                .purpose
+                .map(|purpose| KeyValue::new(PURPOSE, purpose.as_str()));
+            record_operation(
+                &call,
+                std::iter::once(self.keyring.key_value()).chain(purpose),
+                elapsed,
+                outcome,
             );
         }
+    }
+
+    /// Records one read of `keyring`'s record from `store` for `reason` that took `elapsed`.
+    pub(crate) fn record_store_load<T>(
+        keyring: &KeyringAttribute,
+        store: StoreKind,
+        reason: LoadReason,
+        elapsed: Duration,
+        result: &KeyringResult<T>,
+    ) {
+        kms_aead::__instruments::record_store_load(
+            [
+                keyring.key_value(),
+                KeyValue::new(STORE, store.to_string()),
+                KeyValue::new(REASON, reason.as_str()),
+            ],
+            elapsed,
+            result.as_ref().err().map(KeyringError::code),
+        );
+    }
+}
+
+/// The calls of `recorded` that record nothing, for a build without the feature.
+#[cfg(not(feature = "opentelemetry"))]
+mod unrecorded {
+    use std::future::Future;
+    use std::time::Duration;
+
+    use kms_aead::formats::Format;
+
+    use super::KeyringCall;
+    use crate::errors::KeyringResult;
+    use crate::spans::LoadReason;
+    use crate::store::StoreKind;
+    use crate::{Encrypted, KeyringId};
+
+    #[derive(Debug)]
+    pub(crate) struct KeyringAttribute;
+
+    impl KeyringAttribute {
+        pub(crate) fn new(_: &KeyringId) -> Self {
+            Self
+        }
+    }
+
+    impl KeyringCall<'_> {
+        pub(crate) async fn sealed<T, F: Format>(
+            &self,
+            seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
+        ) -> KeyringResult<Encrypted<T, F>> {
+            seal.await
+        }
+
+        pub(crate) async fn opened<T, F: Format, R>(
+            &self,
+            _: &Encrypted<T, F>,
+            open: impl Future<Output = KeyringResult<R>>,
+        ) -> KeyringResult<R> {
+            open.await
+        }
+
+        pub(crate) async fn timed<R>(
+            &self,
+            operation: impl Future<Output = KeyringResult<R>>,
+        ) -> KeyringResult<R> {
+            operation.await
+        }
+    }
+
+    pub(crate) fn record_store_load<T>(
+        _: &KeyringAttribute,
+        _: StoreKind,
+        _: LoadReason,
+        _: Duration,
+        _: &KeyringResult<T>,
+    ) {
     }
 }
