@@ -1,4 +1,7 @@
-# A workspace release makes one commit for all the crates it bumps, and cargo-release leaves the
-# per-crate placeholders `{{crate_name}}` and `{{version}}` unrendered in that commit's message,
-# so it is literal text. The tags still name each crate and version.
-pre-release-commit-message = "chore: Release"
+# kms-aead and kms-aead-keyring release in lockstep: one version, one release commit and one
+# `v{{version}}` tag for both.
+shared-version = true
+consolidate-commits = true
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore: Release kms-aead and kms-aead-keyring version {{version}}"
+tag-message = "chore: Release kms-aead and kms-aead-keyring version {{version}}"
