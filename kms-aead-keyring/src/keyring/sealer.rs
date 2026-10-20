@@ -39,7 +39,7 @@ pub struct Sealer<'k, S: KeyringStore, P, B> {
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// A [`Sealer`] over the cached record, revalidated first when it is older than
@@ -56,7 +56,7 @@ where
 impl<S, P, B> Sealer<'_, S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The record every call of this sealer seals under. Its

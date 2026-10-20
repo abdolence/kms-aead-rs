@@ -158,7 +158,7 @@ impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
 impl<S, P, B> KeyringAdmin<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The versions `selection` names as Tink's encrypted keyset, encrypted by the keyring's KEK:

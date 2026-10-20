@@ -104,20 +104,27 @@ pub(crate) mod kms {
     /// milliseconds, and with the `opentelemetry` feature in the KMS duration histogram, under
     /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`. `request` maps the KMS's error, so
     /// that the histogram records its code.
-    pub(crate) async fn timed<T>(
+    pub(crate) fn timed<'a, T: 'a>(
         operation: &'static str,
-        provider: &KekProvider,
-        request: impl Future<Output = KmsAeadResult<T>>,
-    ) -> KmsAeadResult<T> {
-        let started = Instant::now();
-        let response = request.await;
-        let elapsed = started.elapsed();
-        Span::current().record(
-            FIELD_RESPONSE_TIME,
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
-        );
-        crate::metrics::record_kms_call(operation, provider, elapsed, &response);
-        response
+        provider: &'a KekProvider,
+        request: impl Future<Output = KmsAeadResult<T>> + 'a,
+    ) -> impl Future<Output = KmsAeadResult<T>> + 'a {
+        // Boxed before the returned future holds it, which keeps the SDK's future type out of the
+        // layout of every future that calls a provider. With the AWS SDK's inline, an
+        // application's `main` that calls an envelope goes past the compiler's default query
+        // depth.
+        let request = Box::pin(request);
+        async move {
+            let started = Instant::now();
+            let response = request.await;
+            let elapsed = started.elapsed();
+            Span::current().record(
+                FIELD_RESPONSE_TIME,
+                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+            );
+            crate::metrics::record_kms_call(operation, provider, elapsed, &response);
+            response
+        }
     }
 }
 

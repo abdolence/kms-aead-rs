@@ -63,7 +63,7 @@ async fn main() -> ExampleResult {
 
 async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> ExampleResult
 where
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
 {
     let admin: KeyringAdmin<MemoryKeyringStore, P, AwsLc> =
         KeyringRegistry::<MemoryKeyringStore, AwsLc>::new(

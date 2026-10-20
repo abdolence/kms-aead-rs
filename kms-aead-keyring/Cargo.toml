@@ -53,8 +53,6 @@ bigquery = { version = "0.9", optional = true }
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
-# The test provider implements kms-aead's provider trait, which is an `async_trait`.
-async-trait = { workspace = true }
 proptest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 uuid = { version = "1", features = ["v7"] }

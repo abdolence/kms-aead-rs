@@ -373,7 +373,7 @@ async fn reencrypt_values<P, B>(
     rows: &[Vec<u8>],
 ) -> KmsAeadResult<Vec<(Vec<u8>, Vec<u8>)>>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     let mut reencrypted: HashMap<EncryptedDataEncryptionKey, EncryptedDataEncryptionKey> =
@@ -562,7 +562,7 @@ async fn missed_deks<P, B>(
     rows: &[Vec<u8>],
 ) -> KmsAeadResult<Vec<EncryptedDataEncryptionKey>>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     let mut encrypted_deks: HashSet<EncryptedDataEncryptionKey> = HashSet::new();

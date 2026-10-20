@@ -78,7 +78,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
-        P: KmsAeadEncryptionProvider + Sync + ?Sized,
+        P: KmsAeadEncryptionProvider,
     {
         crate::formats::generate_encrypted_dek::<B, P>(
             self.algorithm.into(),

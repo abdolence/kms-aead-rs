@@ -34,7 +34,7 @@ use crate::{
 impl<S, P, B> Sealer<'_, S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// Seals `value` with `aad` under the record's active deterministic version: the same `value`
@@ -128,7 +128,7 @@ where
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// Opens `value` with `aad`, under the version it names, applying the

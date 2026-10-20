@@ -236,7 +236,7 @@ impl TinkKeyset {
     /// The provider's errors.
     pub async fn into_encrypted_bytes<P>(self, provider: &P) -> KmsAeadResult<Vec<u8>>
     where
-        P: KmsAeadEncryptionProvider + Sync + ?Sized,
+        P: KmsAeadEncryptionProvider,
     {
         let keyset_dek = DataEncryptionKey::from(self.to_bytes());
         drop(self);

@@ -5,7 +5,6 @@ use super::KekVersion;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::spans::{self, kms};
 use crate::*;
-use async_trait::async_trait;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
 use gcloud_sdk::google::cloud::kms::v1::*;
 use gcloud_sdk::proto_ext::kms::*;
@@ -188,7 +187,6 @@ impl GcpKmsProvider {
     }
 }
 
-#[async_trait]
 impl KmsAeadEncryptionProvider for GcpKmsProvider {
     fn kek(&self) -> &KekRef {
         &self.kek

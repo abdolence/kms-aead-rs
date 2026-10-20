@@ -46,7 +46,7 @@ pub struct KeyringAdmin<S: KeyringStore, P, B> {
 impl<S, P, B> KeyringAdmin<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     pub(crate) fn new(keyring: Keyring<S, P, B>) -> Self {

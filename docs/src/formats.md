@@ -490,7 +490,7 @@ async fn upgrade_values<P, B>(
     rows: &mut [Row],
 ) -> KmsAeadResult<usize>
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     let mut upgraded = 0;

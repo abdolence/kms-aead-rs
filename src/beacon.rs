@@ -259,7 +259,7 @@ impl<B: AeadBackend> BeaconMac<B> {
         provider: &P,
     ) -> KmsAeadResult<(DataEncryptionKey, EncryptedDataEncryptionKey)>
     where
-        P: KmsAeadEncryptionProvider + Sync + ?Sized,
+        P: KmsAeadEncryptionProvider,
     {
         // Tink's `HmacPrfKey` and `AesGcmKey` both hold their key in field 3, `key_value`, so a
         // 32-byte beacon key serialises to the bytes of a 32-byte `AesGcmKey`.

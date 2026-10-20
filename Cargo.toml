@@ -61,7 +61,6 @@ bench = false
 tracing = { workspace = true }
 secret-vault-value = { workspace = true }
 rsb_derive = { workspace = true }
-async-trait = { workspace = true }
 hex = "0.4"
 # The instruments of the `opentelemetry` feature: the API only, never the SDK.
 opentelemetry = { workspace = true, optional = true }
@@ -119,6 +118,8 @@ sqlx-core = { workspace = true, optional = true }
 sqlx-postgres = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The Azure SDK's credential and HTTP client traits, which the Azure tests implement.
+async-trait = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 futures = "0.3"
 serde_json = { workspace = true }

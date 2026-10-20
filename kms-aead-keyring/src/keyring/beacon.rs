@@ -25,7 +25,7 @@ use crate::{FieldSpec, KeyAlgorithm, KeyVersion, Keyring, Purpose, Sealer};
 impl<S, P, B> Sealer<'_, S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The beacon of `value` in `field` under the record's active beacon version, to store
@@ -75,7 +75,7 @@ where
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + Send + Sync + 'static,
+    P: KmsAeadEncryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The beacon of `value` in `field` under every beacon version that is pending, active or

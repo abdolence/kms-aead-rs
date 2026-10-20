@@ -37,7 +37,7 @@ impl NewVersion {
     /// retries with the same key.
     pub(crate) async fn generate<P, B>(algorithm: KeyAlgorithm, provider: &P) -> KeyringResult<Self>
     where
-        P: KmsAeadEncryptionProvider + Sync,
+        P: KmsAeadEncryptionProvider,
         B: AeadBackend,
     {
         let encrypted_dek = match algorithm {
@@ -79,7 +79,7 @@ impl KeyringAlgorithms {
         provider: &P,
     ) -> KeyringResult<KeyringRecord>
     where
-        P: KmsAeadEncryptionProvider + Sync,
+        P: KmsAeadEncryptionProvider,
         B: AeadBackend,
     {
         let now = Timestamp::now();
