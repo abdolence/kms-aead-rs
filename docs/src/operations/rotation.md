@@ -26,17 +26,11 @@ runs the whole cycle, and a KEK re-encryption after it, on the memory store and 
 
 How often:
 
-- A randomised DEK with random 96-bit nonces is good for about 2^32 values, see
-  [Nonces](../security.md#nonces). Estimate the values a fleet seals, or measure them, see
-  [Alerting on volume](#alerting-on-volume): at 550 values per second a version reaches 2^32 in
-  90 days. Rotate every 30 to 90 days,
-  sooner at higher rates. AES-128-GCM, AES-256-GCM, AES-256-GCM-SIV and ChaCha20-Poly1305 all
-  take a 12-byte nonce, so the same cadence applies to each;
-- AES-GCM also bounds the data sealed under one key: RFC 8446, section 5.5, allows 2^38.5 bytes
-  for an AE advantage of about 2^-57. The keyring does not stop at a byte count, since its DEKs
-  are shared across processes, so schedule rotation to stay below 2^38 bytes per version under AES-GCM, the
-  default [`max_bytes`](../dek-caching.md#volume-limit) of a store-less envelope. AES-256-GCM-SIV
-  and ChaCha20-Poly1305 need no volume bound beyond the count of values;
+- a randomised version is good for about 2^32 values, see [Nonces](../security.md#nonces), and an
+  AES-GCM version for about 2^38 bytes, see [Data volume](../security.md#data-volume). The keyring
+  stops at neither, since its DEKs are shared across processes: estimate the values and bytes a
+  fleet seals, or measure them, see [Alerting on volume](#alerting-on-volume). At 550 values per
+  second a version reaches 2^32 in 90 days, so rotate every 30 to 90 days, sooner at higher rates;
 - a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
   deterministic rotation adds a probe to each equality query until a full sweep re-seals every
   row, see [Queries across rotations](../keyring/deterministic.md#queries-across-rotations), so
