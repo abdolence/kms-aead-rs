@@ -20,14 +20,18 @@ a field only needs lookups and its stored value should stay randomised, a beacon
 
 ## What it leaks
 
-Be aware what equal cipher texts tell a reader of the stored data:
+Be aware what equal cipher texts tell a reader of the stored data, without any key:
 
 - **Equality**: which rows hold the same value;
 - **Frequency**: how often each value occurs. On a column with few distinct values, such as a
   country, a status or a yes/no answer, the most frequent cipher text is the most frequent value,
   and the values can be read back from public statistics.
 
-So do not use deterministic encryption:
+And since there is no nonce, a leaked deterministic key lets its holder test candidate values
+against the whole column offline.
+
+So deterministic encryption fits fields that are looked up by equality and have high entropy, such
+as emails and external ids. Do not use it:
 
 - for a column with few distinct values or a skewed distribution;
 - when equality itself is sensitive;
@@ -36,6 +40,11 @@ So do not use deterministic encryption:
 
 The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.
+
+An AAD that a lookup can rebuild names the field and never the row, so a deterministic value also
+opens in any other row of the same field. A deterministic field never decides identity or
+authorisation on its own; where identity matters, the check reads a randomised copy of the field,
+bound to the row by its AAD.
 
 ## Usage
 

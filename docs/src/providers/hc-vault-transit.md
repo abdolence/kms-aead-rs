@@ -104,9 +104,8 @@ older versions for good.
 
 ## Errors
 
-A response with an error status is `VAULT_STATUS_<status>`: a `NetworkError` for a server error
-or a rate limit, an `EncryptionError` otherwise. `VAULT_HTTP` and `VAULT_TIMEOUT` are network
-errors for a request that got no complete response, and `VAULT_RESPONSE`,
-`VAULT_RESPONSE_TOO_LARGE` and `VAULT_CIPHERTEXT` are encryption errors for a response or a
-encrypted DEK that cannot be read. Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
+A response with an error status is `VAULT_STATUS_<status>`. `VAULT_HTTP` and `VAULT_TIMEOUT` are
+for a request that got no complete response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and
+`VAULT_CIPHERTEXT` for a response or an encrypted DEK that cannot be read. Which codes are a
+`NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries). Invalid options fail at creation with `VAULT_INVALID_OPTIONS`,
 or `VAULT_TLS` when the TLS configuration cannot be built.

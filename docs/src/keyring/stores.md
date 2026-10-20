@@ -88,8 +88,8 @@ CREATE TABLE kms_keyrings (
 );
 ```
 
-- an application needs `SELECT` on it, and the administration also `INSERT` and `UPDATE`. An
-  application's watch runs `LISTEN` on the table's channel, which PostgreSQL allows every role;
+- the rights of the application and the administration on the table are in
+  [Store rights](./deployment.md#store-rights);
 - the table name is unqualified, so the connection's `search_path` selects the schema;
 - every write sends `NOTIFY <table>, '<keyring id>'` when it commits, through `pg_notify` in the
   same statement;
@@ -161,8 +161,8 @@ Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through 
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.
 
-- an application needs `storage.objects.get` on the bucket, and the administration also
-  `storage.objects.create` and `storage.objects.delete`, since a write replaces the object;
+- the rights of the application and the administration on the bucket are in
+  [Store rights](./deployment.md#store-rights);
 - Cloud Storage has no change notification the store listens to, so a process sees a change once
   its record is older than `record_ttl`, 5 minutes by default;
 - turn on object versioning on the bucket: every record written is then kept as a noncurrent
@@ -198,8 +198,8 @@ that should read as a folder ends with `/`. A create is conditional on no object
 (`If-None-Match: *`), an update on the ETag the writer read (`If-Match`), and a revalidation reads
 the object only when its ETag changed (`If-None-Match` on the read).
 
-- an application needs `s3:GetObject` on the objects, and the administration also
-  `s3:PutObject`;
+- the rights of the application and the administration on the objects are in
+  [Store rights](./deployment.md#store-rights);
 - S3 has no change notification the store listens to, so a process sees a change once its record
   is older than `record_ttl`, 5 minutes by default;
 - turn on versioning on the bucket: every record written is then kept as a noncurrent version, to

@@ -78,69 +78,13 @@ configured to use one, see [KMS random generators](./providers.md#kms-random-gen
 
 ## Typed fields
 
-`encrypt` and `decrypt` take a value of any type that implements `Plaintext`, so a field can have
-a type of its own. The value is encoded by its `Plaintext` implementation, and the result is an
-`Encrypted<T, Envelope>` that names the type:
+`encrypt` and `decrypt` take a value of any type that implements `Plaintext`, such as an
+application's `Email` newtype, and the result is an `Encrypted<T, Envelope>` that names the type.
+The calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and decrypt through
+the envelope's DEK cache, whatever the type. `Plaintext`, the bytes of an `Encrypted` and how
+serde, tokio-postgres and sqlx store it are in [Stored values](./stored-values.md).
 
-```rust
-use kms_aead::backends::Ring;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, KmsAeadEnvelope, KmsAeadResult, Plaintext};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-// Sealed as the same UTF-8 bytes as a String
-impl Plaintext for Email {
-    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-# #[tokio::main(flavor = "current_thread")]
-# async fn main() -> KmsAeadResult<()> {
-# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
-
-let aad = b"users/1042/email";
-let email = Email("alice@example.com".to_string());
-let encrypted: Encrypted<Email, Envelope> = envelope.encrypt(aad, &email).await?;
-
-// The bytes to store, and the field read back from them
-let stored: Vec<u8> = encrypted.into_value();
-let read_back = Encrypted::<Email, Envelope>::try_from(stored)?;
-
-let decrypted: Email = envelope.decrypt(aad, &read_back).await?;
-assert_eq!(decrypted, email);
-# Ok(())
-# }
-```
-
-- an application type maps to one of the built-in `Plaintext` types, as `Email` does, see
-  [Stored values](./stored-values.md#plaintext);
-- the calls run in the envelope's mode, a DEK per value or store-less DEK reuse, and decrypt
-  through the envelope's DEK cache, whatever the type;
-- `Encrypted::try_from` checks the stored bytes against Tink's KMS envelope layout, so a
-  truncated or foreign value fails when it is read, before any KMS call, with
-  `UNKNOWN_CIPHER_TEXT_LAYOUT`, `INVALID_CIPHER_TEXT_FORMAT` or, without `legacy-formats`,
-  `LEGACY_FORMAT`. It checks the framing only: a changed value fails to decrypt with `DECRYPT`;
-- `decrypt` fails with `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`.
-
-`Encrypted<T, Envelope>` has no `==` and its `Debug` shows the length only, see
-[Stored values](./stored-values.md#encryptedt-f).
-
-### Storing typed fields
-
-serde, tokio-postgres and sqlx store `Encrypted` as bytes, see
-[Stored values](./stored-values.md#storing).
-
-### One fixed key
+## One fixed key
 
 `AeadCipher::encrypt` seals a field under a key the application holds, in Tink's layout of a key
 whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an

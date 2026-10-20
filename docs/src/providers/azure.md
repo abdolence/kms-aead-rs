@@ -55,6 +55,29 @@ wrapKey and unwrapKey key operations, as in the "Key Vault Crypto User" role.
 - `client_options`: settings passed to the Azure SDK, such as a custom HTTP transport or retry
   policy.
 
+A Managed HSM AES key, with `A256Kw`:
+
+```rust,no_run
+use azure_security_keyvault_keys::models::EncryptionAlgorithm;
+use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+
+# fn example() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+let kms_ref = AzureKmsKeyRef::new(
+    "https://my-hsm.managedhsm.azure.net".to_string(),
+    "my-aes-key".to_string(),
+);
+let credential = azure_identity::DeveloperToolsCredential::new(None)?;
+
+let provider = AzureKmsProvider::with_options(
+    &kms_ref,
+    AzureKmsProviderOptions::new().with_algorithm(EncryptionAlgorithm::A256Kw),
+    credential,
+)?;
+# let _ = provider;
+# Ok(())
+# }
+```
+
 ## Encrypted DEKs
 
 Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
@@ -82,6 +105,6 @@ disabled rather than destroyed.
 ## Errors
 
 A failed request carries Key Vault's error code, such as `Forbidden` or `KeyNotFound`, or
-`AZURE_STATUS_<status>` when the response has none. A server error or a rate limit is a
-`NetworkError`, any other status an `EncryptionError`. A decryption of an encrypted DEK in another
+`AZURE_STATUS_<status>` when the response has none. Which statuses are a `NetworkError` and which an
+`EncryptionError` is in [Retries](../errors.md#retries). A decryption of an encrypted DEK in another
 layout fails with `AZURE_ENCRYPTED_DEK_FORMAT`, before any request.

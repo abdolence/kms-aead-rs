@@ -1,5 +1,9 @@
 # Sweeps on BigQuery
 
+A sweep of a BigQuery table, in two paths: one `UPDATE` in SQL for the fields BigQuery reads, and a
+Rust path for the rest. The mechanism is in [Sweeps](./sweeps.md). The Rust path has the five
+properties of [Sweeps by store](./sweeps.md#sweeps-by-store), and the SQL path states its own below.
+
 The marker is a `BYTES` column. BigQuery gives a column added to a table `NULL` in the rows already
 there, so the column's default goes with a write of `SealMarker::ENVELOPE` into them:
 
