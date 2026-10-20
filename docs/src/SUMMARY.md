@@ -10,7 +10,7 @@
 
 # Values and keys
 
-- [Encrypted, Beacon and Plaintext](./stored-values.md)
+- [Stored values](./stored-values.md)
 - [Envelope encryption](./envelope-encryption.md)
 - [DEK caching and reuse](./dek-caching.md)
 - [Deterministic encryption](./deterministic.md)

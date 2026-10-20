@@ -3,14 +3,14 @@
 //! is below the current one with `sweep::run_batched`, each batch through one sealer and written
 //! back in one `BatchWrite` conditional on the update time of each document, and prints the
 //! sweep's report. The re-seal is the one of
-//! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#firestore) in the book.
+//! [Sweeps on Firestore](https://kms-aead-rust.abdolence.dev/operations/sweeps-firestore.html) in the book.
 //!
 //! The sweep is `sweep_users` and `reseal_batch`. `seed_test_data` and `delete_test_data`, at the
 //! end of the file, only write the example's users before it and delete them after.
 //!
 //! A sweep is a job that runs on a schedule, and again until its report shows nothing scanned.
 //! Retiring the previous version is a separate administrative step, see
-//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations/rotation.html#rotation-cadence).
 //!
 //! Every read and write is sized for millions of documents, and memory holds the batches in flight
 //! only. The sweep's candidates are one streamed query, which `sweep::run_batched` cuts into

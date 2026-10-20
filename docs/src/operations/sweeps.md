@@ -355,8 +355,9 @@ record id is often an entity id, so read the sweep's log as an administrative lo
 
 The stream returns `Result<T, E>` and the re-seal `Result<ResealOutcome, E>`, with the
 application's own error type, any type that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`
-impl on the application's error lets `?` convert it, as the examples below do with an error of
-their data store; a re-seal with no errors of its own returns `KeyringResult<ResealOutcome>`, as
+impl on the application's error lets `?` convert it, as the examples on
+[Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
+[BigQuery](./sweeps-bigquery.md) do with an error of their data store; a re-seal with no errors of its own returns `KeyringResult<ResealOutcome>`, as
 above. The error's `Display` is the application's text and goes to the log as it is, so it carries
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.
@@ -369,8 +370,9 @@ turned up after all, while a destroyed one is gone.
 ## Sweeps by store
 
 At millions of records a sweep streams its candidates from the store in one query and never holds
-its result in memory, and it writes them back in batches. Every example below has the same five
-properties:
+its result in memory, and it writes them back in batches. Every example, on
+[Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
+[BigQuery](./sweeps-bigquery.md), has the same five properties:
 
 - it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
   matches it, so a cancelled or failed run is started again over the same query;

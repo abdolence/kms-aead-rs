@@ -55,11 +55,9 @@ too. Build and deploy the application with `cargo build -p <application>`.
 
 ## KMS rights
 
-A [keyring](../keyring.md) record decides which versions are read and which one seals new values,
-and nothing signs it: its integrity rests on the keyring store's access control. So a deployment
-splits the two sides of
-[Applications and administration](#applications-and-administration) into two
-principals:
+Nothing signs a [keyring](../keyring.md) record, see
+[Keyring deployment](../security.md#keyring-deployment), so a deployment splits the two sides
+above into two principals:
 
 - **Application**: builds without the `admin` feature, and calls `Keyring` only: encryption,
   decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
@@ -79,13 +77,12 @@ principals:
 | Azure Key Vault | a role with `keys/unwrap/action` on the key | a role with `keys/wrap/action` and `keys/unwrap/action` on the key |
 | Vault Transit | `update` on `transit/decrypt/<key>` | `update` on `transit/encrypt/<key>` and `transit/decrypt/<key>` |
 
-The permissions of each store are in [Store rights](#store-rights).
+The permissions of each store are below.
 
 ## Store rights
 
 The store's access control is what the record's integrity rests on: only the administration
-writes the record, and the applications read it and listen to its changes, see
-[Applications and administration](#applications-and-administration):
+writes the record, and the applications read it and listen to its changes, see above:
 
 | Store | Application | Administration |
 |---|---|---|

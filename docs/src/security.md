@@ -103,7 +103,9 @@ backups included.
 
 ## Keyring deployment
 
-The two principals of a deployment and their rights are in
+A [keyring](./keyring.md) record decides which versions are read and which one seals new values,
+and nothing signs it: its integrity rests on the keyring store's access control. The two
+principals of a deployment and their rights are in
 [Applications and administration](./keyring/deployment.md).
 
 A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring

@@ -627,7 +627,7 @@ impl KeyringRecord {
     /// record [`Keyring::reload`](crate::Keyring::reload) returns. Under a provider that reports
     /// no version, a `None` stays in the list and the check never passes: the steps for that case
     /// are in
-    /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations.html#a-kek-version-the-kms-did-not-report).
+    /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations/rotation.html#a-kek-version-the-kms-did-not-report).
     pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
         let mut kek_versions = Vec::new();
         for encrypted_dek in self.versions.iter().filter_map(KeyVersion::encrypted_dek) {

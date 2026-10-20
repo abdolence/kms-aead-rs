@@ -36,7 +36,7 @@ hold values the leaked DEK opens. Treat them as exposed and revoke the secrets i
 ## A KMS IAM over-grant
 
 1. Fix the IAM binding, back to the split in
-   [Keyring deployment](../security.md#keyring-deployment);
+   [KMS rights](../keyring/deployment.md#kms-rights);
 2. rotate the KEK in the KMS and `reencrypt_deks()`;
 3. with KMS data-access logs enabled in advance, list the `Decrypt` calls the wrong principal
    made: every encrypted DEK they decrypted is a leaked DEK, see above. Without those logs, every
