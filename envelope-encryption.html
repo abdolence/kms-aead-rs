@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
+            window.path_to_searchindex_js = "searchindex-e4c06dcf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -504,7 +504,7 @@ async fn reencrypt_values&lt;P, B&gt;(
     rows: &amp;[Vec&lt;u8&gt;],
 ) -&gt; KmsAeadResult&lt;Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;&gt;
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     let mut reencrypted: HashMap&lt;EncryptedDataEncryptionKey, EncryptedDataEncryptionKey&gt; =
@@ -677,7 +677,7 @@ async fn missed_deks&lt;P, B&gt;(
     rows: &amp;[Vec&lt;u8&gt;],
 ) -&gt; KmsAeadResult&lt;Vec&lt;EncryptedDataEncryptionKey&gt;&gt;
 where
-    P: KmsAeadEncryptionProvider + Send + Sync,
+    P: KmsAeadEncryptionProvider,
     B: AeadBackend,
 {
     let mut encrypted_deks: HashSet&lt;EncryptedDataEncryptionKey&gt; = HashSet::new();

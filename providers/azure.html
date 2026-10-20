@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
+            window.path_to_searchindex_js = "../searchindex-e4c06dcf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -215,18 +215,23 @@ wrapKey and unwrapKey key operations, as in the “Key Vault Crypto User” role
 <h2 id="options"><a class="header" href="#options">Options</a></h2>
 <p><code>AzureKmsProviderOptions</code> has:</p>
 <ul>
-<li><code>algorithm</code>: the wrap algorithm, which must suit the key type: <code>RsaOaep256</code> for RSA keys,
-<code>A256Kw</code> for Managed HSM AES keys. The default, <code>DEFAULT_ALGORITHM</code>, is <code>RsaOaep256</code> for every
-key, so a Managed HSM AES key needs <code>algorithm</code> set to <code>A256Kw</code> and the provider built with
-<code>AzureKmsProvider::with_options</code>. <code>RsaOaep</code> (SHA-1) is accepted for existing keys; <code>Rsa1_5</code>
-and unknown algorithms are refused. Encrypted DEKs do not record the algorithm, so it stays fixed for the
-life of the key;</li>
+<li><code>algorithm</code>: an <code>AzureKmsAlgorithm</code>, Key Vault’s <code>alg</code> of the wrapKey and unwrapKey
+operations, which must suit the key type: <code>RsaOaepSha256</code> (<code>RSA-OAEP-256</code>) for RSA keys,
+<code>Aes256KeyWrap</code> (<code>A256KW</code>) for Managed HSM AES keys. The default, <code>DEFAULT_ALGORITHM</code>, is
+<code>RsaOaepSha256</code> for every key, so a Managed HSM AES key needs <code>algorithm</code> set to
+<code>Aes256KeyWrap</code> and the provider built with <code>AzureKmsProvider::with_options</code>. <code>RsaOaepSha1</code>
+(<code>RSA-OAEP</code>) is for an RSA key whose encrypted DEKs were written with it. The other AES key
+wraps, <code>Aes128KeyWrap</code> (<code>A128KW</code>), <code>Aes192KeyWrap</code> (<code>A192KW</code>), <code>Pkcs11AesKeyWrap</code>
+(<code>CKM_AES_KEY_WRAP</code>) and <code>Pkcs11AesKeyWrapWithPadding</code> (<code>CKM_AES_KEY_WRAP_PAD</code>), are for
+Managed HSM AES keys too. <code>RSA1_5</code> is not offered. Encrypted DEKs do not record the algorithm, so it
+stays fixed for the life of the key;</li>
 <li><code>client_options</code>: settings passed to the Azure SDK, such as a custom HTTP transport or retry
 policy.</li>
 </ul>
-<p>A Managed HSM AES key, with <code>A256Kw</code>:</p>
-<pre><code class="language-rust no_run">use azure_security_keyvault_keys::models::EncryptionAlgorithm;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions};
+<p>A Managed HSM AES key, with <code>Aes256KeyWrap</code>:</p>
+<pre><code class="language-rust no_run">use kms_aead::providers::{
+    AzureKmsAlgorithm, AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions,
+};
 
 <span class="boring">fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
 </span>let kms_ref = AzureKmsKeyRef::new(
@@ -237,7 +242,7 @@ let credential = azure_identity::DeveloperToolsCredential::new(None)?;
 
 let provider = AzureKmsProvider::with_options(
     &amp;kms_ref,
-    AzureKmsProviderOptions::new().with_algorithm(EncryptionAlgorithm::A256Kw),
+    AzureKmsProviderOptions::new().with_algorithm(AzureKmsAlgorithm::Aes256KeyWrap),
     credential,
 )?;
 <span class="boring">let _ = provider;
@@ -248,8 +253,8 @@ let provider = AzureKmsProvider::with_options(
 it before Key Vault’s encrypted DEK, in the library’s own layout, see
 <a href="../formats.html#encrypted-deks">Formats</a>. No Tink client exists for Azure, so Tink does not read the
 values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
-as in 0.29, rather than the DEK as Tink serialises it. Every wrap algorithm takes it, <code>A256Kw</code> too,
-which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, <code>Aes256KeyWrap</code>
+too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 <a href="../envelope-encryption.html#storing-encrypted-deks">Envelope encryption</a>.</p>
 <h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
 <p>A rotation adds a version to the key, by hand or by the key’s rotation policy. Without a key version

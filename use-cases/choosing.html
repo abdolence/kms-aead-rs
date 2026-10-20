@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-d662b6b1.js";
+            window.path_to_searchindex_js = "../searchindex-e4c06dcf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-7da9b6c9.js"></script>
@@ -214,8 +214,8 @@ rotation, under “Key versions and rotation”: <a href="../providers/gcp.html"
 <a href="../providers/hc-vault-transit.html">Vault Transit</a> and <a href="../providers/local.html">Local KMS</a>;</li>
 <li>with an RSA key on Azure Key Vault the encryption is a public-key operation, so whoever holds the
 public key encrypts a DEK of their own into a keyring record. Use an AES key from Managed HSM,
-with <code>algorithm</code> set to <code>A256Kw</code>, see <a href="../providers/azure.html#options">Azure Key Vault</a> and
-<a href="../security.html#keyring-limits">Keyring limits</a>;</li>
+with <code>algorithm</code> set to <code>AzureKmsAlgorithm::Aes256KeyWrap</code>, see
+<a href="../providers/azure.html#options">Azure Key Vault</a> and <a href="../security.html#keyring-limits">Keyring limits</a>;</li>
 <li>the local KMS has no IAM, no audit log and no HSM, see <a href="../providers/local.html#limits">Local KMS</a>;</li>
 <li>crypto-shredding per KMS is in <a href="./incidents.html#crypto-shredding">A leaked key or a shredded tenant</a>.</li>
 </ul>

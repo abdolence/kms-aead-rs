@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
+            window.path_to_searchindex_js = "searchindex-e4c06dcf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -230,6 +230,9 @@ the backend’s CSPRNG.</p>
 <p>An application can implement <code>KmsAeadEncryptionProvider</code> for a KMS of its own, or as a wrapper
 around another provider. The implementation:</p>
 <ul>
+<li>is <code>Send</code> and <code>Sync</code>, and writes <code>encrypt_data_encryption_key</code>, <code>decrypt_data_encryption_key</code>
+and <code>generate_key_material</code> as <code>async fn</code>, whose futures must be <code>Send</code>. The trait has no <code>dyn</code>
+form, so code that holds a provider is generic over it;</li>
 <li>returns from <code>kek()</code> a <code>KekRef</code> with <code>KekProvider::Other</code> and a key name that identifies the
 key across every KMS instance it may address. A wrapper returns the inner provider’s <code>kek()</code>;</li>
 <li>names that KEK to the KMS on every decryption;</li>

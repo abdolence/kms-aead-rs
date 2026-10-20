@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-d662b6b1.js";
+            window.path_to_searchindex_js = "searchindex-e4c06dcf.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-7da9b6c9.js"></script>
@@ -250,6 +250,7 @@ backend</a>.</p>
 <tr><td><code>AzureKmsKeyRef.key_version</code></td><td><code>AzureKmsKeyRef.kek_version</code></td></tr>
 <tr><td><code>DataEncryptionKey(secret)</code>, <code>DataEncryptionKey::new(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
 <tr><td><code>errors::BoxedError</code></td><td>removed</td></tr>
+<tr><td><code>AzureKmsProviderOptions::with_algorithm(EncryptionAlgorithm::RsaOaep256)</code>, with the Azure SDK’s enum</td><td><code>with_algorithm(AzureKmsAlgorithm::RsaOaepSha256)</code>; <code>RsaOaep</code> is <code>RsaOaepSha1</code>, <code>A128Kw</code>, <code>A192Kw</code> and <code>A256Kw</code> are <code>Aes128KeyWrap</code>, <code>Aes192KeyWrap</code> and <code>Aes256KeyWrap</code>, and <code>CkmAesKeyWrap</code> and <code>CkmAesKeyWrapPad</code> are <code>Pkcs11AesKeyWrap</code> and <code>Pkcs11AesKeyWrapWithPadding</code>. <code>Rsa1_5</code>, refused by 0.29 too, and the algorithms Key Vault does not wrap keys with have no variant</td></tr>
 </tbody>
 </table>
 </div>
@@ -299,7 +300,8 @@ has its own <code>value()</code> and <code>into_value()</code>, and so has <code
 <h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
 <p>An application’s own implementation of the provider trait:</p>
 <ul>
-<li>implements <code>KmsAeadEncryptionProvider</code> instead of <code>KmsAeadRingEncryptionProvider</code>;</li>
+<li>implements <code>KmsAeadEncryptionProvider</code> instead of <code>KmsAeadRingEncryptionProvider</code>, without
+<code>#[async_trait]</code>. Its methods stay <code>async fn</code>, and their futures must be <code>Send</code>;</li>
 <li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code> and a key name that identifies the
 key;</li>
 <li>deletes <code>generate_encryption_key</code> when it returned the backend’s key. The replacement,
@@ -311,6 +313,9 @@ decrypt gets it from those bytes, as the Azure provider’s do.</li>
 </ul>
 <p>The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 <a href="./formats.html#serialised-deks">Formats</a>. The library never inspects the provider’s own bytes.</p>
+<p>The trait has no <code>dyn</code> form, so a <code>Box&lt;dyn KmsAeadRingEncryptionProvider&gt;</code> becomes a type
+parameter <code>P: KmsAeadEncryptionProvider</code>, or an enum of the providers the application uses. The
+trait requires <code>Send</code> and <code>Sync</code>, so <code>P: KmsAeadEncryptionProvider</code> needs no <code>+ Send + Sync</code>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p><code>KmsAeadError</code> is <code>#[non_exhaustive]</code>, so an exhaustive <code>match</code> on it needs a <code>_</code> arm. It has two
 new variants, <code>UnsupportedAlgorithm</code> and <code>LegacyFormat</code>. <code>code()</code> returns the code of any variant,
@@ -345,6 +350,7 @@ only an <code>Encrypted&lt;T, Deterministic&gt;</code> has it.</p>
 <tr><td><code>SYSTEM_TIME_ERROR</code></td><td>removed</td><td></td></tr>
 <tr><td><code>UNKNOWN_ENCRYPTED_KEY_LAYOUT</code></td><td>removed</td><td>stored encrypted DEKs are the provider’s bytes</td></tr>
 <tr><td><code>AZURE_KEY_VERSION_MISSING</code></td><td><code>AZURE_ENCRYPTED_DEK_FORMAT</code></td><td>the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with <code>legacy-formats</code></td></tr>
+<tr><td><code>AZURE_WRAP_ALGORITHM</code></td><td>removed</td><td><code>AzureKmsAlgorithm</code> has no variant for <code>Rsa1_5</code> or an unknown algorithm</td></tr>
 </tbody>
 </table>
 </div>
