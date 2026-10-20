@@ -314,18 +314,25 @@ reading and writing:
 
 1. rotate the KEK in the KMS, as the page of each provider describes. Under Cloud KMS, wait until
    the new primary version has propagated, see
-   [Google Cloud KMS](./providers/gcp.md#key-versions-and-rotation);
+   [Google Cloud KMS](./providers/gcp.md#key-versions-and-rotation). Then wait until every
+   store-less writer has renewed its DEK. Until then a writer keeps sealing under its current DEK,
+   encrypted under the old version, so the sweep of step 2 misses the values it writes, the check
+   of step 3 does not see them, and they first fail at the check of step 6, after the disable. A
+   writer renews its DEK when its `DekReusePolicy` says so, and at the latest when the DEK leaves
+   its cache, at the cache's `DekCacheOptions::ttl`, `DekCacheOptions::DEFAULT_TTL` of 15 minutes
+   by default, see [The DEK lives in the cache](./dek-caching.md#the-dek-lives-in-the-cache);
 2. re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
    values, and the record of each keyring under the KEK with `KeyringAdmin::reencrypt_deks`. Then
    export the keyrings' keysets again and re-encrypt the application's own encrypted keysets, see
-   [Encrypted keysets](#encrypted-keysets);
+   [Encrypted keysets](#encrypted-keysets), and replace the old keyset bytes wherever they are
+   kept, see [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery);
 3. check that the `kek_versions_in_use` of every keyring record lists the new version alone, and so
    does the KEK version an application stores beside its own DEKs. A `None` never passes this
    check, see [A KEK version the KMS did not report](./operations/rotation.md#a-kek-version-the-kms-did-not-report);
-4. wait until no process holds an encrypted DEK from before step 2: one `record_ttl` after the last
-   `reencrypt_deks`, with no process logging "The keyring record could not be revalidated"
-   meanwhile, and every process has read its DEKs stored apart from their values again, see
-   [The check](#the-check);
+4. wait until no process holds an encrypted DEK from before step 2: the longest `record_ttl` in the
+   fleet after the last `reencrypt_deks`, with no process logging "The keyring record could not
+   be revalidated" meanwhile, and every process has read its DEKs stored apart from their values
+   again, see [The check](#the-check);
 5. disable the old version, and wait until the disable has propagated in the KMS: under Cloud KMS
    typically up to a minute, and several hours in exceptional cases;
 6. check that the KMS decrypts every stored DEK, every keyring's DEKs with `reencrypt_deks`, and
@@ -613,14 +620,10 @@ Under the local KMS the check needs no disable. A provider that lists the new ve
 the sample above builds it, refuses every DEK under the old version, so the check runs before the
 deploy that drops the old version from the list, and a missed DEK costs no outage and no redeploy.
 
-Three things keep using the old version after a rotation, and each sets when to sweep or to
-disable:
+Besides the store-less writers that step 1 of
+[Re-encrypting DEKs after a KEK rotation](#re-encrypting-deks-after-a-kek-rotation) waits for, two
+things keep using the old version after a rotation, and each sets when to disable it:
 
-- a store-less writer keeps sealing under its current DEK, encrypted under the old version, until
-  its reuse policy renews the DEK or the DEK leaves its cache, at the cache's TTL of 15 minutes by
-  default. Start the sweep once every writer has renewed its DEK after the rotation took effect,
-  under Cloud KMS once the new primary version had propagated, or the check finds the values
-  written meanwhile;
 - every DEK cache serves the DEKs it holds, without a KMS call, until their entries expire. A value
   the sweep missed fails to decrypt in the application only once its entry has expired, see
   [DEK caching](./dek-caching.md). The check does not wait for that, since it never reads a cache;

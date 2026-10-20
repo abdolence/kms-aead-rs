@@ -154,8 +154,8 @@ The range serves two decisions:
   of the last of them. A version flagged compromised after it stopped being active moves no epoch,
   and keeps the range it had;
 - before `retire`, and again before `destroy`, the query of the version returning nothing shows
-  that no record holds a value under it, see [Retiring the old version](#retiring-the-old-version). That check needs one record at most: `limit(1)` in
-  Firestore, `EXISTS` in SQL.
+  that no record holds a value under it, see [Retiring the old version](#retiring-the-old-version).
+  That check needs one record at most: `limit(1)` in Firestore, `EXISTS` in SQL.
 
 One epoch counts the activations of every purpose of the keyring, so a range can match a record
 with no field of the version's purpose, such as a record without beacons in the range of a beacon
@@ -360,15 +360,13 @@ struct of key columns or the record itself, and its `Display` names the record a
 record id is often an entity id, so read the sweep's log as an administrative log.
 
 The stream returns `Result<T, E>` and the re-seal `Result<ResealOutcome, E>`, with the
-application's own error type, any type that implements `Display`. The keyring's calls inside it return a `KeyringError`, and a `From`
-impl on the application's error lets `?` convert it, as the examples on
-[Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
-[BigQuery](./sweeps-bigquery.md) do with an error of their data store; a re-seal with no errors of its own returns `KeyringResult<ResealOutcome>`, as
-above. The error's `Display` is the application's text and goes to the log as it is, so it carries
+application's own error type, any type that implements `Display`. The keyring's calls inside it
+return a `KeyringError`, and a `From` impl on the application's error lets `?` convert it, as the
+examples on [Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
+[BigQuery](./sweeps-bigquery.md) do with an error of their data store; a re-seal with no errors of
+its own returns `KeyringResult<ResealOutcome>`, as above. The error's `Display` is the application's text and goes to the log as it is, so it carries
 no value, secret or personal data. The report counts failures and keeps no error: an application
 that wants the errors themselves records them inside its re-seal.
-
-Retiring the old version is not the sweep's, see [Retiring the old version](#retiring-the-old-version).
 
 ## Retiring the old version
 
@@ -376,9 +374,10 @@ Once the sweep is done, the administrative job retires the version a promotion r
 destroys it, on its `KeyringAdmin`:
 
 1. wait, from the promotion, the longest time any process may run without a successful refresh of
-   its record, and check that no process logged "The keyring record could not be revalidated"
-   meanwhile. Until then a process on the old record seals under the old version and stamps the
-   old epoch, see [Finding records behind](#finding-records-behind);
+   its record, see [Staged rotation](../keyring/lifecycle.md#staged-rotation), and check that no
+   process logged "The keyring record could not be revalidated" meanwhile. Until then a process
+   on the old record seals under the old version and stamps the old epoch, see
+   [Finding records behind](#finding-records-behind);
 2. run the sweep until a run reports nothing scanned and nothing failed;
 3. run the old version's [range query](#records-under-a-version). When it returns nothing,
    `retire(key_id)`. Reads under the version fail with `KeyVersionRetired` from then on, logged at
@@ -387,10 +386,18 @@ destroys it, on its `KeyringAdmin`:
    write them where the old ones are kept, see
    [BigQuery and Tink interop](../keyring/bigquery.md). A keyset exported before keeps reading
    values under the retired version in SQL and in Tink;
-5. keep the version retired for a while. A value the sweep missed fails with `KeyVersionRetired`:
-   `reinstate(key_id)`, export the keysets again, sweep again, and go back to step 3;
+5. keep the version retired for as long as the backups of the stored values taken before the
+   sweep are kept. A destroyed version makes the values in them unreadable, as a destroyed KEK
+   version does, see
+   [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+   and only a backup of the record from before the destroy still opens them, see below.
+   A value the sweep missed fails with `KeyVersionRetired`: `reinstate(key_id)`, export the
+   keysets again, sweep again, and go back to step 3;
 6. run the range query again. When it still returns nothing, delete every copy of the keysets
-   exported before step 4, then `destroy(key_id)`. No call brings a destroyed version back.
+   whose `key_ids()` include the retired version, then `destroy(key_id)`. The other keysets, such
+   as the `Single` keyset of the active deterministic version and the `Readable` keysets of other
+   purposes, keep reading their values in SQL and in Tink. No call brings a destroyed version
+   back.
 
 `destroy` removes the encrypted DEK from the record only. A backup of the record still holds it,
 and so does every copy of a keyset exported while the version decrypted, both opened by the KMS as
