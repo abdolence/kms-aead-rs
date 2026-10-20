@@ -3,8 +3,7 @@ use rsb_derive::*;
 use super::kek_version::read_kek_version;
 use super::KekVersion;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::spans;
-use crate::spans::kms::{self, KmsCall};
+use crate::spans::{self, kms};
 use crate::*;
 use async_trait::async_trait;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
@@ -203,7 +202,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
             let encrypt_request = encrypt_request(self.kek.key(), dek)?;
 
             let encrypt_response = kms::timed(
-                KmsCall::EncryptDek,
+                "encrypt_dek",
                 self.kek.provider(),
                 self.client.get().encrypt(encrypt_request),
             )
@@ -235,7 +234,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         spans::in_span(kms::decrypt_span(&self.kek), async {
             let decrypt_request = decrypt_request(self.kek.key(), encrypted_dek)?;
             let decrypt_response = kms::timed(
-                KmsCall::DecryptDek,
+                "decrypt_dek",
                 self.kek.provider(),
                 self.client.get().decrypt(decrypt_request),
             )
@@ -272,7 +271,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
             )?;
 
             let response = kms::timed(
-                KmsCall::Random,
+                "random",
                 self.kek.provider(),
                 self.client.get().generate_random_bytes(request),
             )

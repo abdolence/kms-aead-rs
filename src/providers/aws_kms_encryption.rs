@@ -1,8 +1,7 @@
 use rsb_derive::*;
 
 use crate::errors::*;
-use crate::spans;
-use crate::spans::kms::{self, KmsCall};
+use crate::spans::{self, kms};
 use crate::*;
 use async_trait::async_trait;
 use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
@@ -162,7 +161,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let encrypt_response = kms::timed(
-                KmsCall::EncryptDek,
+                "encrypt_dek",
                 self.kek.provider(),
                 self.encrypt_request(dek).send(),
             )
@@ -189,7 +188,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
             let decrypt_response = kms::timed(
-                KmsCall::DecryptDek,
+                "decrypt_dek",
                 self.kek.provider(),
                 self.decrypt_request(encrypted_dek).send(),
             )
@@ -221,7 +220,7 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                 )
             })?;
             let response = kms::timed(
-                KmsCall::Random,
+                "random",
                 self.kek.provider(),
                 self.client
                     .generate_random()

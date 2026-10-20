@@ -13,8 +13,7 @@ use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
-use crate::spans;
-use crate::spans::kms::{self, KmsCall};
+use crate::spans::{self, kms};
 use crate::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
     KmsAeadEncryptionProvider, KmsAeadResult,
@@ -380,7 +379,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             let kek_version = KekVersion::from(version);
             kms::record_kek_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
-            let encrypted_dek = kms::timed(KmsCall::EncryptDek, self.kek.provider(), async {
+            let encrypted_dek = kms::timed("encrypt_dek", self.kek.provider(), async {
                 self.cipher.seal(
                     &header,
                     &header,
@@ -422,7 +421,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let key = kms::timed(KmsCall::DecryptDek, self.kek.provider(), async {
+            let key = kms::timed("decrypt_dek", self.kek.provider(), async {
                 self.cipher.open(
                     layout.header,
                     layout.sealed,

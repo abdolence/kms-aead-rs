@@ -13,8 +13,7 @@ use std::sync::Arc;
 
 use super::KekVersion;
 use crate::formats::azure::AzureWrappedKey;
-use crate::spans;
-use crate::spans::kms::{self, KmsCall};
+use crate::spans::{self, kms};
 use secret_vault_value::SecretValue;
 
 /// A Key Vault or Managed HSM key that encrypts data encryption keys.
@@ -193,7 +192,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
         spans::in_span(kms::encrypt_span(&self.kek), async {
             let parameters = self.key_operation(dek.value().ref_sensitive_value().clone())?;
             let wrapped = kms::timed(
-                KmsCall::EncryptDek,
+                "encrypt_dek",
                 self.kek.provider(),
                 self.client.wrap_key(
                     &self.azure_key_ref.key_name,
@@ -252,7 +251,7 @@ impl KmsAeadEncryptionProvider for AzureKmsProvider {
 
             let parameters = self.key_operation(wrapped_key.wrapped.to_vec())?;
             let unwrapped = kms::timed(
-                KmsCall::DecryptDek,
+                "decrypt_dek",
                 self.kek.provider(),
                 self.client.unwrap_key(
                     &self.azure_key_ref.key_name,

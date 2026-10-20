@@ -24,8 +24,7 @@ use tracing::*;
 use super::kek_version::read_kek_version;
 use super::KekVersion;
 use crate::errors::*;
-use crate::spans;
-use crate::spans::kms::{self, KmsCall};
+use crate::spans::{self, kms};
 use crate::*;
 
 const VAULT_TOKEN_HEADER: &str = "x-vault-token";
@@ -392,7 +391,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
             let body = kms::timed(
-                KmsCall::EncryptDek,
+                "encrypt_dek",
                 self.kek.provider(),
                 self.post(&self.encrypt_uri, request),
             )
@@ -435,7 +434,7 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
                 .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
 
             let body = kms::timed(
-                KmsCall::DecryptDek,
+                "decrypt_dek",
                 self.kek.provider(),
                 self.post(&self.decrypt_uri, request),
             )

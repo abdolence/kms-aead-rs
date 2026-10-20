@@ -59,16 +59,6 @@ impl KeyringAttribute {
     }
 }
 
-/// A keyring call, the `operation` attribute.
-#[derive(Debug, Clone, Copy)]
-#[cfg_attr(not(feature = "opentelemetry"), allow(dead_code))]
-enum Operation {
-    Encrypt,
-    Decrypt,
-    #[cfg(feature = "deterministic")]
-    Probe,
-}
-
 /// Runs `seal`, a seal of one value under the active version of `purpose`, and with the feature
 /// records its duration and, when it succeeds, the value and its plaintext bytes under the
 /// version it names.
@@ -85,12 +75,12 @@ pub(crate) async fn encrypt<T, F: VersionedFormat>(
         instruments::record_call(
             keyring,
             purpose,
-            Operation::Encrypt,
+            "encrypt",
             started.elapsed(),
             result.as_ref().err(),
         );
         if let Ok(sealed) = &result {
-            instruments::record_value(keyring, purpose, Operation::Encrypt, sealed);
+            instruments::record_value(keyring, purpose, "encrypt", sealed);
         }
         result
     }
@@ -114,12 +104,12 @@ pub(crate) async fn decrypt<T, F: VersionedFormat, R>(
         instruments::record_call(
             keyring,
             purpose,
-            Operation::Decrypt,
+            "decrypt",
             started.elapsed(),
             result.as_ref().err(),
         );
         if result.is_ok() {
-            instruments::record_value(keyring, purpose, Operation::Decrypt, value);
+            instruments::record_value(keyring, purpose, "decrypt", value);
         }
         result
     }
@@ -142,7 +132,7 @@ pub(crate) async fn probe<R>(
         instruments::record_call(
             keyring,
             Purpose::Deterministic,
-            Operation::Probe,
+            "probe",
             started.elapsed(),
             result.as_ref().err(),
         );
@@ -173,7 +163,7 @@ mod instruments {
     use opentelemetry::metrics::{Counter, Histogram};
     use opentelemetry::{InstrumentationScope, KeyValue};
 
-    use super::{KeyringAttribute, Operation, VersionedFormat};
+    use super::{KeyringAttribute, VersionedFormat};
     use crate::spans::LoadReason;
     use crate::store::StoreKind;
     use crate::{Encrypted, KeyringError, Purpose};
@@ -229,17 +219,6 @@ mod instruments {
         }
     });
 
-    impl Operation {
-        fn as_str(self) -> &'static str {
-            match self {
-                Operation::Encrypt => "encrypt",
-                Operation::Decrypt => "decrypt",
-                #[cfg(feature = "deterministic")]
-                Operation::Probe => "probe",
-            }
-        }
-    }
-
     impl KeyringAttribute {
         fn key_value(&self) -> KeyValue {
             KeyValue::new("keyring", self.value.clone())
@@ -249,7 +228,7 @@ mod instruments {
     pub(super) fn record_value<T, F: VersionedFormat>(
         keyring: &KeyringAttribute,
         purpose: Purpose,
-        operation: Operation,
+        operation: &'static str,
         value: &Encrypted<T, F>,
     ) {
         let (key_id, plaintext_len) = F::version_and_plaintext_len(value);
@@ -257,7 +236,7 @@ mod instruments {
             keyring.key_value(),
             KeyValue::new("purpose", purpose.as_str()),
             KeyValue::new("key_id", i64::from(key_id.as_u32())),
-            KeyValue::new("operation", operation.as_str()),
+            KeyValue::new("operation", operation),
         ];
         let instruments = &*INSTRUMENTS;
         instruments.values.add(1, &attributes);
@@ -270,14 +249,14 @@ mod instruments {
     pub(super) fn record_call(
         keyring: &KeyringAttribute,
         purpose: Purpose,
-        operation: Operation,
+        operation: &'static str,
         elapsed: Duration,
         error: Option<&KeyringError>,
     ) {
         let attributes = [
             keyring.key_value(),
             KeyValue::new("purpose", purpose.as_str()),
-            KeyValue::new("operation", operation.as_str()),
+            KeyValue::new("operation", operation),
         ];
         record_duration(&INSTRUMENTS.call_duration, attributes, elapsed, error);
     }
@@ -307,16 +286,9 @@ mod instruments {
         match error {
             None => histogram.record(elapsed.as_secs_f64(), &attributes),
             Some(error) => {
-                let [first, second, third] = attributes;
-                histogram.record(
-                    elapsed.as_secs_f64(),
-                    &[
-                        first,
-                        second,
-                        third,
-                        KeyValue::new("error_code", error.code().to_owned()),
-                    ],
-                );
+                let mut attributes = attributes.to_vec();
+                attributes.push(KeyValue::new("error_code", error.code().to_owned()));
+                histogram.record(elapsed.as_secs_f64(), &attributes);
             }
         }
     }

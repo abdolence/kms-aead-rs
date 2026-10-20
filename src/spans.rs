@@ -100,32 +100,12 @@ pub(crate) mod kms {
         Span::current().record(FIELD_KEK_VERSION, kek_version);
     }
 
-    /// The KMS calls, as the `operation` of the `kms_aead.kms.duration` histogram.
-    #[derive(Debug, Clone, Copy)]
-    pub(crate) enum KmsCall {
-        EncryptDek,
-        DecryptDek,
-        #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
-        Random,
-    }
-
-    impl KmsCall {
-        #[cfg(feature = "opentelemetry")]
-        fn as_str(self) -> &'static str {
-            match self {
-                KmsCall::EncryptDek => "encrypt_dek",
-                KmsCall::DecryptDek => "decrypt_dek",
-                #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
-                KmsCall::Random => "random",
-            }
-        }
-    }
-
-    /// Sends `call`'s request to `provider`'s KMS and records on the current span how long it
-    /// took, in milliseconds, and with the `opentelemetry` feature in the duration histogram.
+    /// Sends a request to `provider`'s KMS and records on the current span how long it took, in
+    /// milliseconds, and with the `opentelemetry` feature in the duration histogram, under
+    /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`.
     #[cfg_attr(not(feature = "opentelemetry"), allow(unused_variables))]
     pub(crate) async fn timed<T, E>(
-        call: KmsCall,
+        operation: &'static str,
         provider: &KekProvider,
         request: impl Future<Output = Result<T, E>>,
     ) -> Result<T, E> {
@@ -137,7 +117,7 @@ pub(crate) mod kms {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         );
         #[cfg(feature = "opentelemetry")]
-        crate::metrics::record_kms_call(call.as_str(), provider, elapsed, response.is_err());
+        crate::metrics::record_kms_call(operation, provider, elapsed, response.is_err());
         response
     }
 }
