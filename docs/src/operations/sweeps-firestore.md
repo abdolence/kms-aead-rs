@@ -5,8 +5,31 @@ and the conditional write back. The mechanism is in [Sweeps](./sweeps.md), and t
 five properties of [Sweeps by store](./sweeps.md#sweeps-by-store).
 
 The marker is a `bytes` field, `seal`, and the query is one range filter on it. Firestore indexes a
-field ascending and descending by default, and the query needs the ascending index only, so an
-exemption keeps just that one:
+field ascending and descending by default, and the query needs the ascending index only, so a
+field override keeps just that one. firestore-rs declares it with its index management, behind its
+`admin` feature:
+
+```rust,ignore
+use firestore::{FirestoreDb, FirestoreIndexSyncReport, FirestoreResult};
+
+/// Keeps the ascending index of `seal` in the `users` collection group, and drops the descending
+/// one.
+async fn sync_users_indexes(db: &FirestoreDb) -> FirestoreResult<FirestoreIndexSyncReport> {
+    db.fluent()
+        .indexes()
+        .collection_group("users")
+        .field_overrides(|f| f.fields([f.field("seal").indexes([f.ascending()])]))
+        .sync()
+        .await
+}
+```
+
+The declaration runs from an administrative job, such as a deploy step, since `.sync()` needs the
+Firestore Admin API and `roles/datastore.indexAdmin`; the application that sweeps does not run it.
+The [index management chapter](https://firestore-rust.abdolence.dev/index-management.html) of
+firestore-rs covers `.plan()`, `.sync()` and running them from a deploy.
+
+A project that manages its indexes outside Rust sets the same override with `gcloud`:
 
 ```sh
 gcloud firestore indexes fields update seal --collection-group=users --index=order=ASCENDING
