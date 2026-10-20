@@ -260,7 +260,7 @@ The requirements:
   version the keyset could not hold, see [Fields BigQuery reads](#fields-bigquery-reads);
 - the principal that queries has decrypt on the KMS key, and the one that exports has encrypt and
   decrypt on it. The export is a `KeyringAdmin` call, see
-  [Keyring deployment](../security.md#keyring-deployment).
+  [KMS rights](./deployment.md#kms-rights).
 
 ### How it behaves
 

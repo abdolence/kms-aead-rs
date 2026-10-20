@@ -163,7 +163,7 @@ is re-indexed:
    version, compromised ones included, newest first;
 4. the promotion moved the keyring's seal epoch on, so every row written before it has a
    `SealMarker` below the current one, and a re-index sweep visits them, see
-   [Sweeps](../operations.md#sweeps). It computes each row's beacon again under the active version
+   [Sweeps](../operations/sweeps.md). It computes each row's beacon again under the active version
    of its sealer and writes the sealer's marker; a row without a beacon gets the marker alone;
 5. once the sweep reports no failure and that query returns nothing, `retire` the old version, and
    its probe drops out of every lookup.

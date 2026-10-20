@@ -85,7 +85,7 @@ stored value holds:
 | Crypto-shredding | KEK destruction | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
 
 No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
-[Migrating from envelope values](./operations.md#migrating-from-envelope-values).
+[Move envelope values to a keyring](./use-cases/envelope-to-keyring.md).
 
 Both envelope modes seal a value of a Rust type, such as an application newtype, into an
 `Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store

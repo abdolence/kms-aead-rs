@@ -3,7 +3,7 @@
 //! promotes the randomised version, re-seals every row whose marker is below the current one with
 //! one `UPDATE` in SQL through an exported keyset, and prints the rows it re-sealed. The statement
 //! is the one of
-//! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#bigquery) in the book: a
+//! [Sweeps on BigQuery](https://kms-aead-rust.abdolence.dev/operations/sweeps-bigquery.html) in the book: a
 //! field BigQuery reads is re-sealed without a Rust loop and without a value leaving BigQuery, so
 //! the sweep is that statement rather than `sweep::run`.
 //!
@@ -12,7 +12,7 @@
 //!
 //! A sweep is a job that runs on a schedule, and again until it re-seals no row. Retiring the
 //! previous version is a separate administrative step, see
-//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations/rotation.html#rotation-cadence).
 //!
 //! The example runs against the Cloud KMS key that `PROJECT_ID`, `PROJECT_LOCATION`,
 //! `KMS_KEY_RING` and `KMS_KEY` name, under the application default credentials, which need the

@@ -11,10 +11,10 @@ A keyring record holds:
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
 - the seal epoch, which every write that makes a version active moves on by one, and which the
-  application stores beside its records as a `SealMarker`, see [Sweeps](../operations.md#sweeps);
+  application stores beside its records as a `SealMarker`, see [Sweeps](../operations/sweeps.md);
 - every key version ever created, in creation order, each with its encrypted DEK, its state and,
   once it was active, its seal range: the markers of the records sealed under it, see
-  [Records under a version](../operations.md#records-under-a-version).
+  [Records under a version](../operations/sweeps.md#records-under-a-version).
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
@@ -73,7 +73,7 @@ as pending, except the replacement `mark_compromised` adds for an active version
 at once.
 
 The calls, on a `KeyringAdmin`, with the `admin` feature, see
-[Applications and administration](../keyring.md#applications-and-administration):
+[Applications and administration](./deployment.md):
 
 | Call | Does |
 |---|---|
@@ -204,7 +204,7 @@ pending version if the purpose has one: `promote` would refuse with `PromotionTo
 `destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
 backup of the record still holds them, and the KMS still decrypts them as long as the KEK version
 that encrypted them exists, see
-[Crypto-shredding](../operations.md#crypto-shredding).
+[Crypto-shredding](../operations/runbook.md#crypto-shredding).
 
 ## Reading a compromised version
 
@@ -219,5 +219,5 @@ version:
 
 `decrypt_with_trust` opens the value whatever the policy, and returns a `Decrypted` with the
 value, the key id of the version that opened it and its `KeyTrust`, `Trusted` or
-`Compromised`. It is the call for a [sweep](../operations.md#sweeps). A compromised version's DEK
+`Compromised`. It is the call for a [sweep](../operations/sweeps.md). A compromised version's DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.

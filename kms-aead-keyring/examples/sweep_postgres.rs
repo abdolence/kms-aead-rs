@@ -3,7 +3,7 @@
 //! the current one with `sweep::run_batched`, read in one streamed query, each batch through one
 //! sealer and written back in one `UPDATE` conditional on the bytes it read of each row, and
 //! prints the sweep's report. The re-seal is the one of
-//! [Sweeps by store](https://kms-aead-rust.abdolence.dev/operations.html#postgresql) in the book.
+//! [Sweeps on PostgreSQL](https://kms-aead-rust.abdolence.dev/operations/sweeps-postgres.html) in the book.
 //!
 //! The sweep is `sweep_users` and `reseal_batch`. `create_test_schema`, `seed_test_data` and
 //! `delete_test_data`, at the end of the file, only create the example's tables and users before
@@ -11,7 +11,7 @@
 //!
 //! A sweep is a job that runs on a schedule, and again until its report shows nothing scanned.
 //! Retiring the previous version is a separate administrative step, see
-//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations.html#rotation-cadence).
+//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations/rotation.html#rotation-cadence).
 //!
 //! Every read and write is sized for millions of rows, and memory holds the batches in flight
 //! only. The candidates are one query, `seal < $1` with no `ORDER BY`, so the planner is free to

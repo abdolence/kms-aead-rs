@@ -1,7 +1,7 @@
 # HashiCorp Vault Transit
 
 Feature `hashicorp-vault-transit-kms-encryption`, or one root store and one crypto provider
-variant, see [Getting started](../getting-started.md#features).
+variant, see [Cargo features](../features.md).
 
 The provider encrypts DEKs with a key of the Vault Transit secrets engine. `HcVaultTransitKeyRef`
 names the key, and the mount is `transit` unless set with `with_mount`.

@@ -6,6 +6,9 @@
 #[doc = include_str!("../../docs/src/keyring.md")]
 mod keyring {}
 
+#[doc = include_str!("../../docs/src/keyring/deployment.md")]
+mod deployment {}
+
 #[doc = include_str!("../../docs/src/keyring/lifecycle.md")]
 mod lifecycle {}
 
@@ -29,6 +32,27 @@ mod bigquery {}
 
 #[doc = include_str!("../../docs/src/operations.md")]
 mod operations {}
+
+#[doc = include_str!("../../docs/src/operations/rotation.md")]
+mod rotation {}
+
+#[doc = include_str!("../../docs/src/operations/sweeps.md")]
+mod sweeps {}
+
+#[doc = include_str!("../../docs/src/operations/sweeps-firestore.md")]
+mod sweeps_firestore {}
+
+#[doc = include_str!("../../docs/src/operations/sweeps-postgres.md")]
+mod sweeps_postgres {}
+
+#[doc = include_str!("../../docs/src/operations/sweeps-bigquery.md")]
+mod sweeps_bigquery {}
+
+#[doc = include_str!("../../docs/src/operations/runbook.md")]
+mod runbook {}
+
+#[doc = include_str!("../../docs/src/use-cases/envelope-to-keyring.md")]
+mod envelope_to_keyring {}
 
 /// The README's quick start, compiled so it cannot drift from the API it demonstrates.
 #[doc = include_str!("../README.md")]

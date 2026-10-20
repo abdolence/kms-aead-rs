@@ -38,7 +38,7 @@ kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "aws-lc"] }
 
 Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`, `aws-lc-fips` or
 `rustcrypto`. The features are listed in
-[Getting started](https://kms-aead-rust.abdolence.dev/getting-started.html#features).
+[Cargo features](https://kms-aead-rust.abdolence.dev/features.html).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
