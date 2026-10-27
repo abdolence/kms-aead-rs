@@ -13,7 +13,7 @@ randomised version with another algorithm, such as ChaCha20-Poly1305, writes the
 before its own body, which only kms-aead reads.
 
 The prefix is not authenticated. A value relabelled with another key id selects another version,
-whose key the body does not open under.
+whose key the body does not decrypt under.
 
 ## AAD in SQL
 
@@ -33,7 +33,7 @@ the application's own bytes, so `FieldSpec::custom_aad` fails on a field declare
 `Interop::BigQuery`, see [Why the AAD is structured](./fields.md#why-the-aad-is-structured).
 
 The [plaintext encodings](./fields.md#encrypted-values) are the ones SQL reads: `String` and
-`Json<T>` with `AEAD.DECRYPT_STRING`, the integers with a `CAST` of it, and `Vec<u8>` with
+`JsonEncoded<T>` with `AEAD.DECRYPT_STRING`, the integers with a `CAST` of it, and `Vec<u8>` with
 `AEAD.DECRYPT_BYTES`. An application type reads as the type it encodes as, such as `Email` as a
 `String`.
 
@@ -41,17 +41,17 @@ The [plaintext encodings](./fields.md#encrypted-values) are the ones SQL reads: 
 
 BigQuery decrypts through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM and AES-SIV only and
 decrypts with Cloud KMS only. A field BigQuery also decrypts is declared with
-`FieldSpec::with_interop(Interop::BigQuery)`, and the keyring then refuses to seal it unless:
+`FieldSpec::with_interop(Interop::BigQuery)`, and the keyring then refuses to encrypt it unless:
 
-- a randomised value is sealed under an AES-256-GCM version, the default of a new keyring;
-- a deterministic value is sealed under an AES-SIV version;
+- a randomised value is encrypted under an AES-256-GCM version, the default of a new keyring;
+- a deterministic value is encrypted under an AES-SIV version;
 - the KEK is in Google Cloud KMS.
 
-The check runs on a sealer's `encrypt` and `encrypt_deterministic`, before sealing, and fails with
-`KeyringError::Interop` naming the first requirement broken. Values already written always
-decrypt: only sealing checks. So a `change_algorithm` away from AES-256-GCM, or a keyring on
-another KMS, fails the next write of the field instead of silently writing values BigQuery
-cannot read.
+The check runs on an encryptor's `encrypt` and `encrypt_deterministic`, before encrypting, and fails
+with `KeyringError::Interop` naming the first requirement broken. Values already written always
+decrypt: only encrypting checks. So a `change_algorithm` away from AES-256-GCM, or a keyring on
+another KMS, fails the next write of the field instead of silently writing values BigQuery cannot
+read.
 
 ```rust
 use kms_aead::backends::Ring;
@@ -103,7 +103,7 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 let aad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
 let refused: KeyringResult<Encrypted<Email, Randomized>> =
-    keyring.sealer().await.encrypt(&aad, &alice).await;
+    keyring.encryptor().await.encrypt(&aad, &alice).await;
 assert!(matches!(
     refused,
     Err(KeyringError::Interop(InteropError {
@@ -120,10 +120,10 @@ registry.shutdown(None).await;
 
 A field that Tink also decrypts, with the keyset of
 [`export_tink_keyset`](#exporting-a-keyset-to-tink), is declared with
-`FieldSpec::with_interop(Interop::Tink)`. The keyring then refuses to seal it unless:
+`FieldSpec::with_interop(Interop::Tink)`. The keyring then refuses to encrypt it unless:
 
-- a randomised value is sealed under an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version;
-- a deterministic value is sealed under an AES-SIV version;
+- a randomised value is encrypted under an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version;
+- a deterministic value is encrypted under an AES-SIV version;
 - the KEK has a Tink key URI: a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault
   Transit key.
 
@@ -183,20 +183,20 @@ registry.shutdown(None).await;
 The selection:
 
 - `KeysetSelection::Readable(purpose)`: every version of the purpose that decrypts and is not
-  compromised, the pending one included, with the active version as the primary. BigQuery opens a
+  compromised, the pending one included, with the active version as the primary. BigQuery decrypts a
   value under the key its prefix names, so one keyset reads a column written across rotations. It
   fails with `NoActiveVersion` when the purpose has none;
 - `KeysetSelection::Single(key_id)`: the one version as the primary, also when it is compromised.
   It is the keyset of `DETERMINISTIC_ENCRYPT`, which encrypts under the primary, for the probe of
   one version, and of a read through a compromised version. A retired, destroyed or unknown
   version fails as a read under it does, and a pending one with `KeyVersionPending`, since
-  BigQuery would seal under it.
+  BigQuery would encrypt under it.
 
 Beacon versions are never exported: a selection of the beacon purpose fails with
 `ExportAlgorithmUnsupported`. BigQuery's SQL cannot compute a beacon either, see
 [BigQuery](../beacons.md#bigquery) in kms-aead.
 
-The type parameter of a `EncryptedKeyset` is its encoding, from the `encodings` module, which names
+The type parameter of an `EncryptedKeyset` is its encoding, from the `encodings` module, which names
 the reader of its bytes. The `EncryptedKeyset<encodings::BigQuery>` this export returns:
 
 - `value()` and `into_value()`: the encrypted keyset, as a `BYTES` column or query parameter holds
@@ -213,7 +213,7 @@ export with `RecordRegressed`, and a missing one with `RecordMissing`.
 
 A keyset is a copy of the record at the time of the export. A `Readable` keyset exported while a
 version is pending already holds it, so the order of a rotation is: `rotate`, export the
-`Readable` keysets again, wait, `promote`. Values sealed under the new version then read in
+`Readable` keysets again, wait, `promote`. Values encrypted under the new version then read in
 BigQuery from the first one. After `mark_compromised`, whose replacement is active at once, the
 replacement's values do not read, and the compromised version stays in a keyset exported before
 it, until the keyset is exported again.
@@ -249,14 +249,14 @@ WHERE u.email_det IN (
 ```
 
 The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
-no `Single` keyset, and no value is sealed under it before its promotion.
+no `Single` keyset, and no value is encrypted under it before its promotion.
 
 The requirements:
 
 - the keyring's KEK is a Cloud KMS key, and the query runs in the KMS key's location;
 - the exported versions are AES-256-GCM or AES-SIV. Any other algorithm fails with
   `ExportAlgorithmUnsupported`, before any KMS call;
-- the field is declared with `Interop::BigQuery`, so that the keyring never seals it under a
+- the field is declared with `Interop::BigQuery`, so that the keyring never encrypts it under a
   version the keyset could not hold, see [Fields BigQuery reads](#fields-bigquery-reads);
 - the principal that queries has decrypt on the KMS key, and the one that exports has encrypt and
   decrypt on it. The export is a `KeyringAdmin` call, see
@@ -270,7 +270,7 @@ The crate's live test runs the export and the queries against Cloud KMS and BigQ
   `SAFE.AEAD.DECRYPT_STRING`;
 - the keyset is encrypted with no associated data, since `KEYS.KEYSET_CHAIN` decrypts with none.
   What the KMS decrypts from it is a serialised Tink keyset, which is no serialised Tink key, so
-  copied into a record as a version's encrypted DEK it opens nothing and fails with
+  copied into a record as a version's encrypted DEK it decrypts nothing and fails with
   `INVALID_KEY_FORMAT`;
 - the export decrypts each selected version through the provider and never through the DEK cache,
   so the keys stay in the process for the call only. Its span records `dek_cache` as `bypassed`.
@@ -280,7 +280,7 @@ Cloud KMS encrypts at most 64 KiB of plaintext, which a keyset reaches at severa
 ## Exporting a keyset to Tink
 
 `export_tink_keyset` exports the same versions as Tink's encrypted keyset, which Tink for Java,
-Go and Python open with `KeysetHandle.read` and their own KMS client. It is a `KeyringAdmin`
+Go and Python decrypt with `KeysetHandle.read` and their own KMS client. It is a `KeyringAdmin`
 call, needs the `admin` feature only, and runs on a keyring with any provider whose KEK has a Tink
 key URI. The bytes are a `google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the
 serialised keyset, see
@@ -298,7 +298,7 @@ ARN have no Tink client. The export fails on them with `KeyringError::Interop`, 
 and `InteropRequirement::Kek`, before any store or KMS call.
 
 After a KEK rotation, a Tink keyset is exported again and replaces the old one wherever a Tink
-reader opens it, as a BigQuery keyset does, see
+reader decrypts it, as a BigQuery keyset does, see
 [Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
 
 ```rust,no_run
@@ -336,7 +336,7 @@ registry.shutdown(None).await;
 # }
 ```
 
-Tink for Python reads the keyset with the KMS client of that URI, and opens a randomised value
+Tink for Python reads the keyset with the KMS client of that URI, and decrypts a randomised value
 with the value's default AAD as UTF-8:
 
 ```python
@@ -365,4 +365,5 @@ beacon version fails with `ExportAlgorithmUnsupported`, before any KMS call.
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs):
 it exports a keyset for each Cloud KMS or AWS KMS key whose variables are set, and Tink for Python
-opens a value sealed before the rotation with it, through `tests/tink_interop.py read-keysets`.
+decrypts a value encrypted before the rotation with it, through
+`tests/tink_interop.py read-keysets`.

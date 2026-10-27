@@ -74,12 +74,13 @@ and sweeps inside an administrative job. The example in
 ephemeral local KEK has no second copy to `open` the keyring with: `LocalKmsProvider` is not
 `Clone`.
 
-`Keyring::sealer` takes the cached record, and the `Sealer` seals under that record's active
-versions; `decrypt` opens under the version the value names. A write takes one sealer and seals
-every encrypted field of the record through it, so that the seal marker it stores beside them
-names the versions they are under, see [The seal marker](./operations/sweeps.md#the-seal-marker).
-Neither calls the store while the cached record is fresh, nor the KMS while the version's DEK is
-in the DEK cache, see [Record cache](./keyring/record-cache.md).
+`Keyring::encryptor` takes the cached record, and the `Encryptor` encrypts under that record's
+active versions; `decrypt` uses the version the value names. A write takes one encryptor and
+encrypts every encrypted field of the record through it, so that the encryption marker it stores
+beside them names the versions they are under, see [The encryption
+marker](./operations/sweeps.md#the-encryption-marker). Neither calls the store while the cached
+record is fresh, nor the KMS while the version's DEK is in the DEK cache, see [Record
+cache](./keyring/record-cache.md).
 
 A keyring stays open until the registry shuts down. Where the store has push, the registry follows
 the change signals of each open keyring with a task on the current tokio runtime.

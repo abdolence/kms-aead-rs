@@ -6,8 +6,8 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.30", features = ["ring", "admin", "firestore"] }
+kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "ring"] }
+kms-aead-keyring = { version = "0.31", features = ["ring", "admin", "firestore-tls-roots"] }
 secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
@@ -24,7 +24,7 @@ use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldAad, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
     KeyringAlgorithms, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext, Purpose,
-    Sealer,
+    Encryptor,
 };
 use secret_vault_value::SecretValue;
 
@@ -64,9 +64,9 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 // The AAD ties the value to user 42's email: `user/42/email`
 let aad: FieldAad = EMAIL.aad(&EntityId::try_from("42")?);
 let alice = Email("alice@example.com".to_string());
-// One sealer per write of a record, for every encrypted field it holds
-let sealer: Sealer<'_, MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = keyring.sealer().await;
-let value: Encrypted<Email, Randomized> = sealer.encrypt(&aad, &alice).await?;
+// One encryptor per write of a record, for every encrypted field it holds
+let encryptor: Encryptor<'_, MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = keyring.encryptor().await;
+let value: Encrypted<Email, Randomized> = encryptor.encrypt(&aad, &alice).await?;
 assert_eq!(value.key_id(), KeyId::new(1));
 
 // A staged rotation keeps the previous version decrypting. One process has nothing to wait for,
@@ -79,7 +79,7 @@ registry.shutdown(None).await;
 # }
 ```
 
-The registry, its handles and the sealer are in
+The registry, its handles and the encryptor are in
 [The registry and its handles](./keyring.md#the-registry-and-its-handles).
 
 Full example available

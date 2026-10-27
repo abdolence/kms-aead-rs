@@ -62,7 +62,7 @@ The crate declares `rust-version = "1.99"`.
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()`, a `&[u8]`, and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
-| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, `KmsKeyVersion` from 0.31, the type of `AzureKmsKeyRef::kek_version` |
 | `AzureKmsKeyRef::with_key_version`, `opt_key_version`, `without_key_version`, `key_version`, `mopt_key_version`, `reset_key_version` | `AzureKmsKeyRef::with_kek_version`, `opt_kek_version`, `without_kek_version`, `kek_version`, `mopt_kek_version`, `reset_kek_version` |
 | `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
 | `DataEncryptionKey(secret)`, `DataEncryptionKey::new(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
@@ -111,8 +111,8 @@ An application's own implementation of the provider trait:
 
 - implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`, without
   `#[async_trait]`. Its methods stay `async fn`, and their futures must be `Send`;
-- adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other` and a key name that identifies the
-  key;
+- adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other`, `KmsProvider::Other` from 0.31, and
+  a key name that identifies the key;
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator;
@@ -126,6 +126,9 @@ The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 The trait has no `dyn` form, so a `Box<dyn KmsAeadRingEncryptionProvider>` becomes a type
 parameter `P: KmsAeadEncryptionProvider`, or an enum of the providers the application uses. The
 trait requires `Send` and `Sync`, so `P: KmsAeadEncryptionProvider` needs no `+ Send + Sync`.
+
+0.31 moves `decrypt_data_encryption_key` to a trait of its own, `KmsAeadDecryptionProvider`, see
+[Migrating from 0.30](./migrating-from-0.30.md#your-own-provider).
 
 ## Errors
 
@@ -185,7 +188,7 @@ Configure the key ARN rather than an alias, see [AWS KMS](./providers/aws.md#key
 The default algorithm of `KmsAeadEnvelope` is AES-256-GCM, which every Tink implementation reads
 in a KMS envelope. The default of 0.29 was ChaCha20-Poly1305.
 
-A value does not record its algorithm. Values sealed under the default of 0.29 open only with
+A value does not record its algorithm. Values encrypted under the default of 0.29 decrypt only with
 ChaCha20-Poly1305 configured, and an envelope on the new default fails them with `DECRYPT`. A 0.29
 envelope that named no algorithm becomes:
 
@@ -217,7 +220,7 @@ length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only w
 `legacy-formats` feature, and fails with `LEGACY_FORMAT` without it, see
 [Formats](./formats.md#values-written-by-029-and-earlier).
 
-The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
+The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 [Default algorithm](#default-algorithm).
 
 To move stored values to the new format:
@@ -227,7 +230,7 @@ To move stored values to the new format:
 2. rewrite the stored values with `upgrade_legacy_value` and `upgrade_legacy_encrypted_dek` of
    `KmsAeadEnvelope`, one or two KMS calls per value, see
    [Upgrading stored values](./formats.md#upgrading-stored-values). `upgrade_legacy_value` takes
-   the value's AAD, and fails with `DECRYPT` on a value that does not open under the envelope's
+   the value's AAD, and fails with `DECRYPT` on a value that does not decrypt under the envelope's
    algorithm and that AAD;
 3. turn the feature off.
 

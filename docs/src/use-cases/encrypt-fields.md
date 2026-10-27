@@ -1,6 +1,6 @@
 # Encrypt fields with a KMS
 
-A field or a secret in the application's own table, sealed under a DEK that a cloud KMS encrypts,
+A field or a secret in the application's own table, encrypted under a DEK that a cloud KMS encrypts,
 with no keyring store. Every value carries its encrypted DEK, so nothing is stored apart from the
 values. For central rotation, deterministic fields across rotations or BigQuery reads across
 rotations, see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
@@ -12,7 +12,7 @@ rotations, see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
 | written rarely, such as secrets and configuration | per-call envelope: a new DEK for every value, one KMS call to encrypt it | [Envelope encryption](../envelope-encryption.md) |
 | written at a high rate | store-less DEK reuse: one DEK for many values, renewed by age, count and bytes | [Store-less DEK reuse](../dek-caching.md#store-less-dek-reuse) |
 | grouped, such as a file in chunks or a tenant's rows, with one DEK the application keeps | the `*_with_dek` and `*_with_encrypted_dek` calls, with the encrypted DEK stored apart | [Working with DEKs yourself](../envelope-encryption.md#working-with-deks-yourself) |
-| sealed with a key the application holds, with no KMS | `AeadCipher` | [AEAD without a KMS](../crypto-backends.md#aead-without-a-kms) |
+| encrypted with a key the application holds, with no KMS | `AeadCipher` | [AEAD without a KMS](../crypto-backends.md#aead-without-a-kms) |
 
 ## The path
 
@@ -24,7 +24,7 @@ rotations, see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
 3. a newtype per field, such as `Email`, that implements `Plaintext`, and normalises the value if
    it is ever looked up, see [`Plaintext`](../stored-values.md#plaintext);
 4. the AAD that ties the value to its place, `<table>/<row id>/<column>`, so a value copied into
-   another row fails to open, see [AAD](../envelope-encryption.md#aad);
+   another row fails to decrypt, see [AAD](../envelope-encryption.md#aad);
 5. `envelope.encrypt(aad, &value)` into an `Encrypted<Email, Envelope>`, stored as a serde field, a
    `BYTEA` column through tokio-postgres or sqlx, or hex in a `TEXT` column, see
    [Storing](../stored-values.md#storing);

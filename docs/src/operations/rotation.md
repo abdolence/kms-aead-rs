@@ -5,7 +5,7 @@
 A rotation is staged: `rotate(purpose)` adds a pending version, which every process decrypts under
 once its record refreshes, and `promote(key_id)` makes it active once every process has had time
 to see it, see [Staged rotation](../keyring/lifecycle.md#staged-rotation). The previous version keeps
-decrypting. Nothing is lost while the change propagates: processes on the old record seal under
+decrypting. Nothing is lost while the change propagates: processes on the old record encrypt under
 the previous version until their record refreshes, and those values decrypt.
 
 The administrative job runs a rotation in steps, on its `KeyringAdmin`, see
@@ -29,10 +29,10 @@ How often:
 - a randomised version is good for about 2^32 values, see [Nonces](../security.md#nonces), and an
   AES-GCM version for about 2^38 bytes, see [Data volume](../security.md#data-volume). The keyring
   stops at neither, since its DEKs are shared across processes: estimate the values and bytes a
-  fleet seals, or measure them, see [Alerting on volume](#alerting-on-volume). At 550 values per
+  fleet encrypts, or measure them, see [Alerting on volume](#alerting-on-volume). At 550 values per
   second a version reaches 2^32 in 90 days, so rotate every 30 to 90 days, sooner at higher rates;
 - a deterministic version has no nonce, so it is rotated by policy and on compromise only. Every
-  deterministic rotation adds a probe to each equality query until a full sweep re-seals every
+  deterministic rotation adds a probe to each equality query until a full sweep re-encrypts every
   row, see [Queries across rotations](../keyring/deterministic.md#queries-across-rotations), so
   rotate deterministic versions rarely;
 - a beacon version likewise, since every beacon rotation adds a probe to each lookup until a
@@ -41,14 +41,14 @@ How often:
 After a promotion, export the `Single` BigQuery keysets of the new deterministic version, since
 a pending version has none.
 
-Rotation does not touch values already written. A [sweep](./sweeps.md) re-seals them: a job that runs
-on a schedule until its `SweepReport` shows nothing scanned. Retiring and destroying the old version
-are separate steps of the administrative job, see
-[Retiring the old version](./sweeps.md#retiring-the-old-version).
+Rotation does not touch values already written. A [sweep](./sweeps.md) re-encrypts them: a job that
+runs on a schedule until its `SweepReport` shows nothing scanned. Retiring and destroying the old
+version are separate steps of the administrative job, see [Retiring the old
+version](./sweeps.md#retiring-the-old-version).
 
 ### Alerting on volume
 
-With the `opentelemetry` feature, the keyring records the plaintext size of each value it seals
+With the `opentelemetry` feature, the keyring records the plaintext size of each value it encrypts
 under each version, see [Metrics](../observability.md#metrics): the histogram's count is the
 values, and its sum their bytes. Each process records its own, and the alert sums them across the
 fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
@@ -96,8 +96,9 @@ version 1 to version 2, where dropping version 1 from the provider stands for di
 use std::num::NonZeroU32;
 
 use kms_aead::backends::Ring;
+use kms_aead::formats::SymmetricKeyFormat;
 use kms_aead::providers::{
-    KekVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
+    KmsKeyVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider,
 };
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
@@ -117,7 +118,7 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
 )?;
 # let before_rotation = LocalKmsProvider::<Ring>::new(
 #     kek_id.clone(),
-#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?],
+#     vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?],
 # )?;
 # registry
 #     .create(before_rotation, TENANT, KeyringAlgorithms::new())
@@ -127,15 +128,15 @@ let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
 let rotated = LocalKmsProvider::<Ring>::new(
     kek_id.clone(),
     vec![
-        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]))?,
-        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?,
+        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?,
+        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?,
     ],
 )?;
 let admin = registry.admin(rotated, TENANT).await?;
 
 // One entry per version: the KEK version its DEK was under, and the one it is under now
 let moved: Vec<DekReencryption> = admin.reencrypt_deks().await?;
-let new_kek_version = KekVersion::from(v2);
+let new_kek_version = KmsKeyVersion::from(v2);
 assert!(moved
     .iter()
     .all(|reencryption| reencryption.kek_version.as_ref() == Some(&new_kek_version)));
@@ -147,7 +148,7 @@ assert_eq!(record.kek_versions_in_use(), [Some(&new_kek_version)]);
 // The check once the old version is disabled: every DEK still decrypts
 let disabled = LocalKmsProvider::<Ring>::new(
     kek_id,
-    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]))?],
+    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?],
 )?;
 registry.admin(disabled, TENANT).await?.reencrypt_deks().await?;
 # Ok(())

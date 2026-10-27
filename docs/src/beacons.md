@@ -79,9 +79,12 @@ assert_eq!(decrypted, email);
   beacon so that a column can hold beacons of two keys at once;
 - the beacon key is decrypted through the envelope's DEK cache, as a DEK is.
 
-`Beacon<T>` is stored as `Encrypted` is, with the `serde`, `postgres` and `sqlx` features, and
+`Beacon<T>` is stored as `Encrypted` is, with serde and the `postgres` and `sqlx` features, and
 read back through `TryFrom`, which checks its layout, see [Stored values](./stored-values.md#beacont).
 See [Formats](./formats.md#beacons) for its bytes.
+
+A message authentication code (MAC) over a value's bytes, which is not truncated and never serves
+a lookup, is in [Beacons and MACs](./signing.md#beacons-and-macs).
 
 ## What a beacon leaks
 

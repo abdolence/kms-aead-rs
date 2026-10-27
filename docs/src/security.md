@@ -2,10 +2,10 @@
 
 ## Threat model
 
-Envelope encryption protects stored values from whoever can read the store but cannot use the
-KEK: a database dump, a backup, a replica, a data export or an operator with read access to the
-tables. Opening a value needs a KMS decryption, and the KMS checks the caller's permission and, for
-the cloud KMSs, writes an audit log entry.
+Envelope encryption protects stored values from whoever can read the store but cannot use the KEK: a
+database dump, a backup, a replica, a data export or an operator with read access to the tables.
+Decrypting a value needs a KMS decryption, and the KMS checks the caller's permission and, for the
+cloud KMSs, writes an audit log entry.
 
 It does not protect values from:
 
@@ -13,11 +13,11 @@ It does not protect values from:
   fetch;
 - whoever can read the memory of a process while it holds plaintext DEKs, in the
   [DEK cache](./dek-caching.md#key-lifetime) or as a store-less writer's DEK;
-- a reader of the store learning which values are equal, for values sealed with
+- a reader of the store learning which values are equal, for values encrypted with
   [deterministic encryption](./deterministic.md#what-it-leaks).
 
 The AAD protects a value from being moved: a value copied into another row or column, with an AAD
-that names its place, fails to open there. The AAD itself is not encrypted, and neither is the
+that names its place, fails to decrypt there. The AAD itself is not encrypted, and neither is the
 length of the encrypted DEK at the start of Tink's KMS envelope, which is not authenticated either.
 
 An encrypted DEK carries no context that the KMS authenticates. Whoever can write where encrypted
@@ -31,6 +31,10 @@ The controls for this are in the deployment:
 - the KMS audit log of decrypt calls, turned on where the KMS leaves it off by default, shows
   which principal decrypted which key.
 
+A DEK encrypted with the public half of an asymmetric KEK leaves no KMS audit log entry; the decrypt
+log and the record's signature are the controls, see
+[Asymmetric KEKs](./asymmetric-kek.md#threat-model-and-limits).
+
 The local KMS has no IAM, no audit log and no HSM, see its [limits](./providers/local.md#limits).
 
 ## Nonces
@@ -39,15 +43,15 @@ Every AEAD algorithm takes a random 96-bit nonce from the backend's CSPRNG for e
 writes it in front of the cipher text. NIST SP 800-38D allows 2^32 encryptions under one key with
 random 96-bit nonces, and the library applies the same bound to every algorithm:
 
-- the per-call envelope seals one value per DEK, so the bound does not apply to it;
+- the per-call envelope encrypts one value per DEK, so the bound does not apply to it;
 - a store-less envelope renews its DEK at `max_uses`, 2^24 by default and at most 2^32;
-- with `encrypt_with_dek` and `AeadCipher`, the application counts the values it seals
+- with `encrypt_with_dek` and `AeadCipher`, the application counts the values it encrypts
   under one key, and moves to a new key before 2^32;
-- the local KMS seals each DEK it encrypts with AES-256-GCM, so a KEK version is good for about 2^32
-  encryptions. Add a new version before that.
+- the local KMS encrypts each DEK it encrypts with AES-256-GCM, so a KEK version is good for about
+  2^32 encryptions. Add a new version before that.
 
 AES-256-GCM-SIV (RFC 8452) resists nonce misuse: a repeated nonce reveals only whether the two
-values sealed with it are equal, and does not break integrity.
+values encrypted with it are equal, and does not break integrity.
 
 Deterministic encryption with AES-SIV takes no random nonce.
 
@@ -72,7 +76,7 @@ The bound applies to AES-GCM keys this way:
 - a store-less envelope renews its DEK at `max_bytes`, 2^38 bytes by default under AES-GCM, below
   the 2^38.5 of RFC 8446, and at most 2^52, see [Volume limit](./dek-caching.md#volume-limit).
   AES-256-GCM-SIV and ChaCha20-Poly1305 have no default volume limit;
-- with `encrypt_with_dek` and `AeadCipher`, the application counts the bytes it seals under one
+- with `encrypt_with_dek` and `AeadCipher`, the application counts the bytes it encrypts under one
   AES-GCM key too, and moves to a new key before 2^38 bytes.
 
 ## Key lifetime and zeroisation
@@ -100,9 +104,9 @@ Rotating the KEK in the KMS makes the KMS encrypt new DEKs under the new key ver
 
 - re-encrypt the DEKs already stored: they still decrypt with the old key version, which the KMS
   must keep enabled for as long as those values are read;
-- re-encrypt any value: a DEK that leaked keeps opening every value sealed under it, whatever the
-  KEK version that encrypts it. To retire a leaked DEK, decrypt and encrypt the values again under
-  new DEKs;
+- re-encrypt any value: a DEK that leaked keeps decrypting every value encrypted under it, whatever
+  the KEK version that encrypts it. To retire a leaked DEK, decrypt and encrypt the values again
+  under new DEKs;
 - reach DEKs already in a DEK cache: they keep serving until their entries expire, or until
   `invalidate` or `clear`. The same holds for disabling a KMS key or revoking an IAM grant;
 - renew a store-less writer's DEK: it is renewed by its policy, or once it leaves the cache.
@@ -113,18 +117,21 @@ backups included.
 
 ## Keyring deployment
 
-A [keyring](./keyring.md) record decides which versions are read and which one seals new values,
-and nothing signs it: its integrity rests on the keyring store's access control. The two
-principals of a deployment and their rights are in
-[Applications and administration](./keyring/deployment.md).
+A [keyring](./keyring.md) record decides which versions are read and which one encrypts new values,
+and the administration signs it where record signing is on, see
+[Signing the keyring record](./signing.md#signing-the-keyring-record); without it, its integrity
+rests on the keyring store's access control. The two principals of a deployment and their rights
+are in [Applications and administration](./keyring/deployment.md).
 
 A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
 or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
 to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
 compromised or destroyed version's DEK back into use under a new key id, or point one tenant's
-version at another tenant's DEK. A writer without KMS rights cannot add a DEK of its own, since
-every decryption names the configured KEK and the KMS refuses a DEK encrypted under another key. The
-controls for this are the deployment's, as in the [threat model](#threat-model):
+version at another tenant's DEK. Under a symmetric KEK, a writer without KMS rights cannot add a
+DEK of its own, since every decryption names the configured KEK and the KMS refuses a DEK encrypted
+under another key; an asymmetric KEK encrypts for anyone holding its public key, see
+[Keyring limits](#keyring-limits). The controls for this are the deployment's, as in the
+[threat model](#threat-model):
 
 - write access to the keyring store for the administration only, and read-only access for the
   applications;
@@ -132,7 +139,8 @@ controls for this are the deployment's, as in the [threat model](#threat-model):
   fails to decrypt;
 - backups of the record, or versioning in the store, to compare with and restore from;
 - the KMS audit log of encrypt calls, which shows whether the administrative job encrypted a
-  version's DEK.
+  version's DEK. An asymmetric KEK's encryption is local and leaves none: the signature on the
+  record and the KMS log of the signing call take its place.
 
 A running process also refuses every record that moves a version backwards, with an `ERROR`, see
 [Record cache](./keyring/record-cache.md#when-the-store-fails-or-misbehaves). That catches a
@@ -143,27 +151,50 @@ version.
 
 - **The administration is trusted.** KMS encrypt plus store write re-activates any version, and
   so does an application that provisions keyrings lazily with the `admin` feature and those
-  rights. The KMS audit log is the detection;
+  rights. With record signing on, the right to sign records plus store write does. The KMS audit
+  log is the detection;
 - **a new process has no baseline.** A store writer can clear a compromised flag, re-activate a
   version or restore a destroyed one for the processes that start after the write. Running
-  processes refuse such a record and log an `ERROR`; new ones take it. The record is not signed in
-  this release;
-- **an RSA key on Azure Key Vault encrypts for anyone.** With an RSA key the encryption is a
-  public-key operation, so whoever holds the public key encrypts a DEK of their own into the record.
-  Use an AES key, from Managed HSM;
+  processes refuse such a record and log an `ERROR`, also a process that took the record's
+  deletion, which keeps the deleted record as the baseline. A signed record read under `Required`
+  refuses such a write; under `VerifyIfSigned` a running process refuses it and a new process has
+  no baseline. A signature proves the record was written by a signer, not that it is the latest: a
+  store writer can restore an older signed record;
+- **an asymmetric KEK encrypts for anyone holding its public key**, an RSA key on Azure Key Vault
+  included: whoever holds it encrypts a DEK of their own into the record. A signed record under
+  `RecordSignaturePolicy::Required` is the control, see
+  [Keyrings under an asymmetric KEK](./asymmetric-kek.md#keyrings-under-an-asymmetric-kek);
 - **`decrypt_envelope_for_migration` knows no key version.** It decrypts the encrypted DEK an envelope value
-  carries, so an encrypted DEK kept from a version, compromised or destroyed since, still opens
+  carries, so an encrypted DEK kept from a version, compromised or destroyed since, still decrypts
   values through it. Keep it in the read path for the migration only;
 - **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
-  record holds encrypted DEKs the KMS still opens, and a keyset exported before the destroy holds
+  record holds encrypted DEKs the KMS still decrypts, and a keyset exported before the destroy holds
   the version's key under the same KEK, see
   [Crypto-shredding](./operations/runbook.md#crypto-shredding);
+- **`dangerously_shred()` reaches the store's API only.** It deletes the record with the earlier
+  versions the store keeps, and never calls the KMS. What the store keeps beyond its API stays until
+  the operator deletes it: Firestore serves a deleted document to reads at an earlier time for one
+  hour, and for seven days with point-in-time recovery on; Cloud Storage's soft delete keeps every
+  deleted generation restorable for the bucket's retention, 7 days by default; backups, exports, WAL
+  archives, replicas and replication hold the record until they are deleted. Every such copy, and
+  every BigQuery and Tink keyset exported from the keyring, still decrypts while a KEK version that
+  encrypted its DEKs exists: delete the copies, or rotate the KEK, re-encrypt every other keyring
+  under it and destroy the previous KEK versions. Values encrypted under the keyring stay where they
+  are and decrypt under nothing, and the keyring id is free for a new keyring;
+- **a running process keeps the deleted record as the baseline of its id.** A store writer who
+  deletes the record and writes another under the id gains nothing against it: a signed keyring
+  stays signed, so under `VerifyIfSigned` an unsigned record fails with `RecordSignatureRemoved`,
+  and a copy of the record from before the deletion, signed or not, fails with `RecordRegressed` and
+  an `ERROR`, because it revives a version the process holds destroyed. A keyring created again
+  under the id has other versions, by key id or creation time, and decrypts. The baseline lasts
+  until the process restarts, so an accidentally deleted record that is restored is taken by a new
+  process only. A new process has no baseline, and `Required` is the control for it;
 - **an exported BigQuery keyset holds the versions' keys**, encrypted with no associated data, since
   BigQuery decrypts it with none. Treat it as a copy of the record's readable versions, and export
   again after every rotation and every `mark_compromised`;
-- **a sweep re-seals forgeries as trusted values.** Values read through a compromised version are
-  decided per record before a sweep re-seals them, see
-  [The trust of re-sealed values](./operations/sweeps.md#the-trust-of-re-sealed-values);
+- **a sweep re-encrypts forgeries as trusted values.** Values read through a compromised version are
+  decided per record before a sweep re-encrypts them, see
+  [The trust of re-encrypted values](./operations/sweeps.md#the-trust-of-re-encrypted-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
   [Queries across rotations](./keyring/deterministic.md#queries-across-rotations);

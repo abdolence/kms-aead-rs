@@ -10,10 +10,11 @@ A keyring record holds:
   without escaping. It is an identifier, not a secret, and appears in spans and errors;
 - the KEK of the provider the keyring was created with;
 - the algorithms new versions use, one per purpose;
-- the seal epoch, which every write that makes a version active moves on by one, and which the
-  application stores beside its records as a `SealMarker`, see [Sweeps](../operations/sweeps.md);
+- the re-encryption epoch, which every write that makes a version active moves on by one, and which
+  the application stores beside its records as an `EncryptionMarker`, see
+  [Sweeps](../operations/sweeps.md);
 - every key version ever created, in creation order, each with its encrypted DEK, its state and,
-  once it was active, its seal range: the markers of the records sealed under it, see
+  once it was active, its re-encryption range: the markers of the records encrypted under it, see
   [Records under a version](../operations/sweeps.md#records-under-a-version).
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
@@ -31,8 +32,8 @@ reads it as `admin.keyring().record()`.
 
 ## Key ids
 
-Every value carries the key id of the version that sealed it, and the id names the version's
-purpose: randomised, deterministic or beacon. So a value of one purpose never opens under a
+Every value carries the key id of the version that encrypted it, and the id names the version's
+purpose: randomised, deterministic or beacon. So a value of one purpose never decrypts under a
 version of another, and the purpose of a value is known from its bytes, see
 [Keyring key ids](../formats.md#keyring-key-ids). The keyring numbers the versions of each purpose
 from its first id: randomised versions are `1`, `2`, `3`, …, deterministic ones `2147483649`,
@@ -85,7 +86,8 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
-| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on |
+| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring), and the record stays in the store |
+| `dangerously_shred()` | destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see [Shredding a keyring](#shredding-a-keyring) |
 | `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
@@ -93,7 +95,7 @@ version, its state and the `Transition`:
 
 - `rotate` and `change_algorithm` while the purpose has a pending version fail with
   `Transition::Rotate`, naming that version. Promote or destroy it first;
-- `retire`, `mark_compromised` and `reinstate` refuse a pending version, which never sealed a
+- `retire`, `mark_compromised` and `reinstate` refuse a pending version, which never encrypted a
   value. `destroy` it instead.
 
 Each call reads the record, applies the change and writes it with a compare-and-swap, reading
@@ -101,8 +103,8 @@ again after a conflict up to `KeyringOptions::cas_retries` times,
 `KeyringOptions::DEFAULT_CAS_RETRIES` by default, before `RecordConflict`.
 
 States move forward only: nothing returns to `Pending`, and `Pending` moves only to `Active` or
-`Destroyed`. A running process refuses a record that moves a version or the seal epoch backwards,
-see [Record cache](./record-cache.md#when-the-store-fails-or-misbehaves).
+`Destroyed`. A running process refuses a record that moves a version or the re-encryption epoch
+backwards, see [Record cache](./record-cache.md#when-the-store-fails-or-misbehaves).
 
 ## Staged rotation
 
@@ -110,7 +112,7 @@ A rotation is two calls, so that no process meets a value under a version it doe
 
 1. `rotate(purpose)` stages the version. Every process decrypts under it once its record
    refreshes, and none encrypts under it;
-2. after a wait, `promote(key_id)` makes it active. Processes seal under it from their next
+2. after a wait, `promote(key_id)` makes it active. Processes encrypt under it from their next
    refresh, and every process that reads those values already has the version.
 
 Promote only after the longest time any process may run without a successful refresh of its
@@ -188,11 +190,11 @@ registry.shutdown(None).await;
 ## Compromised versions
 
 `mark_compromised` on the active version replaces it with a version that is active at once, not
-pending. Sealing under a compromised key has to stop at each process's next refresh, and a wait
-before the replacement takes over would leave the leaked key sealing new values for that long. The
-cost is the one staged rotation avoids: a process that has not seen the replacement yet reloads its
-record once, rate-limited, when it meets a value under it. A pending version of the purpose stays
-pending, to be promoted or destroyed as planned.
+pending. Encrypting under a compromised key has to stop at each process's next refresh, and a wait
+before the replacement takes over would leave the leaked key encrypting new values for that long.
+The cost is the one staged rotation avoids: a process that has not seen the replacement yet reloads
+its record once, rate-limited, when it meets a value under it. A pending version of the purpose
+stays pending, to be promoted or destroyed as planned.
 
 The replacement needs a new DEK encrypted. When the KMS cannot encrypt it, in an outage or without
 the encrypt right, the flag is written alone, a `WARN` is logged, and the call returns `Ok(None)`:
@@ -203,9 +205,62 @@ pending version if the purpose has one: `promote` would refuse with `PromotionTo
 
 `destroy` and `dangerously_destroy_all_versions` remove encrypted DEKs from this record only. A
 backup of the record still holds them, and a keyset exported while the version decrypted holds its
-key under the same KEK. The KMS opens both as long as the KEK version that encrypted them exists,
+key under the same KEK. The KMS decrypts both as long as the KEK version that encrypted them exists,
 see
 [Crypto-shredding](../operations/runbook.md#crypto-shredding).
+
+## Shredding a keyring
+
+`dangerously_shred()` is the call for a keyring whose values must become unreadable under a KEK that
+other keyrings share. It destroys every version in one write, as `dangerously_destroy_all_versions`
+does, signed as every lifecycle write is, then deletes the record from the store at the revision
+that write left. The runbook has the rules of the two steps, the retry of a shred that failed, and
+the copies a store keeps beyond its API, see [Shredding a
+keyring](../operations/runbook.md#shredding-a-keyring).
+
+```rust,no_run
+use kms_aead::backends::Ring;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead_keyring::testing::MemoryKeyringStore;
+use kms_aead_keyring::{
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+};
+
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+#     MemoryKeyringStore::new(),
+#     KeyringRegistryOptions::new(),
+# )?;
+let id = KeyringId::from_static("tenant-42");
+let admin = registry
+    .open_or_create(provider, id.clone(), KeyringAlgorithms::new())
+    .await?;
+admin.dangerously_shred().await?;
+
+// The id is free: the registry reads the store again and finds no record
+# let provider =
+#     LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("tenant-kek".to_string())?)?;
+assert!(matches!(
+    registry.open(provider, id).await,
+    Err(KeyringError::RecordMissing(_))
+));
+# Ok(())
+# }
+```
+
+A keyring already gone makes `KeyringRegistry::admin` fail with `RecordMissing`, which a job that
+erases a tenant treats as done. The handles opened before the shred stay on a record with every
+version destroyed, and the registry's `create` makes a new keyring under the id, with key ids from 1.
+
+`dangerously_shred()` never calls the KMS and leaves every KMS key version as it was. Values
+encrypted under the keyring stay where they are and decrypt under nothing. Every process that holds
+the keyring takes the deletion at its next revalidation, see [A record gone from the
+store](./record-cache.md#a-record-gone-from-the-store). A stream decryptor made before the shred
+keeps decrypting until it is dropped, so a service builds one per request, see [Shredding a
+keyring](../operations/runbook.md#shredding-a-keyring).
 
 ## Reading a compromised version
 
@@ -218,7 +273,7 @@ version:
   of a sweep when availability matters more, and be aware the leaked DEK can forge values under
   that id meanwhile.
 
-`decrypt_with_trust` opens the value whatever the policy, and returns a `Decrypted` with the
-value, the key id of the version that opened it and its `KeyTrust`, `Trusted` or
+`decrypt_with_trust` decrypts the value whatever the policy, and returns a `Decrypted` with the
+value, the key id of the version that decrypted it and its `KeyTrust`, `Trusted` or
 `Compromised`. It is the call for a [sweep](../operations/sweeps.md). A compromised version's DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.

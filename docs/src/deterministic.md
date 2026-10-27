@@ -3,13 +3,14 @@
 Feature `deterministic`.
 
 Randomised encryption gives a different cipher text every time, even for the same value. A
-deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
-sealed column can be compared, joined or looked up by equality without opening it.
+deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so an
+encrypted column can be compared, joined or looked up by equality without decrypting it.
 
-The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`.
-Its name for `FromStr` and `Display` is `aes-256-siv`. `DeterministicCipher` takes a backend, as
-`AeadCipher` does, and draws its keys from the backend's CSPRNG. Every backend seals and opens with
-the RustCrypto `aes-siv` crate, so a value sealed under one backend opens under any other.
+The library provides AES-SIV (RFC 5297) with a 64-byte key, `DeterministicAlgorithm::Aes256Siv`. Its
+name for `FromStr` and `Display` is `aes-256-siv`. `DeterministicCipher` takes a backend, as
+`AeadCipher` does, and draws its keys from the backend's CSPRNG. Every backend encrypts and decrypts
+with the RustCrypto `aes-siv` crate, so a value encrypted under one backend decrypts under any
+other.
 
 AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
 validated boundary, also on `aws-lc-fips`, where the keys come from the FIPS module's DRBG.
@@ -42,13 +43,13 @@ The AAD narrows what leaks: values are equal only under the same AAD, so a per-t
 equal values of two tenants apart.
 
 An AAD that a lookup can rebuild names the field and never the row, so a deterministic value also
-opens in any other row of the same field. A deterministic field never decides identity or
+decrypts in any other row of the same field. A deterministic field never decides identity or
 authorisation on its own; where identity matters, the check reads a randomised copy of the field,
 bound to the row by its AAD.
 
 ## Usage
 
-`DeterministicCipher` seals and opens with a `DataEncryptionKey` of
+`DeterministicCipher` encrypts and decrypts with a `DataEncryptionKey` of
 `DeterministicAlgorithm::key_len()` bytes, 64 for AES-SIV, and refuses a key of another length
 with `INVALID_KEY_LENGTH`, such as the 16 or 32 bytes of a randomised algorithm's key. The
 application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
@@ -108,9 +109,9 @@ let (dek, encrypted_dek) = envelope.generate_encrypted_deterministic_dek(algorit
 let decrypted_dek = envelope.decrypt_deterministic_dek(algorithm, &encrypted_dek).await?;
 
 let cipher = DeterministicCipher::<Ring>::new(algorithm)?;
-let sealed: Encrypted<SecretValue, Deterministic> =
+let encrypted: Encrypted<SecretValue, Deterministic> =
     cipher.encrypt(KeyId::new(1), b"aad", &SecretValue::from("value"), &dek)?;
-let decrypted: SecretValue = cipher.decrypt(b"aad", &sealed, &decrypted_dek)?;
+let decrypted: SecretValue = cipher.decrypt(b"aad", &encrypted, &decrypted_dek)?;
 assert_eq!(decrypted, SecretValue::from("value"));
 # Ok(())
 # }

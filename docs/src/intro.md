@@ -14,7 +14,7 @@ encryption without a KMS:
 - Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
   and the library reads Tink's, see [Formats](./formats.md);
 - Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
-  crates. A value sealed by one backend opens with any other;
+  crates. A value encrypted by one backend decrypts with any other;
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
   keys;
 - Deterministic encryption with AES-SIV, for values that are looked up by equality;
@@ -23,6 +23,13 @@ encryption without a KMS:
 - Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
   Firestore, PostgreSQL, Cloud Storage or S3, central staged rotation, beacons, and values in
   Tink's wire format;
+- Streaming encryption for files of any length, with reads of any byte range that fetch only the
+  chunks that cover it;
+- Signatures with Ed25519 and ECDSA P-256 keys held by a KMS, verified without a KMS in Rust and in
+  a browser, and MACs under keyring key versions;
+- Signed keyring records, so that whoever can write the keyring store cannot change which keys are
+  used;
+- Asymmetric KEKs, for producers that encrypt with a public key and can never decrypt;
 - Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
   in them;
 - No unsafe code.
@@ -31,19 +38,19 @@ To start using the library, see [Getting started](./getting-started.md).
 
 ## Envelope encryption
 
-A value is sealed with an AEAD algorithm under a data encryption key (DEK). The DEK is then
+A value is encrypted with an AEAD algorithm under a data encryption key (DEK). The DEK is then
 encrypted by a key encryption key (KEK) that never leaves the KMS, and the encrypted DEK is stored
 next to the cipher text. KMS documentation, and Azure Key Vault's `wrapKey` and `unwrapKey`
 operations, call this wrapping the DEK. To read the value, the KMS decrypts the DEK, and the DEK
-opens the value locally.
+decrypts the value locally.
 
 So the KMS sees only DEKs, never the data, and a KMS call is needed only to encrypt or decrypt a
 DEK. Access to the data is controlled by access to the KEK: revoke the KMS permission, or
-destroy the key, and the stored values cannot be opened.
+destroy the key, and the stored values cannot be decrypted.
 
-The additional authenticated data (AAD) is authenticated but not encrypted: a value opens only
-with the AAD it was sealed with. Use it to tie a value to where it is stored, such as a table
-and a row id, so that a value copied to another row fails to open.
+The additional authenticated data (AAD) is authenticated but not encrypted: a value decrypts only
+with the AAD it was encrypted with. Use it to tie a value to where it is stored, such as a table
+and a row id, so that a value copied to another row fails to decrypt.
 
 ## Choosing a mode
 
@@ -55,7 +62,7 @@ stored value holds:
   more KMS call, unless the envelope has a DEK cache. Use it when values are written rarely,
   such as secrets and configuration, or when one DEK per value is a requirement. See
   [Envelope encryption](./envelope-encryption.md);
-- **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK seals many
+- **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK encrypts many
   values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
   still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
   the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
@@ -82,12 +89,15 @@ stored value holds:
 | Deterministic fields | with keys the application stores, see [Deterministic encryption](./deterministic.md) | no | yes, with `DeterministicCipher` | yes, with queries across rotations |
 | BigQuery readers | no | no | yes, with a keyset of the key encrypted by a Cloud KMS KEK | yes, with a Cloud KMS KEK |
 | Tink readers | yes, with `KmsEnvelopeAead` for GCP and AWS keys | yes, with `KmsEnvelopeAead` for GCP and AWS keys | yes, with a keyset of the key | yes, with a KEK in Cloud KMS, AWS KMS by key ARN or Vault Transit |
-| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction | KEK destruction, or `dangerously_destroy_all_versions` and the deletion of the record's backups |
+| Crypto-shredding | KEK destruction | KEK destruction | KEK destruction | KEK destruction, or `dangerously_shred()` and the deletion of the record's backups |
 
 No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
 [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md).
 
-Both envelope modes seal a value of a Rust type, such as an application newtype, into an
+Streamed values come in the same modes: under a keyring, under an envelope, or with a DEK the
+application holds, see [Streaming encryption](./streaming.md).
+
+Both envelope modes encrypt a value of a Rust type, such as an application newtype, into an
 `Encrypted<T, Envelope>` that carries its encrypted DEK, and serde, tokio-postgres and sqlx store
 it as bytes, so a column of secrets needs no store of its own. See
 [Stored values](./stored-values.md).
@@ -103,6 +113,13 @@ holds.
 | Give each tenant its own keys | [A keyring per tenant](./use-cases/keyring-per-tenant.md) |
 | Find rows by an encrypted value | [Find rows by an encrypted value](./use-cases/equality-lookups.md) |
 | Read the values in BigQuery or with Tink | [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md) |
+| Encrypt large files and read byte ranges of them | [Encrypt large files and serve ranges](./use-cases/large-files.md) |
+| Stream an export over HTTP, encrypted as it is sent | [Encrypt streaming HTTP bodies](./use-cases/encrypted-http-streams.md) |
+| Publish a file or a document that anyone can verify | [Publish content anyone can verify](./use-cases/publish-verifiable.md) |
+| Check that your own services' messages and rows were not changed | [Check integrity between your own services](./use-cases/service-integrity.md) |
+| Log the shape of a JSON payload that fails to parse, with no encryption | [Log JSON payloads without leaking data](./use-cases/log-json-payloads.md) |
+| Let partners, devices or upload clients encrypt and never decrypt | [Writers that can never read](./use-cases/write-only-producers.md) |
+| Stop a writer of the keyring store from changing which keys are used | [Protect the keyring record](./use-cases/signed-records.md) |
 | Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./use-cases/rotation.md) |
 | Respond to a leaked key, or shred a tenant | [A leaked key or a shredded tenant](./use-cases/incidents.md) |
 | Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./use-cases/deployment.md) |

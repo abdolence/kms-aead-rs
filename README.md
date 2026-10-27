@@ -18,6 +18,9 @@ encryption without a KMS:
 - Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
   keys;
 - Deterministic encryption with AES-SIV;
+- Streaming encryption of values of any length, with ranged reads;
+- Signatures and MACs, with the signing key held by a KMS;
+- Asymmetric KEKs, where producers encrypt DEKs with a public key and need no KMS right;
 - Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
 - Optional KMS-side random generators for GCP and AWS;
 - Tracing spans for every operation and every KMS call;
@@ -33,7 +36,7 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "aws-lc"] }
+kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "aws-lc"] }
 ```
 
 Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`, `aws-lc-fips` or
@@ -78,6 +81,14 @@ Other providers:
 [Local KMS](https://kms-aead-rust.abdolence.dev/providers/local.html).
 
 All examples available in the [examples](examples) directory.
+
+## Migrating from 0.30
+
+0.31 has eight changes that break a build against 0.30, among them the removed `serde` and
+`serde-json` features of both crates and the provider trait's decryption moving to a trait of its
+own. The readers of a deployment move to 0.31 before its producers. See the
+[migration guide](MIGRATION.md) and
+[Migrating from 0.30](https://kms-aead-rust.abdolence.dev/migrating-from-0.30.html).
 
 ## Migrating from 0.29
 

@@ -1,6 +1,6 @@
 # Find rows by an encrypted value
 
-A randomised value is different every time it is sealed, so a data store cannot find a row by it.
+A randomised value is different every time it is encrypted, so a data store cannot find a row by it.
 Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
 for equal plaintexts, and a beacon, a truncated HMAC stored beside a field that stays randomised.
 Both leak which rows hold the same value, see
@@ -12,7 +12,7 @@ values, such as a status or a country.
 
 | | Beacon | Deterministic field |
 |---|---|---|
-| Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to open | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there |
+| Stored value | Randomised, so its AAD can name the row, and a value copied into another row fails to decrypt | Equal for equal values, so its AAD names the field and never the row, and a value copied into another row decrypts there |
 | Match | The truncated HMAC, with deliberate collisions | Always the exact value |
 | Key | A beacon key, rotated separately from the data keys | The field's own key |
 | Cost | An extra column, and a decryption and filter of the candidates on every lookup | Nothing beyond the field |
@@ -41,11 +41,11 @@ settings, and rotates it by hand:
 Each purpose has its own key versions, rotated centrally, and a lookup matches every version that
 still decrypts:
 
-- a deterministic field: a sealer's `encrypt_deterministic` on every write, and
+- a deterministic field: an encryptor's `encrypt_deterministic` on every write, and
   `Keyring::deterministic_probes` for a lookup, under the `deterministic` feature, see
   [Deterministic fields](../keyring/deterministic.md);
-- a beacon: a sealer's `encrypt` and `beacon` in the same write, and `Keyring::beacon_probes` for a
-  lookup, see [Beacons](../keyring/beacons.md).
+- a beacon: an encryptor's `encrypt` and `beacon` in the same write, and `Keyring::beacon_probes`
+  for a lookup, see [Beacons](../keyring/beacons.md).
 
 Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
 [Rotation cadence](../operations/rotation.md#rotation-cadence).

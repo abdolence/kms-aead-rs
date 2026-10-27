@@ -9,6 +9,13 @@
 - [A keyring per tenant](./use-cases/keyring-per-tenant.md)
 - [Find rows by an encrypted value](./use-cases/equality-lookups.md)
 - [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md)
+- [Encrypt large files and serve ranges](./use-cases/large-files.md)
+- [Encrypt streaming HTTP bodies](./use-cases/encrypted-http-streams.md)
+- [Publish content anyone can verify](./use-cases/publish-verifiable.md)
+- [Check integrity between your own services](./use-cases/service-integrity.md)
+- [Log JSON payloads without leaking data](./use-cases/log-json-payloads.md)
+- [Writers that can never read](./use-cases/write-only-producers.md)
+- [Protect the keyring record](./use-cases/signed-records.md)
 - [Rotate keys and re-encrypt values](./use-cases/rotation.md)
 - [A leaked key or a shredded tenant](./use-cases/incidents.md)
 - [Applications and administration apart](./use-cases/deployment.md)
@@ -16,6 +23,7 @@
 - [Develop and test without a cloud](./use-cases/local-development.md)
 - [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md)
 - [Migrating from 0.29](./migrating-from-0.29.md)
+- [Migrating from 0.30](./migrating-from-0.30.md)
 
 # Values and keys
 
@@ -24,6 +32,8 @@
 - [DEK caching and reuse](./dek-caching.md)
 - [Deterministic encryption](./deterministic.md)
 - [Beacons](./beacons.md)
+- [Streaming encryption](./streaming.md)
+- [Signatures and MACs](./signing.md)
 - [Crypto backends](./crypto-backends.md)
 - [KMS providers](./providers.md)
   - [Google Cloud KMS](./providers/gcp.md)
@@ -31,6 +41,7 @@
   - [Azure Key Vault](./providers/azure.md)
   - [HashiCorp Vault Transit](./providers/hc-vault-transit.md)
   - [Local KMS](./providers/local.md)
+- [Asymmetric KEKs](./asymmetric-kek.md)
 
 # Keyring
 

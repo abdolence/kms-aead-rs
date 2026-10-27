@@ -20,20 +20,21 @@ its current version without changing any value, before the old KEK version is di
 
 ## Sweeps
 
-A sweep re-seals stored values under the active versions, after a rotation, after a compromise
+A sweep re-encrypts stored values under the active versions, after a rotation, after a compromise
 and to migrate envelope values: a job the application runs on a schedule, which finds the records
-behind by their seal marker. [Sweeps](./operations/sweeps.md) has the mechanism, and the sweeps by
-store have the queries and writes of [Firestore](./operations/sweeps-firestore.md),
+behind by their encryption marker. [Sweeps](./operations/sweeps.md) has the mechanism, and the
+sweeps by store have the queries and writes of [Firestore](./operations/sweeps-firestore.md),
 [PostgreSQL](./operations/sweeps-postgres.md) and [BigQuery](./operations/sweeps-bigquery.md).
 
 ## Migrating from envelope values
 
-Values that `KmsAeadEnvelope` wrote move to keyring values in five steps, with the seal marker
-telling the two layouts apart and a sweep re-sealing the envelope values. See
-[Move envelope values to a keyring](./use-cases/envelope-to-keyring.md).
+Values that `KmsAeadEnvelope` wrote move to keyring values in five steps, with the encryption
+marker telling the two layouts apart and a sweep re-encrypting the envelope values. See [Move
+envelope values to a keyring](./use-cases/envelope-to-keyring.md).
 
 ## Emergency runbook
 
-What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant,
-a version the administrative job did not create, a deleted or corrupted record or a KMS outage,
-and how to crypto-shred a scope. See [Emergency runbook](./operations/runbook.md).
+What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant, a
+version the administrative job did not create, a deleted or corrupted record or a KMS outage, and
+how to crypto-shred a scope with `dangerously_shred()` or a KEK per scope. See [Emergency
+runbook](./operations/runbook.md).

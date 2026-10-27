@@ -14,7 +14,7 @@ deterministic DEK lets its holder test candidate values offline, see
 [What it leaks](../deterministic.md#what-it-leaks) in kms-aead.
 
 The AAD of a deterministic field names its kind and field and no entity, see [AAD](#aad), so a
-deterministic value also opens in any row of the same kind and field, and a deterministic field
+deterministic value also decrypts in any row of the same kind and field, and a deterministic field
 never decides identity or authorisation on its own.
 
 ## Usage
@@ -72,9 +72,9 @@ let keyring: &Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring> = admin.
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
 let first: Encrypted<Email, Deterministic> =
-    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
+    keyring.encryptor().await.encrypt_deterministic(&aad, &alice).await?;
 let second: Encrypted<Email, Deterministic> =
-    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
+    keyring.encryptor().await.encrypt_deterministic(&aad, &alice).await?;
 
 // Equal plaintexts give equal values under one version
 assert_eq!(first, second);
@@ -106,7 +106,7 @@ to be queried, and the query rebuilds its AAD.
 
 ## Queries across rotations
 
-A value sealed under one deterministic version and the same plaintext under the next one differ.
+A value encrypted under one deterministic version and the same plaintext under the next one differ.
 So an equality query matches against every version that still decrypts, with
 `deterministic_probes`:
 
@@ -149,7 +149,7 @@ So an equality query matches against every version that still decrypts, with
 let aad: DeterministicAad = EMAIL.deterministic_aad();
 let alice = Email("alice@example.com".to_string());
 let before: Encrypted<Email, Deterministic> =
-    keyring.sealer().await.encrypt_deterministic(&aad, &alice).await?;
+    keyring.encryptor().await.encrypt_deterministic(&aad, &alice).await?;
 
 let staged: KeyId = admin.rotate(Purpose::Deterministic).await?;
 admin.promote_now(staged).await?;
@@ -164,10 +164,10 @@ assert!(probes.contains(&before));
 ```
 
 `deterministic_probes` returns one probe per pending, active or decrypt-only deterministic version,
-compromised ones included, so a query finds the rows sealed under any of them, and a sweep the rows
-sealed under a compromised one. A staged version is probed before its promotion, so a process that
-has not seen the promotion yet finds the values of the processes that have. Retired and destroyed
-versions give no probe. The probes go into the query:
+compromised ones included, so a query finds the rows encrypted under any of them, and a sweep the
+rows encrypted under a compromised one. A staged version is probed before its promotion, so a
+process that has not seen the promotion yet finds the values of the processes that have. Retired and
+destroyed versions give no probe. The probes go into the query:
 
 | Store | Query |
 |---|---|
@@ -175,7 +175,7 @@ versions give no probe. The probes go into the query:
 | Firestore | an `in` filter on the field, which takes up to 30 values |
 | BigQuery | `IN` over one `DETERMINISTIC_ENCRYPT` per version, each with that version's `Single` keyset, see [Queries](./bigquery.md#queries) |
 
-After a promotion the list has two probes until a sweep re-seals every row and the old version is
+After a promotion the list has two probes until a sweep re-encrypts every row and the old version is
 retired. That is why deterministic versions are rotated rarely, and every rotation is followed by
 a full sweep, see [Rotation cadence](../operations/rotation.md#rotation-cadence).
 

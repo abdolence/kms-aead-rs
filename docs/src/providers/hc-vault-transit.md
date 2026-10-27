@@ -102,12 +102,83 @@ it again restores them. Once
 nothing needs them, the backups included, `min_available_version` and a trim of the key delete the
 older versions for good.
 
+## Asymmetric keys
+
+A Transit key of the type `rsa-2048`, `rsa-3072` or `rsa-4096` is an asymmetric KEK, see
+[Asymmetric KEKs](../asymmetric-kek.md):
+
+- `HcVaultTransitProvider::public_key(None)` reads `<mount>/keys/<key>` for the latest version, and
+  `public_key(Some(&version))` for one, and returns the PEM public key of that version, for the
+  producers. It fails with `ASYMMETRIC_KEK_PUBLIC_KEY` for a key of another type or a version the
+  key does not list;
+- a decryption of a `0x02` encrypted DEK sends `<mount>/decrypt/<key>` with the ciphertext
+  `vault:v<version>:` and the standard base64 of the RSA block, `padding_scheme` `oaep` and
+  `hash_algorithm` `sha2-256`. Both are always set and never left to the server's defaults;
+- the token of a reader needs `update` on `<mount>/decrypt/<key>`, and the administration also
+  `read` on `<mount>/keys/<key>` or on `<mount>/export/public-key/<key>`. Nobody needs `update` on
+  `<mount>/encrypt/<key>`.
+
+## Signing
+
+`HcVaultTransitSigningProvider` signs with one version of a Transit key of the type `ed25519` or
+`ecdsa-p256`, see [Signatures and MACs](../signing.md). `HcVaultTransitSigningKeyRef` names the key
+and the mount, `transit` unless set with `with_mount`, and adds the version and the algorithm:
+`Ed25519` for an `ed25519` key and `EcdsaP256Sha256` for `ecdsa-p256`. The version is required and
+never zero, so a signer never signs with the latest version.
+
+```rust,no_run
+use std::num::NonZeroU32;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{HcVaultTransitSigningKeyRef, HcVaultTransitSigningProvider};
+use kms_aead::signing::{Signer, SigningAlgorithm};
+
+# async fn example() -> kms_aead::KmsAeadResult<()> {
+// VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE, VAULT_CACERT and VAULT_CLIENT_TIMEOUT are read by
+// the provider
+let key_ref = HcVaultTransitSigningKeyRef::new(
+    "invoices".to_string(),
+    NonZeroU32::MIN,
+    SigningAlgorithm::Ed25519,
+);
+
+let provider = HcVaultTransitSigningProvider::new(&key_ref)?;
+let signer = Signer::<_, AwsLc>::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+# let _ = jwk;
+# Ok(())
+# }
+```
+
+`HcVaultTransitSigningProvider::with_options` takes the options of
+[`HcVaultTransitProviderOptions`](#options). Creating the provider sends no request; `Signer::new`
+sends the first one.
+
+- `sign` posts to `<mount>/sign/<key>` with `input`, `key_version`, `hash_algorithm` `sha2-256` and
+  `marshaling_algorithm` `jws`. The `input` is the base64 of the pre-image for Ed25519, and for
+  P-256 the base64 of its SHA-256 with `prehashed` set;
+- Vault answers `vault:vN:<base64url>` with the 64-byte Ed25519 signature, or `r || s` for P-256. An `N` other than the configured version
+  fails with `SIGNING_KEY_MISMATCH`, and a signature that is not base64url without padding or not
+  64 bytes with `SIGNATURE_ENCODING`;
+- `verifying_key` reads `<mount>/keys/<key>` and takes the `public_key` of the configured version:
+  base64 of the raw key for Ed25519, PEM for P-256. A key of another `type` fails with
+  `SIGNING_ALGORITHM_MISMATCH`, and a version the key does not list with `INVALID_PUBLIC_KEY`;
+- the token needs `update` on `<mount>/sign/<key>` and `read` on `<mount>/keys/<key>`.
+
+A rotation is `<mount>/keys/<key>/rotate`, and a new signer names the new version, see
+[Key ids and rotation](../signing.md#key-ids-and-rotation).
+
 ## Errors
 
 A response with an error status is `VAULT_STATUS_<status>`. `VAULT_HTTP` and `VAULT_TIMEOUT` are
 for a request that got no complete response, and `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE` and
 `VAULT_CIPHERTEXT` for a response or an encrypted DEK that cannot be read. Which codes are a
-`NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries). Invalid options
+`NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries).
+`HcVaultTransitSigningProvider` returns the same codes, with a `SignatureError` where the encryption
+provider returns an `EncryptionError`. Invalid options
 fail at creation with `VAULT_INVALID_OPTIONS`, or `VAULT_TLS` when the TLS configuration cannot be
 built. A request body that cannot be serialised fails with `VAULT_REQUEST`, a `SystemError`,
 before any request is sent.
