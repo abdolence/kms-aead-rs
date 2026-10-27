@@ -1,6 +1,6 @@
 //! The OpenTelemetry instruments of the `opentelemetry` feature, read through the SDK's in-memory
 //! exporter. The meter provider is global and installed once for the whole test binary, before
-//! any envelope call. The tests run in parallel, so each seals under its own pair of algorithm
+//! any envelope call. The tests run in parallel, so each encrypts under its own pair of algorithm
 //! and mode, or makes calls no other test makes, and reads only its own points.
 
 use std::sync::OnceLock;
@@ -111,7 +111,7 @@ fn points(name: &str, with: &[KeyValue]) -> Result<Vec<Point>, TestError> {
 
 /// The sorted attributes of an envelope call of `operation` in `mode` on ring, under `algorithm`
 /// when it has one.
-fn call(
+fn call_attributes(
     operation: &'static str,
     mode: &'static str,
     algorithm: Option<&'static str>,
@@ -139,7 +139,7 @@ async fn a_per_call_encrypt_and_decrypt_record_one_value_and_its_plaintext_bytes
         KeyValue::new("kms_aead.algorithm", "aes-256-gcm"),
     ];
     let value_of = |operation| Point {
-        attributes: call(operation, "per_call", Some("aes-256-gcm")),
+        attributes: call_attributes(operation, "per_call", Some("aes-256-gcm")),
         count: 1,
         sum: Some(SECRET.len() as u64),
     };
@@ -151,7 +151,7 @@ async fn a_per_call_encrypt_and_decrypt_record_one_value_and_its_plaintext_bytes
 }
 
 #[tokio::test]
-async fn caller_dek_seals_and_opens_record_their_plaintext_bytes() -> TestResult {
+async fn caller_dek_encrypts_and_decrypts_record_their_plaintext_bytes() -> TestResult {
     let envelope =
         envelope(KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::Aes128Gcm))?;
     let (dek, encrypted_dek) = envelope.generate_encrypted_dek().await?;
@@ -184,9 +184,9 @@ async fn a_failed_decrypt_records_no_value_and_times_the_call_with_its_error_typ
     let value = envelope
         .encrypt(AAD, &SecretValue::from(SECRET.to_string()))
         .await?;
-    let opened: Result<SecretValue, _> = envelope.decrypt("orders/other/card", &value).await;
-    let Err(error) = opened else {
-        return Err("a value opened under another AAD".into());
+    let decrypted: Result<SecretValue, _> = envelope.decrypt("orders/other/card", &value).await;
+    let Err(error) = decrypted else {
+        return Err("a value decrypted under another AAD".into());
     };
 
     let decrypts = [
@@ -194,7 +194,7 @@ async fn a_failed_decrypt_records_no_value_and_times_the_call_with_its_error_typ
         KeyValue::new("kms_aead.algorithm", "chacha20-poly1305"),
     ];
     assert_eq!(points("kms_aead.plaintext.size", &decrypts)?, []);
-    let mut attributes = call("decrypt", "per_call", Some("chacha20-poly1305"));
+    let mut attributes = call_attributes("decrypt", "per_call", Some("chacha20-poly1305"));
     attributes.push(KeyValue::new("error.type", error.code().to_string()));
     assert_eq!(
         points("kms_aead.operation.duration", &decrypts)?,
@@ -242,7 +242,7 @@ async fn beacons_new_deks_and_reencryptions_are_timed() -> TestResult {
         )
     };
     let generated = timed("generate_dek")?;
-    let generate_dek = call("generate_dek", "caller_dek", Some("aes-128-gcm"));
+    let generate_dek = call_attributes("generate_dek", "caller_dek", Some("aes-128-gcm"));
     assert!(
         generated
             .iter()
@@ -252,12 +252,15 @@ async fn beacons_new_deks_and_reencryptions_are_timed() -> TestResult {
     // The algorithm plays no part in a re-encryption, so it records none.
     let reencryptions = timed("reencrypt_dek")?;
     for mode in ["caller_dek", "per_call"] {
-        let reencryption = (call("reencrypt_dek", mode, None), 1);
+        let reencryption = (call_attributes("reencrypt_dek", mode, None), 1);
         assert!(reencryptions.contains(&reencryption), "{reencryptions:?}");
     }
     assert_eq!(
         timed("beacon")?,
-        [(call("beacon", "caller_dek", Some("hmac-sha256")), 1)]
+        [(
+            call_attributes("beacon", "caller_dek", Some("hmac-sha256")),
+            1
+        )]
     );
     Ok(())
 }
@@ -282,8 +285,14 @@ async fn a_new_deterministic_dek_and_its_decryption_are_timed() -> TestResult {
     assert_eq!(
         timed,
         [
-            (call("decrypt_dek", "caller_dek", Some("aes-256-siv")), 1),
-            (call("generate_dek", "caller_dek", Some("aes-256-siv")), 1),
+            (
+                call_attributes("decrypt_dek", "caller_dek", Some("aes-256-siv")),
+                1
+            ),
+            (
+                call_attributes("generate_dek", "caller_dek", Some("aes-256-siv")),
+                1
+            ),
         ]
     );
     Ok(())

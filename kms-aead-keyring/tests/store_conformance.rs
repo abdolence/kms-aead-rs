@@ -3,7 +3,9 @@
 
 use std::time::Duration;
 
-use kms_aead_keyring::store::{KeyringStore, Revalidation, Stored, Swap, WatchEvent};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use kms_aead_keyring::store::{Deletion, KeyringStore, Revalidation, Stored, Swap, WatchEvent};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{KeyringId, KeyringRecord, KeyringResult};
 use serde_json::json;
@@ -35,12 +37,16 @@ fn record(id: &KeyringId, rotations: u32) -> KeyringResult<KeyringRecord> {
     record_holding(id, rotations, ENCRYPTED_DEK)
 }
 
-/// As [`record`], with every version's encrypted DEK in `encrypted_dek`, in standard base64.
+/// As [`record`], with the encrypted DEK of every version `encrypted_dek`, in standard base64,
+/// followed by the version's key id since no two versions hold the same bytes.
 fn record_holding(
     id: &KeyringId,
     rotations: u32,
     encrypted_dek: &str,
 ) -> KeyringResult<KeyringRecord> {
+    let base = STANDARD
+        .decode(encrypted_dek)
+        .expect("the callers pass standard base64");
     let versions: Vec<_> = (1..=rotations + 1)
         .map(|key_id| {
             json!({
@@ -54,7 +60,7 @@ fn record_holding(
                 },
                 "created_at": "2026-01-10T09:00:00Z",
                 "state_changed_at": "2026-01-10T09:00:00Z",
-                "encrypted_dek": encrypted_dek,
+                "encrypted_dek": STANDARD.encode([&base[..], &key_id.to_be_bytes()].concat()),
             })
         })
         .collect();
@@ -72,7 +78,7 @@ fn record_holding(
 }
 
 /// The revision a write landed at.
-fn written<R>(swap: Swap<R>) -> Result<R, &'static str> {
+fn written_revision<R>(swap: Swap<R>) -> Result<R, &'static str> {
     match swap {
         Swap::Written(revision) => Ok(revision),
         Swap::Conflict => Err("the write conflicted"),
@@ -80,7 +86,7 @@ fn written<R>(swap: Swap<R>) -> Result<R, &'static str> {
 }
 
 /// The record a load or revalidation returned.
-fn same_record<R>(stored: &Stored<R>, expected: &KeyringRecord) -> KeyringResult<bool> {
+fn is_same_record<R>(stored: &Stored<R>, expected: &KeyringRecord) -> KeyringResult<bool> {
     Ok(stored.record.to_json()? == expected.to_json()?)
 }
 
@@ -92,22 +98,22 @@ async fn an_absent_record_loads_as_none(store: impl KeyringStore) -> TestResult 
 async fn a_created_record_loads_at_its_revision(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
     let created = record(&id, 0)?;
-    let revision = written(store.compare_and_swap(&created, None).await?)?;
+    let revision = written_revision(store.compare_and_swap(&created, None).await?)?;
     let loaded = store.load(&id).await?.ok_or("the record is gone")?;
-    assert!(same_record(&loaded, &created)?);
+    assert!(is_same_record(&loaded, &created)?);
     assert_eq!(loaded.revision, revision);
     Ok(())
 }
 
 async fn creating_an_existing_record_conflicts(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
-    written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
     assert_eq!(
         store.compare_and_swap(&record(&id, 1)?, None).await?,
         Swap::Conflict
     );
     let loaded = store.load(&id).await?.ok_or("the record is gone")?;
-    assert!(same_record(&loaded, &record(&id, 0)?)?);
+    assert!(is_same_record(&loaded, &record(&id, 0)?)?);
     Ok(())
 }
 
@@ -115,20 +121,20 @@ async fn an_update_at_the_current_revision_writes_a_new_one(
     store: impl KeyringStore,
 ) -> TestResult {
     let id = unique_keyring_id()?;
-    let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
     let rotated = record(&id, 1)?;
-    let updated = written(store.compare_and_swap(&rotated, Some(&created)).await?)?;
+    let updated = written_revision(store.compare_and_swap(&rotated, Some(&created)).await?)?;
     assert_ne!(updated, created);
     let loaded = store.load(&id).await?.ok_or("the record is gone")?;
-    assert!(same_record(&loaded, &rotated)?);
+    assert!(is_same_record(&loaded, &rotated)?);
     assert_eq!(loaded.revision, updated);
     Ok(())
 }
 
 async fn an_update_at_a_stale_revision_conflicts(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
-    let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
-    let updated = written(
+    let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let updated = written_revision(
         store
             .compare_and_swap(&record(&id, 1)?, Some(&created))
             .await?,
@@ -140,7 +146,7 @@ async fn an_update_at_a_stale_revision_conflicts(store: impl KeyringStore) -> Te
         Swap::Conflict
     );
     let loaded = store.load(&id).await?.ok_or("the record is gone")?;
-    assert!(same_record(&loaded, &record(&id, 1)?)?);
+    assert!(is_same_record(&loaded, &record(&id, 1)?)?);
     assert_eq!(loaded.revision, updated);
     Ok(())
 }
@@ -148,7 +154,7 @@ async fn an_update_at_a_stale_revision_conflicts(store: impl KeyringStore) -> Te
 async fn an_update_of_an_absent_record_conflicts(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
     let elsewhere = unique_keyring_id()?;
-    let revision = written(
+    let revision = written_revision(
         store
             .compare_and_swap(&record(&elsewhere, 0)?, None)
             .await?,
@@ -165,7 +171,7 @@ async fn an_update_of_an_absent_record_conflicts(store: impl KeyringStore) -> Te
 
 async fn revalidating_the_current_revision_is_unchanged(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
-    let revision = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let revision = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
     assert!(matches!(
         store.revalidate(&id, &revision).await?,
         Revalidation::Unchanged
@@ -175,15 +181,15 @@ async fn revalidating_the_current_revision_is_unchanged(store: impl KeyringStore
 
 async fn revalidating_a_stale_revision_returns_the_record(store: impl KeyringStore) -> TestResult {
     let id = unique_keyring_id()?;
-    let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
-    let updated = written(
+    let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let updated = written_revision(
         store
             .compare_and_swap(&record(&id, 1)?, Some(&created))
             .await?,
     )?;
     match store.revalidate(&id, &created).await? {
         Revalidation::Changed(stored) => {
-            assert!(same_record(&stored, &record(&id, 1)?)?);
+            assert!(is_same_record(&stored, &record(&id, 1)?)?);
             assert_eq!(stored.revision, updated);
         }
         other => return Err(format!("expected the changed record, got {other:?}").into()),
@@ -193,7 +199,7 @@ async fn revalidating_a_stale_revision_returns_the_record(store: impl KeyringSto
 
 async fn revalidating_an_absent_record_is_missing(store: impl KeyringStore) -> TestResult {
     let elsewhere = unique_keyring_id()?;
-    let revision = written(
+    let revision = written_revision(
         store
             .compare_and_swap(&record(&elsewhere, 0)?, None)
             .await?,
@@ -208,14 +214,78 @@ async fn revalidating_an_absent_record_is_missing(store: impl KeyringStore) -> T
 async fn records_are_kept_apart_by_id(store: impl KeyringStore) -> TestResult {
     let first = unique_keyring_id()?;
     let second = unique_keyring_id()?;
-    let first_revision = written(store.compare_and_swap(&record(&first, 0)?, None).await?)?;
-    written(store.compare_and_swap(&record(&second, 3)?, None).await?)?;
+    let first_revision =
+        written_revision(store.compare_and_swap(&record(&first, 0)?, None).await?)?;
+    written_revision(store.compare_and_swap(&record(&second, 3)?, None).await?)?;
     let loaded = store.load(&first).await?.ok_or("the record is gone")?;
-    assert!(same_record(&loaded, &record(&first, 0)?)?);
+    assert!(is_same_record(&loaded, &record(&first, 0)?)?);
     assert!(matches!(
         store.revalidate(&first, &first_revision).await?,
         Revalidation::Unchanged
     ));
+    Ok(())
+}
+
+/// A delete at the current revision removes the record, and a repeated one, as after a failure,
+/// finds nothing left to delete.
+async fn a_delete_at_the_current_revision_removes_the_record(
+    store: impl KeyringStore,
+) -> TestResult {
+    let id = unique_keyring_id()?;
+    let revision = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    assert_eq!(store.delete(&id, &revision).await?, Deletion::Deleted);
+    assert!(store.load(&id).await?.is_none());
+    assert!(matches!(
+        store.revalidate(&id, &revision).await?,
+        Revalidation::Missing
+    ));
+    assert_eq!(store.delete(&id, &revision).await?, Deletion::Deleted);
+    Ok(())
+}
+
+async fn a_delete_at_a_stale_revision_conflicts(store: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let updated = written_revision(
+        store
+            .compare_and_swap(&record(&id, 1)?, Some(&created))
+            .await?,
+    )?;
+    assert_eq!(store.delete(&id, &created).await?, Deletion::Conflict);
+    let loaded = store.load(&id).await?.ok_or("the record is gone")?;
+    assert!(is_same_record(&loaded, &record(&id, 1)?)?);
+    assert_eq!(loaded.revision, updated);
+    assert_eq!(store.delete(&id, &updated).await?, Deletion::Deleted);
+    Ok(())
+}
+
+async fn a_deleted_record_is_created_again(store: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let revision = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    assert_eq!(store.delete(&id, &revision).await?, Deletion::Deleted);
+    let recreated = written_revision(store.compare_and_swap(&record(&id, 2)?, None).await?)?;
+    assert_ne!(recreated, revision, "a revision of the id was reused");
+    let loaded = store.load(&id).await?.ok_or("the record is gone")?;
+    assert!(is_same_record(&loaded, &record(&id, 2)?)?);
+    assert_eq!(loaded.revision, recreated);
+    assert_eq!(store.delete(&id, &recreated).await?, Deletion::Deleted);
+    Ok(())
+}
+
+/// A store with push signals the deletion of the record it watches.
+async fn a_delete_signals_the_watch_of_its_record(store: impl KeyringStore) -> TestResult {
+    let id = unique_keyring_id()?;
+    let Some(mut watch) = store.watch(&id).await? else {
+        return Ok(());
+    };
+    let revision = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    while matches!(
+        tokio::time::timeout(Duration::from_millis(500), watch.next()).await,
+        Ok(Some(_))
+    ) {}
+    assert_eq!(store.delete(&id, &revision).await?, Deletion::Deleted);
+    let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
+    assert_eq!(event, Some(WatchEvent::Changed));
     Ok(())
 }
 
@@ -227,21 +297,21 @@ async fn a_write_signals_the_watch_of_its_record(store: impl KeyringStore) -> Te
     let Some(mut watch) = store.watch(&id).await? else {
         return Ok(());
     };
-    let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+    let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
     let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
     assert_eq!(event, Some(WatchEvent::Changed));
-    while tokio::time::timeout(Duration::from_millis(500), watch.next())
-        .await
-        .is_ok()
-    {}
-    written(
+    while matches!(
+        tokio::time::timeout(Duration::from_millis(500), watch.next()).await,
+        Ok(Some(_))
+    ) {}
+    written_revision(
         store
             .compare_and_swap(&record(&id, 1)?, Some(&created))
             .await?,
     )?;
     let event = tokio::time::timeout(Duration::from_secs(10), watch.next()).await?;
     assert_eq!(event, Some(WatchEvent::Changed));
-    written(
+    written_revision(
         store
             .compare_and_swap(&record(&unique_keyring_id()?, 0)?, None)
             .await?,
@@ -320,7 +390,11 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     revalidating_a_stale_revision_returns_the_record(new_store()).await?;
     revalidating_an_absent_record_is_missing(new_store()).await?;
     records_are_kept_apart_by_id(new_store()).await?;
-    a_write_signals_the_watch_of_its_record(new_store()).await
+    a_delete_at_the_current_revision_removes_the_record(new_store()).await?;
+    a_delete_at_a_stale_revision_conflicts(new_store()).await?;
+    a_deleted_record_is_created_again(new_store()).await?;
+    a_write_signals_the_watch_of_its_record(new_store()).await?;
+    a_delete_signals_the_watch_of_its_record(new_store()).await
 }
 
 #[tokio::test]
@@ -421,7 +495,7 @@ mod firestore_store {
         let writes = async {
             let mut revisions = Vec::new();
             for id in &ids {
-                revisions.push(written(
+                revisions.push(written_revision(
                     store.compare_and_swap(&record(id, 0)?, None).await?,
                 )?);
             }
@@ -430,7 +504,7 @@ mod firestore_store {
                 tokio::time::sleep(Duration::from_millis(100)).await;
                 rotations += 1;
                 for (id, revision) in ids.iter().zip(&mut revisions) {
-                    *revision = written(
+                    *revision = written_revision(
                         store
                             .compare_and_swap(&record(id, rotations)?, Some(revision))
                             .await?,
@@ -442,13 +516,13 @@ mod firestore_store {
         let ((), (rotations, revisions)) = tokio::try_join!(churn, writes)?;
 
         for watch in &mut watches {
-            while tokio::time::timeout(Duration::from_millis(500), watch.next())
-                .await
-                .is_ok()
-            {}
+            while matches!(
+                tokio::time::timeout(Duration::from_millis(500), watch.next()).await,
+                Ok(Some(_))
+            ) {}
         }
         for ((id, revision), watch) in ids.iter().zip(&revisions).zip(&mut watches) {
-            written(
+            written_revision(
                 store
                     .compare_and_swap(&record(id, rotations + 1)?, Some(revision))
                     .await?,
@@ -485,7 +559,7 @@ mod firestore_store {
             Some(WatchEvent::Changed)
         );
         let mut second = store.watch(&id).await?.ok_or("the store has no push")?;
-        let created = written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        let created = written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
         for watch in [&mut first, &mut second] {
             assert_eq!(
                 tokio::time::timeout(Duration::from_secs(10), watch.next()).await?,
@@ -493,7 +567,7 @@ mod firestore_store {
             );
         }
         drop(first);
-        written(
+        written_revision(
             store
                 .compare_and_swap(&record(&id, 1)?, Some(&created))
                 .await?,
@@ -520,7 +594,7 @@ mod firestore_store {
         let store = store().await?;
         let id = unique_keyring_id()?;
         let mut watch = store.watch(&id).await?.ok_or("the store has no push")?;
-        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
         assert_eq!(
             tokio::time::timeout(Duration::from_secs(5), watch.next()).await?,
             Some(WatchEvent::Changed)
@@ -586,7 +660,7 @@ mod postgres {
     use kms_aead_keyring::KeyringError;
     use tokio_postgres::{Client, Config, NoTls};
 
-    use super::{conformance, record, unique_keyring_id, written, TestResult};
+    use super::{conformance, record, unique_keyring_id, written_revision, TestResult};
 
     fn config() -> Result<Config, Box<dyn Error>> {
         Ok(std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?)
@@ -614,7 +688,7 @@ mod postgres {
     }
 
     /// The open sessions named `application`.
-    async fn sessions(admin: &Client, application: &str) -> Result<i64, Box<dyn Error>> {
+    async fn session_count(admin: &Client, application: &str) -> Result<i64, Box<dyn Error>> {
         let row = admin
             .query_one(
                 "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
@@ -719,7 +793,7 @@ mod postgres {
             );
         }
         assert!(store.load(&unique_keyring_id()?).await?.is_none());
-        assert_eq!(sessions(&admin, &application).await?, 2);
+        assert_eq!(session_count(&admin, &application).await?, 2);
         drop(watches);
         drop_table(&admin, &table).await
     }
@@ -745,7 +819,7 @@ mod postgres {
             .watch(&unique_keyring_id()?)
             .await?
             .ok_or("the store has no push")?;
-        written(store.compare_and_swap(&record(&changed, 0)?, None).await?)?;
+        written_revision(store.compare_and_swap(&record(&changed, 0)?, None).await?)?;
         for watch in &mut changed_watches {
             assert_eq!(next_event(watch).await?, Some(WatchEvent::Changed));
         }
@@ -781,7 +855,7 @@ mod postgres {
             assert_eq!(next_event(watch).await?, Some(WatchEvent::Disconnected));
             assert_eq!(next_event(watch).await?, Some(WatchEvent::Reconnected));
         }
-        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
         assert_eq!(
             next_event(&mut watches[0]).await?,
             Some(WatchEvent::Changed)
@@ -799,10 +873,10 @@ mod postgres {
         let application = unique_application();
         let store = named_store(&application, &table)?;
         let id = unique_keyring_id()?;
-        written(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
+        written_revision(store.compare_and_swap(&record(&id, 0)?, None).await?)?;
         terminate_sessions(&admin, &application).await?;
         let deadline = Instant::now() + Duration::from_secs(10);
-        while sessions(&admin, &application).await? > 0 {
+        while session_count(&admin, &application).await? > 0 {
             assert!(
                 Instant::now() < deadline,
                 "the session outlived its termination"
@@ -832,10 +906,10 @@ mod postgres {
             .await?
             .ok_or("the store has no push")?;
         drop(first);
-        assert_eq!(sessions(&admin, &application).await?, 1);
+        assert_eq!(session_count(&admin, &application).await?, 1);
         drop(last);
         let deadline = Instant::now() + Duration::from_secs(10);
-        while sessions(&admin, &application).await? > 0 {
+        while session_count(&admin, &application).await? > 0 {
             assert!(Instant::now() < deadline, "the watch kept its connection");
         }
         drop_table(&admin, &table).await
@@ -861,14 +935,14 @@ mod postgres {
                 .ok_or("the store has no push")?,
         ];
         assert!(store.load(&unique_keyring_id()?).await?.is_none());
-        assert_eq!(sessions(&admin, &application).await?, 2);
+        assert_eq!(session_count(&admin, &application).await?, 2);
 
         store.shutdown(None).await;
         for watch in &mut watches {
             assert_eq!(next_event(watch).await?, None);
         }
         let deadline = Instant::now() + Duration::from_secs(10);
-        while sessions(&admin, &application).await? > 1 {
+        while session_count(&admin, &application).await? > 1 {
             assert!(
                 Instant::now() < deadline,
                 "the listener connection stayed open"
@@ -945,8 +1019,8 @@ mod postgres {
         use kms_aead::backends::Ring;
         use kms_aead::providers::{LocalKekId, LocalKmsProvider};
         use kms_aead_keyring::store::{
-            KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresRevision, Revalidation,
-            StoreKind, Stored, Swap,
+            Deletion, KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresRevision,
+            Revalidation, StoreKind, Stored, Swap,
         };
         use kms_aead_keyring::{
             KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRecord, KeyringRegistry,
@@ -991,6 +1065,14 @@ mod postgres {
                 expected: Option<&PostgresRevision>,
             ) -> KeyringResult<Swap<PostgresRevision>> {
                 self.inner.compare_and_swap(record, expected).await
+            }
+
+            async fn delete(
+                &self,
+                id: &KeyringId,
+                expected: &PostgresRevision,
+            ) -> KeyringResult<Deletion> {
+                self.inner.delete(id, expected).await
             }
 
             async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {
@@ -1098,6 +1180,92 @@ mod gcs {
         conformance(|| store.clone()).await
     }
 
+    /// The generations of every object under `prefix`, live and noncurrent.
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    async fn generations_under(
+        client: &GoogleApi<StorageClient<gcloud_sdk::GoogleAuthMiddleware>>,
+        bucket: &str,
+        prefix: &str,
+    ) -> Result<Vec<i64>, Box<dyn std::error::Error>> {
+        use gcloud_sdk::google::storage::v2::ListObjectsRequest;
+
+        let resource = format!("projects/_/buckets/{bucket}");
+        let mut generations = Vec::new();
+        let mut page_token = String::new();
+        loop {
+            let mut request = tonic::Request::new(ListObjectsRequest {
+                parent: resource.clone(),
+                prefix: prefix.to_string(),
+                versions: true,
+                page_token,
+                ..Default::default()
+            });
+            request.metadata_mut().insert(
+                "x-goog-request-params",
+                format!("bucket={resource}").parse()?,
+            );
+            let page = client.get().list_objects(request).await?.into_inner();
+            generations.extend(page.objects.iter().map(|object| object.generation));
+            if page.next_page_token.is_empty() {
+                return Ok(generations);
+            }
+            page_token = page.next_page_token;
+        }
+    }
+
+    /// A shred leaves no generation of the keyring's record, and the id opens as missing.
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    #[tokio::test]
+    #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
+    async fn a_shred_leaves_no_generation_of_the_record() -> TestResult {
+        use kms_aead::backends::Ring;
+        use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+        use kms_aead_keyring::{
+            KeyringAdmin, KeyringAlgorithms, KeyringRegistry, KeyringRegistryOptions, Purpose,
+        };
+
+        let bucket = std::env::var("KEYRING_GCS_BUCKET")?;
+        let client =
+            GoogleApi::from_function(StorageClient::new, "https://storage.googleapis.com", None)
+                .await?;
+        let prefix = format!("kms-keyrings-conformance/{}/", uuid::Uuid::now_v7());
+        let store = GcsKeyringStore::new(client.clone(), GcsBucketName::try_from(bucket.clone())?)?
+            .with_prefix(ObjectPrefix::from(prefix.clone()));
+        let id = unique_keyring_id()?;
+        let registry = KeyringRegistry::<GcsKeyringStore, Ring>::new(
+            store,
+            KeyringRegistryOptions::new().with_watch(false),
+        )?;
+        let kek = LocalKekId::try_from("gcs-shred-kek".to_string())?;
+        let admin: KeyringAdmin<GcsKeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+            .open_or_create(
+                LocalKmsProvider::ephemeral(kek.clone())?,
+                id.clone(),
+                KeyringAlgorithms::new(),
+            )
+            .await?;
+        admin.rotate(Purpose::Randomized).await?;
+        assert!(
+            generations_under(&client, &bucket, &prefix).await?.len() >= 2,
+            "the bucket does not keep noncurrent versions"
+        );
+
+        admin.dangerously_shred().await?;
+
+        assert!(matches!(
+            registry
+                .open(LocalKmsProvider::<Ring>::ephemeral(kek)?, id)
+                .await,
+            Err(KeyringError::RecordMissing(_))
+        ));
+        assert_eq!(
+            generations_under(&client, &bucket, &prefix).await?,
+            Vec::<i64>::new()
+        );
+        registry.shutdown(None).await;
+        Ok(())
+    }
+
     /// An object name past the service's 1,024-byte limit makes every write fail.
     #[tokio::test]
     #[ignore = "needs the GCS bucket KEYRING_GCS_BUCKET names, and credentials for it"]
@@ -1203,6 +1371,145 @@ mod s3 {
     async fn the_s3_store_conforms() -> TestResult {
         let store = store().await?;
         conformance(|| store.clone()).await
+    }
+
+    /// The version ids of every version and delete marker under `prefix`, in the first page of the
+    /// listing, which holds the few objects of a test.
+    async fn versions_under(
+        client: &aws_sdk_s3::Client,
+        bucket: &S3BucketName,
+        prefix: &str,
+    ) -> Result<Vec<(String, String)>, Box<dyn std::error::Error>> {
+        let page = client
+            .list_object_versions()
+            .bucket(bucket.to_string())
+            .prefix(prefix)
+            .send()
+            .await?;
+        let versions = page
+            .versions()
+            .iter()
+            .map(|version| (version.key(), version.version_id()));
+        let markers = page
+            .delete_markers()
+            .iter()
+            .map(|marker| (marker.key(), marker.version_id()));
+        Ok(versions
+            .chain(markers)
+            .filter_map(|(key, version_id)| Some((key?.to_string(), version_id?.to_string())))
+            .collect())
+    }
+
+    /// A shred leaves no version or delete marker of the keyring's record, and the id opens as
+    /// missing. The bucket keeps noncurrent versions, as the CI bucket's versioning makes it.
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    #[tokio::test]
+    #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
+    async fn a_shred_leaves_no_version_of_the_record() -> TestResult {
+        use kms_aead::backends::Ring;
+        use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+        use kms_aead_keyring::{
+            KeyringAdmin, KeyringAlgorithms, KeyringRegistry, KeyringRegistryOptions, Purpose,
+        };
+
+        let client = client().await?;
+        let bucket = bucket()?;
+        let prefix = run_prefix();
+        let store = S3KeyringStore::new(client.clone(), bucket.clone())
+            .with_prefix(ObjectPrefix::from(prefix.clone()));
+        let id = unique_keyring_id()?;
+        let registry = KeyringRegistry::<S3KeyringStore, Ring>::new(
+            store,
+            KeyringRegistryOptions::new().with_watch(false),
+        )?;
+        let kek = LocalKekId::try_from("s3-shred-kek".to_string())?;
+        let admin: KeyringAdmin<S3KeyringStore, LocalKmsProvider<Ring>, Ring> = registry
+            .open_or_create(
+                LocalKmsProvider::ephemeral(kek.clone())?,
+                id.clone(),
+                KeyringAlgorithms::new(),
+            )
+            .await?;
+        admin.rotate(Purpose::Randomized).await?;
+        assert!(
+            versions_under(&client, &bucket, &prefix).await?.len() >= 2,
+            "the bucket does not keep noncurrent versions"
+        );
+
+        admin.dangerously_shred().await?;
+
+        assert!(matches!(
+            registry
+                .open(LocalKmsProvider::<Ring>::ephemeral(kek)?, id)
+                .await,
+            Err(KeyringError::RecordMissing(_))
+        ));
+        assert_eq!(
+            versions_under(&client, &bucket, &prefix).await?,
+            Vec::<(String, String)>::new()
+        );
+        registry.shutdown(None).await;
+        Ok(())
+    }
+
+    /// The server refuses a `DeleteObject` under an `If-Match` that is not the object's ETag and
+    /// leaves the object, which the store's conditional delete relies on.
+    #[tokio::test]
+    #[ignore = "needs the S3 server KEYRING_S3_ENDPOINT names, see the module docs"]
+    async fn the_server_honours_if_match_on_delete_object() -> TestResult {
+        use aws_sdk_s3::error::ProvideErrorMetadata;
+
+        let client = client().await?;
+        let bucket = bucket()?;
+        let prefix = run_prefix();
+        let key = format!("{prefix}{}.json", unique_keyring_id()?);
+        let etag = client
+            .put_object()
+            .bucket(bucket.to_string())
+            .key(&key)
+            .body(ByteStream::from_static(b"{}"))
+            .send()
+            .await?
+            .e_tag
+            .ok_or("the write returned no ETag")?;
+
+        let refused = client
+            .delete_object()
+            .bucket(bucket.to_string())
+            .key(&key)
+            .if_match("\"not-the-etag\"")
+            .send()
+            .await;
+
+        assert_eq!(
+            refused
+                .err()
+                .and_then(|error| error.code().map(str::to_string)),
+            Some("PreconditionFailed".to_string())
+        );
+        client
+            .get_object()
+            .bucket(bucket.to_string())
+            .key(&key)
+            .send()
+            .await?;
+        client
+            .delete_object()
+            .bucket(bucket.to_string())
+            .key(&key)
+            .if_match(etag)
+            .send()
+            .await?;
+        for (key, version_id) in versions_under(&client, &bucket, &prefix).await? {
+            client
+                .delete_object()
+                .bucket(bucket.to_string())
+                .key(key)
+                .version_id(version_id)
+                .send()
+                .await?;
+        }
+        Ok(())
     }
 
     /// An object key past the 1,024-byte limit makes every write fail.

@@ -8,19 +8,26 @@
 
 use azure_core::http::{ClientOptions, RequestContent, RetryOptions, Transport};
 use azure_security_keyvault_keys::models::{
-    CreateKeyParameters, EncryptionAlgorithm, KeyAttributes, KeyClientUpdateKeyPropertiesOptions,
-    KeyOperation, KeyOperationParameters, KeyType, UpdateKeyPropertiesParameters,
+    CreateKeyParameters, CurveName, EncryptionAlgorithm, KeyAttributes,
+    KeyClientUpdateKeyPropertiesOptions, KeyOperation, KeyOperationParameters, KeyType,
+    UpdateKeyPropertiesParameters,
 };
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt};
 use kms_aead::errors::KmsAeadError;
 use kms_aead::formats::Envelope;
-use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, KekVersion};
+use kms_aead::providers::{
+    AzureKmsKeyRef, AzureKmsProvider, AzureKmsProviderOptions, AzureKmsSigningKeyRef,
+    AzureKmsSigningProvider, KmsKeyVersion,
+};
+use kms_aead::signing::{Signer, Verifier, VerifyingKeySet};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
 use std::sync::Arc;
 
 mod common;
+#[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+use common::RsaBackend;
 use common::{Backend, FixedTokenCredential};
 
 const EMULATOR_URL_ENV: &str = "AZURE_KEY_VAULT_EMULATOR_URL";
@@ -65,7 +72,7 @@ impl Emulator {
 
     /// Creates a new RSA version of `key_name`, creating the key if it does not exist, and
     /// returns that version.
-    async fn create_rsa_key_version(&self, key_name: &str) -> TestResult<KekVersion> {
+    async fn create_rsa_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
         let parameters = CreateKeyParameters {
             kty: Some(KeyType::Rsa),
             key_size: Some(2048),
@@ -87,22 +94,59 @@ impl Emulator {
             .resource_id()?
             .version
             .ok_or("Lowkey Vault returned a key id without a version")?;
-        Ok(KekVersion::try_from(version)?)
+        Ok(KmsKeyVersion::try_from(version)?)
+    }
+
+    /// Creates a new EC P-256 version of `key_name` that signs, creating the key if it does not
+    /// exist, and returns that version.
+    async fn create_ec_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
+        let parameters = CreateKeyParameters {
+            kty: Some(KeyType::Ec),
+            curve: Some(CurveName::P256),
+            key_ops: Some(vec![KeyOperation::Sign, KeyOperation::Verify]),
+            ..Default::default()
+        };
+        let key = self
+            .client
+            .create_key(key_name, RequestContent::try_from(parameters)?, None)
+            .await?
+            .into_model()?;
+        let version = key
+            .resource_id()?
+            .version
+            .ok_or("Lowkey Vault returned a key id without a version")?;
+        Ok(KmsKeyVersion::try_from(version)?)
+    }
+
+    fn signing_provider(
+        &self,
+        key_name: &str,
+        version: KmsKeyVersion,
+    ) -> TestResult<AzureKmsSigningProvider> {
+        Ok(AzureKmsSigningProvider::with_client_options(
+            &AzureKmsSigningKeyRef::new(self.vault_url.clone(), key_name.to_string(), version),
+            Some(Self::client_options()?),
+            Arc::new(FixedTokenCredential),
+        )?)
+    }
+
+    fn provider(&self, key_ref: &AzureKmsKeyRef) -> TestResult<AzureKmsProvider> {
+        Ok(AzureKmsProvider::with_options(
+            key_ref,
+            AzureKmsProviderOptions::new().with_client_options(Self::client_options()?),
+            Arc::new(FixedTokenCredential),
+        )?)
     }
 
     /// Lowkey Vault encrypts only with an explicit key version.
     async fn encryption(
         &self,
         key_name: &str,
-        kek_version: KekVersion,
+        kek_version: KmsKeyVersion,
     ) -> TestResult<KmsAeadEnvelope<AzureKmsProvider, Backend>> {
         let key_ref = AzureKmsKeyRef::new(self.vault_url.clone(), key_name.to_string())
             .with_kek_version(kek_version);
-        let provider = AzureKmsProvider::with_options(
-            &key_ref,
-            AzureKmsProviderOptions::new().with_client_options(Self::client_options()?),
-            Arc::new(FixedTokenCredential),
-        )?;
+        let provider = self.provider(&key_ref)?;
         Ok(KmsAeadEnvelope::new(provider)?)
     }
 }
@@ -166,7 +210,7 @@ async fn encrypt_reports_the_key_version_that_encrypted() -> TestResult<()> {
 
 #[tokio::test]
 #[ignore = "needs the Lowkey Vault emulator, see the module docs"]
-async fn a_reencrypted_value_opens_with_the_old_key_version_disabled() -> TestResult<()> {
+async fn a_reencrypted_value_decrypts_with_the_old_key_version_disabled() -> TestResult<()> {
     let emulator = Emulator::connect()?;
     let key_name = unique_name("dek-encrypting-key")?;
     let first_version = emulator.create_rsa_key_version(&key_name).await?;
@@ -270,5 +314,81 @@ async fn key_vault_encrypts_the_raw_dek_and_the_value_round_trips() -> TestResul
         Some(dek.value().ref_sensitive_value().as_slice())
     );
     assert_eq!(decrypted.as_sensitive_str(), "test-secret");
+    Ok(())
+}
+
+#[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+#[tokio::test]
+#[ignore = "needs the Lowkey Vault emulator, see the module docs"]
+async fn key_vault_unwraps_what_its_public_key_wraps() -> TestResult<()> {
+    use kms_aead::providers::PublicKeyKekProvider;
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("dek-encrypting-key")?;
+    let kek_version = emulator.create_rsa_key_version(&key_name).await?;
+    let provider = emulator.provider(&AzureKmsKeyRef::new(
+        emulator.vault_url.clone(),
+        key_name.clone(),
+    ))?;
+    let aad = b"test-aad";
+
+    let public_key = provider.public_key(None).await?;
+    let producer = KmsAeadEnvelope::<_, RsaBackend>::new(PublicKeyKekProvider::<RsaBackend>::new(
+        public_key.clone(),
+    )?)?;
+    let encrypted: Encrypted<SecretValue, Envelope> = producer
+        .encrypt(aad, &SecretValue::from("test-secret"))
+        .await?;
+    let reader = KmsAeadEnvelope::<_, RsaBackend>::new(provider)?;
+    let decrypted: SecretValue = reader.decrypt(aad, &encrypted).await?;
+
+    assert_eq!(public_key.kek(), reader.provider().kek());
+    assert_eq!(public_key.kek_version(), Some(&kek_version));
+    assert_eq!(decrypted.as_sensitive_str(), "test-secret");
+    Ok(())
+}
+
+struct Invoice(Vec<u8>);
+
+impl SignableType for Invoice {
+    const PAYLOAD_TYPE: SignedPayloadType =
+        SignedPayloadType::from_static("application/vnd.example.invoice+json");
+}
+
+impl Signable for Invoice {
+    fn to_payload(&self) -> KmsAeadResult<Vec<u8>> {
+        Ok(self.0.clone())
+    }
+
+    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
+        Ok(Invoice(payload))
+    }
+}
+
+#[tokio::test]
+#[ignore = "needs the Lowkey Vault emulator, see the module docs"]
+async fn each_key_version_signs_values_that_verify_with_its_own_public_key() -> TestResult<()> {
+    let emulator = Emulator::connect()?;
+    let key_name = unique_name("signing-key")?;
+    let first_version = emulator.create_ec_key_version(&key_name).await?;
+    let second_version = emulator.create_ec_key_version(&key_name).await?;
+    let first =
+        Signer::<_, Backend>::new(emulator.signing_provider(&key_name, first_version)?).await?;
+    let second =
+        Signer::<_, Backend>::new(emulator.signing_provider(&key_name, second_version)?).await?;
+    let verifier = Verifier::<Backend>::new(VerifyingKeySet::new([
+        first.verifying_key().clone(),
+        second.verifying_key().clone(),
+    ])?)?;
+    let invoice = Invoice(br#"{"number":"INV-1042","total_cents":12500}"#.to_vec());
+
+    for signer in [&first, &second] {
+        let signature = signer.sign(&invoice).await?;
+
+        assert_eq!(
+            verifier.verify(&invoice, &signature)?,
+            signer.verifying_key()
+        );
+    }
+    assert_ne!(first.verifying_key(), second.verifying_key());
     Ok(())
 }

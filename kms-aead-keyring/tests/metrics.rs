@@ -11,13 +11,18 @@
 use std::num::NonZeroU32;
 use std::sync::OnceLock;
 
-use kms_aead::formats::Randomized;
-use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+use kms_aead::formats::{Randomized, SymmetricKeyFormat};
+use kms_aead::providers::{
+    LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider, LocalSigningKeyName,
+    LocalSigningProvider,
+};
+use kms_aead::signing::{Signer, SigningAlgorithm, VerifyingKeySet};
 use kms_aead::{AeadAlgorithm, BeaconAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Interop, KeyringAdmin,
     KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Purpose,
+    RecordSignaturePolicy,
 };
 use opentelemetry::KeyValue;
 use opentelemetry_sdk::metrics::data::{AggregatedMetrics, Metric, MetricData};
@@ -70,6 +75,7 @@ fn provider() -> Result<LocalKmsProvider<Backend>, Box<dyn std::error::Error>> {
     let kek = LocalKek::from_secret(
         LocalKekVersion::from(NonZeroU32::MIN),
         SecretValue::new(vec![7; 32]),
+        SymmetricKeyFormat::Raw,
     )?;
     Ok(LocalKmsProvider::new(
         LocalKekId::try_from("tenant-kek".to_string())?,
@@ -96,7 +102,7 @@ async fn keyring_with(
 }
 
 /// A point of one histogram: its sorted attributes, its count and, for the plaintext size, its
-/// sum.
+/// sum. A counter's point holds its value as the count.
 #[derive(Debug, Clone, PartialEq)]
 struct Point {
     attributes: Vec<KeyValue>,
@@ -126,6 +132,14 @@ fn points_of(metric: &Metric) -> Vec<Point> {
             .map(|p| Point {
                 attributes: attributes(&mut p.attributes()),
                 count: p.count(),
+                sum: None,
+            })
+            .collect(),
+        AggregatedMetrics::U64(MetricData::Sum(sum)) => sum
+            .data_points()
+            .map(|p| Point {
+                attributes: attributes(&mut p.attributes()),
+                count: p.value(),
                 sum: None,
             })
             .collect(),
@@ -162,7 +176,11 @@ fn points_of_keyring(name: &str, keyring: &str) -> Result<Vec<Point>, Box<dyn st
 }
 
 /// The sorted attributes of a call of `operation` on `keyring`: `extra` beside the common ones.
-fn call(operation: &'static str, keyring: &'static str, extra: Vec<KeyValue>) -> Vec<KeyValue> {
+fn call_attributes(
+    operation: &'static str,
+    keyring: &'static str,
+    extra: Vec<KeyValue>,
+) -> Vec<KeyValue> {
     let mut attributes = vec![
         KeyValue::new("kms_aead.operation", operation),
         KeyValue::new("kms_aead.mode", "keyring"),
@@ -173,7 +191,7 @@ fn call(operation: &'static str, keyring: &'static str, extra: Vec<KeyValue>) ->
 }
 
 #[tokio::test]
-async fn a_seal_and_a_decrypt_record_their_values_and_plaintext_bytes_under_the_version(
+async fn an_encryption_and_a_decryption_record_their_values_and_plaintext_bytes_under_the_version(
 ) -> TestResult {
     let admin = keyring("metrics-values").await?;
     let keyring = admin.keyring();
@@ -183,13 +201,13 @@ async fn a_seal_and_a_decrypt_record_their_values_and_plaintext_bytes_under_the_
         .map(|version| version.id())
         .ok_or("no active version")?;
     let aad = EMAIL.aad(&EntityId::try_from(ENTITY)?);
-    let sealer = keyring.sealer().await;
-    let value = sealer.encrypt(&aad, &ALICE.to_string()).await?;
-    sealer.encrypt(&aad, &ALICE.to_string()).await?;
+    let encryptor = keyring.encryptor().await;
+    let value = encryptor.encrypt(&aad, &ALICE.to_string()).await?;
+    encryptor.encrypt(&aad, &ALICE.to_string()).await?;
     keyring.decrypt(&aad, &value).await?;
 
     let value_of = |operation, count| Point {
-        attributes: call(
+        attributes: call_attributes(
             operation,
             "metrics-values",
             vec![
@@ -207,7 +225,7 @@ async fn a_seal_and_a_decrypt_record_their_values_and_plaintext_bytes_under_the_
         [value_of("decrypt", 1), value_of("encrypt", 2)]
     );
     // A keyring call runs kms-aead's ciphers and never its envelope, so no other point counts
-    // it. The envelope of the migration test seals under another algorithm.
+    // it. The envelope of the migration test encrypts under another algorithm.
     let keyring_mode = KeyValue::new("kms_aead.mode", "keyring");
     let aes_256_gcm = KeyValue::new("kms_aead.algorithm", "aes-256-gcm");
     assert_eq!(
@@ -224,7 +242,7 @@ async fn a_seal_and_a_decrypt_record_their_values_and_plaintext_bytes_under_the_
 
 #[cfg(feature = "deterministic")]
 #[tokio::test]
-async fn a_deterministic_seal_and_open_record_their_plaintext_bytes() -> TestResult {
+async fn a_deterministic_encryption_and_decryption_record_their_plaintext_bytes() -> TestResult {
     let admin = keyring_with(
         "metrics-deterministic",
         KeyringAlgorithms::new().with_deterministic(kms_aead::DeterministicAlgorithm::Aes256Siv),
@@ -233,7 +251,7 @@ async fn a_deterministic_seal_and_open_record_their_plaintext_bytes() -> TestRes
     let keyring = admin.keyring();
     let aad = EMAIL.deterministic_aad();
     let value = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt_deterministic(&aad, &ALICE.to_string())
         .await?;
@@ -261,7 +279,7 @@ async fn a_deterministic_seal_and_open_record_their_plaintext_bytes() -> TestRes
         .collect::<Vec<_>>();
     assert_eq!(
         probes,
-        [call(
+        [call_attributes(
             "probe",
             "metrics-deterministic",
             vec![
@@ -274,30 +292,30 @@ async fn a_deterministic_seal_and_open_record_their_plaintext_bytes() -> TestRes
 }
 
 #[tokio::test]
-async fn a_failed_seal_records_no_value_and_times_the_call_with_its_error_type() -> TestResult {
-    let admin = keyring("metrics-failed-seal").await?;
+async fn a_failed_encryption_records_no_value_and_times_the_call_by_error_type() -> TestResult {
+    let admin = keyring("metrics-failed-encrypt").await?;
     let keyring = admin.keyring();
     let bigquery_only = EMAIL.with_interop(Interop::BigQuery);
     let aad = bigquery_only.aad(&EntityId::try_from(ENTITY)?);
-    let sealed = keyring
-        .sealer()
+    let encrypted = keyring
+        .encryptor()
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await;
-    let Err(error @ KeyringError::Interop(_)) = sealed else {
-        return Err(format!("expected an interop error, got {sealed:?}").into());
+    let Err(error @ KeyringError::Interop(_)) = encrypted else {
+        return Err(format!("expected an interop error, got {encrypted:?}").into());
     };
 
     assert_eq!(
-        points_of_keyring("kms_aead.plaintext.size", "metrics-failed-seal")?,
+        points_of_keyring("kms_aead.plaintext.size", "metrics-failed-encrypt")?,
         []
     );
     assert_eq!(
-        points_of_keyring("kms_aead.operation.duration", "metrics-failed-seal")?,
+        points_of_keyring("kms_aead.operation.duration", "metrics-failed-encrypt")?,
         [Point {
-            attributes: call(
+            attributes: call_attributes(
                 "encrypt",
-                "metrics-failed-seal",
+                "metrics-failed-encrypt",
                 vec![
                     KeyValue::new("kms_aead.algorithm", "aes-256-gcm"),
                     KeyValue::new("kms_aead.backend", BACKEND),
@@ -313,7 +331,7 @@ async fn a_failed_seal_records_no_value_and_times_the_call_with_its_error_type()
 }
 
 #[tokio::test]
-async fn a_decrypt_that_fails_the_purpose_check_is_timed_without_an_algorithm() -> TestResult {
+async fn a_decryption_that_fails_the_purpose_check_is_timed_without_an_algorithm() -> TestResult {
     let admin = keyring("metrics-purpose").await?;
     let keyring = admin.keyring();
     // Key id 0 is reserved: TINK's prefix, the id, and a nonce and a tag of zeros.
@@ -322,13 +340,13 @@ async fn a_decrypt_that_fails_the_purpose_check_is_timed_without_an_algorithm() 
     let value = Encrypted::<String, Randomized>::try_from(bytes)?;
     let aad = EMAIL.aad(&EntityId::try_from(ENTITY)?);
     let Err(error) = keyring.decrypt(&aad, &value).await else {
-        return Err("a value under a reserved key id opened".into());
+        return Err("a value under a reserved key id decrypted".into());
     };
 
     assert_eq!(
         points_of_keyring("kms_aead.operation.duration", "metrics-purpose")?,
         [Point {
-            attributes: call(
+            attributes: call_attributes(
                 "decrypt",
                 "metrics-purpose",
                 vec![
@@ -345,7 +363,7 @@ async fn a_decrypt_that_fails_the_purpose_check_is_timed_without_an_algorithm() 
 }
 
 #[tokio::test]
-async fn beacons_probes_and_reseals_are_timed() -> TestResult {
+async fn beacons_probes_and_reencryptions_are_timed() -> TestResult {
     let admin = keyring_with(
         "metrics-beacons",
         KeyringAlgorithms::new().with_beacon(BeaconAlgorithm::HmacSha256),
@@ -353,10 +371,10 @@ async fn beacons_probes_and_reseals_are_timed() -> TestResult {
     .await?;
     let keyring = admin.keyring();
     let aad = EMAIL.aad(&EntityId::try_from(ENTITY)?);
-    let sealer = keyring.sealer().await;
-    let value = sealer.encrypt(&aad, &ALICE.to_string()).await?;
-    sealer.reseal(&aad, &value).await?;
-    sealer.beacon(&EMAIL, &ALICE.to_string()).await?;
+    let encryptor = keyring.encryptor().await;
+    let value = encryptor.encrypt(&aad, &ALICE.to_string()).await?;
+    encryptor.reencrypt(&aad, &value).await?;
+    encryptor.beacon(&EMAIL, &ALICE.to_string()).await?;
     keyring.beacon_probes(&EMAIL, &ALICE.to_string()).await?;
 
     let timed = points_of_keyring("kms_aead.operation.duration", "metrics-beacons")?
@@ -366,7 +384,7 @@ async fn beacons_probes_and_reseals_are_timed() -> TestResult {
     let backend = || KeyValue::new("kms_aead.backend", BACKEND);
     let beacon = || KeyValue::new("kms_aead.purpose", "beacon");
     for attributes in [
-        call(
+        call_attributes(
             "beacon",
             "metrics-beacons",
             vec![
@@ -375,9 +393,9 @@ async fn beacons_probes_and_reseals_are_timed() -> TestResult {
                 beacon(),
             ],
         ),
-        call("probe", "metrics-beacons", vec![backend(), beacon()]),
-        call(
-            "reseal",
+        call_attributes("probe", "metrics-beacons", vec![backend(), beacon()]),
+        call_attributes(
+            "reencrypt",
             "metrics-beacons",
             vec![backend(), KeyValue::new("kms_aead.purpose", "randomized")],
         ),
@@ -397,16 +415,16 @@ async fn an_envelope_migration_records_its_value_without_a_purpose() -> TestResu
     let value = envelope
         .encrypt("users/42/email", &ALICE.to_string())
         .await?;
-    let opened = admin
+    let decrypted = admin
         .keyring()
         .decrypt_envelope_for_migration("users/42/email", &value, AeadAlgorithm::ChaCha20Poly1305)
         .await?;
-    assert_eq!(opened, ALICE);
+    assert_eq!(decrypted, ALICE);
 
     assert_eq!(
         points_of_keyring("kms_aead.plaintext.size", "metrics-migration")?,
         [Point {
-            attributes: call(
+            attributes: call_attributes(
                 "decrypt",
                 "metrics-migration",
                 vec![
@@ -440,12 +458,62 @@ async fn a_store_read_is_timed_by_store_and_reason() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_reader_refusing_a_stripped_signature_counts_the_refusal() -> TestResult {
+    telemetry();
+    let id = KeyringId::from_static("metrics-stripped");
+    let store = MemoryKeyringStore::new();
+    let signer = Signer::<_, Backend>::new(LocalSigningProvider::<Backend>::ephemeral(
+        LocalSigningKeyName::try_from("records".to_string())?,
+        SigningAlgorithm::Ed25519,
+    )?)
+    .await?;
+    let verification = RecordSignaturePolicy::VerifyIfSigned(VerifyingKeySet::new([signer
+        .verifying_key()
+        .clone()])?);
+    let registry = || {
+        KeyringRegistry::<MemoryKeyringStore, Backend>::new(
+            store.clone(),
+            KeyringRegistryOptions::new()
+                .with_watch(false)
+                .with_record_signatures(verification.clone()),
+        )
+    };
+    let signing_admin = registry()?
+        .create_signed(provider()?, signer, id.clone(), KeyringAlgorithms::new())
+        .await?;
+    registry()?
+        .admin(provider()?, id.clone())
+        .await?
+        .dangerously_unsign_record()
+        .await?;
+
+    let reloaded = signing_admin.keyring().reload().await;
+
+    assert!(matches!(
+        reloaded,
+        Err(KeyringError::RecordSignatureRemoved(_))
+    ));
+    assert_eq!(
+        points_of_keyring("kms_aead.record.refusals", "metrics-stripped")?,
+        [Point {
+            attributes: sorted(vec![
+                KeyValue::new("kms_aead.keyring", "metrics-stripped"),
+                KeyValue::new("error.type", "RECORD_SIGNATURE_REMOVED"),
+            ]),
+            count: 1,
+            sum: None,
+        }]
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn no_attribute_carries_the_plaintext_or_the_aad() -> TestResult {
     let admin = keyring("metrics-no-secrets").await?;
     let keyring = admin.keyring();
     let aad = EMAIL.aad(&EntityId::try_from(ENTITY)?);
     let value = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
