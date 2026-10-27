@@ -12,27 +12,41 @@
 //!
 //! ```text
 //! Azure: [0x01][k: u8][key version: k ASCII alphanumerics][Key Vault encrypted DEK]
-//! local: [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
+//! local: [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][encrypted DEK][tag: 16]
+//! ```
+//!
+//! A DEK encrypted with the public half of an asymmetric KEK is one more layout, the same under
+//! every provider, which each provider reads by its first byte:
+//!
+//! ```text
+//! [0x02][a: u8][i: u8][KEK id: i bytes][k: u8][KEK version: k ASCII alphanumerics][RSA block]
 //! ```
 //!
 //! The public items here are the [`Format`] of an [`Encrypted`](crate::Encrypted) value,
 //! [`Envelope`], [`Bare`], [`Randomized`] or [`Deterministic`], and the Tink items of the keys the
-//! last two are sealed under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery
+//! last two are encrypted under: [`TinkKeyType`], and [`TinkKeyset`], the keyset Tink and BigQuery
 //! read them with, whose keys are named by the [`KeyId`](crate::KeyId) their prefix carries.
+//!
+//! [`SymmetricKeyFormat`], [`PrivateKeyFormat`] and [`PublicKeyFormat`] name the encoding of a key
+//! given to a loader, one enum per kind of key, so that a loader never guesses the encoding from
+//! the bytes.
 
 use crate::backends::AeadBackend;
 use crate::errors::{
     KmsAeadEncryptionError, KmsAeadError, KmsAeadLegacyFormat, KmsAeadLegacyFormatError,
 };
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider,
-    KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult, KmsProvider,
 };
 
 pub(crate) mod envelope;
 
 mod field;
 pub use field::{Bare, Deterministic, Envelope, Format, Randomized};
+
+mod keys;
+pub use keys::{PrivateKeyFormat, PublicKeyFormat, SymmetricKeyFormat};
 
 mod tink;
 pub(crate) use tink::{
@@ -41,6 +55,8 @@ pub(crate) use tink::{
 pub use tink::{TinkKeyType, TinkKeyset};
 
 pub(crate) mod local_kms;
+
+pub(crate) mod asymmetric;
 
 #[cfg(feature = "azure-kms-encryption-base")]
 pub(crate) mod azure;
@@ -69,7 +85,7 @@ where
     P: KmsAeadEncryptionProvider,
 {
     match provider.kek().provider() {
-        KekProvider::Azure => provider.encrypt_data_encryption_key(dek).await,
+        KmsProvider::Azure => provider.encrypt_data_encryption_key(dek).await,
         _ => {
             let serialized_dek = DataEncryptionKey::from(serialize_tink_key(key_type, dek));
             provider.encrypt_data_encryption_key(&serialized_dek).await
@@ -127,7 +143,7 @@ pub(crate) async fn decrypt_dek<P>(
     provider: &P,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)>
 where
-    P: KmsAeadEncryptionProvider,
+    P: KmsAeadDecryptionProvider,
 {
     let kek = provider.kek().provider();
     match encrypted_dek_v1_body(encrypted_dek, kek) {
@@ -168,7 +184,7 @@ pub(crate) async fn reencrypt_encrypted_dek<P>(
     provider: &P,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey>
 where
-    P: KmsAeadEncryptionProvider,
+    P: KmsAeadDecryptionProvider,
 {
     let kek = provider.kek().provider();
     if encrypted_dek_v1_body(encrypted_dek, kek).is_some() {
@@ -192,10 +208,10 @@ where
 /// inspected.
 fn encrypted_dek_v1_body<'e>(
     encrypted_dek: &'e EncryptedDataEncryptionKey,
-    kek: &KekProvider,
+    kek: &KmsProvider,
 ) -> Option<&'e [u8]> {
     match kek {
-        KekProvider::Other(_) => None,
+        KmsProvider::Other(_) => None,
         _ => encrypted_dek
             .value()
             .strip_prefix(&LEGACY_ENCRYPTED_DEK_V1_PREFIX),
@@ -208,11 +224,11 @@ fn encrypted_dek_v1_body<'e>(
 /// those lengths.
 fn key_from_decrypted(
     decrypted_dek: DataEncryptionKey,
-    kek: &KekProvider,
+    kek: &KmsProvider,
 ) -> KmsAeadResult<(DataEncryptionKey, Option<KmsAeadLegacyFormat>)> {
     match (kek, decrypted_dek.value().ref_sensitive_value().len()) {
-        (KekProvider::Azure, 16 | 32 | 64) => Ok((decrypted_dek, None)),
-        (KekProvider::Azure, len) => Err(KmsAeadEncryptionError::create(
+        (KmsProvider::Azure, 16 | 32 | 64) => Ok((decrypted_dek, None)),
+        (KmsProvider::Azure, len) => Err(KmsAeadEncryptionError::create(
             "INVALID_KEY_FORMAT",
             &format!("The decrypted key of {len} bytes is not a raw key of 16, 32 or 64 bytes"),
         )),
@@ -232,11 +248,9 @@ fn key_from_decrypted(
     }
 }
 
-/// Splits `[k: u8][key version: k bytes]` off `bytes`, the key version field of the Azure
-/// provider's encrypted DEKs and of the layouts of 0.29: the key version's bytes and the bytes
-/// after them, or `None` when `k` runs past the end.
-#[cfg(any(feature = "azure-kms-encryption-base", feature = "legacy-formats"))]
-fn split_kek_version_field(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+/// Splits `[len: u8][len bytes]` off `bytes`: the field's bytes and the bytes after them, or
+/// `None` when `len` runs past the end.
+fn split_u8_length_prefixed(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let (&len, rest) = bytes.split_first()?;
     rest.split_at_checked(usize::from(len))
 }
@@ -265,7 +279,7 @@ mod tests {
             &encrypted_dek,
             &CountingKmsProvider::with_kek(
                 TestKmsProvider::Working,
-                KekRef::new(KekProvider::Gcp, CLOUD_KMS_KEY),
+                KekRef::new(KmsProvider::Gcp, CLOUD_KMS_KEY),
             ),
         )
         .await?;
@@ -279,7 +293,7 @@ mod tests {
     async fn an_azure_kek_encrypts_and_decrypts_the_raw_key() -> KmsAeadResult<()> {
         let provider = CountingKmsProvider::with_kek(
             TestKmsProvider::Working,
-            KekRef::new(KekProvider::Azure, AZURE_KEY),
+            KekRef::new(KmsProvider::Azure, AZURE_KEY),
         );
         for (key_type, len) in [
             (TinkKeyType::AesGcm, 16),
@@ -321,7 +335,7 @@ mod tests {
     async fn the_layouts_of_0_29_need_legacy_formats() {
         let provider = CountingKmsProvider::with_kek(
             TestKmsProvider::Working,
-            KekRef::new(KekProvider::Gcp, CLOUD_KMS_KEY),
+            KekRef::new(KmsProvider::Gcp, CLOUD_KMS_KEY),
         );
         let cases = [
             (
@@ -349,7 +363,7 @@ mod tests {
     async fn the_layouts_of_0_29_read_with_legacy_formats() -> KmsAeadResult<()> {
         let provider = CountingKmsProvider::with_kek(
             TestKmsProvider::Working,
-            KekRef::new(KekProvider::Gcp, CLOUD_KMS_KEY),
+            KekRef::new(KmsProvider::Gcp, CLOUD_KMS_KEY),
         );
         let cases = [
             (

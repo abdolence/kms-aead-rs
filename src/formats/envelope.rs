@@ -43,6 +43,9 @@ impl TryFrom<&[u8]> for EnvelopeLayout {
 /// The most bytes of an encrypted DEK, `MAX_LENGTH_ENCRYPTED_DEK` in Tink.
 const MAX_ENCRYPTED_DEK_LEN: u32 = 4096;
 
+/// The bytes of `w`, the `u32` in front of the encrypted DEK that gives its length.
+pub(crate) const ENCRYPTED_DEK_LEN_FIELD_SIZE: usize = 4;
+
 /// Tink's KMS envelope format, as Tink's `KmsEnvelopeAead` writes and reads it:
 ///
 /// ```text
@@ -51,11 +54,11 @@ const MAX_ENCRYPTED_DEK_LEN: u32 = 4096;
 ///
 /// The encrypted DEK is the provider's [`EncryptedDataEncryptionKey`]: the KMS ciphertext of the
 /// DEK as Tink serialises it, or of the raw DEK for Azure, 1 to 4,096 bytes, the sizes every Tink
-/// implementation reads. The rest is the [`Bare`] value the DEK opens. The layout records neither
-/// the algorithm nor the KMS key version, so the writer and the reader of a value are configured
-/// with the same algorithm.
+/// implementation reads. The rest is the [`Bare`] value the DEK decrypts. The layout records
+/// neither the algorithm nor the KMS key version, so the writer and the reader of a value are
+/// configured with the same algorithm.
 impl<T> Encrypted<T, Envelope> {
-    /// `bare` and the encrypted DEK that opens it in Tink's KMS envelope format, which
+    /// `bare` and the encrypted DEK that decrypts it in Tink's KMS envelope format, which
     /// [`separate`](Self::separate) reads back.
     ///
     /// # Errors
@@ -81,7 +84,7 @@ impl<T> Encrypted<T, Envelope> {
     /// `KmsAeadEnvelope::upgrade_legacy_value` rewrites. A value in Tink's format always
     /// separates.
     pub fn separate(&self) -> KmsAeadResult<(Encrypted<T, Bare>, EncryptedDataEncryptionKey)> {
-        let (encrypted_dek_bytes, bare) = split_envelope(self.value())?;
+        let (encrypted_dek_bytes, bare) = split_encrypted_dek_and_bare_value(self.value())?;
         Ok((
             Encrypted::try_from(bare.to_vec())?,
             EncryptedDataEncryptionKey::new(encrypted_dek_bytes.to_vec()),
@@ -89,8 +92,8 @@ impl<T> Encrypted<T, Envelope> {
     }
 }
 
-/// `[w: u32 BE][encrypted DEK: w]`, the start of every value in Tink's KMS envelope format sealed
-/// under the DEK that `encrypted_dek` holds.
+/// `[w: u32 BE][encrypted DEK: w]`, the start of every value in Tink's KMS envelope format
+/// encrypted under the DEK that `encrypted_dek` holds.
 ///
 /// # Errors
 ///
@@ -113,7 +116,7 @@ pub(crate) fn envelope_header(
                 ),
             )
         })?;
-    let mut header = Vec::with_capacity(4 + encrypted_dek_bytes.len());
+    let mut header = Vec::with_capacity(ENCRYPTED_DEK_LEN_FIELD_SIZE + encrypted_dek_bytes.len());
     header.extend_from_slice(&encrypted_dek_len.to_be_bytes());
     header.extend_from_slice(encrypted_dek_bytes);
     Ok(header)
@@ -127,7 +130,7 @@ pub(crate) fn envelope_header(
 /// `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or a first byte that starts no layout,
 /// `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length outside 1 to 4,096 bytes or past the
 /// end of the value, and [`KmsAeadError::LegacyFormat`] on the layouts of 0.29 and earlier.
-pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
+pub(crate) fn split_encrypted_dek_and_bare_value(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
     match EnvelopeLayout::try_from(value)? {
         EnvelopeLayout::Tink => {}
         EnvelopeLayout::V1 => {
@@ -152,13 +155,20 @@ pub(crate) fn split_envelope(value: &[u8]) -> KmsAeadResult<(&[u8], &[u8])> {
             ),
         )
     };
-    let (encrypted_dek_len, rest) = value.split_first_chunk::<4>().ok_or_else(invalid)?;
-    let encrypted_dek_len = u32::from_be_bytes(*encrypted_dek_len);
-    if encrypted_dek_len > MAX_ENCRYPTED_DEK_LEN {
-        return Err(invalid());
-    }
-    let encrypted_dek_len = usize::try_from(encrypted_dek_len).map_err(|_| invalid())?;
+    let (encrypted_dek_len, rest) = split_encrypted_dek_len(value).ok_or_else(invalid)?;
     rest.split_at_checked(encrypted_dek_len).ok_or_else(invalid)
+}
+
+/// `w`, the encrypted DEK length that `value` starts with, and the bytes after it, when `value`
+/// has its 4 bytes and they hold 1 to 4,096. It needs no byte after the 4, so a reader learns
+/// from them how long the encrypted DEK is before it fetches it.
+pub(crate) fn split_encrypted_dek_len(value: &[u8]) -> Option<(usize, &[u8])> {
+    let (encrypted_dek_len, rest) = value.split_first_chunk::<ENCRYPTED_DEK_LEN_FIELD_SIZE>()?;
+    let encrypted_dek_len = u32::from_be_bytes(*encrypted_dek_len);
+    if !(1..=MAX_ENCRYPTED_DEK_LEN).contains(&encrypted_dek_len) {
+        return None;
+    }
+    Some((usize::try_from(encrypted_dek_len).ok()?, rest))
 }
 
 #[cfg(test)]
@@ -168,7 +178,7 @@ mod tests {
     use super::*;
     use crate::test_provider::renderings;
 
-    const SEALED: &[u8] = b"sealed";
+    const ENCRYPTED: &[u8] = b"payload";
     const ENCRYPTED_DEK: &[u8] = b"wrapped";
     /// The shortest bare value: a nonce and a tag around an empty plaintext.
     const BARE: [u8; 28] = [0xAB; 28];
@@ -321,12 +331,12 @@ mod tests {
 
         let errors = [
             vec![PLAIN_TEXT_BYTE, 0x00],
-            [&[0x00, 0x00, 0x00, 0x7E][..], SEALED].concat(),
+            [&[0x00, 0x00, 0x00, 0x7E][..], ENCRYPTED].concat(),
         ]
         .map(Encrypted::<String, Envelope>::try_from);
         for error in errors {
             let text = format!("{error:?}");
-            for stored in [&[PLAIN_TEXT_BYTE][..], SEALED] {
+            for stored in [&[PLAIN_TEXT_BYTE][..], ENCRYPTED] {
                 for rendering in renderings(stored) {
                     assert!(!text.contains(&rendering), "{rendering:?} in {text}");
                 }

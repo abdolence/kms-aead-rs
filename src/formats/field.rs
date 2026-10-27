@@ -32,7 +32,7 @@ pub(crate) trait FormatLayout {
     /// decrypted.
     fn check(value: &[u8]) -> KmsAeadResult<Self::FramedKeyId>;
 
-    /// The length of the plaintext that `value`, a value [`check`](Self::check) passed, seals:
+    /// The length of the plaintext that `value`, a value [`check`](Self::check) passed, encrypts:
     /// its length less the framing and the algorithm's nonce and tag, or synthetic IV.
     #[cfg_attr(
         not(feature = "opentelemetry"),
@@ -58,7 +58,7 @@ pub(crate) trait FormatLayout {
 #[derive(Debug, Clone, Copy)]
 pub enum Envelope {}
 
-/// A value sealed by an [`AeadAlgorithm`] with no framing:
+/// A value encrypted by an [`AeadAlgorithm`] with no framing:
 ///
 /// ```text
 /// [nonce: 12][ciphertext][tag: 16]
@@ -66,7 +66,7 @@ pub enum Envelope {}
 ///
 /// It is Tink's AEAD output under a key with the output prefix RAW, and the part of every
 /// [`Envelope`] value after the encrypted DEK. It names no key: the caller keeps track of the key
-/// that opens it. [`AeadCipher::encrypt_bare`](crate::AeadCipher::encrypt_bare) and
+/// that decrypts it. [`AeadCipher::encrypt_bare`](crate::AeadCipher::encrypt_bare) and
 /// [`KmsAeadEnvelope::encrypt_with_dek`](crate::KmsAeadEnvelope::encrypt_with_dek) write it.
 #[derive(Debug, Clone, Copy)]
 pub enum Bare {}
@@ -122,7 +122,7 @@ impl Envelope {
         }
         #[cfg(not(feature = "legacy-formats"))]
         {
-            let (_, bare) = super::envelope::split_envelope(value)?;
+            let (_, bare) = super::envelope::split_encrypted_dek_and_bare_value(value)?;
             Ok(bare)
         }
     }
@@ -162,7 +162,7 @@ impl FormatLayout for Randomized {
     type FramedKeyId = KeyId;
 
     fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
-        check_tink_prefixed(value, "a nonce and a tag", Bare::OVERHEAD)
+        tink_prefixed_key_id(value, "a nonce and a tag", Bare::OVERHEAD)
     }
 
     fn plaintext_len(value: &[u8]) -> usize {
@@ -178,7 +178,7 @@ impl FormatLayout for Deterministic {
     type FramedKeyId = KeyId;
 
     fn check(value: &[u8]) -> KmsAeadResult<KeyId> {
-        check_tink_prefixed(
+        tink_prefixed_key_id(
             value,
             "a synthetic IV",
             DeterministicAlgorithm::SYNTHETIC_IV_LEN,
@@ -194,7 +194,7 @@ impl FormatLayout for Deterministic {
 
 /// The key id of `value`, checked to be Tink's output prefix followed by at least `min_len`
 /// bytes, the `shortest` value of the format.
-fn check_tink_prefixed(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<KeyId> {
+fn tink_prefixed_key_id(value: &[u8], shortest: &str, min_len: usize) -> KmsAeadResult<KeyId> {
     match split_tink_output_prefix(value) {
         Some((key_id, after_prefix)) if after_prefix.len() >= min_len => Ok(key_id),
         _ => Err(KmsAeadEncryptionError::create(

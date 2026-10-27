@@ -92,10 +92,11 @@ pub(crate) fn serialize_tink_key(key_type: TinkKeyType, dek: &DataEncryptionKey)
 }
 
 /// The key a serialised Tink key holds: an `AesGcmKey` or `AesGcmSivKey` of 16 or 32 bytes, a
-/// `ChaCha20Poly1305Key` of 32 bytes or an `AesSivKey` of 64 bytes, with `version` 0 and no
-/// other field. The message does not name its type, so a key of one type is read as a key
-/// of another of the same field and length: AES-256-GCM and AES-256-GCM-SIV keys are written
-/// alike, in Tink too, which reads them as the type it is configured with.
+/// `ChaCha20Poly1305Key` of 32 bytes, an `AesSivKey` of 64 bytes, or an HMAC key of 32 or 64
+/// bytes in field 3, as an `HmacKey` holds it, with `version` 0 and no other field. The message
+/// does not name its type, so a key of one type is read as a key of another of the same field and
+/// length: AES-256-GCM and AES-256-GCM-SIV keys are written alike, in Tink too, which reads them
+/// as the type it is configured with.
 ///
 /// # Errors
 ///
@@ -107,7 +108,7 @@ pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKe
             "INVALID_KEY_FORMAT",
             &format!(
                 "The decrypted key of {} bytes is not a serialised Tink AES-GCM, AES-GCM-SIV, \
-                 ChaCha20-Poly1305 or AES-SIV key",
+                 ChaCha20-Poly1305, AES-SIV or HMAC key",
                 serialized.len()
             ),
         )
@@ -132,7 +133,9 @@ pub(crate) fn read_tink_key(serialized: &[u8]) -> KmsAeadResult<DataEncryptionKe
         }
     }
     match key {
-        Some((field, value)) if matches!((field, value.len()), (2, 32 | 64) | (3, 16 | 32)) => {
+        Some((field, value))
+            if matches!((field, value.len()), (2, 32 | 64) | (3, 16 | 32 | 64)) =>
+        {
             Ok(DataEncryptionKey::from(SecretValue::new(value.to_vec())))
         }
         _ => Err(invalid()),
@@ -435,6 +438,16 @@ mod tests {
                 "{bytes:02x?}: {result:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_64_byte_key_in_field_3_is_read_as_an_hmac_key() -> KmsAeadResult<()> {
+        let key = [0x42; 64];
+
+        let dek = read_tink_key(&[&[0x1a, 0x40][..], &key].concat())?;
+
+        assert_eq!(dek, DataEncryptionKey::from(SecretValue::new(key.to_vec())));
+        Ok(())
     }
 
     #[test]

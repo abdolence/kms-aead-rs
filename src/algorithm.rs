@@ -4,7 +4,7 @@ use std::str::FromStr;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 
 /// A randomised AEAD algorithm. Values are `[nonce][ciphertext][tag]`, with a 12-byte random
-/// nonce from the backend's CSPRNG and a 16-byte tag, and do not depend on which backend sealed
+/// nonce from the backend's CSPRNG and a 16-byte tag, and do not depend on which backend encrypted
 /// them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -89,6 +89,89 @@ impl FromStr for AeadAlgorithm {
     }
 }
 
+/// A public-key algorithm an asymmetric KEK encrypts data encryption keys with: the public half of
+/// a KMS key pair encrypts each DEK in the producer's process, and the KMS decrypts it with the
+/// private half, see [`AsymmetricKekPublicKey`](crate::AsymmetricKekPublicKey).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AsymmetricKekAlgorithm {
+    /// RSAES-OAEP (RFC 8017), RSA encryption with Optimal Asymmetric Encryption Padding, with
+    /// SHA-256 as the OAEP hash and the MGF1 hash and an empty label, under an RSA key of 2048,
+    /// 3072 or 4096 bits: the asymmetric decryption of Cloud KMS, AWS KMS, Key Vault and Vault
+    /// Transit. 3072 bits is the size for a new key; 2048 bits is deprecated and stays for the
+    /// keys that exist.
+    RsaOaepSha256,
+}
+
+impl AsymmetricKekAlgorithm {
+    /// The name [`Display`] writes: `rsa-oaep-sha256`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AsymmetricKekAlgorithm::RsaOaepSha256 => "rsa-oaep-sha256",
+        }
+    }
+}
+
+/// `rsa-oaep-sha256`.
+impl Display for AsymmetricKekAlgorithm {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Reads what `Display` writes.
+///
+/// # Errors
+///
+/// `UNKNOWN_ALGORITHM` for any other name.
+impl FromStr for AsymmetricKekAlgorithm {
+    type Err = KmsAeadError;
+
+    fn from_str(name: &str) -> Result<Self, Self::Err> {
+        match name {
+            "rsa-oaep-sha256" => Ok(AsymmetricKekAlgorithm::RsaOaepSha256),
+            _ => Err(KmsAeadEncryptionError::create(
+                "UNKNOWN_ALGORITHM",
+                "Not the name of an asymmetric KEK algorithm: the name is rsa-oaep-sha256",
+            )),
+        }
+    }
+}
+
+/// An algorithm a backend implements, or does not: the
+/// [`algorithm`](crate::errors::KmsAeadUnsupportedAlgorithmError::algorithm) of
+/// [`KmsAeadUnsupportedAlgorithmError`](crate::errors::KmsAeadUnsupportedAlgorithmError).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BackendAlgorithm {
+    /// An AEAD algorithm, such as AES-256-GCM-SIV on ring.
+    Aead(AeadAlgorithm),
+    /// An asymmetric KEK algorithm, such as RSA-OAEP on ring.
+    AsymmetricKek(AsymmetricKekAlgorithm),
+}
+
+impl From<AeadAlgorithm> for BackendAlgorithm {
+    fn from(algorithm: AeadAlgorithm) -> Self {
+        BackendAlgorithm::Aead(algorithm)
+    }
+}
+
+impl From<AsymmetricKekAlgorithm> for BackendAlgorithm {
+    fn from(algorithm: AsymmetricKekAlgorithm) -> Self {
+        BackendAlgorithm::AsymmetricKek(algorithm)
+    }
+}
+
+/// The inner algorithm's name, such as `aes-256-gcm-siv` or `rsa-oaep-sha256`.
+impl Display for BackendAlgorithm {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendAlgorithm::Aead(algorithm) => algorithm.fmt(f),
+            BackendAlgorithm::AsymmetricKek(algorithm) => algorithm.fmt(f),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,11 +182,17 @@ mod tests {
         for algorithm in AeadAlgorithm::ALL {
             assert_eq!(algorithm.to_string().parse::<AeadAlgorithm>()?, algorithm);
         }
-        let unknown = "aes-512-gcm".parse::<AeadAlgorithm>();
-        assert!(
-            matches!(&unknown, Err(e) if e.code() == "UNKNOWN_ALGORITHM"),
-            "{unknown:?}"
-        );
+        let rsa = AsymmetricKekAlgorithm::RsaOaepSha256;
+        assert_eq!(rsa.to_string().parse::<AsymmetricKekAlgorithm>()?, rsa);
+        for unknown in [
+            "aes-512-gcm".parse::<AeadAlgorithm>().err(),
+            "rsa-oaep-sha1".parse::<AsymmetricKekAlgorithm>().err(),
+        ] {
+            assert!(
+                matches!(&unknown, Some(e) if e.code() == "UNKNOWN_ALGORITHM"),
+                "{unknown:?}"
+            );
+        }
         Ok(())
     }
 }

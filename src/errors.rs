@@ -10,9 +10,10 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
+#[cfg(feature = "stream")]
 use crate::AeadAlgorithm;
+use crate::BackendAlgorithm;
 
-#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 /// Every error of the crate. No variant carries plaintext, key material in any form, AAD content
@@ -39,6 +40,11 @@ pub enum KmsAeadError {
     /// [`reencrypt_encrypted_dek`](crate::KmsAeadEnvelope::reencrypt_encrypted_dek) return it with
     /// the feature too: the upgrades rewrite such a value.
     LegacyFormat(KmsAeadLegacyFormatError),
+    /// A signature could not be made, read or verified, a public key or a key set could not be
+    /// read, or a KMS refused a sign or public-key request. The same call fails the same way
+    /// again, so a caller should not retry it; a verifier's `SIGNING_KEY_UNKNOWN` clears once its
+    /// key set is refreshed.
+    SignatureError(KmsAeadSignatureError),
 }
 
 impl KmsAeadError {
@@ -51,6 +57,7 @@ impl KmsAeadError {
             KmsAeadError::EncryptionError(err) => &err.public.code,
             KmsAeadError::UnsupportedAlgorithm(err) => &err.public.code,
             KmsAeadError::LegacyFormat(err) => &err.public.code,
+            KmsAeadError::SignatureError(err) => &err.public.code,
         }
     }
 
@@ -228,6 +235,27 @@ impl KmsAeadError {
             ),
         }
     }
+
+    /// A KMS refusal of a sign or public-key request as a signature error: the
+    /// [`EncryptionError`](Self::EncryptionError) that the encryption providers' error mappings
+    /// return becomes a [`SignatureError`](Self::SignatureError) with the same code, message and
+    /// root cause. Every other variant is returned as it is, so that a network error stays
+    /// retryable.
+    #[cfg(any(
+        feature = "gcp-kms-encryption-base",
+        feature = "aws-kms-encryption",
+        feature = "azure-kms-encryption-base",
+        feature = "hashicorp-vault-transit-kms-encryption-base"
+    ))]
+    pub(crate) fn into_signature_error(self) -> Self {
+        match self {
+            KmsAeadError::EncryptionError(error) => KmsAeadError::SignatureError(
+                KmsAeadSignatureError::new(error.public, error.message)
+                    .opt_root_cause(error.root_cause),
+            ),
+            other => other,
+        }
+    }
 }
 
 /// The AWS KMS error codes of a request that may succeed later: throttling, an internal error, a
@@ -248,6 +276,7 @@ impl Display for KmsAeadError {
             KmsAeadError::EncryptionError(err) => err.fmt(f),
             KmsAeadError::UnsupportedAlgorithm(err) => err.fmt(f),
             KmsAeadError::LegacyFormat(err) => err.fmt(f),
+            KmsAeadError::SignatureError(err) => err.fmt(f),
         }
     }
 }
@@ -262,13 +291,13 @@ impl std::error::Error for KmsAeadError {
             KmsAeadError::EncryptionError(err) => err.source(),
             KmsAeadError::UnsupportedAlgorithm(err) => err.source(),
             KmsAeadError::LegacyFormat(err) => err.source(),
+            KmsAeadError::SignatureError(err) => err.source(),
         }
     }
 }
 
 /// The part of an error that is safe to return to an application's own callers.
-#[derive(Debug, Eq, PartialEq, Clone, Builder)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Eq, PartialEq, Clone, Builder, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct KmsAeadErrorPublicGenericDetails {
     /// A code a caller can match on: one of the crate's codes or the code a KMS returned.
@@ -304,6 +333,38 @@ impl KmsAeadSystemError {
             KmsAeadErrorPublicGenericDetails::new(code.to_string()),
             message.to_string(),
         ))
+    }
+
+    /// `ASYMMETRIC_KEK_PUBLIC_KEY`: bytes, a document or a KMS key that are not the public half of
+    /// an asymmetric KEK, for `reason`, which never quotes the bytes.
+    pub(crate) fn asymmetric_public_key(reason: &str) -> KmsAeadError {
+        Self::create("ASYMMETRIC_KEK_PUBLIC_KEY", reason)
+    }
+
+    /// `ASYMMETRIC_KEK_PRIVATE_KEY`: bytes that are not the private key of a local asymmetric KEK,
+    /// for `reason`, which never quotes the bytes.
+    pub(crate) fn asymmetric_private_key(reason: &str) -> KmsAeadError {
+        Self::create("ASYMMETRIC_KEK_PRIVATE_KEY", reason)
+    }
+
+    /// `ASYMMETRIC_KEK_MISMATCH`: a public key of another KEK than the one it is used with, for
+    /// `reason`.
+    pub(crate) fn asymmetric_kek_mismatch(reason: &str) -> KmsAeadError {
+        Self::create("ASYMMETRIC_KEK_MISMATCH", reason)
+    }
+
+    /// `STREAM_IO`: the source or the sink a streamed value was read from or written to failed,
+    /// as `context` names it, with `error` as the root cause. The error is the caller's I/O, never
+    /// the value's, so its message is kept.
+    #[cfg(feature = "stream")]
+    pub(crate) fn stream_io(context: &str, error: Arc<dyn Error + Send + Sync>) -> KmsAeadError {
+        KmsAeadError::SystemError(
+            KmsAeadSystemError::new(
+                KmsAeadErrorPublicGenericDetails::new("STREAM_IO".to_string()),
+                format!("{context}: {error}"),
+            )
+            .with_root_cause(error),
+        )
     }
 }
 
@@ -381,6 +442,12 @@ impl KmsAeadEncryptionError {
         ))
     }
 
+    /// `ASYMMETRIC_ENCRYPTED_DEK_FORMAT`: an encrypted DEK a public key encrypted whose header the
+    /// reading provider refuses before any KMS call, for `reason`, which never quotes the bytes.
+    pub(crate) fn asymmetric_encrypted_dek_format(reason: &str) -> KmsAeadError {
+        Self::create("ASYMMETRIC_ENCRYPTED_DEK_FORMAT", reason)
+    }
+
     /// `INVALID_PLAINTEXT`: a plaintext that does not convert to or from `T`, for `reason`, which
     /// never quotes the plaintext.
     pub(crate) fn invalid_plaintext<T>(reason: impl Display) -> KmsAeadError {
@@ -390,6 +457,14 @@ impl KmsAeadEncryptionError {
                 "The plaintext does not convert to or from {}: {reason}",
                 std::any::type_name::<T>()
             ),
+        )
+    }
+
+    /// `INVALID_MAC_FORMAT` for a value of `len` bytes that is not `layout`.
+    pub(crate) fn invalid_mac_format(len: usize, layout: &str) -> KmsAeadError {
+        Self::create(
+            "INVALID_MAC_FORMAT",
+            &format!("A value of {len} bytes is not {layout}"),
         )
     }
 
@@ -406,16 +481,58 @@ impl KmsAeadEncryptionError {
         Self::create("INVALID_HEX", &format!("{subject} is not hex: {reason}"))
     }
 
-    /// `INVALID_PLAINTEXT` for the JSON of `T`, with serde_json's category and position of
-    /// `error`, never its message, which quotes the input.
-    #[cfg(feature = "serde-json")]
+    /// `INVALID_PLAINTEXT` for the JSON of `T`, with serde_json's category of `error`, never its
+    /// message, which quotes the input, nor its position, which gives away the length of the
+    /// values before it.
     pub(crate) fn invalid_json<T>(error: &serde_json::Error) -> KmsAeadError {
-        Self::invalid_plaintext::<T>(format_args!(
-            "{:?} error at line {} column {}",
-            error.classify(),
-            error.line(),
-            error.column()
-        ))
+        Self::invalid_plaintext::<T>(json_error_category(error.classify()))
+    }
+
+    /// `INVALID_PAYLOAD` for the JSON of `T`, with serde_json's category of `error` only, as
+    /// [`invalid_json`](Self::invalid_json).
+    pub(crate) fn invalid_json_payload<T>(error: &serde_json::Error) -> KmsAeadError {
+        Self::create(
+            "INVALID_PAYLOAD",
+            &format!(
+                "The payload does not convert to or from {}: {}",
+                std::any::type_name::<T>(),
+                json_error_category(error.classify())
+            ),
+        )
+    }
+
+    /// `STREAM_ALGORITHM`: a cipher or key version of `algorithm` asked to encrypt or decrypt a
+    /// streamed value, which is AES-256-GCM only.
+    #[cfg(feature = "stream")]
+    pub(crate) fn stream_algorithm(algorithm: AeadAlgorithm) -> KmsAeadError {
+        Self::create(
+            "STREAM_ALGORITHM",
+            &format!("A streamed value is encrypted with aes-256-gcm only, not {algorithm}"),
+        )
+    }
+
+    /// `STREAM_LENGTH`: a stored length, the bytes given for a chunk read plan, or a source that ends, where
+    /// the layout of a streamed value refuses them, for `reason`, which names no length of the
+    /// value: the length is the plaintext's.
+    #[cfg(feature = "stream")]
+    pub(crate) fn stream_length(reason: &str) -> KmsAeadError {
+        Self::create("STREAM_LENGTH", reason)
+    }
+
+    /// `STREAM_KEY_COMMITMENT`: the key commitment in a streamed value's header is not the one
+    /// the DEK, the salt and the AAD derive.
+    #[cfg(feature = "stream")]
+    pub(crate) fn stream_key_commitment() -> KmsAeadError {
+        Self::create(
+            "STREAM_KEY_COMMITMENT",
+            "The key commitment of the streamed value is not the one its DEK, salt and AAD derive",
+        )
+    }
+
+    /// `STREAM_RANGE`: a plaintext range or a chunk index outside a streamed value, for `reason`.
+    #[cfg(feature = "stream")]
+    pub(crate) fn stream_range(reason: &str) -> KmsAeadError {
+        Self::create("STREAM_RANGE", reason)
     }
 }
 
@@ -438,20 +555,75 @@ impl std::error::Error for KmsAeadEncryptionError {
     }
 }
 
+/// See [`KmsAeadError::SignatureError`].
+#[derive(Debug, Clone, Builder)]
+#[non_exhaustive]
+pub struct KmsAeadSignatureError {
+    /// The error code.
+    pub public: KmsAeadErrorPublicGenericDetails,
+    /// What failed, for a person reading logs.
+    pub message: String,
+    /// The error of the library or the KMS that failed, when there is one.
+    pub root_cause: Option<Arc<dyn Error + Send + Sync>>,
+}
+
+impl KmsAeadSignatureError {
+    /// A [`KmsAeadError::SignatureError`] with `code` and `message` and no root cause.
+    pub fn create(code: &str, message: &str) -> KmsAeadError {
+        KmsAeadError::SignatureError(KmsAeadSignatureError::new(
+            KmsAeadErrorPublicGenericDetails::new(code.to_string()),
+            message.to_string(),
+        ))
+    }
+
+    /// `INVALID_PUBLIC_KEY` with `message`, which never quotes the key bytes.
+    pub(crate) fn invalid_public_key(message: &str) -> KmsAeadError {
+        Self::create("INVALID_PUBLIC_KEY", message)
+    }
+
+    /// `INVALID_SIGNATURE_FORMAT` for a value of `len` bytes that is not `layout`.
+    pub(crate) fn invalid_format(len: usize, layout: &str) -> KmsAeadError {
+        Self::create(
+            "INVALID_SIGNATURE_FORMAT",
+            &format!("A value of {len} bytes is not {layout}"),
+        )
+    }
+}
+
+impl Display for KmsAeadSignatureError {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "KmsAead signature error: {:?} / {}",
+            self.public, self.message
+        )
+    }
+}
+
+/// The root cause, when there is one.
+impl std::error::Error for KmsAeadSignatureError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.root_cause
+            .as_deref()
+            .map(|cause| cause as &(dyn Error + 'static))
+    }
+}
+
 /// See [`KmsAeadError::UnsupportedAlgorithm`]. Its code is `UNSUPPORTED_ALGORITHM`.
 #[derive(Debug, Clone, PartialEq, Eq, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadUnsupportedAlgorithmError {
     /// The error code, `UNSUPPORTED_ALGORITHM`.
     pub public: KmsAeadErrorPublicGenericDetails,
-    /// The algorithm the backend does not implement.
-    pub algorithm: AeadAlgorithm,
+    /// The algorithm the backend does not implement. An `AeadAlgorithm` in 0.30.
+    pub algorithm: BackendAlgorithm,
     /// Names the backend.
     pub message: String,
 }
 
 impl KmsAeadUnsupportedAlgorithmError {
-    pub(crate) fn create(algorithm: AeadAlgorithm, backend: &str) -> KmsAeadError {
+    pub(crate) fn create(algorithm: impl Into<BackendAlgorithm>, backend: &str) -> KmsAeadError {
+        let algorithm = algorithm.into();
         KmsAeadError::UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError::new(
             KmsAeadErrorPublicGenericDetails::new("UNSUPPORTED_ALGORITHM".to_string()),
             algorithm,
@@ -565,6 +737,12 @@ pub enum KmsAeadLegacyFormat {
     RawEncryptedDek,
 }
 
+/// In what way a serde_json error of `category` failed, without serde_json's message, which quotes
+/// the input, and without its line and column, which are byte offsets into the input.
+pub(crate) fn json_error_category(category: serde_json::error::Category) -> String {
+    format!("{category:?} error")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,5 +775,36 @@ mod tests {
                 "{error:?}"
             );
         }
+    }
+
+    #[cfg(any(
+        feature = "gcp-kms-encryption-base",
+        feature = "aws-kms-encryption",
+        feature = "azure-kms-encryption-base",
+        feature = "hashicorp-vault-transit-kms-encryption-base"
+    ))]
+    #[test]
+    fn a_refusal_becomes_a_signature_error_and_a_network_error_stays() {
+        let refusal = KmsAeadError::EncryptionError(
+            KmsAeadEncryptionError::new(
+                KmsAeadErrorPublicGenericDetails::new("PermissionDenied".to_string()),
+                "denied".to_string(),
+            )
+            .with_root_cause(Arc::new(std::io::Error::other("denied"))),
+        );
+        let network = KmsAeadNetworkError::create("Unavailable", "try again");
+
+        let refusal = refusal.into_signature_error();
+        let network = network.into_signature_error();
+
+        assert!(
+            matches!(&refusal, KmsAeadError::SignatureError(error)
+                if error.public.code == "PermissionDenied" && error.root_cause.is_some()),
+            "{refusal:?}"
+        );
+        assert!(
+            matches!(network, KmsAeadError::NetworkError(_)),
+            "{network:?}"
+        );
     }
 }

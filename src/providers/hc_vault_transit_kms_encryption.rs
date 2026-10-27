@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64ct::{Base64, Encoding};
 use go_duration::GoDuration;
 use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
 use hyper::body::Bytes;
@@ -20,9 +22,11 @@ use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
 use tracing::*;
 
-use super::kek_version::read_kek_version;
-use super::KekVersion;
+use super::kms_key_version::read_kek_version;
+use super::KmsKeyVersion;
 use crate::errors::*;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
+use crate::formats::PublicKeyFormat;
 use crate::spans::{self, kms};
 use crate::*;
 
@@ -138,25 +142,25 @@ impl HcVaultTransitProviderOptions {
     /// token is not visible ASCII, or `VAULT_CLIENT_TIMEOUT` is not a positive duration in one of
     /// those formats.
     pub fn from_env() -> KmsAeadResult<Self> {
-        let address = env_var("VAULT_ADDR")?.ok_or_else(|| {
+        let address = optional_env_var("VAULT_ADDR")?.ok_or_else(|| {
             KmsAeadSystemError::create(
                 "VAULT_INVALID_OPTIONS",
                 "VAULT_ADDR must be set to the address of the Vault server",
             )
         })?;
-        let token = env_var("VAULT_TOKEN")?
+        let token = optional_env_var("VAULT_TOKEN")?
             .map(|token| HcVaultTransitToken::try_from(SecretValue::from(token)))
             .transpose()?;
 
-        let timeout = env_var("VAULT_CLIENT_TIMEOUT")?
+        let timeout = optional_env_var("VAULT_CLIENT_TIMEOUT")?
             .map(|timeout| vault_timeout(&timeout))
             .transpose()?
             .unwrap_or(Self::DEFAULT_TIMEOUT);
 
         Ok(Self::new(address)
             .opt_token(token)
-            .opt_namespace(env_var("VAULT_NAMESPACE")?)
-            .opt_ca_certificate(env_var("VAULT_CACERT")?.map(PathBuf::from))
+            .opt_namespace(optional_env_var("VAULT_NAMESPACE")?)
+            .opt_ca_certificate(optional_env_var("VAULT_CACERT")?.map(PathBuf::from))
             .with_timeout(timeout))
     }
 }
@@ -173,14 +177,15 @@ impl HcVaultTransitProviderOptions {
 ///
 /// The encrypted data encryption key is the Transit ciphertext, such as `vault:v1:...`. It names
 /// the key version, so it still decrypts after the key is rotated.
+///
+/// With an `rsa-*` key it also decrypts an encrypted DEK that a producer encrypted with the key's
+/// public half, which [`public_key`](Self::public_key) returns.
 #[derive(Clone)]
 pub struct HcVaultTransitProvider {
-    http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    transport: VaultTransport,
     encrypt_uri: Uri,
     decrypt_uri: Uri,
-    token: Option<HcVaultTransitToken>,
-    namespace: Option<HeaderValue>,
-    timeout: Duration,
+    key_uri: Uri,
     kek: KekRef,
 }
 
@@ -206,6 +211,128 @@ impl HcVaultTransitProvider {
         key_ref: &HcVaultTransitKeyRef,
         options: HcVaultTransitProviderOptions,
     ) -> KmsAeadResult<Self> {
+        let transport = VaultTransport::new(options)?;
+        Ok(Self {
+            encrypt_uri: transport.endpoint(&key_ref.mount, "encrypt", &key_ref.key_name)?,
+            decrypt_uri: transport.endpoint(&key_ref.mount, "decrypt", &key_ref.key_name)?,
+            key_uri: transport.endpoint(&key_ref.mount, "keys", &key_ref.key_name)?,
+            kek: KekRef::new(
+                KmsProvider::HcVaultTransit,
+                transport.key_url(&key_ref.mount, &key_ref.key_name),
+            ),
+            transport,
+        })
+    }
+
+    /// The public key of `kek_version` of the asymmetric KEK, or of the latest version for
+    /// `None`, from `GET <mount>/keys/<name>` with `read` on it: for the administration, which
+    /// hands it to the producers. The version is the one the response lists the key under.
+    ///
+    /// # Errors
+    ///
+    /// The provider's errors, and `ASYMMETRIC_KEK_PUBLIC_KEY` when the key's `type` is not
+    /// `rsa-2048`, `rsa-3072` or `rsa-4096`, or the version is not listed.
+    pub async fn public_key(
+        &self,
+        kek_version: Option<&KmsKeyVersion>,
+    ) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        spans::in_span(kms::kek_public_key_span(&self.kek), async {
+            if let Some(kek_version) = kek_version {
+                kms::record_kek_version(kek_version.as_str());
+            }
+            let body = kms::timed(
+                "public_key",
+                self.kek.provider(),
+                self.transport.get(&self.key_uri),
+            )
+            .await?;
+            let response: TransitResponse<KeyData> = parse_vault_response(&body)?;
+            let public_key = self.kek_public_key(response.data, kek_version)?;
+            if let (None, Some(listed)) = (kek_version, public_key.kek_version()) {
+                kms::record_kek_version(listed.as_str());
+            }
+            Ok(public_key)
+        })
+        .await
+    }
+
+    /// The public key of `kek_version`, or of the latest version for `None`, in the `keys`
+    /// response `key`.
+    fn kek_public_key(
+        &self,
+        key: KeyData,
+        kek_version: Option<&KmsKeyVersion>,
+    ) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        let refuse = |reason: &str| {
+            KmsAeadSystemError::asymmetric_public_key(&format!(
+                "The Vault Transit key {} {reason}",
+                self.kek.key()
+            ))
+        };
+        if !matches!(key.key_type.as_str(), "rsa-2048" | "rsa-3072" | "rsa-4096") {
+            return Err(refuse(&format!(
+                "is of type {}, not of rsa-2048, rsa-3072 or rsa-4096",
+                key.key_type
+            )));
+        }
+        let wanted = match (kek_version, key.latest_version) {
+            (Some(kek_version), _) => kek_version.to_string(),
+            (None, Some(latest_version)) => latest_version.to_string(),
+            (None, None) => return Err(refuse("names no latest version")),
+        };
+        let (listed_version, listed) = key
+            .keys
+            .get_key_value(&wanted)
+            .ok_or_else(|| refuse(&format!("lists no version {wanted}")))?;
+        let public_key = listed
+            .get("public_key")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| refuse(&format!("holds no public key for version {wanted}")))?;
+        AsymmetricKekPublicKey::new(
+            self.kek.clone(),
+            Some(KmsKeyVersion::try_from(listed_version.clone())?),
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+            public_key.as_bytes().to_vec(),
+            PublicKeyFormat::SpkiPem,
+        )
+    }
+
+    /// The Transit `decrypt` request for a DEK a public key encrypted: the block as the ciphertext
+    /// of the version the header names. The padding and the hash are set, never left to the
+    /// server's defaults.
+    fn asymmetric_decrypt_request(
+        encrypted_dek: PublicKeyEncryptedDek<'_>,
+    ) -> KmsAeadResult<Vec<u8>> {
+        let (kek_version, block) = encrypted_dek.into_versioned_block()?;
+        kms::record_kek_version(kek_version.as_str());
+        let ciphertext = format!("vault:v{kek_version}:{}", Base64::encode_string(block));
+        serde_json::to_vec(&AsymmetricDecryptRequest {
+            ciphertext: &ciphertext,
+            padding_scheme: "oaep",
+            hash_algorithm: "sha2-256",
+        })
+        .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))
+    }
+}
+
+/// The connection to a Vault server that the Transit providers send their requests over: the
+/// HTTP client with its TLS configuration, the address, the token and the namespace.
+#[derive(Clone)]
+pub(super) struct VaultTransport {
+    http_client: Client<HttpsConnector<HttpConnector>, Full<Bytes>>,
+    address: Uri,
+    token: Option<HcVaultTransitToken>,
+    namespace: Option<HeaderValue>,
+    /// The namespace without its surrounding `/`, if it is not empty.
+    namespace_path: Option<String>,
+    timeout: Duration,
+}
+
+impl VaultTransport {
+    /// # Errors
+    ///
+    /// As [`HcVaultTransitProvider::with_options`], for what the options hold.
+    pub(super) fn new(options: HcVaultTransitProviderOptions) -> KmsAeadResult<Self> {
         if options.timeout.is_zero() {
             return Err(KmsAeadSystemError::create(
                 "VAULT_INVALID_OPTIONS",
@@ -219,20 +346,6 @@ impl HcVaultTransitProvider {
                 "The Vault address uses plain HTTP to another host, so the token and the data keys cross the network unencrypted"
             );
         }
-        let key_endpoint = |operation: &str| -> KmsAeadResult<Uri> {
-            let uri = format!(
-                "{}/v1/{}/{operation}/{}",
-                address.to_string().trim_end_matches('/'),
-                encoded_vault_path("mount", key_ref.mount.trim_matches('/'))?,
-                encoded_vault_path("key_name", &key_ref.key_name)?
-            );
-            Uri::try_from(uri.as_str()).map_err(|e| {
-                KmsAeadSystemError::create(
-                    "VAULT_INVALID_OPTIONS",
-                    &format!("`{uri}` is not a valid Vault request URI: {e}"),
-                )
-            })
-        };
         let namespace = options
             .namespace
             .as_deref()
@@ -253,12 +366,41 @@ impl HcVaultTransitProvider {
 
         Ok(Self {
             http_client: Client::builder(TokioExecutor::new()).build(connector),
-            encrypt_uri: key_endpoint("encrypt")?,
-            decrypt_uri: key_endpoint("decrypt")?,
+            address,
             token: options.token,
             namespace,
+            namespace_path: options
+                .namespace
+                .as_deref()
+                .map(|namespace| namespace.trim_matches('/').to_string())
+                .filter(|namespace| !namespace.is_empty()),
             timeout: options.timeout,
-            kek: Self::kek_ref(&address, options.namespace.as_deref(), key_ref),
+        })
+    }
+
+    /// The URI of `operation` on the Transit key `key_name` at `mount`:
+    /// `<address>/v1/<mount>/<operation>/<key_name>`.
+    ///
+    /// # Errors
+    ///
+    /// `VAULT_INVALID_OPTIONS` when the mount or the key name is not a valid Vault path.
+    pub(super) fn endpoint(
+        &self,
+        mount: &str,
+        operation: &str,
+        key_name: &str,
+    ) -> KmsAeadResult<Uri> {
+        let uri = format!(
+            "{}/v1/{}/{operation}/{}",
+            self.address.to_string().trim_end_matches('/'),
+            encoded_vault_path("mount", mount.trim_matches('/'))?,
+            encoded_vault_path("key_name", key_name)?,
+        );
+        Uri::try_from(uri.as_str()).map_err(|e| {
+            KmsAeadSystemError::create(
+                "VAULT_INVALID_OPTIONS",
+                &format!("`{uri}` is not a valid Vault request URI: {e}"),
+            )
         })
     }
 
@@ -266,30 +408,27 @@ impl HcVaultTransitProvider {
     /// set. The address and the namespace are part of it because the same mount and key name
     /// exist on every Vault server and in every Enterprise namespace, and a cache keyed by the
     /// KEK must never serve one tenant's data key to another.
-    fn kek_ref(address: &Uri, namespace: Option<&str>, key_ref: &HcVaultTransitKeyRef) -> KekRef {
-        let address = address.to_string();
-        let namespace = namespace
-            .map(|namespace| namespace.trim_matches('/'))
-            .filter(|namespace| !namespace.is_empty());
-        let mount = key_ref.mount.trim_matches('/');
-        let key = match namespace {
-            Some(namespace) => format!(
-                "{}/{namespace}/{mount}/keys/{}",
-                address.trim_end_matches('/'),
-                key_ref.key_name
-            ),
-            None => format!(
-                "{}/{mount}/keys/{}",
-                address.trim_end_matches('/'),
-                key_ref.key_name
-            ),
-        };
-        KekRef::new(KekProvider::HcVaultTransit, key)
+    pub(super) fn key_url(&self, mount: &str, key_name: &str) -> String {
+        let address = self.address.to_string();
+        let address = address.trim_end_matches('/');
+        let mount = mount.trim_matches('/');
+        match &self.namespace_path {
+            Some(namespace) => format!("{address}/{namespace}/{mount}/keys/{key_name}"),
+            None => format!("{address}/{mount}/keys/{key_name}"),
+        }
     }
 
-    async fn post(&self, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
+    pub(super) async fn post(&self, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
+        self.send(Method::POST, uri, body).await
+    }
+
+    pub(super) async fn get(&self, uri: &Uri) -> KmsAeadResult<Bytes> {
+        self.send(Method::GET, uri, Vec::new()).await
+    }
+
+    async fn send(&self, method: Method, uri: &Uri, body: Vec<u8>) -> KmsAeadResult<Bytes> {
         let mut request = Request::new(Full::new(Bytes::from(body)));
-        *request.method_mut() = Method::POST;
+        *request.method_mut() = method;
         *request.uri_mut() = uri.clone();
         let headers = request.headers_mut();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -391,10 +530,10 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
             let body = kms::timed(
                 "encrypt_dek",
                 self.kek.provider(),
-                self.post(&self.encrypt_uri, request),
+                self.transport.post(&self.encrypt_uri, request),
             )
             .await?;
-            let response: TransitResponse<EncryptData> = parse_response(&body)?;
+            let response: TransitResponse<EncryptData> = parse_vault_response(&body)?;
             let ciphertext = response.data.ciphertext;
             let kek_version = transit_key_version(&ciphertext);
             let encrypted_dek = EncryptedDataEncryptionKey::new(ciphertext.into_bytes());
@@ -411,7 +550,9 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         })
         .await
     }
+}
 
+impl KmsAeadDecryptionProvider for HcVaultTransitProvider {
     /// The request URL names the configured key, so that Vault refuses a ciphertext of another
     /// key.
     async fn decrypt_data_encryption_key(
@@ -419,25 +560,30 @@ impl KmsAeadEncryptionProvider for HcVaultTransitProvider {
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<DataEncryptionKey> {
         spans::in_span(kms::decrypt_span(&self.kek), async {
-            let ciphertext = std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
-                KmsAeadEncryptionError::create(
-                    "VAULT_CIPHERTEXT",
-                    "The encrypted data encryption key is not a Vault Transit ciphertext",
-                )
-            })?;
-            if let Ok(kek_version) = transit_key_version(ciphertext) {
-                kms::record_kek_version(kek_version.as_str());
-            }
-            let request = serde_json::to_vec(&DecryptRequest { ciphertext })
-                .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?;
+            let request = match PublicKeyEncryptedDek::read(encrypted_dek.value()) {
+                Some(public_key_dek) => Self::asymmetric_decrypt_request(public_key_dek?)?,
+                None => {
+                    let ciphertext = std::str::from_utf8(encrypted_dek.value()).map_err(|_| {
+                        KmsAeadEncryptionError::create(
+                            "VAULT_CIPHERTEXT",
+                            "The encrypted data encryption key is not a Vault Transit ciphertext",
+                        )
+                    })?;
+                    if let Ok(kek_version) = transit_key_version(ciphertext) {
+                        kms::record_kek_version(kek_version.as_str());
+                    }
+                    serde_json::to_vec(&DecryptRequest { ciphertext })
+                        .map_err(|e| KmsAeadSystemError::create("VAULT_REQUEST", &e.to_string()))?
+                }
+            };
 
             let body = kms::timed(
                 "decrypt_dek",
                 self.kek.provider(),
-                self.post(&self.decrypt_uri, request),
+                self.transport.post(&self.decrypt_uri, request),
             )
             .await?;
-            let response: TransitResponse<DecryptData> = parse_response(&body)?;
+            let response: TransitResponse<DecryptData> = parse_vault_response(&body)?;
             // The decode error is dropped because it names a byte of the key and its offset.
             let plaintext =
                 SecretValue::from_base64_str(response.data.plaintext).map_err(|_| {
@@ -462,9 +608,16 @@ struct DecryptRequest<'a> {
     ciphertext: &'a str,
 }
 
+#[derive(Serialize)]
+struct AsymmetricDecryptRequest<'a> {
+    ciphertext: &'a str,
+    padding_scheme: &'a str,
+    hash_algorithm: &'a str,
+}
+
 #[derive(Deserialize)]
-struct TransitResponse<D> {
-    data: D,
+pub(super) struct TransitResponse<D> {
+    pub(super) data: D,
 }
 
 #[derive(Deserialize)]
@@ -475,6 +628,19 @@ struct EncryptData {
 #[derive(Deserialize)]
 struct DecryptData {
     plaintext: String,
+}
+
+/// The `data` of reading a Transit key. For an asymmetric key `keys` maps each version to an
+/// object with its `public_key`; for other key types it maps to other values, which are read only
+/// once the type matches.
+#[derive(Deserialize)]
+pub(super) struct KeyData {
+    #[serde(rename = "type")]
+    pub(super) key_type: String,
+    /// Read for the latest version of an asymmetric KEK; absent from a response that lists the
+    /// versions only.
+    pub(super) latest_version: Option<u64>,
+    pub(super) keys: BTreeMap<String, serde_json::Value>,
 }
 
 /// The body of a failed Vault request.
@@ -500,7 +666,7 @@ impl VaultErrorResponse {
 
 /// serde_json quotes the offending value in its messages, and in a decryption response that value
 /// can be the data key itself, so only the category and position are kept.
-fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
+pub(super) fn parse_vault_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
     serde_json::from_slice(body).map_err(|e| {
         KmsAeadEncryptionError::create(
             "VAULT_RESPONSE",
@@ -517,7 +683,7 @@ fn parse_response<'a, T: Deserialize<'a>>(body: &'a [u8]) -> KmsAeadResult<T> {
 /// The `N` of the `vault:vN:` prefix of a Transit ciphertext: the key version that encrypted, as
 /// the `min_decryption_version` of the key counts it. Vault reads it from its own ciphertext at
 /// decrypt.
-fn transit_key_version(ciphertext: &str) -> KmsAeadResult<KekVersion> {
+fn transit_key_version(ciphertext: &str) -> KmsAeadResult<KmsKeyVersion> {
     let version = ciphertext
         .strip_prefix("vault:v")
         .and_then(|versioned| versioned.split_once(':'))
@@ -546,7 +712,7 @@ fn is_plain_http_to_another_host(address: &Uri) -> bool {
 }
 
 /// The value of an environment variable, `None` when it is unset or empty.
-fn env_var(name: &str) -> KmsAeadResult<Option<String>> {
+fn optional_env_var(name: &str) -> KmsAeadResult<Option<String>> {
     match std::env::var(name) {
         Ok(value) if value.is_empty() => Ok(None),
         Ok(value) => Ok(Some(value)),
@@ -696,8 +862,11 @@ fn trusted_roots(
 mod tests {
     use super::*;
     use crate::formats::Envelope;
-    use crate::test_http::answer_with;
-    use crate::test_provider::TestBackend;
+    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_provider::{
+        public_key_encrypted_dek, RsaOaepSuite, TestBackend, ENCRYPTED_BLOCK,
+    };
+    use std::sync::Mutex;
     use tokio::net::TcpListener;
 
     const TOKEN: &str = "hvs.token-marker-value";
@@ -706,7 +875,7 @@ mod tests {
     const ENCRYPTED_DEK: &str = "vault:v1:encrypted-dek";
 
     /// Ends a test whose request would otherwise hang, so a missing timeout fails the test.
-    const TEST_GUARD: Duration = Duration::from_secs(5);
+    const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn local_provider(listener: &TcpListener) -> HcVaultTransitProvider {
         let address = format!("http://{}", listener.local_addr().unwrap());
@@ -801,6 +970,136 @@ mod tests {
         Ok(())
     }
 
+    /// A provider whose requests go to a local server that answers each of them with `status` and
+    /// the JSON `body`, and the requests the server receives.
+    async fn provider_recording(
+        body: String,
+    ) -> (HcVaultTransitProvider, Arc<Mutex<Vec<ReceivedRequest>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = local_provider(&listener);
+        (provider, answer_with(listener, 200, body))
+    }
+
+    #[tokio::test]
+    async fn an_asymmetric_decryption_sends_the_block_as_the_ciphertext_of_the_version(
+    ) -> KmsAeadResult<()> {
+        let (provider, requests) = provider_recording(format!(
+            r#"{{"data":{{"plaintext":"{}"}}}}"#,
+            data_key().value().as_sensitive_base64_str().as_str()
+        ))
+        .await;
+
+        let dek = provider
+            .decrypt_data_encryption_key(&public_key_encrypted_dek(b"", Some("2"))?)
+            .await?;
+
+        assert_eq!(dek, data_key());
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0]
+                .head
+                .starts_with(&format!("POST /v1/transit/decrypt/{TEST_KEY} ")),
+            "{}",
+            requests[0].head
+        );
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&requests[0].body).unwrap(),
+            serde_json::json!({
+                "ciphertext": format!("vault:v2:{}", Base64::encode_string(&ENCRYPTED_BLOCK)),
+                "padding_scheme": "oaep",
+                "hash_algorithm": "sha2-256",
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_asymmetric_header_that_names_a_kek_id_or_no_version_is_refused_before_any_request(
+    ) -> KmsAeadResult<()> {
+        for (kek_id, kek_version) in [(&b"orders"[..], Some("2")), (b"", None)] {
+            let (provider, requests) = provider_recording("{}".to_string()).await;
+
+            let result = provider
+                .decrypt_data_encryption_key(&public_key_encrypted_dek(kek_id, kek_version)?)
+                .await;
+
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "ASYMMETRIC_ENCRYPTED_DEK_FORMAT"),
+                "{result:?}"
+            );
+            assert!(requests.lock().unwrap().is_empty());
+        }
+        Ok(())
+    }
+
+    /// The body of reading a Transit key of `key_type` whose version 1 is the 3072-bit key and
+    /// whose version 2, the latest, is the 2048-bit one.
+    fn keys_body(key_type: &str) -> String {
+        serde_json::json!({
+            "data": {
+                "type": key_type,
+                "latest_version": 2,
+                "keys": {
+                    "1": { "public_key": RsaOaepSuite::of_bits(3072).spki_pem() },
+                    "2": { "public_key": RsaOaepSuite::of_bits(2048).spki_pem() },
+                },
+            }
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_public_key_takes_its_version_from_the_response() -> KmsAeadResult<()> {
+        for (requested, version, bits) in [(None, "2", 2048), (Some("1"), "1", 3072)] {
+            let (provider, requests) = provider_recording(keys_body("rsa-2048")).await;
+            let requested = requested.map(|version| KmsKeyVersion::try_from(version.to_string()));
+
+            let public_key = provider.public_key(requested.transpose()?.as_ref()).await?;
+
+            assert_eq!(public_key.kek(), provider.kek());
+            assert_eq!(
+                public_key.kek_version(),
+                Some(&KmsKeyVersion::try_from(version.to_string())?)
+            );
+            assert_eq!(
+                public_key.spki_der(),
+                RsaOaepSuite::of_bits(bits).spki_der()
+            );
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0]
+                    .head
+                    .starts_with(&format!("GET /v1/transit/keys/{TEST_KEY} ")),
+                "{}",
+                requests[0].head
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_public_key_of_another_type_or_an_unlisted_version_is_refused() -> KmsAeadResult<()> {
+        let absent = KmsKeyVersion::try_from("3".to_string())?;
+        for (key_type, requested) in [
+            ("ed25519", None),
+            ("aes256-gcm96", None),
+            ("rsa-2048", Some(&absent)),
+        ] {
+            let (provider, _) = provider_recording(keys_body(key_type)).await;
+
+            let result = provider.public_key(requested).await;
+
+            assert!(
+                matches!(&result, Err(error) if error.code() == "ASYMMETRIC_KEK_PUBLIC_KEY"),
+                "{key_type} {requested:?}: {result:?}"
+            );
+        }
+        Ok(())
+    }
+
     fn kek_of(address: &str, namespace: Option<&str>) -> KekRef {
         let options = HcVaultTransitProviderOptions::new(address.into())
             .opt_namespace(namespace.map(str::to_string));
@@ -815,7 +1114,7 @@ mod tests {
         assert_eq!(
             kek_of("https://vault.example.com:8200/", Some("/tenant-a/")),
             KekRef::new(
-                KekProvider::HcVaultTransit,
+                KmsProvider::HcVaultTransit,
                 format!("https://vault.example.com:8200/tenant-a/transit/keys/{TEST_KEY}")
             )
         );
@@ -871,7 +1170,7 @@ mod tests {
         let provider = local_provider(&listener);
 
         let result = tokio::time::timeout(
-            TEST_GUARD,
+            TEST_REQUEST_TIMEOUT,
             provider.encrypt_data_encryption_key(&data_key()),
         )
         .await
@@ -1017,7 +1316,7 @@ mod tests {
     fn key_version_is_read_from_the_transit_ciphertext() -> KmsAeadResult<()> {
         assert_eq!(
             transit_key_version("vault:v3:AbCd+/ef==")?,
-            KekVersion::try_from("3".to_string())?
+            KmsKeyVersion::try_from("3".to_string())?
         );
         for malformed in [
             "vault:3:AbCd",
@@ -1059,6 +1358,47 @@ mod tests {
         HcVaultTransitProvider::new(&HcVaultTransitKeyRef::new(key_name)).unwrap()
     }
 
+    /// Runs against the `rsa-3072` Transit key named `VAULT_TRANSIT_KEY_RSA`, at version 1.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[ignore = "needs a Vault server with the Transit secrets engine"]
+    async fn live_key_decrypts_what_its_public_key_encrypts() -> KmsAeadResult<()> {
+        use crate::providers::PublicKeyKekProvider;
+        use crate::test_provider::RsaTestBackend;
+        let reader = HcVaultTransitProvider::new(&HcVaultTransitKeyRef::new(
+            std::env::var("VAULT_TRANSIT_KEY_RSA")
+                .expect("VAULT_TRANSIT_KEY_RSA must name a Transit key"),
+        ))?;
+
+        let public_key = reader.public_key(None).await?;
+        let producer = KmsAeadEnvelope::<_, RsaTestBackend>::new(PublicKeyKekProvider::<
+            RsaTestBackend,
+        >::new(public_key)?)?;
+        let reader = KmsAeadEnvelope::<_, RsaTestBackend>::new(reader)?;
+        let encrypted: Encrypted<SecretValue, Envelope> = producer
+            .encrypt(
+                b"orders/vault/rsa",
+                &SecretValue::from("encrypted by a producer"),
+            )
+            .await?;
+
+        assert_eq!(
+            producer.provider().public_key().kek(),
+            reader.provider().kek()
+        );
+        assert_eq!(
+            producer.provider().public_key().kek_version(),
+            Some(&KmsKeyVersion::try_from("1".to_string())?)
+        );
+        assert_eq!(
+            reader
+                .decrypt::<SecretValue>(b"orders/vault/rsa", &encrypted)
+                .await?,
+            SecretValue::from("encrypted by a producer")
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
     async fn envelope_round_trip_survives_key_rotation() {
@@ -1082,16 +1422,20 @@ mod tests {
         };
 
         let before_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
-        provider.post(&rotate_uri, Vec::new()).await.unwrap();
+        provider
+            .transport
+            .post(&rotate_uri, Vec::new())
+            .await
+            .unwrap();
         let after_rotation = encryption.encrypt(aad.as_bytes(), &secret).await.unwrap();
 
         assert_eq!(
             kek_version(&before_rotation),
-            KekVersion::try_from("1".to_string()).unwrap()
+            KmsKeyVersion::try_from("1".to_string()).unwrap()
         );
         assert_eq!(
             kek_version(&after_rotation),
-            KekVersion::try_from("2".to_string()).unwrap()
+            KmsKeyVersion::try_from("2".to_string()).unwrap()
         );
         for cipher_text in [before_rotation, after_rotation] {
             assert_eq!(
@@ -1118,6 +1462,7 @@ mod tests {
             .to_string()
             .replace("/encrypt/", "/keys/");
         provider
+            .transport
             .post(&Uri::try_from(key_uri.clone()).unwrap(), Vec::new())
             .await?;
         Ok((provider, key_uri))
@@ -1130,6 +1475,7 @@ mod tests {
 
         let encrypted_dek_under_v1 = provider.encrypt_data_encryption_key(&data_key()).await?;
         provider
+            .transport
             .post(
                 &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
                 Vec::new(),
@@ -1143,8 +1489,8 @@ mod tests {
                 encrypted_dek_under_v2.kek_version()
             ],
             [
-                Some(&KekVersion::try_from("1".to_string())?),
-                Some(&KekVersion::try_from("2".to_string())?)
+                Some(&KmsKeyVersion::try_from("1".to_string())?),
+                Some(&KmsKeyVersion::try_from("2".to_string())?)
             ]
         );
         Ok(())
@@ -1153,13 +1499,15 @@ mod tests {
     /// Rotates a key of its own and moves its `min_decryption_version`.
     #[tokio::test]
     #[ignore = "needs a Vault server with the Transit secrets engine"]
-    async fn a_reencrypted_value_opens_once_vault_refuses_the_old_version() -> KmsAeadResult<()> {
+    async fn a_reencrypted_value_decrypts_once_vault_refuses_the_old_version() -> KmsAeadResult<()>
+    {
         let (provider, key_uri) = provider_with_own_key("reencrypted").await?;
         let envelope =
             KmsAeadEnvelope::<HcVaultTransitProvider, TestBackend>::new(provider.clone())?;
         let secret = SecretValue::from("order-secret");
         let value = envelope.encrypt(b"orders-aad", &secret).await?;
         provider
+            .transport
             .post(
                 &Uri::try_from(format!("{key_uri}/rotate")).unwrap(),
                 Vec::new(),
@@ -1169,6 +1517,7 @@ mod tests {
         let reencrypted = envelope.reencrypt_dek(&value).await?;
 
         provider
+            .transport
             .post(
                 &Uri::try_from(format!("{key_uri}/config")).unwrap(),
                 br#"{"min_decryption_version": 2}"#.to_vec(),

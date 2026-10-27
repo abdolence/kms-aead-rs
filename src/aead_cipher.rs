@@ -15,11 +15,11 @@ use crate::{
 /// Randomised authenticated encryption with associated data (AEAD) under a data encryption key
 /// the caller holds, on the backend `B` and with the algorithm it was made with, without a KMS.
 ///
-/// Every value is sealed with a random nonce, so that sealing the same input twice gives
+/// Every value is encrypted with a random nonce, so that encrypting the same input twice gives
 /// different values. [`encrypt`](Self::encrypt) writes it in Tink's layout of a key named by a
 /// [`KeyId`], an [`Encrypted<T, Randomized>`](Encrypted), and
 /// [`encrypt_bare`](Self::encrypt_bare) without the key id, an [`Encrypted<T, Bare>`](Encrypted).
-/// The AAD is authenticated but not encrypted: a value opens only with the AAD it was sealed
+/// The AAD is authenticated but not encrypted: a value decrypts only with the AAD it was encrypted
 /// with.
 ///
 /// It does no I/O and opens no span: it runs once per value, inside the caller's span.
@@ -48,7 +48,7 @@ impl<B: AeadBackend> AeadCipher<B> {
         }
     }
 
-    /// The algorithm this cipher seals and opens with.
+    /// The algorithm this cipher encrypts and decrypts with.
     pub fn algorithm(&self) -> AeadAlgorithm {
         self.algorithm
     }
@@ -67,7 +67,7 @@ impl<B: AeadBackend> AeadCipher<B> {
     /// from the KMS generator when the provider is configured to use one, and from the backend's
     /// CSPRNG otherwise. It is encrypted as Tink encrypts a data encryption key, serialised as the
     /// Tink key of the algorithm, or raw under an Azure KEK, so that
-    /// [`Encrypted::join`](crate::Encrypted::join) can store it with the values sealed under it.
+    /// [`Encrypted::join`](crate::Encrypted::join) can store it with the values encrypted under it.
     ///
     /// # Errors
     ///
@@ -88,22 +88,23 @@ impl<B: AeadBackend> AeadCipher<B> {
         .await
     }
 
-    /// `value`, as [`Plaintext`] encodes it, sealed under `dek` with a fresh random nonce, in
+    /// `value`, as [`Plaintext`] encodes it, encrypted under `dek` with a fresh random nonce, in
     /// Tink's layout of a key with the output prefix TINK and the id `key_id`:
     ///
     /// ```text
     /// [0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]
     /// ```
     ///
-    /// Tink's AEAD opens it with a keyset that holds `dek` as the key `key_id` of the cipher's
+    /// Tink's AEAD decrypts it with a keyset that holds `dek` as the key `key_id` of the cipher's
     /// algorithm, and so does BigQuery's `AEAD.DECRYPT_STRING` or `AEAD.DECRYPT_BYTES` under
     /// AES-256-GCM. `key_id` is not authenticated.
     ///
     /// # Errors
     ///
-    /// `INVALID_PLAINTEXT` when `value` does not encode, `INVALID_KEY_LENGTH` when the key does
-    /// not have the length of the algorithm, `RANDOM_GENERATOR` when the random nonce cannot be
-    /// generated, and `ENCRYPT_KEY` or `ENCRYPT` when the backend refuses the key or fails to seal.
+    /// `INVALID_PLAINTEXT` when `value` does not encode, `INVALID_KEY_LENGTH` when the key does not
+    /// have the length of the algorithm, `RANDOM_GENERATOR` when the random nonce cannot be
+    /// generated, and `ENCRYPT_KEY` or `ENCRYPT` when the backend refuses the key or fails to
+    /// encrypt.
     pub fn encrypt<T: Plaintext>(
         &self,
         key_id: KeyId,
@@ -112,17 +113,17 @@ impl<B: AeadBackend> AeadCipher<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Encrypted<T, Randomized>> {
         let plain_text = value.to_plaintext()?;
-        let sealed = self.seal(
+        let encrypted = self.seal(
             &tink_output_prefix(key_id),
             aad.as_ref(),
             plain_text.ref_sensitive_value(),
             dek.value().ref_sensitive_value(),
         )?;
-        Encrypted::try_from(sealed)
+        Encrypted::try_from(encrypted)
     }
 
-    /// Opens `value`, sealed under `dek` and `aad` by [`encrypt`](Self::encrypt) or by Tink, and
-    /// decodes the plaintext as a `T`. The caller picks `dek` by
+    /// Decrypts `value`, encrypted under `dek` and `aad` by [`encrypt`](Self::encrypt) or by Tink,
+    /// and decodes the plaintext as a `T`. The caller picks `dek` by
     /// [`value.key_id()`](Encrypted::key_id).
     ///
     /// # Errors
@@ -145,8 +146,8 @@ impl<B: AeadBackend> AeadCipher<B> {
         )?)
     }
 
-    /// `value`, as [`Plaintext`] encodes it, sealed under `dek` with a fresh random nonce, with no
-    /// framing: `[nonce: 12][ciphertext][tag: 16]`, Tink's output under a key with the output
+    /// `value`, as [`Plaintext`] encodes it, encrypted under `dek` with a fresh random nonce, with
+    /// no framing: `[nonce: 12][ciphertext][tag: 16]`, Tink's output under a key with the output
     /// prefix RAW.
     ///
     /// # Errors
@@ -159,17 +160,17 @@ impl<B: AeadBackend> AeadCipher<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<Encrypted<T, Bare>> {
         let plain_text = value.to_plaintext()?;
-        let sealed = self.seal(
+        let encrypted = self.seal(
             &[],
             aad.as_ref(),
             plain_text.ref_sensitive_value(),
             dek.value().ref_sensitive_value(),
         )?;
-        Encrypted::try_from(sealed)
+        Encrypted::try_from(encrypted)
     }
 
-    /// Opens `value`, sealed under `dek` and `aad` by [`encrypt_bare`](Self::encrypt_bare), and
-    /// decodes the plaintext as a `T`.
+    /// Decrypts `value`, encrypted under `dek` and `aad` by [`encrypt_bare`](Self::encrypt_bare),
+    /// and decodes the plaintext as a `T`.
     ///
     /// # Errors
     ///
@@ -189,18 +190,18 @@ impl<B: AeadBackend> AeadCipher<B> {
     }
 }
 
-/// Sealing and opening under raw key bytes, which the envelope, the local KMS and the legacy
+/// Encrypting and decrypting under raw key bytes, which the envelope, the local KMS and the legacy
 /// upgrades run on. Crate-private, so that the public methods of [`AeadCipher`] take typed keys
 /// only.
 pub(crate) trait AeadKeyBytesOps {
-    /// `prefix`, then `plain_text` sealed under `key` with a fresh random nonce:
+    /// `prefix`, then `plain_text` encrypted under `key` with a fresh random nonce:
     /// `[prefix][nonce][ciphertext][tag]`.
     ///
     /// # Errors
     ///
     /// `INVALID_KEY_LENGTH` when `key` does not have the length of the algorithm,
     /// `RANDOM_GENERATOR` when the random nonce cannot be generated, and `ENCRYPT_KEY` or
-    /// `ENCRYPT` when the backend refuses the key or fails to seal.
+    /// `ENCRYPT` when the backend refuses the key or fails to encrypt.
     fn seal(
         &self,
         prefix: &[u8],
@@ -209,7 +210,7 @@ pub(crate) trait AeadKeyBytesOps {
         key: &[u8],
     ) -> KmsAeadResult<Vec<u8>>;
 
-    /// Opens the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value` under
+    /// Decrypts the `[nonce][ciphertext][tag]` after the first `prefix_len` bytes of `value` under
     /// `key`, into a buffer the returned `SecretValue` owns.
     ///
     /// # Errors
@@ -243,7 +244,7 @@ impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
         })?;
 
         // Allocated once at its final size, since growing it would leave a copy of the plaintext
-        // in freed memory, and zeroised if sealing fails.
+        // in freed memory, and zeroised if encrypting fails.
         let mut buffer = SecretValue::new(Vec::with_capacity(
             prefix.len() + AeadAlgorithm::NONCE_LEN + plain_text.len() + AeadAlgorithm::TAG_LEN,
         ));
@@ -258,14 +259,7 @@ impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
             aad,
             &mut value[prefix.len() + AeadAlgorithm::NONCE_LEN..],
         )
-        .map_err(|failure| match failure {
-            Failure::Key => {
-                KmsAeadEncryptionError::create("ENCRYPT_KEY", "Unable to create a sealing key")
-            }
-            Failure::Operation => {
-                KmsAeadEncryptionError::create("ENCRYPT", "Unable to encrypt data")
-            }
-        })?;
+        .map_err(Failure::encrypting)?;
         value.extend_from_slice(&tag);
         Ok(std::mem::take(value))
     }
@@ -278,12 +272,12 @@ impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
         key: &[u8],
     ) -> KmsAeadResult<SecretValue> {
         let key = checked_key_bytes(key, self.algorithm, self.algorithm.key_len())?;
-        let (nonce, sealed) = value
+        let (nonce, encrypted) = value
             .get(prefix_len..)
             .and_then(|after_prefix| {
                 after_prefix.split_first_chunk::<{ AeadAlgorithm::NONCE_LEN }>()
             })
-            .filter(|(_, sealed)| sealed.len() >= AeadAlgorithm::TAG_LEN)
+            .filter(|(_, encrypted)| encrypted.len() >= AeadAlgorithm::TAG_LEN)
             .ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "INVALID_CIPHER_TEXT_FORMAT",
@@ -294,7 +288,7 @@ impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
                 )
             })?;
 
-        let mut plain_text = SecretValue::new(sealed.to_vec());
+        let mut plain_text = SecretValue::new(encrypted.to_vec());
         let plain_text_len = B::open_in_place(
             self.algorithm,
             key,
@@ -302,14 +296,7 @@ impl<B: AeadBackend> AeadKeyBytesOps for AeadCipher<B> {
             aad,
             plain_text.ref_sensitive_value_mut(),
         )
-        .map_err(|failure| match failure {
-            Failure::Key => {
-                KmsAeadEncryptionError::create("DECRYPT_KEY", "Unable to create an opening key")
-            }
-            Failure::Operation => {
-                KmsAeadEncryptionError::create("DECRYPT", "Unable to decrypt data")
-            }
-        })?;
+        .map_err(Failure::decrypting)?;
         plain_text
             .ref_sensitive_value_mut()
             .truncate(plain_text_len);
@@ -330,7 +317,7 @@ mod tests {
     const EMAIL_AAD: &[u8] = b"user/42/email";
     const KEY_ID: KeyId = KeyId::new(7);
 
-    /// `alice@example.com` sealed by Tink 1.16.1 for Python with a keyset of one AES-256-GCM key
+    /// `alice@example.com` encrypted by Tink 1.16.1 for Python with a keyset of one AES-256-GCM key
     /// with the TINK prefix: key id 7, the bytes 0 to 31 as the key, `user/42/email` as the
     /// associated data.
     const TINK_VALUE: [u8; 50] = [
@@ -358,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn a_value_sealed_by_tink_decrypts() -> KmsAeadResult<()> {
+    fn a_value_encrypted_by_tink_decrypts() -> KmsAeadResult<()> {
         let cipher = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?;
         let dek = DataEncryptionKey::from(SecretValue::new((0u8..32).collect()));
 

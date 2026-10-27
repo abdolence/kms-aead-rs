@@ -44,6 +44,9 @@ mod deterministic {}
 #[doc = include_str!("../docs/src/beacons.md")]
 mod beacons {}
 
+#[doc = include_str!("../docs/src/asymmetric-kek.md")]
+mod asymmetric_kek {}
+
 #[doc = include_str!("../docs/src/formats.md")]
 mod formats {}
 
@@ -58,6 +61,22 @@ mod security {}
 
 #[doc = include_str!("../docs/src/migrating-from-0.29.md")]
 mod migrating_from_0_29 {}
+
+#[doc = include_str!("../docs/src/migrating-from-0.30.md")]
+mod migrating_from_0_30 {}
+
+#[doc = include_str!("../docs/src/use-cases/publish-verifiable.md")]
+mod publish_verifiable {}
+
+#[doc = include_str!("../docs/src/use-cases/write-only-producers.md")]
+mod write_only_producers {}
+
+#[doc = include_str!("../docs/src/use-cases/log-json-payloads.md")]
+mod log_json_payloads {}
+
+#[cfg(feature = "stream")]
+#[doc = include_str!("../docs/src/use-cases/encrypted-http-streams.md")]
+mod encrypted_http_streams {}
 
 /// The README's quick start, compiled so it cannot drift from the API it demonstrates.
 #[doc = include_str!("../README.md")]

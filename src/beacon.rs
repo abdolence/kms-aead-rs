@@ -17,7 +17,6 @@ use crate::{
 
 #[cfg(feature = "postgres")]
 mod postgres;
-#[cfg(feature = "serde")]
 mod serde;
 #[cfg(feature = "sqlx")]
 mod sqlx;
@@ -120,8 +119,8 @@ impl BeaconBits {
 /// under one key and one context come from equal plaintexts, or from a collision of the
 /// truncated HMAC.
 ///
-/// `Debug` shows the key id only. The `serde` feature serialises it as bytes, and the `postgres`
-/// and `sqlx` features store it as `BYTEA`, as for [`Encrypted`](crate::Encrypted).
+/// `Debug` shows the key id only. serde serialises it as bytes, and the `postgres` and `sqlx`
+/// features store it as `BYTEA`, as for [`Encrypted`](crate::Encrypted).
 #[derive(Clone)]
 pub struct Beacon<T> {
     key_id: KeyId,

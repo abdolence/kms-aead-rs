@@ -1,11 +1,15 @@
 use rsb_derive::*;
 
 use crate::errors::*;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
+use crate::formats::PublicKeyFormat;
 use crate::spans::{self, kms};
 use crate::*;
 use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
 use aws_sdk_kms::operation::encrypt::builders::EncryptFluentBuilder;
+use aws_sdk_kms::operation::get_public_key::GetPublicKeyOutput;
 use aws_sdk_kms::primitives::Blob;
+use aws_sdk_kms::types::{EncryptionAlgorithmSpec, KeyUsageType};
 
 use secret_vault_value::SecretValue;
 
@@ -72,6 +76,9 @@ impl AwsKmsProviderOptions {
 /// `AccessDeniedException` or a request that could not be built or signed, is an
 /// [`EncryptionError`](crate::errors::KmsAeadError::EncryptionError) whose root cause is the SDK
 /// error.
+///
+/// With an `RSA_*` key of usage `ENCRYPT_DECRYPT` it also decrypts an encrypted DEK that a
+/// producer encrypted with the key's public half, which [`public_key`](Self::public_key) returns.
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,
@@ -126,7 +133,7 @@ impl AwsKmsProvider {
         Self {
             client,
             options,
-            kek: KekRef::new(KekProvider::Aws, kms_key_ref.to_key_arn()),
+            kek: KekRef::new(KmsProvider::Aws, kms_key_ref.to_key_arn()),
         }
     }
 
@@ -145,6 +152,73 @@ impl AwsKmsProvider {
             .decrypt()
             .key_id(self.kek.key())
             .ciphertext_blob(Blob::new(encrypted_dek.value()))
+    }
+
+    /// As `decrypt_request`, for `block`, a DEK a public key encrypted: AWS KMS requires the
+    /// algorithm for an asymmetric key and has no default for it.
+    fn asymmetric_decrypt_request(&self, block: &[u8]) -> DecryptFluentBuilder {
+        self.client
+            .decrypt()
+            .key_id(self.kek.key())
+            .encryption_algorithm(EncryptionAlgorithmSpec::RsaesOaepSha256)
+            .ciphertext_blob(Blob::new(block))
+    }
+
+    /// The public key of a `GetPublicKey` response for the configured key: it must be a key of
+    /// usage `ENCRYPT_DECRYPT` that decrypts with RSAES-OAEP and SHA-256.
+    fn kek_public_key(
+        &self,
+        response: GetPublicKeyOutput,
+    ) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        let refuse = |reason: &str| {
+            KmsAeadSystemError::asymmetric_public_key(&format!(
+                "The AWS KMS key {} {reason}",
+                self.kek.key()
+            ))
+        };
+        if response.key_usage() != Some(&KeyUsageType::EncryptDecrypt) {
+            return Err(refuse("is not of usage ENCRYPT_DECRYPT"));
+        }
+        if !response
+            .encryption_algorithms()
+            .contains(&EncryptionAlgorithmSpec::RsaesOaepSha256)
+        {
+            return Err(refuse("does not decrypt with RSAES_OAEP_SHA_256"));
+        }
+        let public_key = response
+            .public_key
+            .ok_or_else(|| refuse("holds no public key"))?;
+        AsymmetricKekPublicKey::new(
+            self.kek.clone(),
+            None,
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+            public_key.into_inner(),
+            PublicKeyFormat::SpkiDer,
+        )
+    }
+
+    /// The public key of the configured asymmetric KEK, a key of usage `ENCRYPT_DECRYPT`, from
+    /// `GetPublicKey` with `kms:GetPublicKey`: for the administration, which hands it to the
+    /// producers. AWS KMS keys have no versions, so the key carries none.
+    ///
+    /// # Errors
+    ///
+    /// The KMS's errors, and `ASYMMETRIC_KEK_PUBLIC_KEY` when the key's `KeyUsage` is not
+    /// `ENCRYPT_DECRYPT` or `RSAES_OAEP_SHA_256` is not among its `EncryptionAlgorithms`.
+    pub async fn public_key(&self) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        spans::in_span(kms::kek_public_key_span(&self.kek), async {
+            let response = kms::timed("public_key", self.kek.provider(), async {
+                self.client
+                    .get_public_key()
+                    .key_id(self.kek.key())
+                    .send()
+                    .await
+                    .map_err(KmsAeadError::from_aws_sdk_error)
+            })
+            .await?;
+            self.kek_public_key(response)
+        })
+        .await
     }
 }
 
@@ -174,32 +248,6 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
                         "AWS error {:?}. No encrypted blob received.",
                         self.kek.key()
                     ),
-                )),
-            }
-        })
-        .await
-    }
-
-    async fn decrypt_data_encryption_key(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        spans::in_span(kms::decrypt_span(&self.kek), async {
-            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
-                self.decrypt_request(encrypted_dek)
-                    .send()
-                    .await
-                    .map_err(KmsAeadError::from_aws_sdk_error)
-            })
-            .await?;
-
-            match decrypt_response.plaintext {
-                Some(plaintext) => Ok(DataEncryptionKey::from(SecretValue::new(
-                    plaintext.into_inner(),
-                ))),
-                None => Err(KmsAeadEncryptionError::create(
-                    "AWS_ERROR",
-                    &format!("AWS error {:?}: No plaintext received", self.kek.key()),
                 )),
             }
         })
@@ -241,20 +289,58 @@ impl KmsAeadEncryptionProvider for AwsKmsProvider {
     }
 }
 
+impl KmsAeadDecryptionProvider for AwsKmsProvider {
+    async fn decrypt_data_encryption_key(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
+        spans::in_span(kms::decrypt_span(&self.kek), async {
+            let request = match PublicKeyEncryptedDek::read(encrypted_dek.value()) {
+                Some(public_key_dek) => {
+                    self.asymmetric_decrypt_request(public_key_dek?.into_unversioned_block()?)
+                }
+                None => self.decrypt_request(encrypted_dek),
+            };
+            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
+                request
+                    .send()
+                    .await
+                    .map_err(KmsAeadError::from_aws_sdk_error)
+            })
+            .await?;
+
+            match decrypt_response.plaintext {
+                Some(plaintext) => Ok(DataEncryptionKey::from(SecretValue::new(
+                    plaintext.into_inner(),
+                ))),
+                None => Err(KmsAeadEncryptionError::create(
+                    "AWS_ERROR",
+                    &format!("AWS error {:?}: No plaintext received", self.kek.key()),
+                )),
+            }
+        })
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_http::answer_with;
+    use crate::test_http::{answer_with, ReceivedRequest};
     use aws_sdk_kms::config::http::HttpResponse;
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};
     use aws_sdk_kms::error::{ConnectorError, ErrorMetadata, SdkError};
     use aws_sdk_kms::operation::decrypt::DecryptError;
     use aws_sdk_kms::types::error::IncorrectKeyException;
+    use base64ct::{Base64, Encoding};
+    use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
     use crate::formats::Envelope;
-    use crate::test_provider::{TestBackend, TinkEnvelope};
+    use crate::test_provider::{
+        public_key_encrypted_dek, RsaOaepSuite, TestBackend, TinkEnvelope, ENCRYPTED_BLOCK,
+    };
 
     const REGION: &str = "eu-west-1";
     const ACCOUNT_ID: &str = "123456789012";
@@ -290,19 +376,27 @@ mod tests {
     }
 
     /// A provider whose requests go to a local server that answers each of them with `status`
-    /// and the JSON `body`.
-    async fn provider_answered_with(status: u16, body: &str) -> AwsKmsProvider {
+    /// and the JSON `body`, and the requests the server receives.
+    async fn provider_recording(
+        status: u16,
+        body: &str,
+    ) -> (AwsKmsProvider, Arc<Mutex<Vec<ReceivedRequest>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        answer_with(listener, status, body.to_string());
-        provider_for(
+        let requests = answer_with(listener, status, body.to_string());
+        let provider = provider_for(
             KEY_ID,
             aws_sdk_kms::Config::builder()
                 .endpoint_url(endpoint)
                 .region(Region::new(REGION))
                 .credentials_provider(Credentials::new("AKID", "SECRET", None, None, "test"))
                 .retry_config(RetryConfig::disabled()),
-        )
+        );
+        (provider, requests)
+    }
+
+    async fn provider_answered_with(status: u16, body: &str) -> AwsKmsProvider {
+        provider_recording(status, body).await.0
     }
 
     fn response_with_body(status: u16, body: &str) -> HttpResponse {
@@ -326,6 +420,147 @@ mod tests {
         )
     }
 
+    fn request_body(request: &ReceivedRequest) -> serde_json::Value {
+        serde_json::from_slice(&request.body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_asymmetric_decryption_names_the_key_the_algorithm_and_the_block(
+    ) -> KmsAeadResult<()> {
+        let (provider, requests) = provider_recording(
+            200,
+            &format!(
+                r#"{{"KeyId":"{KEY_ARN}","Plaintext":"{}","EncryptionAlgorithm":"RSAES_OAEP_SHA_256"}}"#,
+                Base64::encode_string(DATA_KEY)
+            ),
+        )
+        .await;
+
+        let dek = provider
+            .decrypt_data_encryption_key(&public_key_encrypted_dek(b"", None)?)
+            .await?;
+
+        assert_eq!(dek.value().ref_sensitive_value().as_slice(), DATA_KEY);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].head.contains("TrentService.Decrypt"),
+            "{}",
+            requests[0].head
+        );
+        assert_eq!(
+            request_body(&requests[0]),
+            serde_json::json!({
+                "KeyId": KEY_ARN,
+                "EncryptionAlgorithm": "RSAES_OAEP_SHA_256",
+                "CiphertextBlob": Base64::encode_string(&ENCRYPTED_BLOCK),
+            })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_asymmetric_header_that_names_a_kek_id_or_a_version_is_refused_before_any_request(
+    ) -> KmsAeadResult<()> {
+        for (kek_id, kek_version) in [(&b"orders"[..], None), (b"", Some("3"))] {
+            let (provider, requests) = provider_recording(200, "{}").await;
+
+            let result = provider
+                .decrypt_data_encryption_key(&public_key_encrypted_dek(kek_id, kek_version)?)
+                .await;
+
+            assert!(
+                matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                    if error.public.code == "ASYMMETRIC_ENCRYPTED_DEK_FORMAT"),
+                "{result:?}"
+            );
+            assert!(requests.lock().unwrap().is_empty());
+        }
+        Ok(())
+    }
+
+    fn public_key_response(
+        key_usage: KeyUsageType,
+        encryption_algorithms: &[EncryptionAlgorithmSpec],
+    ) -> GetPublicKeyOutput {
+        GetPublicKeyOutput::builder()
+            .public_key(Blob::new(RsaOaepSuite::of_bits(2048).spki_der()))
+            .key_usage(key_usage)
+            .set_encryption_algorithms(Some(encryption_algorithms.to_vec()))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn a_public_key_is_the_configured_keys_without_a_version() -> KmsAeadResult<()> {
+        let (provider, requests) = provider_recording(
+            200,
+            &format!(
+                r#"{{"KeyId":"{KEY_ARN}","KeyUsage":"ENCRYPT_DECRYPT","KeySpec":"RSA_2048","PublicKey":"{}","EncryptionAlgorithms":["RSAES_OAEP_SHA_1","RSAES_OAEP_SHA_256"]}}"#,
+                Base64::encode_string(&RsaOaepSuite::of_bits(2048).spki_der())
+            ),
+        )
+        .await;
+
+        let public_key = provider.public_key().await?;
+
+        assert_eq!(public_key.kek(), provider.kek());
+        assert_eq!(public_key.kek_version(), None);
+        assert_eq!(
+            public_key.spki_der(),
+            RsaOaepSuite::of_bits(2048).spki_der()
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            requests[0].head.contains("TrentService.GetPublicKey"),
+            "{}",
+            requests[0].head
+        );
+        assert_eq!(
+            request_body(&requests[0]),
+            serde_json::json!({ "KeyId": KEY_ARN })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_public_key_of_another_usage_or_algorithm_is_refused() {
+        let provider = offline_provider();
+        for response in [
+            public_key_response(
+                KeyUsageType::SignVerify,
+                &[EncryptionAlgorithmSpec::RsaesOaepSha256],
+            ),
+            public_key_response(
+                KeyUsageType::EncryptDecrypt,
+                &[EncryptionAlgorithmSpec::RsaesOaepSha1],
+            ),
+            public_key_response(KeyUsageType::EncryptDecrypt, &[]),
+        ] {
+            let result = provider.kek_public_key(response.clone());
+
+            assert!(
+                matches!(&result, Err(error) if error.code() == "ASYMMETRIC_KEK_PUBLIC_KEY"),
+                "{response:?}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_public_key_response_without_a_key_is_refused_as_a_public_key() {
+        let response = GetPublicKeyOutput::builder()
+            .key_usage(KeyUsageType::EncryptDecrypt)
+            .encryption_algorithms(EncryptionAlgorithmSpec::RsaesOaepSha256)
+            .build();
+
+        let result = offline_provider().kek_public_key(response);
+
+        assert!(
+            matches!(&result, Err(error) if error.code() == "ASYMMETRIC_KEK_PUBLIC_KEY"),
+            "{result:?}"
+        );
+    }
+
     #[test]
     fn decrypt_names_the_configured_kek() {
         let provider = offline_provider();
@@ -338,7 +573,7 @@ mod tests {
             request.get_ciphertext_blob().as_ref().map(Blob::as_ref),
             Some(b"encrypted-dek".as_slice())
         );
-        assert_eq!(*provider.kek(), KekRef::new(KekProvider::Aws, KEY_ARN));
+        assert_eq!(*provider.kek(), KekRef::new(KmsProvider::Aws, KEY_ARN));
     }
 
     #[test]
@@ -548,6 +783,85 @@ mod tests {
             std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
             std::env::var("KMS_KEY_ID").expect("KMS_KEY_ID is set"),
         )
+    }
+
+    /// The asymmetric KEK of the live tests, `KMS_KEY_ID_RSA`: a key of spec `RSA_3072` and usage
+    /// `ENCRYPT_DECRYPT` in the account of the other live keys.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    async fn live_key_decrypts_what_its_public_key_encrypts() -> KmsAeadResult<()> {
+        use crate::providers::PublicKeyKekProvider;
+        use crate::test_provider::RsaTestBackend;
+        let reader = AwsKmsProvider::new(&AwsKmsKeyRef::new(
+            std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
+            std::env::var("KMS_KEY_ID_RSA").expect("KMS_KEY_ID_RSA is set"),
+        ))
+        .await?;
+
+        let public_key = reader.public_key().await?;
+        let producer = KmsAeadEnvelope::<_, RsaTestBackend>::new(PublicKeyKekProvider::<
+            RsaTestBackend,
+        >::new(public_key)?)?;
+        let reader = KmsAeadEnvelope::<_, RsaTestBackend>::new(reader)?;
+        let encrypted: Encrypted<SecretValue, Envelope> = producer
+            .encrypt(
+                b"orders/aws/rsa",
+                &SecretValue::from("encrypted by a producer"),
+            )
+            .await?;
+
+        assert_eq!(
+            producer.provider().public_key().kek(),
+            reader.provider().kek()
+        );
+        assert_eq!(producer.provider().public_key().kek_version(), None);
+        assert_eq!(
+            reader
+                .decrypt::<SecretValue>(b"orders/aws/rsa", &encrypted)
+                .await?,
+            SecretValue::from("encrypted by a producer")
+        );
+        Ok(())
+    }
+
+    /// A block encrypted with the public key of another key is refused by AWS KMS with one of the
+    /// two codes the book names for it.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-aws"), ignore)]
+    async fn live_key_refuses_a_block_of_another_key() -> KmsAeadResult<()> {
+        use crate::providers::{LocalAsymmetricKmsProvider, LocalKekId, PublicKeyKekProvider};
+        use crate::test_provider::RsaTestBackend;
+        let reader = AwsKmsProvider::new(&AwsKmsKeyRef::new(
+            std::env::var("ACCOUNT_ID").expect("ACCOUNT_ID is set"),
+            std::env::var("KMS_KEY_ID_RSA").expect("KMS_KEY_ID_RSA is set"),
+        ))
+        .await?;
+        let another_key = LocalAsymmetricKmsProvider::<RsaTestBackend>::ephemeral(
+            LocalKekId::try_from("another".to_string())?,
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+        )?;
+        let impostor = PublicKeyKekProvider::<RsaTestBackend>::new(AsymmetricKekPublicKey::new(
+            reader.kek().clone(),
+            None,
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+            another_key.public_key(None)?.spki_der().to_vec(),
+            PublicKeyFormat::SpkiDer,
+        )?)?;
+        let encrypted_dek = impostor
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::new(vec![0x42; 32])))
+            .await?;
+
+        let result = reader.decrypt_data_encryption_key(&encrypted_dek).await;
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if ["IncorrectKeyException", "InvalidCiphertextException"]
+                    .contains(&error.public.code.as_str())),
+            "{result:?}"
+        );
+        Ok(())
     }
 
     /// Decrypts the values of the algorithms the test backend implements: every one but

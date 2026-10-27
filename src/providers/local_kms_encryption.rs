@@ -1,21 +1,22 @@
-use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
-use std::fs::File;
-use std::io::Read;
 use std::num::NonZeroU32;
 use std::path::Path;
 
+use base64ct::{Base64UrlUnpadded, Encoding};
 use secret_vault_value::SecretValue;
+use serde::Deserialize;
 
-use super::KekVersion;
+use super::local_key_source::{decode_local_key_base64, read_local_key_env, read_local_key_file};
+use super::{KmsKeyVersion, LocalKekVersions};
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
 use crate::formats::local_kms::LocalEncryptedDek;
+use crate::formats::SymmetricKeyFormat;
 use crate::spans::{self, kms};
 use crate::{
-    AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, EncryptedDataEncryptionKey, KekRef,
+    KmsAeadDecryptionProvider, KmsAeadEncryptionProvider, KmsAeadResult, KmsProvider,
 };
 
 /// The name of a local key encryption key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and
@@ -79,6 +80,11 @@ impl Display for LocalKekVersion {
 
 /// One version of a local key encryption key: 32 bytes for AES-256-GCM, zeroised on drop.
 /// `Debug` shows the version and where the key came from, never the key.
+///
+/// Each loader takes the [`SymmetricKeyFormat`] of the key: [`Raw`](SymmetricKeyFormat::Raw), the
+/// 32 key bytes themselves, [`Base64`](SymmetricKeyFormat::Base64), their standard base64 with
+/// trailing whitespace allowed, or [`Jwk`](SymmetricKeyFormat::Jwk), an `oct` JSON Web Key. A file
+/// or a variable holds at most 32 KiB, the one cap of every local key of the two crates.
 pub struct LocalKek {
     version: LocalKekVersion,
     material: SecretValue,
@@ -87,24 +93,30 @@ pub struct LocalKek {
 }
 
 impl LocalKek {
-    /// The largest KEK file read: the 44 characters of the base64 and room for whitespace, small
-    /// enough that a wrong path is refused before its content is read into memory.
-    const MAX_FILE_LEN: usize = 256;
-
-    /// A KEK the application already holds: one an operator unseals with their own tool
-    /// (systemd-creds, a TPM, sops, age), or a credential the init system passes, such as a
-    /// file systemd's `LoadCredential` places in `$CREDENTIALS_DIRECTORY`. The recommended form
-    /// on a host.
+    /// A KEK the application already holds, in `format`: one an operator decrypts with their own
+    /// tool (systemd-creds, a TPM, sops, age), or a credential the init system passes, such as a
+    /// file systemd's `LoadCredential` places in `$CREDENTIALS_DIRECTORY`. The recommended form on
+    /// a host. 0.30's `from_secret` took the raw bytes, which [`SymmetricKeyFormat::Raw`]
+    /// reproduces.
     ///
     /// # Errors
     ///
-    /// `LOCAL_KEK_LENGTH` when `material` is not 32 bytes.
-    pub fn from_secret(version: LocalKekVersion, material: SecretValue) -> KmsAeadResult<Self> {
-        Self::new(version, material, "secret", "the secret")
+    /// `LOCAL_KEK_SOURCE` when `material` is not standard base64 under
+    /// [`SymmetricKeyFormat::Base64`] or not an `oct` JWK under [`SymmetricKeyFormat::Jwk`], and
+    /// `LOCAL_KEK_LENGTH` when the key is not 32 bytes.
+    pub fn from_secret(
+        version: LocalKekVersion,
+        material: SecretValue,
+        format: SymmetricKeyFormat,
+    ) -> KmsAeadResult<Self> {
+        Self::decode(version, material, format, "secret", "the secret")
     }
 
-    /// Reads the standard base64 of the 32 bytes from the environment variable `variable`.
-    /// Trailing whitespace is allowed.
+    /// Reads the key in `format` from the environment variable `variable`: the standard base64 of
+    /// the 32 bytes under [`SymmetricKeyFormat::Base64`], as 0.30's `from_env` read it, or the
+    /// variable's bytes as the key under [`SymmetricKeyFormat::Raw`], which an environment holds
+    /// only when none of them is `0x00`, or the JSON of an `oct` JWK under
+    /// [`SymmetricKeyFormat::Jwk`].
     ///
     /// The variable stays in the process environment for the life of the process: the same
     /// user can read it through `/proc/<pid>/environ`, and every child process inherits it.
@@ -113,65 +125,69 @@ impl LocalKek {
     ///
     /// # Errors
     ///
-    /// `LOCAL_KEK_SOURCE` when the variable is not set or is not standard base64, and
-    /// `LOCAL_KEK_LENGTH` when it does not decode to 32 bytes. The error names the variable,
-    /// never its value.
-    pub fn from_env(version: LocalKekVersion, variable: &str) -> KmsAeadResult<Self> {
+    /// `LOCAL_KEK_SOURCE` when the variable is not set, is not standard base64 where base64 is
+    /// expected or is not an `oct` JWK where one is expected, and `LOCAL_KEK_LENGTH` when it is
+    /// larger than 32 KiB or the key is not 32 bytes.
+    /// The error names the variable, never its value.
+    pub fn from_env(
+        version: LocalKekVersion,
+        variable: &str,
+        format: SymmetricKeyFormat,
+    ) -> KmsAeadResult<Self> {
         let origin = format!("the environment variable {variable}");
-        let encoded = std::env::var_os(variable).ok_or_else(|| {
-            KmsAeadSystemError::create("LOCAL_KEK_SOURCE", &format!("{origin} is not set"))
-        })?;
-        let material = Self::decode(SecretValue::new(encoded.into_encoded_bytes()), &origin)?;
-        Self::new(version, material, "env", &origin)
+        let content = read_local_key_env(variable, &origin)
+            .map_err(|error| error.into_error("LOCAL_KEK_SOURCE", "LOCAL_KEK_LENGTH"))?;
+        Self::decode(version, content, format, "env", &origin)
     }
 
-    /// Reads the standard base64 of the 32 bytes from the file at `path`. Trailing whitespace,
-    /// such as an editor's final newline, is allowed. A symbolic link is followed.
+    /// Reads the key in `format` from the file at `path`: the standard base64 of the 32 bytes under
+    /// [`SymmetricKeyFormat::Base64`], as 0.30's `from_file` read it, with trailing whitespace such
+    /// as an editor's final newline allowed, or the 32 bytes as they are under
+    /// [`SymmetricKeyFormat::Raw`], or the JSON of an `oct` JWK under [`SymmetricKeyFormat::Jwk`].
+    /// A symbolic link is followed.
     ///
-    /// The opened file must be a regular file of at most 256 bytes; both are checked on the
-    /// opened file before it is read, so a file swapped in after the open is never read. No
-    /// permission or ownership check runs: restricting who can read or replace the file is the
-    /// operator's job. Opening a FIFO blocks until a writer opens it.
+    /// The opened file must be a regular file of at most 32 KiB; both are checked on the opened
+    /// file before it is read, so a file swapped in after the open is never read. No permission
+    /// or ownership check runs: restricting who can read or replace the file is the operator's
+    /// job. Opening a FIFO blocks until a writer opens it.
     ///
     /// # Errors
     ///
-    /// `LOCAL_KEK_SOURCE` when the file cannot be read, is not a regular file or is not standard
-    /// base64, and `LOCAL_KEK_LENGTH` when it is larger than 256 bytes or does not decode to 32
-    /// bytes. The error names the path, never the content.
-    pub fn from_file(version: LocalKekVersion, path: &Path) -> KmsAeadResult<Self> {
+    /// `LOCAL_KEK_SOURCE` when the file cannot be read, is not a regular file, is not standard
+    /// base64 where base64 is expected or is not an `oct` JWK where one is expected, and
+    /// `LOCAL_KEK_LENGTH` when it is larger than 32 KiB or the key is not 32 bytes. The error names the path, never the content.
+    pub fn from_file(
+        version: LocalKekVersion,
+        path: &Path,
+        format: SymmetricKeyFormat,
+    ) -> KmsAeadResult<Self> {
         let origin = format!("the file {}", path.display());
-        let unreadable = |error: std::io::Error| {
-            KmsAeadSystemError::create(
-                "LOCAL_KEK_SOURCE",
-                &format!("Unable to read {origin}: {error}"),
-            )
-        };
+        let content = read_local_key_file(path, &origin)
+            .map_err(|error| error.into_error("LOCAL_KEK_SOURCE", "LOCAL_KEK_LENGTH"))?;
+        Self::decode(version, content, format, "file", &origin)
+    }
 
-        let file = File::open(path).map_err(unreadable)?;
-        let metadata = file.metadata().map_err(unreadable)?;
-        if !metadata.is_file() {
-            return Err(KmsAeadSystemError::create(
-                "LOCAL_KEK_SOURCE",
-                &format!("{origin} is not a regular file"),
-            ));
-        }
-        let len = usize::try_from(metadata.len())
-            .ok()
-            .filter(|len| *len <= Self::MAX_FILE_LEN)
-            .ok_or_else(|| {
+    /// The KEK `content` holds in `format`, read from `origin`.
+    fn decode(
+        version: LocalKekVersion,
+        content: SecretValue,
+        format: SymmetricKeyFormat,
+        source: &'static str,
+        origin: &str,
+    ) -> KmsAeadResult<Self> {
+        let material = match format {
+            SymmetricKeyFormat::Raw => content,
+            SymmetricKeyFormat::Jwk => OctJwk::key(&content).map_err(|reason| {
+                KmsAeadSystemError::create("LOCAL_KEK_SOURCE", &format!("{origin} {reason}"))
+            })?,
+            SymmetricKeyFormat::Base64 => decode_local_key_base64(content).ok_or_else(|| {
                 KmsAeadSystemError::create(
-                    "LOCAL_KEK_LENGTH",
-                    &format!("{origin} is larger than {} bytes", Self::MAX_FILE_LEN),
+                    "LOCAL_KEK_SOURCE",
+                    &format!("{origin} does not hold standard base64"),
                 )
-            })?;
-        let mut encoded = SecretValue::new(Vec::with_capacity(len));
-        // Reading at most the length the file had when opened keeps the buffer from growing,
-        // which would leave a copy of the key in freed memory.
-        file.take(metadata.len())
-            .read_to_end(encoded.ref_sensitive_value_mut())
-            .map_err(unreadable)?;
-        let material = Self::decode(encoded, &origin)?;
-        Self::new(version, material, "file", &origin)
+            })?,
+        };
+        Self::new(version, material, source, origin)
     }
 
     fn new(
@@ -195,18 +211,51 @@ impl LocalKek {
             ))
         }
     }
+}
 
-    /// Decodes standard base64 with trailing whitespace allowed. Every copy of the text is
-    /// zeroised: `encoded` on drop, and the trimmed copy by `from_base64_str`.
-    fn decode(encoded: SecretValue, origin: &str) -> KmsAeadResult<SecretValue> {
-        let invalid = || {
-            KmsAeadSystemError::create(
-                "LOCAL_KEK_SOURCE",
-                &format!("{origin} does not hold standard base64"),
+/// An `oct` JSON Web Key as read: the members that decide whether it is a usable KEK, every other
+/// one ignored as RFC 7517 requires. `k` is held as a [`SecretValue`] so that its text is zeroised.
+#[derive(Deserialize)]
+struct OctJwk {
+    kty: String,
+    alg: Option<String>,
+    k: Option<SecretValue>,
+}
+
+impl OctJwk {
+    /// The `JWK_ALG` values RFC 7518 gives a 256-bit symmetric key that encrypts or wraps keys.
+    const ALGORITHMS: [&'static str; 2] = ["A256GCM", "A256KW"];
+
+    /// The key bytes of the `oct` JWK in `json`, or why it holds none, to follow the origin in an
+    /// error. The length of the key is not checked here.
+    fn key(json: &SecretValue) -> Result<SecretValue, String> {
+        let jwk: OctJwk = serde_json::from_slice(json.ref_sensitive_value()).map_err(|error| {
+            format!(
+                "is not a JWK: {:?} error at line {} column {}",
+                error.classify(),
+                error.line(),
+                error.column()
             )
-        };
-        let text = encoded.sensitive_value_to_str().map_err(|_| invalid())?;
-        SecretValue::from_base64_str(text.trim_end().to_string()).map_err(|_| invalid())
+        })?;
+        if jwk.kty != "oct" {
+            return Err("is not an oct JWK".to_string());
+        }
+        if jwk
+            .alg
+            .as_deref()
+            .is_some_and(|alg| !Self::ALGORITHMS.contains(&alg))
+        {
+            return Err(format!(
+                "has an alg other than {}",
+                Self::ALGORITHMS.join(" or ")
+            ));
+        }
+        jwk.k
+            .as_ref()
+            .and_then(|k| k.sensitive_value_to_str().ok())
+            .and_then(|k| Base64UrlUnpadded::decode_vec(k).ok())
+            .map(SecretValue::new)
+            .ok_or_else(|| "has no k in base64url without padding".to_string())
     }
 }
 
@@ -236,11 +285,11 @@ impl std::fmt::Debug for LocalKek {
 /// [`EncryptedDataEncryptionKey`], is
 ///
 /// ```text
-/// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed DEK][tag: 16]
+/// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][encrypted DEK][tag: 16]
 /// ```
 ///
 /// with the header up to the version as the associated data, so neither the id nor the version
-/// can be changed. A decryption refuses a key encrypted under another KEK id before it opens it.
+/// can be changed. A decryption refuses a key encrypted under another KEK id before it decrypts it.
 ///
 /// # Limits
 ///
@@ -249,8 +298,8 @@ impl std::fmt::Debug for LocalKek {
 ///   [`LocalKek::from_file`] does not check them.
 /// - Every DEK encryption is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK
 ///   version is safe for about 2^32 encryptions. With the per-call envelope every value costs one
-///   encryption: a host sealing 1,000 values per second spends 2^32 encryptions in 50 days. Reuse
-///   each data encryption key for many values instead, and add a new KEK version before the
+///   encryption: a host encrypting 1,000 values per second spends 2^32 encryptions in 50 days.
+///   Reuse each data encryption key for many values instead, and add a new KEK version before the
 ///   budget is spent.
 /// - Crypto-shredding means destroying every copy of the KEK, backups included.
 /// - Keys encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS.
@@ -267,9 +316,7 @@ pub struct LocalKmsProvider<B> {
     /// Its key is the KEK id, which every encrypted DEK records.
     kek: KekRef,
     /// The material of each KEK version.
-    keks: BTreeMap<LocalKekVersion, SecretValue>,
-    /// Always a key of `keks`.
-    encrypting_version: LocalKekVersion,
+    keks: LocalKekVersions<SecretValue>,
     cipher: AeadCipher<B>,
 }
 
@@ -284,38 +331,16 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
     /// `LOCAL_KEK_VERSIONS` when `keks` is empty or lists a version twice.
     pub fn new(id: LocalKekId, keks: Vec<LocalKek>) -> KmsAeadResult<Self> {
         let cipher = AeadCipher::new(AeadAlgorithm::Aes256Gcm)?;
-        let mut sources = Vec::with_capacity(keks.len());
-        let mut by_version = BTreeMap::new();
-        for kek in keks {
-            if by_version.insert(kek.version, kek.material).is_some() {
-                return Err(KmsAeadSystemError::create(
-                    "LOCAL_KEK_VERSIONS",
-                    &format!("The local KEK {id} lists version {} twice", kek.version),
-                ));
-            }
-            sources.push((kek.version, kek.source));
-        }
-        let Some(&encrypting_version) = by_version.keys().next_back() else {
-            return Err(KmsAeadSystemError::create(
-                "LOCAL_KEK_VERSIONS",
-                &format!("The local KEK {id} has no version"),
-            ));
-        };
+        let kek = KekRef::new(KmsProvider::Local, id.to_string());
+        let keks = LocalKekVersions::new(
+            id.clone(),
+            keks.into_iter()
+                .map(|kek| (kek.version, kek.source.to_string(), kek.material))
+                .collect(),
+        )?;
+        kms::local_kek_loaded(&id, &keks.listing());
 
-        sources.sort();
-        let versions = sources
-            .iter()
-            .map(|(version, source)| format!("{version} ({source})"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        kms::local_kek_loaded(&id, &versions);
-
-        Ok(Self {
-            kek: KekRef::new(KekProvider::Local, id.to_string()),
-            keks: by_version,
-            encrypting_version,
-            cipher,
-        })
+        Ok(Self { kek, keks, cipher })
     }
 
     /// The provider with `version` encrypting new DEKs in place of the highest version listed,
@@ -327,16 +352,7 @@ impl<B: AeadBackend> LocalKmsProvider<B> {
     ///
     /// `LOCAL_KEK_VERSIONS` when the provider does not list `version`.
     pub fn with_encrypting_version(mut self, version: LocalKekVersion) -> KmsAeadResult<Self> {
-        if !self.keks.contains_key(&version) {
-            return Err(KmsAeadSystemError::create(
-                "LOCAL_KEK_VERSIONS",
-                &format!(
-                    "The local KEK {} does not list version {version} to encrypt with",
-                    self.kek.key()
-                ),
-            ));
-        }
-        self.encrypting_version = version;
+        self.keks = self.keks.with_encrypting_version(version)?;
         Ok(self)
     }
 
@@ -367,14 +383,14 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         dek: &DataEncryptionKey,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         spans::in_span(kms::encrypt_span(&self.kek), async {
-            let version = self.encrypting_version;
-            let material = self.keks.get(&version).ok_or_else(|| {
+            let version = self.keks.encrypting_version();
+            let material = self.keks.get(version).ok_or_else(|| {
                 KmsAeadSystemError::create(
                     "LOCAL_KEK_VERSIONS",
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
                 )
             })?;
-            let kek_version = KekVersion::from(version);
+            let kek_version = KmsKeyVersion::from(version);
             kms::record_kek_version(kek_version.as_str());
             let header = LocalEncryptedDek::header(self.kek.key(), version)?;
             let encrypted_dek = kms::timed("encrypt_dek", self.kek.provider(), async {
@@ -390,7 +406,9 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
         })
         .await
     }
+}
 
+impl<B: AeadBackend> KmsAeadDecryptionProvider for LocalKmsProvider<B> {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
@@ -413,7 +431,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             }
             let version = layout.kek_version;
             kms::record_kek_version(&version.to_string());
-            let material = self.keks.get(&version).ok_or_else(|| {
+            let material = self.keks.get(version).ok_or_else(|| {
                 KmsAeadEncryptionError::create(
                     "LOCAL_KEK_UNKNOWN_VERSION",
                     &format!("The local KEK {} has no version {version}", self.kek.key()),
@@ -422,7 +440,7 @@ impl<B: AeadBackend> KmsAeadEncryptionProvider for LocalKmsProvider<B> {
             let key = kms::timed("decrypt_dek", self.kek.provider(), async {
                 self.cipher.open(
                     layout.header,
-                    layout.sealed,
+                    layout.cipher_text,
                     0,
                     material.ref_sensitive_value(),
                 )
@@ -457,6 +475,7 @@ mod tests {
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::MIN),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
@@ -467,7 +486,7 @@ mod tests {
             provider.decrypt_data_encryption_key(&encrypted_dek).await?,
             dek
         );
-        assert_eq!(*provider.kek(), KekRef::new(KekProvider::Local, ORDERS));
+        assert_eq!(*provider.kek(), KekRef::new(KmsProvider::Local, ORDERS));
         Ok(())
     }
 
@@ -478,20 +497,21 @@ mod tests {
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::MIN),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
 
         let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
 
-        let (header, sealed) = encrypted_dek.value().split_at(2 + ORDERS.len() + 4);
-        let opened: SecretValue = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
+        let (header, cipher_text) = encrypted_dek.value().split_at(2 + ORDERS.len() + 4);
+        let decrypted: SecretValue = AeadCipher::<TestBackend>::new(AeadAlgorithm::Aes256Gcm)?
             .decrypt_bare(
                 header,
-                &Encrypted::<SecretValue, Bare>::try_from(sealed.to_vec())?,
+                &Encrypted::<SecretValue, Bare>::try_from(cipher_text.to_vec())?,
                 &DataEncryptionKey::from(SecretValue::new(KEK_MATERIAL.to_vec())),
             )?;
-        assert_eq!(DataEncryptionKey::from(opened), dek);
+        assert_eq!(DataEncryptionKey::from(decrypted), dek);
         Ok(())
     }
 
@@ -504,15 +524,28 @@ mod tests {
             vec![LocalKek::from_secret(
                 v1,
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let old_encrypted_dek = old.encrypt_data_encryption_key(&dek).await?;
         let rotated = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
-                LocalKek::from_secret(v3, SecretValue::new(vec![0x43; 32]))?,
-                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
-                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+                LocalKek::from_secret(
+                    v3,
+                    SecretValue::new(vec![0x43; 32]),
+                    SymmetricKeyFormat::Raw,
+                )?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
+                )?,
+                LocalKek::from_secret(
+                    v2,
+                    SecretValue::new(vec![0x44; 32]),
+                    SymmetricKeyFormat::Raw,
+                )?,
             ],
         )?;
 
@@ -533,7 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_dek_from_a_process_listing_a_new_version_opens_where_only_the_old_one_is_listed(
+    async fn a_dek_from_a_process_listing_a_new_version_decrypts_where_only_the_old_one_is_listed(
     ) -> KmsAeadResult<()> {
         let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
@@ -542,13 +575,22 @@ mod tests {
             vec![LocalKek::from_secret(
                 v1,
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let restarted = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
-                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
-                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
+                )?,
+                LocalKek::from_secret(
+                    v2,
+                    SecretValue::new(vec![0x44; 32]),
+                    SymmetricKeyFormat::Raw,
+                )?,
             ],
         )?
         .with_encrypting_version(v1)?;
@@ -571,8 +613,16 @@ mod tests {
         let rotated = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
             vec![
-                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
-                LocalKek::from_secret(v2, SecretValue::new(vec![0x44; 32]))?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
+                )?,
+                LocalKek::from_secret(
+                    v2,
+                    SecretValue::new(vec![0x44; 32]),
+                    SymmetricKeyFormat::Raw,
+                )?,
             ],
         )?;
 
@@ -586,8 +636,8 @@ mod tests {
                 encrypted_dek_under_v1.kek_version()
             ],
             [
-                Some(&KekVersion::try_from("2".to_string())?),
-                Some(&KekVersion::try_from("1".to_string())?)
+                Some(&KmsKeyVersion::try_from("2".to_string())?),
+                Some(&KmsKeyVersion::try_from("1".to_string())?)
             ]
         );
         Ok(())
@@ -601,6 +651,7 @@ mod tests {
             vec![LocalKek::from_secret(
                 v1,
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
 
@@ -620,6 +671,7 @@ mod tests {
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
@@ -647,6 +699,7 @@ mod tests {
                     LocalKek::from_secret(
                         LocalKekVersion::from(NonZeroU32::new(version).unwrap()),
                         SecretValue::new(KEK_MATERIAL.to_vec()),
+                        SymmetricKeyFormat::Raw,
                     )
                 })
                 .into_iter()
@@ -679,6 +732,7 @@ mod tests {
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::MIN),
                     SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
                 )?],
             )
         });
@@ -702,6 +756,7 @@ mod tests {
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::MIN),
                     SecretValue::new(material.to_vec()),
+                    SymmetricKeyFormat::Raw,
                 )?],
             )
         });
@@ -725,6 +780,7 @@ mod tests {
                 vec![LocalKek::from_secret(
                     LocalKekVersion::from(NonZeroU32::new(version).unwrap()),
                     SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
                 )?],
             )
         });
@@ -747,6 +803,7 @@ mod tests {
             vec![LocalKek::from_secret(
                 LocalKekVersion::from(NonZeroU32::new(7).unwrap()),
                 SecretValue::new(KEK_MATERIAL.to_vec()),
+                SymmetricKeyFormat::Raw,
             )?],
         )?;
         let golden = hex::decode(GOLDEN_ENCRYPTED_DEK).unwrap();
@@ -767,12 +824,20 @@ mod tests {
         let v1 = LocalKekVersion::from(NonZeroU32::MIN);
         let orders = LocalKekId::try_from(ORDERS.to_string())?;
 
-        let short = LocalKek::from_secret(v1, SecretValue::new(vec![0x42; 16]));
+        let short = LocalKek::from_secret(
+            v1,
+            SecretValue::new(vec![0x42; 16]),
+            SymmetricKeyFormat::Raw,
+        );
         assert!(
             matches!(&short, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
             "{short:?}"
         );
-        let unset = LocalKek::from_env(v1, "KMS_AEAD_LOCAL_KEK_TEST_UNSET_VARIABLE");
+        let unset = LocalKek::from_env(
+            v1,
+            "KMS_AEAD_LOCAL_KEK_TEST_UNSET_VARIABLE",
+            SymmetricKeyFormat::Base64,
+        );
         assert!(
             matches!(&unset, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
             "{unset:?}"
@@ -785,8 +850,16 @@ mod tests {
         let twice = LocalKmsProvider::<TestBackend>::new(
             orders,
             vec![
-                LocalKek::from_secret(v1, SecretValue::new(KEK_MATERIAL.to_vec()))?,
-                LocalKek::from_secret(v1, SecretValue::new(vec![0x43; 32]))?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
+                )?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::new(vec![0x43; 32]),
+                    SymmetricKeyFormat::Raw,
+                )?,
             ],
         );
         assert!(
@@ -835,15 +908,126 @@ mod tests {
         let [v1, v2] = [1, 2].map(|v| LocalKekVersion::from(NonZeroU32::new(v).unwrap()));
         let provider = LocalKmsProvider::<TestBackend>::new(
             LocalKekId::try_from(ORDERS.to_string())?,
-            vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x5A; 32]))?],
+            vec![LocalKek::from_secret(
+                v1,
+                SecretValue::new(vec![0x5A; 32]),
+                SymmetricKeyFormat::Raw,
+            )?],
         )?;
-        let kek = LocalKek::from_secret(v2, SecretValue::new(vec![0x5A; 32]))?;
+        let kek = LocalKek::from_secret(
+            v2,
+            SecretValue::new(vec![0x5A; 32]),
+            SymmetricKeyFormat::Raw,
+        )?;
 
         let printed = format!("{provider:?} {kek:?}");
 
         for rendering in renderings(&[0x5A; 32]) {
             assert!(!printed.contains(&rendering), "{printed}");
         }
+        Ok(())
+    }
+
+    /// The standard base64 of 32 bytes of `0xfb`, whose `+` and `/` are not in base64url.
+    const KEY_IN_STANDARD_BASE64: &str = "+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/v7+/s=";
+
+    const KEK_JWK_K: &str = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI";
+
+    fn load_jwk(json: &str) -> KmsAeadResult<LocalKek> {
+        LocalKek::from_secret(
+            LocalKekVersion::from(NonZeroU32::MIN),
+            SecretValue::from(json),
+            SymmetricKeyFormat::Jwk,
+        )
+    }
+
+    #[tokio::test]
+    async fn an_oct_jwk_decrypts_like_the_same_key_in_base64() -> KmsAeadResult<()> {
+        let base64 = LocalKmsProvider::<TestBackend>::new(
+            LocalKekId::try_from(ORDERS.to_string())?,
+            vec![LocalKek::from_secret(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                SecretValue::from("QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="),
+                SymmetricKeyFormat::Base64,
+            )?],
+        )?;
+        let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+        let documents = [
+            format!(r#"{{"kty":"oct","k":"{KEK_JWK_K}"}}"#),
+            format!(
+                r#"{{"kty":"oct","k":"{KEK_JWK_K}","alg":"A256GCM","kid":"orders-1","use":"enc","key_ops":["encrypt","decrypt"]}}"#
+            ),
+            format!(r#"{{"kty":"oct","alg":"A256KW","k":"{KEK_JWK_K}","ext":true}}"#),
+        ];
+
+        for document in documents {
+            let provider = LocalKmsProvider::<TestBackend>::new(
+                LocalKekId::try_from(ORDERS.to_string())?,
+                vec![load_jwk(&document)?],
+            )?;
+            let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+            assert_eq!(
+                base64.decrypt_data_encryption_key(&encrypted_dek).await?,
+                dek,
+                "{document}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_jwk_that_is_not_a_usable_oct_key_is_refused_as_a_source() {
+        let padded = format!("{KEK_JWK_K}=");
+        let documents = [
+            format!(r#"{{"kty":"RSA","k":"{KEK_JWK_K}"}}"#),
+            format!(r#"{{"kty":"EC","k":"{KEK_JWK_K}"}}"#),
+            format!(r#"{{"k":"{KEK_JWK_K}"}}"#),
+            format!(r#"{{"kty":"oct","k":"{padded}"}}"#),
+            format!(r#"{{"kty":"oct","k":"{KEY_IN_STANDARD_BASE64}"}}"#),
+            format!(r#"{{"kty":"oct","alg":"HS256","k":"{KEK_JWK_K}"}}"#),
+            format!(r#"{{"kty":"oct","alg":"A128GCM","k":"{KEK_JWK_K}"}}"#),
+            r#"{"kty":"oct"}"#.to_string(),
+            r#"{"kty":"oct","k":42}"#.to_string(),
+            "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=".to_string(),
+            String::new(),
+        ];
+
+        for document in documents {
+            let result = load_jwk(&document);
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
+                "{document}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jwk_of_another_length_is_refused() {
+        for k in [
+            "QkJCQg",
+            "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg",
+            "",
+        ] {
+            let result = load_jwk(&format!(r#"{{"kty":"oct","k":"{k}"}}"#));
+            assert!(
+                matches!(&result, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
+                "{k}: {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jwk_is_read_from_an_environment_variable() -> KmsAeadResult<()> {
+        const VARIABLE: &str = "KMS_AEAD_LOCAL_KEK_TEST_JWK";
+        std::env::set_var(VARIABLE, format!(r#"{{"kty":"oct","k":"{KEK_JWK_K}"}}"#));
+
+        let kek = LocalKek::from_env(
+            LocalKekVersion::from(NonZeroU32::MIN),
+            VARIABLE,
+            SymmetricKeyFormat::Jwk,
+        )?;
+
+        assert_eq!(kek.material.ref_sensitive_value(), &KEK_MATERIAL.to_vec());
         Ok(())
     }
 
@@ -866,7 +1050,7 @@ mod tests {
                 Self(path)
             }
 
-            fn file(&self, name: &str, content: &str) -> PathBuf {
+            fn file(&self, name: &str, content: impl AsRef<[u8]>) -> PathBuf {
                 let path = self.0.join(name);
                 fs::write(&path, content).unwrap();
                 path
@@ -880,40 +1064,79 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_kek_file_encrypts_and_decrypts() -> KmsAeadResult<()> {
-            let dir = TestDir::new("round-trip");
-            let path = dir.file("kek", KEK_BASE64);
+        async fn every_source_and_format_reads_the_same_kek() -> KmsAeadResult<()> {
+            let dir = TestDir::new("formats");
             let v1 = LocalKekVersion::from(NonZeroU32::MIN);
-            let from_file = LocalKmsProvider::<TestBackend>::new(
-                LocalKekId::try_from(ORDERS.to_string())?,
-                vec![LocalKek::from_file(v1, &path)?],
-            )?;
             let from_secret = LocalKmsProvider::<TestBackend>::new(
                 LocalKekId::try_from(ORDERS.to_string())?,
                 vec![LocalKek::from_secret(
                     v1,
                     SecretValue::new(KEK_MATERIAL.to_vec()),
+                    SymmetricKeyFormat::Raw,
                 )?],
             )?;
             let dek = DataEncryptionKey::from(SecretValue::new(DEK_MATERIAL.to_vec()));
+            let keks = [
+                LocalKek::from_file(
+                    v1,
+                    &dir.file("base64", KEK_BASE64),
+                    SymmetricKeyFormat::Base64,
+                )?,
+                LocalKek::from_file(v1, &dir.file("raw", KEK_MATERIAL), SymmetricKeyFormat::Raw)?,
+                LocalKek::from_secret(
+                    v1,
+                    SecretValue::from(KEK_BASE64),
+                    SymmetricKeyFormat::Base64,
+                )?,
+            ];
 
-            let encrypted_dek = from_file.encrypt_data_encryption_key(&dek).await?;
+            for kek in keks {
+                let source = kek.source;
+                let provider = LocalKmsProvider::<TestBackend>::new(
+                    LocalKekId::try_from(ORDERS.to_string())?,
+                    vec![kek],
+                )?;
+                let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
+                assert_eq!(
+                    from_secret
+                        .decrypt_data_encryption_key(&encrypted_dek)
+                        .await?,
+                    dek,
+                    "{source}"
+                );
+            }
+            Ok(())
+        }
 
-            assert_eq!(
-                from_secret
-                    .decrypt_data_encryption_key(&encrypted_dek)
-                    .await?,
-                dek
+        #[test]
+        fn a_jwk_file_with_a_trailing_newline_is_read() -> KmsAeadResult<()> {
+            let dir = TestDir::new("jwk");
+            let path = dir.file(
+                "kek.jwk",
+                format!("{{\"kty\":\"oct\",\"k\":\"{KEK_JWK_K}\"}}\n"),
             );
+
+            let kek = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Jwk,
+            )?;
+
+            assert_eq!(kek.material.ref_sensitive_value(), &KEK_MATERIAL.to_vec());
             Ok(())
         }
 
         #[test]
         fn a_trailing_newline_is_accepted() {
             let dir = TestDir::new("newline");
-            let path = dir.file("kek", &format!("{KEK_BASE64}\n"));
+            let path = dir.file("kek", format!("{KEK_BASE64}\n"));
 
-            assert!(LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path).is_ok());
+            assert!(LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64
+            )
+            .is_ok());
         }
 
         #[test]
@@ -921,7 +1144,11 @@ mod tests {
             let dir = TestDir::new("base64");
             let path = dir.file("kek", "not base64!");
 
-            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+            let result = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64,
+            );
 
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
@@ -934,7 +1161,11 @@ mod tests {
             let dir = TestDir::new("length");
             let path = dir.file("kek", "QkJCQg==");
 
-            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+            let result = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64,
+            );
 
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),
@@ -947,7 +1178,11 @@ mod tests {
             let dir = TestDir::new("directory");
             let path = dir.0.clone();
 
-            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+            let result = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64,
+            );
 
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
@@ -960,7 +1195,11 @@ mod tests {
             let dir = TestDir::new("missing");
             let path = dir.0.join("kek");
 
-            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+            let result = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64,
+            );
 
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_KEK_SOURCE"),
@@ -973,10 +1212,17 @@ mod tests {
             let dir = TestDir::new("large");
             let path = dir.file(
                 "kek",
-                &format!("{KEK_BASE64}{}", " ".repeat(LocalKek::MAX_FILE_LEN)),
+                format!(
+                    "{KEK_BASE64}{}",
+                    " ".repeat(crate::providers::local_key_source::LOCAL_KEY_MAX_LEN)
+                ),
             );
 
-            let result = LocalKek::from_file(LocalKekVersion::from(NonZeroU32::MIN), &path);
+            let result = LocalKek::from_file(
+                LocalKekVersion::from(NonZeroU32::MIN),
+                &path,
+                SymmetricKeyFormat::Base64,
+            );
 
             assert!(
                 matches!(&result, Err(e) if e.code() == "LOCAL_KEK_LENGTH"),

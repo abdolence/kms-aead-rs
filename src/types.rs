@@ -5,7 +5,7 @@ use secret_vault_value::SecretValue;
 use subtle::ConstantTimeEq;
 
 use crate::errors::*;
-use crate::providers::KekVersion;
+use crate::providers::KmsKeyVersion;
 use crate::KmsAeadResult;
 
 /// A plaintext data encryption key, zeroised on drop and shown as `***` by `Debug`. Equality
@@ -87,7 +87,7 @@ impl Eq for DataEncryptionKey {}
 #[derive(Clone)]
 pub struct EncryptedDataEncryptionKey {
     bytes: Vec<u8>,
-    kek_version: Option<KekVersion>,
+    kek_version: Option<KmsKeyVersion>,
 }
 
 impl EncryptedDataEncryptionKey {
@@ -102,7 +102,7 @@ impl EncryptedDataEncryptionKey {
     /// The same encrypted DEK with `kek_version`, the version of the KEK that encrypted it. A
     /// provider passes the version its KMS's response names, never the one it expects: a KMS that
     /// is still propagating a rotation may encrypt under the previous version.
-    pub fn with_kek_version(self, kek_version: KekVersion) -> Self {
+    pub fn with_kek_version(self, kek_version: KmsKeyVersion) -> Self {
         Self {
             kek_version: Some(kek_version),
             ..self
@@ -121,8 +121,22 @@ impl EncryptedDataEncryptionKey {
 
     /// The version of the KEK that encrypted the key, where it is known, see the type docs. Always
     /// `None` under AWS KMS, whose Encrypt response names no key material.
-    pub fn kek_version(&self) -> Option<&KekVersion> {
+    pub fn kek_version(&self) -> Option<&KmsKeyVersion> {
         self.kek_version.as_ref()
+    }
+
+    /// Whether the bytes are in the `0x02` layout, the one a public key encrypts into:
+    ///
+    /// ```text
+    /// [0x02][algorithm][i: u8][KEK id: i bytes][k: u8][KEK version: k bytes][RSA block]
+    /// ```
+    ///
+    /// with a known algorithm, a header within the bytes and a block of 256, 384 or 512 bytes. A
+    /// keyring logs a `WARN` when it loads a record that holds one under a mode other than
+    /// `RecordSignaturePolicy::Required`.
+    pub fn is_encrypted_with_public_key(&self) -> bool {
+        crate::formats::asymmetric::PublicKeyEncryptedDek::read(&self.bytes)
+            .is_some_and(|read| read.is_ok())
     }
 
     /// The lowercase hex of the bytes.
@@ -169,7 +183,7 @@ impl PartialEq for EncryptedDataEncryptionKey {
 /// By the bytes alone, as [`PartialEq`].
 impl Eq for EncryptedDataEncryptionKey {}
 
-/// Hashes the bytes alone, in variable time: an encrypted DEK opens nothing without the KMS.
+/// Hashes the bytes alone, in variable time: an encrypted DEK decrypts nothing without the KMS.
 impl Hash for EncryptedDataEncryptionKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.bytes.hash(state);

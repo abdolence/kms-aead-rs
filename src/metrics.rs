@@ -26,7 +26,8 @@ pub(crate) use unrecorded::{record_kms_call, Measurement};
     )
 )]
 pub struct Call {
-    /// `encrypt`, `decrypt`, `reseal`, `beacon`, `probe`, `generate_dek` or `reencrypt_dek`.
+    /// `encrypt`, `decrypt`, `reencrypt`, `beacon`, `probe`, `generate_dek`, `reencrypt_dek`,
+    /// `stream_encrypt` or `stream_decrypt`.
     pub operation: &'static str,
     /// `per_call`, `store_less`, `caller_dek` or `keyring`.
     pub mode: &'static str,
@@ -45,12 +46,12 @@ pub mod instruments {
     use std::sync::LazyLock;
     use std::time::{Duration, Instant};
 
-    use opentelemetry::metrics::Histogram;
+    use opentelemetry::metrics::{Counter, Histogram};
     use opentelemetry::{InstrumentationScope, KeyValue};
 
     pub use super::Call;
     use crate::formats::Format;
-    use crate::{Encrypted, KekProvider, KeyId, KmsAeadResult};
+    use crate::{Encrypted, KeyId, KmsAeadResult, KmsProvider};
 
     const OPERATION: &str = "kms_aead.operation";
     const MODE: &str = "kms_aead.mode";
@@ -61,7 +62,7 @@ pub mod instruments {
     /// OpenTelemetry's attribute of the class of error a call ended with, set only on failure.
     const ERROR_TYPE: &str = "error.type";
 
-    /// The bucket bounds of an operation, in seconds: from the microseconds of a seal with a
+    /// The bucket bounds of an operation, in seconds: from the microseconds of an encryption with a
     /// cached key up to the KMS round trip of a cache miss.
     const OPERATION_DURATION_BOUNDS: [f64; 19] = [
         0.00001, 0.000025, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025,
@@ -79,6 +80,7 @@ pub mod instruments {
         operation_duration: Histogram<f64>,
         kms_duration: Histogram<f64>,
         store_duration: Histogram<f64>,
+        record_refusals: Counter<u64>,
     }
 
     static INSTRUMENTS: LazyLock<Instruments> = LazyLock::new(|| {
@@ -94,7 +96,7 @@ pub mod instruments {
             plaintext_size: meter
                 .u64_histogram("kms_aead.plaintext.size")
                 .with_unit("By")
-                .with_description("The plaintext size of each value sealed or opened")
+                .with_description("The plaintext size of each value encrypted or decrypted")
                 .with_boundaries(Vec::new())
                 .build(),
             operation_duration: meter
@@ -115,12 +117,19 @@ pub mod instruments {
                 .with_description("The time a read of a keyring record from its store took")
                 .with_boundaries(NETWORK_DURATION_BOUNDS.to_vec())
                 .build(),
+            record_refusals: meter
+                .u64_counter("kms_aead.record.refusals")
+                .with_unit("{record}")
+                .with_description(
+                    "The keyring records a process refused because of their signature",
+                )
+                .build(),
         }
     });
 
     /// How a call ended, as its metrics record it.
     pub enum Outcome<'a> {
-        /// It sealed or opened one value.
+        /// It encrypted or decrypted one value.
         Value {
             /// The length of the value's plaintext, in bytes.
             plaintext_len: usize,
@@ -137,8 +146,8 @@ pub mod instruments {
     }
 
     impl Outcome<'_> {
-        /// A call that sealed or opened `value`, under the keyring version `key_id` for a keyring
-        /// call.
+        /// A call that encrypted or decrypted `value`, under the keyring version `key_id` for a
+        /// keyring call.
         pub fn value<T, F: Format>(value: &Encrypted<T, F>, key_id: Option<KeyId>) -> Self {
             Outcome::Value {
                 plaintext_len: F::plaintext_len(value.value()),
@@ -212,11 +221,21 @@ pub mod instruments {
             .record(elapsed.as_secs_f64(), &attributes);
     }
 
+    /// Counts one keyring record refused because of its signature, with `attributes` and the
+    /// refusal's code `error_type`.
+    pub fn record_refusal(attributes: impl IntoIterator<Item = KeyValue>, error_type: &str) {
+        let attributes = attributes
+            .into_iter()
+            .chain([KeyValue::new(ERROR_TYPE, error_type.to_owned())])
+            .collect::<Vec<_>>();
+        INSTRUMENTS.record_refusals.add(1, &attributes);
+    }
+
     /// Records one request of `operation` to `provider`'s KMS that took `elapsed` and ended with
     /// `result`.
     pub(crate) fn record_kms_call<T>(
         operation: &'static str,
-        provider: &KekProvider,
+        provider: &KmsProvider,
         elapsed: Duration,
         result: &KmsAeadResult<T>,
     ) {
@@ -256,13 +275,13 @@ pub mod instruments {
             }
         }
 
-        /// Records the call as ended with `result`, the value it sealed.
-        pub(crate) fn sealed<T, F: Format>(self, result: &KmsAeadResult<Encrypted<T, F>>) {
-            self.finish(result, |sealed| Outcome::value(sealed, None));
+        /// Records the call as ended with `result`, the value it encrypted.
+        pub(crate) fn encrypted<T, F: Format>(self, result: &KmsAeadResult<Encrypted<T, F>>) {
+            self.finish(result, |encrypted| Outcome::value(encrypted, None));
         }
 
-        /// Records the call as ended with `result`, the opening of `value`.
-        pub(crate) fn opened<T, F: Format, R>(
+        /// Records the call as ended with `result`, the decryption of `value`.
+        pub(crate) fn decrypted<T, F: Format, R>(
             self,
             value: &Encrypted<T, F>,
             result: &KmsAeadResult<R>,
@@ -299,11 +318,11 @@ mod unrecorded {
 
     use super::Call;
     use crate::formats::Format;
-    use crate::{Encrypted, KekProvider, KmsAeadResult};
+    use crate::{Encrypted, KmsAeadResult, KmsProvider};
 
     pub(crate) fn record_kms_call<T>(
         _: &'static str,
-        _: &KekProvider,
+        _: &KmsProvider,
         _: Duration,
         _: &KmsAeadResult<T>,
     ) {
@@ -316,9 +335,9 @@ mod unrecorded {
             Self
         }
 
-        pub(crate) fn sealed<T, F: Format>(self, _: &KmsAeadResult<Encrypted<T, F>>) {}
+        pub(crate) fn encrypted<T, F: Format>(self, _: &KmsAeadResult<Encrypted<T, F>>) {}
 
-        pub(crate) fn opened<T, F: Format, R>(self, _: &Encrypted<T, F>, _: &KmsAeadResult<R>) {}
+        pub(crate) fn decrypted<T, F: Format, R>(self, _: &Encrypted<T, F>, _: &KmsAeadResult<R>) {}
 
         pub(crate) fn finished<R>(self, _: &KmsAeadResult<R>) {}
     }
