@@ -1,6 +1,6 @@
 [package]
 name = "kms-aead-keyring"
-version = "0.30.0"
+version = "0.31.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
 edition = "2021"
 rust-version.workspace = true
@@ -19,7 +19,7 @@ name = "kms_aead_keyring"
 path = "src/lib.rs"
 
 [dependencies]
-kms-aead = { version = "0.30", path = "..", default-features = false }
+kms-aead = { version = "0.31", path = "..", default-features = false }
 # The major version secret-vault-value depends on, so that one copy is in the tree.
 base64 = "0.23"
 # `Stream` and the bounded concurrency of a sweep.
