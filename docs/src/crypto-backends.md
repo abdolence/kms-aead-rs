@@ -19,8 +19,10 @@ for every crate in a build when one crate enables another backend.
 
 The backend types implement `AeadBackend`, a sealed trait in `kms_aead::backends`. Its items are
 the constant `NAME`, the backend's name in spans and logs: `ring`, `aws-lc` or `rustcrypto`, and
-`generate_random_bytes`. Code that works with any backend bounds its type parameter with
-`AeadBackend` and nothing else:
+`generate_random_bytes`. `AeadBackend` names the crypto engine for every primitive the library runs
+on it: the AEAD algorithms, the beacon HMAC, the RSA operations of asymmetric KEKs and the signature
+verification. Code that works with any backend bounds its type parameter with `AeadBackend` and
+nothing else:
 
 ```rust
 use kms_aead::backends::{AeadBackend, Ring};
@@ -41,8 +43,8 @@ impl<B: AeadBackend> Orders<B> {
     }
 
     async fn round_trip(&self, card: &SecretValue) -> KmsAeadResult<SecretValue> {
-        let sealed = self.envelope.encrypt(b"orders/1042", card).await?;
-        self.envelope.decrypt(b"orders/1042", &sealed).await
+        let encrypted = self.envelope.encrypt(b"orders/1042", card).await?;
+        self.envelope.decrypt(b"orders/1042", &encrypted).await
     }
 }
 
@@ -66,9 +68,14 @@ secrets the application generates itself.
 | `Aes128Gcm` | 16 bytes | yes | yes | yes |
 | `Aes256Gcm`, the envelope's default | 32 bytes | yes | yes | yes |
 | `Aes256GcmSiv` (RFC 8452) | 32 bytes | no | yes | yes |
+| `RsaOaepSha256` encryption under an asymmetric KEK | 2048, 3072 or 4096 bits | no | yes | yes |
+| local RSA private half | | no | yes | yes |
 
-Every algorithm writes `[nonce: 12][ciphertext][tag: 16]`, with a random nonce from the backend's
-CSPRNG. A backend that does not implement the algorithm fails at construction, never later, with
+Every AEAD algorithm writes `[nonce: 12][ciphertext][tag: 16]`, with a random nonce from the
+backend's CSPRNG. The two RSA rows are the RSA-OAEP (RSA encryption with OAEP padding) of
+[Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does): the encryption of a DEK with the
+public key, and the private half of a `LocalAsymmetricKmsProvider`. A backend that does not
+implement the algorithm fails at construction, never later, with
 `KmsAeadError::UnsupportedAlgorithm` and the code `UNSUPPORTED_ALGORITHM`:
 
 ```rust
@@ -79,13 +86,18 @@ let result = AeadCipher::<Ring>::new(AeadAlgorithm::Aes256GcmSiv);
 assert!(matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(_))));
 ```
 
+Streamed values, with the `stream` feature, run AES-256-GCM for their chunks and HMAC-SHA-512 for
+the key derivation, which every backend has: `hmac::HMAC_SHA512` on ring and aws-lc-rs, and
+`Hmac<Sha512>` of the hmac and sha2 crates on RustCrypto. A value encrypted on one backend decrypts
+on every other, see [Streaming encryption](./streaming.md).
+
 `AeadAlgorithm` reads and writes its names with `FromStr` and `Display`: `chacha20-poly1305`,
 `aes-128-gcm`, `aes-256-gcm` and `aes-256-gcm-siv`.
 
 ## AEAD without a KMS
 
-`AeadCipher` seals and opens values with a key the application holds. `encrypt_bare` writes the
-AEAD output alone, an `Encrypted<T, Bare>`:
+`AeadCipher` encrypts and decrypts values with a key the application holds. `encrypt_bare` writes
+the AEAD output alone, an `Encrypted<T, Bare>`:
 
 ```rust
 use kms_aead::backends::Ring;
@@ -118,8 +130,8 @@ of `AeadCipher` make no KMS call and open no span.
 
 ## Cross-backend compatibility
 
-Every backend writes the same bytes for the same algorithm, so a value sealed by one backend
-opens with any other that implements its algorithm. A writer on `Ring` and a reader on `AwsLc`
+Every backend writes the same bytes for the same algorithm, so a value encrypted by one backend
+decrypts with any other that implements its algorithm. A writer on `Ring` and a reader on `AwsLc`
 work together, and moving an application from one backend to another needs no migration of its
 data:
 
@@ -145,8 +157,10 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 
 ## ring
 
-ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV. ring does not zeroise
-its expanded key schedules, so they stay in freed memory after each call.
+ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM. It has no AES-256-GCM-SIV and no RSA encryption,
+so an encryption with a public key and a local RSA private half fail at construction with
+`UNSUPPORTED_ALGORITHM`. ring does not zeroise its expanded key schedules, so they stay in freed
+memory after each call.
 
 ## aws-lc-rs and FIPS
 
@@ -171,3 +185,6 @@ them.
 Every algorithm, in pure Rust, with `getrandom` as the CSPRNG. It needs no C compiler. The
 feature turns on the crates' `zeroize` features, so their key objects, and the Poly1305 and
 POLYVAL keys each call derives, are zeroised when dropped.
+
+RSA-OAEP runs on the `rsa` crate. A `LocalAsymmetricKmsProvider` on RustCrypto decrypts DEKs from
+trusted sources only, see [Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does).

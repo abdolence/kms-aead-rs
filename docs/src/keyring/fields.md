@@ -5,13 +5,13 @@
 A keyring value is kms-aead's [`Encrypted<T, Randomized>`](../stored-values.md#encryptedt-f),
 re-exported by the keyring: the bytes to store, which decrypt to a `T`. `T` is any type that
 implements `Plaintext`, usually an application newtype such as `Email`, so a field names what it
-holds. Its layout is in
-[Formats of `Encrypted`](../formats.md#formats-of-encrypted). The keyring seals and opens it with
-kms-aead's `AeadCipher::encrypt` and `decrypt` under the key of the version, the calls an
-application with [one fixed key](../envelope-encryption.md#one-fixed-key) makes itself.
+holds. Its layout is in [Formats of `Encrypted`](../formats.md#formats-of-encrypted). The keyring
+encrypts and decrypts it with kms-aead's `AeadCipher::encrypt` and `decrypt` under the key of the
+version, the calls an application with [one fixed key](../envelope-encryption.md#one-fixed-key)
+makes itself.
 
 - `value()` and `into_value()` return the bytes;
-- `key_id()` returns the key id of the version that sealed it;
+- `key_id()` returns the key id of the version that encrypted it;
 - `Encrypted::try_from(bytes)`, serde and tokio-postgres check stored bytes against the layout
   when the value is made, and fail on bytes that are no keyring value before any decryption;
 - `decrypt` checks the key id first, and fails with `ReservedKeyId` on a reserved id and with
@@ -23,7 +23,7 @@ The plaintext types and their encodings are in [Stored values](../stored-values.
 
 ## In application records
 
-`Encrypted` is stored as bytes, with the `serde`, `postgres` and `sqlx` features, see
+`Encrypted` is stored as bytes, with serde and the `postgres` and `sqlx` features, see
 [Storing](../stored-values.md#storing). A field of a serde record:
 
 ```rust
@@ -80,7 +80,7 @@ let id = EntityId::try_from("42")?;
 let alice = Email("alice@example.com".to_string());
 let user = User {
     id: "42".to_string(),
-    email: keyring.sealer().await.encrypt(&EMAIL.aad(&id), &alice).await?,
+    email: keyring.encryptor().await.encrypt(&EMAIL.aad(&id), &alice).await?,
 };
 let stored: Vec<u8> = serde_json::to_vec(&user)?;
 
@@ -125,7 +125,7 @@ async fn store_email(
     email: &Email,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let value: Encrypted<Email, Randomized> = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&field.aad(&EntityId::try_from(id)?), email)
         .await?;
@@ -150,10 +150,10 @@ async fn email_of(
 # fn main() {}
 ```
 
-A column holding a value that is no keyring value fails in the decode, before any decryption.
-The keyring's `sqlx` feature binds `Encrypted` and `SealMarker` in sqlx the same way, as `BYTEA`
-on PostgreSQL, and turns on kms-aead's `sqlx` feature, so the application needs no kms-aead
-dependency line for it, see [Stored values](../stored-values.md#storing).
+A column holding a value that is no keyring value fails in the decode, before any decryption. The
+keyring's `sqlx` feature binds `Encrypted` and `EncryptionMarker` in sqlx the same way, as `BYTEA` on
+PostgreSQL, and turns on kms-aead's `sqlx` feature, so the application needs no kms-aead dependency
+line for it, see [Stored values](../stored-values.md#storing).
 
 ## AAD
 
@@ -171,7 +171,7 @@ A `FieldSpec` names the kind and the field once, as a constant, and `FieldSpec::
 the AAD of one row. `from_static` checks a kind or field name at compile time when it
 initialises a constant.
 
-So a value opens only in its own row and field. A value copied into another row fails with
+So a value decrypts only in its own row and field. A value copied into another row fails with
 `KeyringError::KmsAead` with code `DECRYPT`. And since the AAD names the logical place, not the
 physical one, a value moves between tables and data stores without being encrypted again.
 
@@ -188,8 +188,8 @@ application chooses the bytes and rebuilds them itself on every read. The keyrin
 `decrypt` take a `FieldAad` instead, which only a `FieldSpec` builds:
 
 - field binding: the default AAD names the kind and the field, so a value copied into another
-  field of the same row fails to open;
-- row binding: it names the entity id, so a value copied into another row fails to open. The
+  field of the same row fails to decrypt;
+- row binding: it names the entity id, so a value copied into another row fails to decrypt. The
   application's own id, such as a user id, is the `EntityId`;
 - deterministic fields: a deterministic AAD must not hold the row id, or equal plaintexts in
   different rows give different values and equality lookups never match. `DeterministicAad` is a
@@ -200,7 +200,7 @@ application chooses the bytes and rebuilds them itself on every read. The keyrin
   rebuilds; BigQuery itself prescribes no format;
 - Tink: Tink takes any AAD bytes. The requirements of a Tink field are on the algorithm and the
   KEK, not on the AAD;
-- the interop requirement: a `FieldAad` carries the `Interop` of its `FieldSpec`, so sealing
+- the interop requirement: a `FieldAad` carries the `Interop` of its `FieldSpec`, so encrypting
   checks the field's requirements whichever way the AAD was built. Free bytes would name no field
   and skip that check.
 
@@ -220,9 +220,9 @@ AAD:
 - `spec.aad(&id)` with the application's id as the `EntityId`. The id follows the `EntityId`
   rules: 1 to 255 bytes of UTF-8 without `/`, NUL or another ASCII control character. It is
   treated as personal data and never logged;
-- `FieldAad::with_context(bytes)` appends `/` and any bytes, such as a tenant or a schema version.
-  A value sealed with a context opens only with the same one. The context may itself hold `/`, so
-  keep the contexts of one field apart yourself. A BigQuery reader appends the same bytes in SQL,
+- `FieldAad::with_context(bytes)` appends `/` and any bytes, such as a tenant or a schema version. A
+  value encrypted with a context decrypts only with the same one. The context may itself hold `/`,
+  so keep the contexts of one field apart yourself. A BigQuery reader appends the same bytes in SQL,
   `CONCAT('user/', u.id, '/email/tenant-7')`;
 - `FieldSpec::custom_aad(bytes)` takes any bytes, with no structure, in place of the default AAD.
   It gives up field binding and row binding, unless the bytes name the field and the row
@@ -270,7 +270,7 @@ let with_context: FieldAad = EMAIL.aad(&id).with_context(b"tenant-7");
 let custom: FieldAad = EMAIL.custom_aad(format!("signup/{user_id}").as_bytes())?;
 
 for aad in [default_aad, with_context, custom] {
-    let value: Encrypted<String, Randomized> = keyring.sealer().await.encrypt(&aad, &email).await?;
+    let value: Encrypted<String, Randomized> = keyring.encryptor().await.encrypt(&aad, &email).await?;
     assert_eq!(keyring.decrypt(&aad, &value).await?, email);
 }
 

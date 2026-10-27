@@ -2,11 +2,11 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_bytes::ByteBuf;
 
-use super::SealMarker;
+use super::EncryptionMarker;
 
 /// As bytes, through `serialize_bytes`: a `bytes` value in Firestore, and an array of numbers in
 /// serde_json.
-impl Serialize for SealMarker {
+impl Serialize for EncryptionMarker {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_bytes(self.value())
     }
@@ -14,10 +14,10 @@ impl Serialize for SealMarker {
 
 /// From bytes, or from a sequence of byte numbers as serde_json writes them, checked as
 /// `TryFrom<Vec<u8>>` checks them.
-impl<'de> Deserialize<'de> for SealMarker {
+impl<'de> Deserialize<'de> for EncryptionMarker {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let bytes = ByteBuf::deserialize(deserializer)?;
-        SealMarker::try_from(bytes.into_vec()).map_err(D::Error::custom)
+        EncryptionMarker::try_from(bytes.into_vec()).map_err(D::Error::custom)
     }
 }
 
@@ -32,21 +32,21 @@ mod tests {
     #[derive(Deserialize)]
     struct UserRow {
         #[serde(default)]
-        seal: SealMarker,
+        encryption_marker: EncryptionMarker,
     }
 
     #[test]
     fn a_marker_round_trips_through_serde_json_as_a_byte_array() -> TestResult {
-        let marker = SealMarker::of_epoch(258);
+        let marker = EncryptionMarker::of_epoch(258);
 
         let json = serde_json::to_string(&marker)?;
 
         assert_eq!(json, "[1,0,0,1,2]");
-        assert_eq!(serde_json::from_str::<SealMarker>(&json)?, marker);
-        assert!(serde_json::from_str::<SealMarker>("[2,0,0,1,2]").is_err());
+        assert_eq!(serde_json::from_str::<EncryptionMarker>(&json)?, marker);
+        assert!(serde_json::from_str::<EncryptionMarker>("[2,0,0,1,2]").is_err());
         assert_eq!(
-            serde_json::from_str::<UserRow>("{}")?.seal,
-            SealMarker::ENVELOPE
+            serde_json::from_str::<UserRow>("{}")?.encryption_marker,
+            EncryptionMarker::ENVELOPE
         );
         Ok(())
     }
@@ -61,7 +61,7 @@ mod tests {
         use serde::Serialize;
 
         use super::*;
-        use crate::sweep::SealRange;
+        use crate::sweep::ReencryptRange;
 
         /// The epochs the documents are written with, out of order.
         const EPOCHS: [u32; 7] = [65_536, 3, 0, u32::MAX, 255, 256, 1];
@@ -71,16 +71,16 @@ mod tests {
             #[serde(rename = "_firestore_id", skip_serializing)]
             id: String,
             #[serde(default)]
-            seal: SealMarker,
+            encryption_marker: EncryptionMarker,
         }
 
         /// A document written before its collection had markers.
         #[derive(Serialize, Deserialize)]
-        struct UnsealedDoc {
+        struct UnmarkedDoc {
             name: String,
         }
 
-        const UNSEALED: &str = "unsealed";
+        const UNMARKED: &str = "unmarked";
 
         fn document_id(epoch: u32) -> String {
             format!("epoch-{epoch}")
@@ -90,7 +90,7 @@ mod tests {
             for epoch in EPOCHS {
                 let doc = UserDoc {
                     id: document_id(epoch),
-                    seal: SealMarker::of_epoch(epoch),
+                    encryption_marker: EncryptionMarker::of_epoch(epoch),
                 };
                 let _: UserDoc = db
                     .fluent()
@@ -101,12 +101,12 @@ mod tests {
                     .execute()
                     .await?;
             }
-            let _: UnsealedDoc = db
+            let _: UnmarkedDoc = db
                 .fluent()
                 .insert()
                 .into(collection)
-                .document_id(UNSEALED)
-                .object(&UnsealedDoc {
+                .document_id(UNMARKED)
+                .object(&UnmarkedDoc {
                     name: "ada".to_string(),
                 })
                 .execute()
@@ -122,26 +122,32 @@ mod tests {
             assert_eq!(
                 stored
                     .fields
-                    .get("seal")
-                    .and_then(|seal| seal.value_type.clone()),
+                    .get("encryption_marker")
+                    .and_then(|encryption_marker| encryption_marker.value_type.clone()),
                 Some(ValueType::BytesValue(vec![0x01, 0, 0, 1, 0]))
             );
 
-            let unsealed: Option<UserDoc> = db
+            let unmarked: Option<UserDoc> = db
                 .fluent()
                 .select()
                 .by_id_in(collection)
                 .obj()
-                .one(UNSEALED)
+                .one(UNMARKED)
                 .await?;
-            assert_eq!(unsealed.map(|doc| doc.seal), Some(SealMarker::ENVELOPE));
+            assert_eq!(
+                unmarked.map(|doc| doc.encryption_marker),
+                Some(EncryptionMarker::ENVELOPE)
+            );
 
             let behind: Vec<UserDoc> = db
                 .fluent()
                 .select()
                 .from(collection)
-                .filter(|q| q.field("seal").less_than(SealMarker::of_epoch(256)))
-                .order(|order| order.fields([order.field("seal").asc()]))
+                .filter(|q| {
+                    q.field("encryption_marker")
+                        .less_than(EncryptionMarker::of_epoch(256))
+                })
+                .order(|order| order.fields([order.field("encryption_marker").asc()]))
                 .obj()
                 .query()
                 .await?;
@@ -156,11 +162,14 @@ mod tests {
             // The range query of a version: Firestore takes two inequality filters on one field.
             for (range, expected) in [
                 (
-                    SealRange::new(SealMarker::of_epoch(3), Some(SealMarker::of_epoch(256))),
+                    ReencryptRange::new(
+                        EncryptionMarker::of_epoch(3),
+                        Some(EncryptionMarker::of_epoch(256)),
+                    ),
                     vec!["epoch-3", "epoch-255"],
                 ),
                 (
-                    SealRange::new(SealMarker::of_epoch(256), None),
+                    ReencryptRange::new(EncryptionMarker::of_epoch(256), None),
                     vec!["epoch-256", "epoch-65536", "epoch-4294967295"],
                 ),
             ] {
@@ -170,11 +179,14 @@ mod tests {
                     .from(collection)
                     .filter(|q| {
                         q.for_all([
-                            q.field("seal").greater_than_or_equal(range.start()),
-                            range.end().and_then(|end| q.field("seal").less_than(end)),
+                            q.field("encryption_marker")
+                                .greater_than_or_equal(range.start()),
+                            range
+                                .end()
+                                .and_then(|end| q.field("encryption_marker").less_than(end)),
                         ])
                     })
-                    .order(|order| order.fields([order.field("seal").asc()]))
+                    .order(|order| order.fields([order.field("encryption_marker").asc()]))
                     .obj()
                     .query()
                     .await?;
@@ -201,7 +213,7 @@ mod tests {
             for id in EPOCHS
                 .into_iter()
                 .map(document_id)
-                .chain([UNSEALED.to_string()])
+                .chain([UNMARKED.to_string()])
             {
                 db.fluent()
                     .delete()

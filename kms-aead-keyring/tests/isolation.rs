@@ -78,7 +78,7 @@ async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
     let keyring = admin.keyring();
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let value: Encrypted<String, Randomized> = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
@@ -90,7 +90,7 @@ async fn a_randomized_value_is_the_tink_aes_gcm_layout() -> TestResult {
 
 /// A field without an interop requirement takes any algorithm, any AAD and any KEK.
 #[tokio::test]
-async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
+async fn a_default_field_encrypts_under_any_algorithm_aad_and_kek() -> TestResult {
     let admin = default_keyring().await?;
     let keyring = admin.keyring();
     let staged = admin
@@ -102,7 +102,7 @@ async fn a_default_field_seals_under_any_algorithm_aad_and_kek() -> TestResult {
         EMAIL.custom_aad(&[0xFF; 3])?,
     ] {
         let value = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;

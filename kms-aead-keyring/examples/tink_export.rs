@@ -1,8 +1,8 @@
-//! Keyring keysets read by Tink: for each KMS whose key is configured and each algorithm Tink
-//! for Python reads, a keyring seals a value, rotates, and exports its `Readable` keyset with
+//! Keyring keysets read by Tink: for each KMS whose key is configured and each algorithm Tink for
+//! Python reads, a keyring encrypts a value, rotates, and exports its `Readable` keyset with
 //! `KeyringAdmin::export_tink_keyset`. Each keyset is one JSON line, which kms-aead's
-//! `tests/tink_interop.py read-keysets` reads with `KeysetHandle.read`, opening the value sealed
-//! before the rotation, under the keyset's other key.
+//! `tests/tink_interop.py read-keysets` reads with `KeysetHandle.read`, decrypting the value
+//! encrypted before the rotation, under the keyset's other key.
 //!
 //! ```sh
 //! cargo run -p kms-aead-keyring --example tink_export --features ci-tink,aws-lc \
@@ -15,7 +15,7 @@
 
 use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{AeadAlgorithm, KmsAeadEncryptionProvider};
+use kms_aead::{AeadAlgorithm, KmsAeadDecryptionProvider};
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
@@ -63,7 +63,7 @@ async fn main() -> ExampleResult {
 
 async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> ExampleResult
 where
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
 {
     let admin: KeyringAdmin<MemoryKeyringStore, P, AwsLc> =
         KeyringRegistry::<MemoryKeyringStore, AwsLc>::new(
@@ -77,10 +77,13 @@ where
         )
         .await?;
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
-    let plain_text = format!("sealed by kms-aead-keyring {}", env!("CARGO_PKG_VERSION"));
+    let plain_text = format!(
+        "encrypted by kms-aead-keyring {}",
+        env!("CARGO_PKG_VERSION")
+    );
     let value: Encrypted<String, Randomized> = admin
         .keyring()
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&aad, &plain_text)
         .await?;

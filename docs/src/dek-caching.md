@@ -5,7 +5,7 @@ Without a cache, every read of a value decrypts its DEK with one KMS call, and e
 
 - `DekCache`, a cache of decrypted DEKs, which serves repeated reads of values under the same
   DEK without the KMS;
-- store-less DEK reuse, with a `DekReusePolicy`, where one DEK seals many values, so a write
+- store-less DEK reuse, with a `DekReusePolicy`, where one DEK encrypts many values, so a write
   calls the KMS only when the DEK is renewed.
 
 ## DEK cache
@@ -38,10 +38,13 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 # }
 ```
 
-`decrypt`, the `*_with_encrypted_dek` calls and a store-less `encrypt` decrypt through the
-envelope's cache. `Clone` shares the same cache, so one cache may serve several envelopes and
-several KEKs: an entry serves only a lookup that names the same KEK, and a key decrypted under
-one KEK never reaches a caller with the provider of another.
+`decrypt`, `beacon` and the `*_with_encrypted_dek` calls decrypt through the envelope's cache, and
+a store-less `encrypt` keeps its DEK there. `Clone` shares the same cache, so one cache may serve
+several envelopes and several KEKs: an entry serves only a lookup that names the same KEK, and a
+key decrypted under one KEK never reaches a caller with the provider of another. A lookup, through
+`DekCache::with_dek` or an envelope call that decrypts, needs a `KmsAeadDecryptionProvider`, so the
+envelope of a producer over a `PublicKeyKekProvider` puts its DEK in a cache it shares and reads
+back only its own store-less DEK from it, to encrypt with it.
 
 The cache:
 
@@ -179,7 +182,8 @@ envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
 
 ### Volume limit
 
-`max_bytes` counts the plaintext bytes sealed under the DEK. Its default depends on the algorithm:
+`max_bytes` counts the plaintext bytes encrypted under the DEK. Its default depends on the
+algorithm:
 
 | Algorithm | Default `max_bytes` | Most allowed |
 |---|---|---|
@@ -194,9 +198,9 @@ beyond `max_uses`. The citations are in [Data volume](./security.md#data-volume)
 A `max_bytes` set in the policy replaces the default, under any algorithm. Above the most
 allowed, the envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
 
-A value that would take the count past `max_bytes` renews the DEK before it is sealed. A value
-longer than `max_bytes` alone is sealed under a new DEK of its own, as the per-call envelope does,
-and the current DEK stays in use for the next values.
+A value that would take the count past `max_bytes` renews the DEK before it is encrypted. A value
+longer than `max_bytes` alone is encrypted under a new DEK of its own, as the per-call envelope
+does, and the current DEK stays in use for the next values.
 
 The bounds count blocks of plaintext and AAD, and one more block per value, and `max_bytes` counts
 plaintext bytes only. At the default `max_uses` and an AAD of 16 bytes or less, the difference is
@@ -214,10 +218,17 @@ The first encryption after the DEK has left the cache renews it. So the DEK is r
 - when the cache evicts it for capacity;
 - after `invalidate` with `envelope.provider().kek()`, or after `clear`.
 
+A store-less `encrypt` never decrypts a DEK. A writer that renewed the DEK and finds it gone from
+the cache before it encrypts, evicted by a concurrent call or past a short TTL, encrypts with the
+DEK its renewal generated and puts it back in the cache, so a store-less writer over a
+`PublicKeyKekProvider`, which has no decryption, works as any other. An `invalidate` or `clear` that
+lands while a writer renews stops that writer from caching the new DEK: it encrypts with the DEK it
+generated, and the next writer renews.
+
 In a cache shared with readers, size `max_entries` above the number of distinct DEKs read per
 TTL, or give the writer a cache of its own, otherwise reads evict the writer's DEK and it renews
 more often than the policy says.
 
 A writer that falls quiet leaves its DEK in memory until the cache's next call or
-`purge_expired`, see [Key lifetime](#key-lifetime). The values sealed while the cache holds the
+`purge_expired`, see [Key lifetime](#key-lifetime). The values encrypted while the cache holds the
 DEK are readable by whoever reads the process's memory in that window.

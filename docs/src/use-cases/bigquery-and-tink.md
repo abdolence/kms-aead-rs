@@ -6,7 +6,7 @@ whether the key rotates:
 
 | | Envelope values | One fixed key | Keyring |
 |---|---|---|---|
-| Written by | `KmsAeadEnvelope::encrypt`, per call or store-less | `AeadCipher::encrypt` or `DeterministicCipher::encrypt`, with a key the KMS encrypts once | a sealer's `encrypt` or `encrypt_deterministic` |
+| Written by | `KmsAeadEnvelope::encrypt`, per call or store-less | `AeadCipher::encrypt` or `DeterministicCipher::encrypt`, with a key the KMS encrypts once | an encryptor's `encrypt` or `encrypt_deterministic` |
 | A value carries | its encrypted DEK | a 4-byte key id | a 4-byte key id |
 | Tink reads with | `KmsEnvelopeAead`, on a Cloud KMS or AWS KMS key | a keyset of the key, as `TinkKeyset` builds it | `export_tink_keyset`, on a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault Transit key for Tink for Go |
 | BigQuery reads with | nothing: SQL has no KMS envelope | `KEYS.KEYSET_CHAIN` over the keyset encrypted by a Cloud KMS key | `KEYS.KEYSET_CHAIN` over `export_bigquery_keyset`, on a Cloud KMS key |
@@ -16,8 +16,8 @@ whether the key rotates:
 
 ## The AAD
 
-The reader opens a value only with the AAD it was sealed with, so the AAD is one the reader can
-build:
+The reader decrypts a value only with the AAD it was encrypted with, so the AAD is one the reader
+can build:
 
 - envelope values and one fixed key: the application's own bytes, which a Tink reader passes as
   they are, and SQL builds from the row when they are text, see
@@ -29,8 +29,8 @@ build:
 ## With a keyring
 
 1. Declare each field the reader decrypts with `FieldSpec::with_interop(Interop::BigQuery)` or
-   `Interop::Tink`: the keyring then refuses to seal it under an algorithm or a KEK the reader does
-   not read, see [Fields BigQuery reads](../keyring/bigquery.md#fields-bigquery-reads) and
+   `Interop::Tink`: the keyring then refuses to encrypt it under an algorithm or a KEK the reader
+   does not read, see [Fields BigQuery reads](../keyring/bigquery.md#fields-bigquery-reads) and
    [Fields Tink reads](../keyring/bigquery.md#fields-tink-reads);
 2. the administrative job exports the keyset, with `export_bigquery_keyset` under the
    `bigquery-export` feature or `export_tink_keyset` under `admin`, and writes its bytes where the
@@ -40,7 +40,7 @@ build:
      every `mark_compromised` and every KEK rotation;
    - the `Single` keyset of a new deterministic version after its promotion, since a pending
      version has none. Until then, an equality lookup in SQL computes no probe under the new
-     version and misses the rows sealed under it, with no error.
+     version and misses the rows encrypted under it, with no error.
 
    See [Rotation cadence](../operations/rotation.md#rotation-cadence),
    [Retiring the old version](../operations/sweeps.md#retiring-the-old-version) and

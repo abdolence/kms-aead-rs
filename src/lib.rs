@@ -1,16 +1,17 @@
 //! Envelope encryption with a key encryption key (KEK) held by a KMS, and AEAD without one.
 //!
-//! A value is sealed under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
+//! A value is encrypted under a data encryption key (DEK) with an AEAD algorithm, and the DEK is
 //! encrypted by the KEK. [`KmsAeadEnvelope`] does both and stores the encrypted DEK with the cipher
 //! text, in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads the
-//! values with the same KMS key and algorithm. [`AeadCipher`] seals with a DEK the caller holds,
+//! values with the same KMS key and algorithm. [`AeadCipher`] encrypts with a DEK the caller holds,
 //! without a KMS. [`formats`] has every byte layout.
 //!
 //! # Providers
 //!
-//! A provider encrypts and decrypts DEKs with one KEK. Each one is a type in [`providers`], enabled
-//! by its feature where the table names one, and implements [`KmsAeadEncryptionProvider`], which an
-//! application can also implement for a KMS of its own.
+//! A KMS provider encrypts and decrypts DEKs with one KEK. Each one is a type in [`providers`],
+//! enabled by its feature where the table names one, and implements [`KmsAeadEncryptionProvider`],
+//! which encrypts, and [`KmsAeadDecryptionProvider`], which decrypts. An application can implement
+//! both for a KMS of its own.
 //!
 //! | KMS | Type | Feature |
 //! |---|---|---|
@@ -19,10 +20,17 @@
 //! | Azure Key Vault and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
 //! | HashiCorp Vault Transit | `HcVaultTransitProvider` | `hashicorp-vault-transit-kms-encryption` |
 //! | A KEK the process holds | `LocalKmsProvider` | none, in every build |
+//! | An RSA KEK the process holds | `LocalAsymmetricKmsProvider` | none, in every build |
 //!
 //! The GCP, Azure and HashiCorp Vault Transit features have variants that choose the TLS stack,
 //! the root store or the crypto provider of their HTTP client; `Cargo.toml` lists them. A build
 //! with a provider needs a backend.
+//!
+//! A KEK can be asymmetric, an RSA key pair whose public half encrypts DEKs with RSA-OAEP in the
+//! producer's process: [`AsymmetricKekPublicKey`] holds the public half, `PublicKeyKekProvider`
+//! encrypts with it and implements only the encryption trait, for a producer that must never
+//! decrypt, and every provider above reads the DEKs it encrypts through its KMS. The book's
+//! [Asymmetric KEKs](https://kms-aead-rust.abdolence.dev/asymmetric-kek.html) has the design.
 //!
 //! The threat model, a copied or relabelled encrypted DEK among it, is in the book's
 //! [Security considerations](https://kms-aead-rust.abdolence.dev/security.html#threat-model).
@@ -41,19 +49,19 @@
 //! | Feature | Type | Algorithms |
 //! |---|---|---|
 //! | `ring` | `Ring` | ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM |
-//! | `aws-lc` | `AwsLc` | every [`AeadAlgorithm`] |
-//! | `aws-lc-fips` | `AwsLc`, on the FIPS module | every [`AeadAlgorithm`] |
-//! | `rustcrypto` | `RustCrypto` | every [`AeadAlgorithm`] |
+//! | `aws-lc` | `AwsLc` | every [`AeadAlgorithm`] and [`AsymmetricKekAlgorithm`] |
+//! | `aws-lc-fips` | `AwsLc`, on the FIPS module | every [`AeadAlgorithm`] and [`AsymmetricKekAlgorithm`] |
+//! | `rustcrypto` | `RustCrypto` | every [`AeadAlgorithm`] and [`AsymmetricKekAlgorithm`] |
 //!
 //! `aws-lc-fips` builds only the FIPS module, and does not need `aws-lc`. A build with both
 //! compiles both C libraries, and aws-lc-rs runs on the FIPS module. The `aws-lc-rs` feature
 //! both of them enable is not a backend choice: on its own, aws-lc-rs's build fails.
 //!
-//! A value sealed by one backend opens with any other that implements its algorithm.
+//! A value encrypted by one backend decrypts with any other that implements its algorithm.
 //!
 //! A build without a backend feature compiles, and
-//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that seals or encrypts
-//! can be constructed: no type implements [`AeadBackend`](backends::AeadBackend).
+//! [`LocalKmsProvider`](providers::LocalKmsProvider) is in it, but nothing that encrypts or
+//! decrypts can be constructed: no type implements [`AeadBackend`](backends::AeadBackend).
 //!
 //! # Store-less mode and the DEK cache
 //!
@@ -76,13 +84,13 @@
 //! `SecretValue`, and `F` the [`Format`](formats::Format), its byte layout.
 //! [`KmsAeadEnvelope::encrypt`] writes an `Encrypted<T, Envelope>`, Tink's KMS envelope, and
 //! [`KmsAeadEnvelope::decrypt`] reads it back as a `T`. Stored bytes become an `Encrypted`
-//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its format. The `serde`
-//! feature reads and writes it, and the `postgres` and `sqlx` features store it in a PostgreSQL
+//! through `TryFrom<Vec<u8>>`, which checks them against the layout of its format. serde reads and
+//! writes it in every build, and the `postgres` and `sqlx` features store it in a PostgreSQL
 //! `BYTEA` column.
 //!
-//! [`AeadCipher::encrypt`] and `DeterministicCipher::encrypt` seal a value under a key the caller
-//! holds, in Tink's layout of a key named by a [`KeyId`], so that Tink and BigQuery read it with a
-//! keyset of that key. [`AeadCipher::encrypt_bare`] seals it with no framing, as an
+//! [`AeadCipher::encrypt`] and `DeterministicCipher::encrypt` encrypt a value under a key the
+//! caller holds, in Tink's layout of a key named by a [`KeyId`], so that Tink and BigQuery read it
+//! with a keyset of that key. [`AeadCipher::encrypt_bare`] encrypts it with no framing, as an
 //! `Encrypted<T, Bare>`.
 //!
 //! A [`Beacon<T>`](Beacon), or blind index, finds rows by a field's value without decrypting
@@ -90,20 +98,31 @@
 //! [`KmsAeadEnvelope::beacon`] computes with the key decrypted through the envelope's cache, and
 //! [`BeaconMac`] with a key the caller holds. It is stored as `Encrypted` is.
 //!
+//! # Signatures and MACs
+//!
+//! [`signing`] signs a [`Signable`] value with an asymmetric key a KMS or the process holds, and
+//! verifies it with no KMS on any backend; [`mac`] computes and verifies MACs with a key the caller
+//! holds. Both sign the pre-image of DSSE over the value's [`SignedPayloadType`] and the SHA-256 of
+//! its payload, and store the result as the detached or attached values of their modules, which
+//! serde and the `postgres` and `sqlx` features store as `Encrypted` is.
+//!
 //! # Other features
 //!
+//! serde is in every build: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
+//! [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`, and [`JsonEncoded`], a
+//! [`Plaintext`] of any serde type, stored as its JSON. The features are:
+//!
 //! - `deterministic`: deterministic encryption with AES-SIV, [`DeterministicAlgorithm`];
+//! - `stream`: streamed values of any length, encrypted and decrypted chunk by chunk with ranged
+//!   reads, in C2SP's chunked encryption: the `stream` module and its tokio adapters;
 //! - `legacy-formats`: reads the layouts written by 0.29 and earlier. Deprecated;
-//! - `serde`: `Serialize` and `Deserialize` for [`Encrypted`], as bytes, for
-//!   [`errors::KmsAeadErrorPublicGenericDetails`] and for `SecretValue`;
-//! - `serde-json`: `Json`, a [`Plaintext`] of any serde type, stored as its JSON;
 //! - `postgres`: `ToSql` and `FromSql` of postgres-types for [`Encrypted`], as `BYTEA`, and
 //!   through them as `BYTEA[]` for `= ANY($1)`, for tokio-postgres and postgres;
 //! - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for [`Encrypted`] on
 //!   PostgreSQL, as `BYTEA` and `BYTEA[]`. It depends on sqlx-core and sqlx-postgres only, with
 //!   no runtime and no TLS stack;
 //! - `opentelemetry`: OpenTelemetry metrics, on the `opentelemetry` API crate only: the plaintext
-//!   size of each value sealed and opened, and the duration of every envelope call and KMS
+//!   size of each value encrypted and decrypted, and the duration of every envelope call and KMS
 //!   request. The application installs the SDK and its meter provider, and it must install the
 //!   provider before the first call, since the instruments stay bound to the provider they find
 //!   then.
@@ -259,6 +278,9 @@ pub mod backends;
 mod aead_cipher;
 pub use aead_cipher::*;
 
+mod asymmetric_kek;
+pub use asymmetric_kek::{AsymmetricKekFingerprint, AsymmetricKekPublicKey};
+
 mod beacon;
 pub use beacon::{Beacon, BeaconAlgorithm, BeaconBits, BeaconMac};
 
@@ -270,6 +292,8 @@ pub use deterministic::*;
 mod encrypted;
 pub use encrypted::Encrypted;
 
+mod integrity;
+
 pub mod errors;
 
 pub mod formats;
@@ -277,11 +301,20 @@ pub mod formats;
 mod key_id;
 pub use key_id::KeyId;
 
+pub mod mac;
+
 mod kms_envelope_encryption;
 pub use kms_envelope_encryption::*;
 
 mod plaintext;
 pub use plaintext::*;
+
+pub mod redaction;
+
+mod signable;
+pub use signable::{Signable, SignableType, SignedPayloadType};
+
+pub mod signing;
 
 mod metrics;
 #[cfg(feature = "opentelemetry")]
@@ -295,6 +328,9 @@ pub use types::*;
 
 pub mod providers;
 
+#[cfg(feature = "stream")]
+pub mod stream;
+
 // The book's code uses every provider, backend and optional feature, so it compiles in the build
 // with the docs.rs feature set only.
 #[cfg(all(
@@ -304,8 +340,6 @@ pub mod providers;
     feature = "rustcrypto",
     feature = "deterministic",
     feature = "legacy-formats",
-    feature = "serde",
-    feature = "serde-json",
     feature = "postgres",
     feature = "sqlx",
     feature = "gcp-kms-encryption",
@@ -315,6 +349,9 @@ pub mod providers;
     feature = "opentelemetry"
 ))]
 mod book;
+
+#[cfg(test)]
+mod test_events;
 
 #[cfg(test)]
 mod test_provider;

@@ -3,18 +3,18 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use super::envelope::{split_envelope, EnvelopeLayout};
+use super::envelope::{split_encrypted_dek_and_bare_value, EnvelopeLayout};
 use super::{decrypt_dek, encrypt_dek, Envelope};
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadLegacyFormat};
 use crate::metrics::Measurement;
-use crate::providers::kek_version::read_kek_version;
-use crate::providers::KekVersion;
+use crate::providers::kms_key_version::read_kek_version;
+use crate::providers::KmsKeyVersion;
 use crate::types::checked_key_bytes;
 use crate::{
-    Encrypted, EncryptedDataEncryptionKey, KekProvider, KmsAeadEncryptionProvider, KmsAeadEnvelope,
-    KmsAeadResult,
+    Encrypted, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult, KmsProvider,
 };
 
 /// An encrypted DEK as 0.29 and earlier stored it: the KMS's encrypted DEK, with the key version
@@ -27,7 +27,7 @@ struct LegacyEncryptedDek<'w> {
             reason = "only the Azure provider's bytes carry the key version"
         )
     )]
-    kek_version: Option<KekVersion>,
+    kek_version: Option<KmsKeyVersion>,
     encrypted_dek_bytes: &'w [u8],
 }
 
@@ -51,21 +51,21 @@ impl<'w> LegacyEncryptedDek<'w> {
 
     /// The encrypted DEK as the provider of `kek` takes it since 0.30: the Azure provider's bytes
     /// carry the key version, and every other provider's are the KMS's encrypted DEK.
-    fn into_encrypted_dek(self, kek: &KekProvider) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+    fn into_encrypted_dek(self, kek: &KmsProvider) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         match kek {
             #[cfg(feature = "azure-kms-encryption-base")]
-            KekProvider::Azure => {
+            KmsProvider::Azure => {
                 let kek_version = self.kek_version.ok_or_else(|| {
                     KmsAeadEncryptionError::create(
                         "AZURE_KEY_VERSION_MISSING",
                         "The encrypted data encryption key records no Azure Key Vault key version",
                     )
                 })?;
-                let wrapped_key = super::azure::AzureWrappedKey {
+                let azure_dek = super::azure::AzureEncryptedDek {
                     kek_version,
-                    wrapped: self.encrypted_dek_bytes,
+                    ciphertext: self.encrypted_dek_bytes,
                 };
-                wrapped_key.to_bytes().map(EncryptedDataEncryptionKey::new)
+                azure_dek.to_bytes().map(EncryptedDataEncryptionKey::new)
             }
             _ => Ok(EncryptedDataEncryptionKey::new(
                 self.encrypted_dek_bytes.to_vec(),
@@ -99,11 +99,11 @@ impl<'v> StoredEnvelope<'v> {
         let layout = EnvelopeLayout::try_from(value)?;
         let fields = match layout {
             EnvelopeLayout::Tink => {
-                let (encrypted_dek_bytes, bare) = split_envelope(value)?;
+                let (encrypted_dek_bytes, bare) = split_encrypted_dek_and_bare_value(value)?;
                 Some((&[][..], encrypted_dek_bytes, bare))
             }
             EnvelopeLayout::V1 => value.split_first().and_then(|(_, header)| {
-                let (kek_version, rest) = super::split_kek_version_field(header)?;
+                let (kek_version, rest) = super::split_u8_length_prefixed(header)?;
                 let (encrypted_dek_len, rest) = rest.split_first_chunk::<2>()?;
                 let encrypted_dek_len = usize::from(u16::from_be_bytes(*encrypted_dek_len));
                 let (encrypted_dek_bytes, bare) = rest.split_at_checked(encrypted_dek_len)?;
@@ -144,7 +144,7 @@ impl<'v> StoredEnvelope<'v> {
     /// KEK `AZURE_KEY_VERSION_MISSING` on a legacy layout with no key version.
     pub(crate) fn encrypted_dek(
         &self,
-        kek: &KekProvider,
+        kek: &KmsProvider,
     ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
         let format = match self.layout {
             EnvelopeLayout::Tink => {
@@ -171,9 +171,9 @@ impl<'v> StoredEnvelope<'v> {
 /// `INVALID_KEY_VERSION` on a key version that is not ASCII alphanumeric.
 pub(super) fn encrypted_dek_from_layout_v1(
     after_header: &[u8],
-    kek: &KekProvider,
+    kek: &KmsProvider,
 ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-    let (kek_version, encrypted_dek_bytes) = super::split_kek_version_field(after_header)
+    let (kek_version, encrypted_dek_bytes) = super::split_u8_length_prefixed(after_header)
         .ok_or_else(|| {
             KmsAeadEncryptionError::create(
                 "INVALID_ENCRYPTED_KEY_FORMAT",
@@ -205,26 +205,27 @@ pub(super) fn warn_once(format: KmsAeadLegacyFormat) {
     }
 }
 
-/// The upgrades of stored values to Tink's format.
+/// The upgrades of stored values to Tink's format, which decrypt their DEKs.
 impl<P, B> KmsAeadEnvelope<P, B>
 where
-    P: KmsAeadEncryptionProvider,
+    P: KmsAeadDecryptionProvider,
     B: AeadBackend,
 {
-    /// `value`, sealed under `aad`, in Tink's KMS envelope format, or `None` when it already is
+    /// `value`, encrypted under `aad`, in Tink's KMS envelope format, or `None` when it already is
     /// in it, so that a sweep over stored rows writes only the ones that change.
     ///
     /// It decrypts the value's DEK with the provider, never through the DEK cache, since only the
     /// key tells a value of 0.30 from one of a 32-bit target before 0.24.0, and for a value in a
-    /// legacy layout opens it under the envelope's algorithm and `aad` and encrypts the DEK again
-    /// as Tink does, a second KMS call. The opening only verifies the value: the AEAD bytes stay as
-    /// they are, since every release seals them in Tink's layout, and a value that does not open
-    /// is never rewritten with the Tink key type of the envelope's algorithm. The envelope's
-    /// algorithm is the one the value was sealed with, as for [`decrypt`](Self::decrypt).
+    /// legacy layout decrypts it under the envelope's algorithm and `aad` and encrypts the DEK
+    /// again as Tink does, a second KMS call. The decryption only verifies the value: the AEAD
+    /// bytes stay as they are, since every release encrypts them in Tink's layout, and a value that
+    /// does not decrypt is never rewritten with the Tink key type of the envelope's algorithm. The
+    /// envelope's algorithm is the one the value was encrypted with, as for
+    /// [`decrypt`](Self::decrypt).
     ///
     /// # Errors
     ///
-    /// The errors of [`decrypt`](Self::decrypt), among them `DECRYPT` when the value was sealed
+    /// The errors of [`decrypt`](Self::decrypt), among them `DECRYPT` when the value was encrypted
     /// under another algorithm or another AAD, and the provider's errors for the new encryption.
     #[deprecated(
         since = "0.30.0",
@@ -244,7 +245,7 @@ where
                 return Ok(None);
             }
             // A raw key records no algorithm, and every algorithm with its length takes it, so only
-            // opening the value shows that the Tink key type written below is the right one.
+            // decrypting the value shows that the Tink key type written below is the right one.
             self.cipher.open(
                 aad.as_ref(),
                 stored.bare,
@@ -273,10 +274,10 @@ where
     ///
     /// It decrypts the key with the provider, never through the DEK cache, and for a key in a
     /// legacy layout encrypts it again, a second KMS call. The envelope's algorithm is the one the
-    /// key was made for: with no value to open, the upgrade cannot check it, and records the
+    /// key was made for: with no value to decrypt, the upgrade cannot check it, and records the
     /// envelope's algorithm in the Tink key type for any key of its length. Where the values
-    /// sealed under the key are at hand, [`upgrade_legacy_value`](Self::upgrade_legacy_value)
-    /// opens them and refuses a key of another algorithm.
+    /// encrypted under the key are at hand, [`upgrade_legacy_value`](Self::upgrade_legacy_value)
+    /// decrypts them and refuses a key of another algorithm.
     ///
     /// # Errors
     ///
@@ -321,10 +322,10 @@ mod tests {
     use super::*;
     use crate::errors::KmsAeadError;
 
-    /// The shortest sealed value: a nonce and a tag around an empty plaintext.
-    const SEALED: [u8; 28] = [0xAB; 28];
+    /// The shortest encrypted value: a nonce and a tag around an empty plaintext.
+    const ENCRYPTED: [u8; 28] = [0xAB; 28];
     const ENCRYPTED_DEK: &[u8] = b"wrapped";
-    /// The header before the sealed value of the encrypted DEK `wrapped` with the key version
+    /// The header before the encrypted value of the encrypted DEK `wrapped` with the key version
     /// `18`, as 0.29's `join` wrote it in envelope layout v1.
     const ENVELOPE_V1_HEADER: &str = "01023138000777726170706564";
     /// The same without a key version.
@@ -341,17 +342,17 @@ mod tests {
             ENVELOPE_V1_WITHOUT_KEY_VERSION_HEADER,
             LENGTH_PREFIXED_ENVELOPE_HEADER,
         ] {
-            let value = [hex::decode(header).unwrap(), SEALED.to_vec()].concat();
+            let value = [hex::decode(header).unwrap(), ENCRYPTED.to_vec()].concat();
 
             let stored = StoredEnvelope::split(&value)?;
-            let encrypted_dek = stored.encrypted_dek(&KekProvider::Gcp)?;
+            let encrypted_dek = stored.encrypted_dek(&KmsProvider::Gcp)?;
 
-            assert_eq!(stored.bare, SEALED, "{header}");
+            assert_eq!(stored.bare, ENCRYPTED, "{header}");
             assert_eq!(encrypted_dek.value(), ENCRYPTED_DEK, "{header}");
         }
         let encrypted_dek = encrypted_dek_from_layout_v1(
             &hex::decode(ENCRYPTED_DEK_V1).unwrap()[2..],
-            &KekProvider::Gcp,
+            &KmsProvider::Gcp,
         )?;
         assert_eq!(encrypted_dek.value(), ENCRYPTED_DEK);
         Ok(())
@@ -361,21 +362,21 @@ mod tests {
     #[test]
     fn the_azure_provider_takes_the_key_version_in_its_bytes() -> KmsAeadResult<()> {
         let azure_bytes = [&[0x01, 0x02, b'1', b'8'][..], ENCRYPTED_DEK].concat();
-        let value = [hex::decode(ENVELOPE_V1_HEADER).unwrap(), SEALED.to_vec()].concat();
+        let value = [hex::decode(ENVELOPE_V1_HEADER).unwrap(), ENCRYPTED.to_vec()].concat();
         let value_without_key_version = [
             hex::decode(ENVELOPE_V1_WITHOUT_KEY_VERSION_HEADER).unwrap(),
-            SEALED.to_vec(),
+            ENCRYPTED.to_vec(),
         ]
         .concat();
 
         let envelope_encrypted_dek =
-            StoredEnvelope::split(&value)?.encrypted_dek(&KekProvider::Azure)?;
+            StoredEnvelope::split(&value)?.encrypted_dek(&KmsProvider::Azure)?;
         let key_layout_encrypted_dek = encrypted_dek_from_layout_v1(
             &hex::decode(ENCRYPTED_DEK_V1).unwrap()[2..],
-            &KekProvider::Azure,
+            &KmsProvider::Azure,
         )?;
         let without_key_version =
-            StoredEnvelope::split(&value_without_key_version)?.encrypted_dek(&KekProvider::Azure);
+            StoredEnvelope::split(&value_without_key_version)?.encrypted_dek(&KmsProvider::Azure);
 
         assert_eq!(*envelope_encrypted_dek.value(), azure_bytes);
         assert_eq!(*key_layout_encrypted_dek.value(), azure_bytes);
@@ -390,7 +391,7 @@ mod tests {
     #[test]
     fn a_legacy_value_too_short_for_a_nonce_and_a_tag_is_refused_when_read() {
         for header in [ENVELOPE_V1_HEADER, LENGTH_PREFIXED_ENVELOPE_HEADER] {
-            let value = [&hex::decode(header).unwrap()[..], &SEALED[1..]].concat();
+            let value = [&hex::decode(header).unwrap()[..], &ENCRYPTED[1..]].concat();
 
             let result = Encrypted::<String, Envelope>::try_from(value);
 
@@ -426,7 +427,7 @@ mod tests {
                 result.err()
             );
         }
-        let result = encrypted_dek_from_layout_v1(&[0x05, b'1'], &KekProvider::Gcp);
+        let result = encrypted_dek_from_layout_v1(&[0x05, b'1'], &KmsProvider::Gcp);
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(error))
                 if error.public.code == "INVALID_ENCRYPTED_KEY_FORMAT"),
@@ -442,7 +443,7 @@ mod tests {
         value.extend_from_slice(&[0x00, 0x01, 0xAA, 0xBB]);
 
         let result = StoredEnvelope::split(&value)
-            .and_then(|stored| stored.encrypted_dek(&KekProvider::Gcp));
+            .and_then(|stored| stored.encrypted_dek(&KmsProvider::Gcp));
 
         assert!(
             matches!(&result, Err(KmsAeadError::EncryptionError(error))
@@ -460,8 +461,8 @@ mod tests {
         ) {
             let bytes = [&[first][..], &rest].concat();
             let _ = StoredEnvelope::split(&bytes)
-                .and_then(|stored| stored.encrypted_dek(&KekProvider::Azure));
-            let _ = encrypted_dek_from_layout_v1(&bytes, &KekProvider::Azure);
+                .and_then(|stored| stored.encrypted_dek(&KmsProvider::Azure));
+            let _ = encrypted_dek_from_layout_v1(&bytes, &KmsProvider::Azure);
         }
     }
 
@@ -483,7 +484,7 @@ mod tests {
                 CountingKmsProvider::with_kek(
                     TestKmsProvider::Working,
                     KekRef::new(
-                        KekProvider::Gcp,
+                        KmsProvider::Gcp,
                         "projects/p/locations/l/keyRings/r/cryptoKeys/k",
                     ),
                 ),

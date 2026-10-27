@@ -14,8 +14,8 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Client, Config, Connection, Socket};
 
 use super::{
-    join_until, KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap,
-    WatchEvent,
+    join_tasks_until, Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind,
+    StoreOperation, Stored, Swap, WatchEvent,
 };
 use crate::errors::{Identifier, IdentifierRule, KeyringResult};
 use crate::{KeyringError, KeyringId, KeyringRecord};
@@ -40,8 +40,9 @@ const LISTENER_MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// );
 /// ```
 ///
-/// The application's principal needs `SELECT` on it, and the administrative one also `INSERT` and
-/// `UPDATE`. Every write sends `NOTIFY <table>, '<keyring id>'` when it commits, and a
+/// The application's principal needs `SELECT` on it, and the administrative one also `INSERT`,
+/// `UPDATE` and, to shred a keyring, `DELETE`. Every write and delete sends
+/// `NOTIFY <table>, '<keyring id>'` when it commits, and a
 /// [`watch`](KeyringStore::watch) listens on that channel. PostgreSQL lets any session notify
 /// any channel; a keyring revalidates at most once per
 /// [`reload_min_interval`](crate::KeyringRegistryOptions::reload_min_interval) however many signals
@@ -75,8 +76,11 @@ pub struct PostgresKeyringStore<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PostgresTable(String);
 
-/// The revision of a record in a [`PostgresKeyringStore`]: the row's `revision` column, 1 when
-/// the record is created and incremented by every write.
+/// The revision of a record in a [`PostgresKeyringStore`]: the row's `revision` column, the
+/// server's clock in microseconds since the Unix epoch when the record is created, and the larger
+/// of that and the previous revision plus one after every write. A row deleted and created again
+/// therefore starts at a revision no earlier row of the id held, unless the server's clock steps
+/// back.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PostgresRevision(i64);
 
@@ -110,6 +114,7 @@ struct Statements {
     revalidate: String,
     create: String,
     update: String,
+    delete: String,
 }
 
 /// The senders of the live watches of a store, by keyring id, and the listener task that
@@ -407,7 +412,8 @@ impl Statements {
             create: format!(
                 r#"WITH written AS (
                     INSERT INTO "{table}" (id, record, revision)
-                    VALUES ($1, convert_from($2, 'UTF8')::jsonb, 1)
+                    VALUES ($1, convert_from($2, 'UTF8')::jsonb,
+                        (extract(epoch FROM clock_timestamp()) * 1000000)::bigint)
                     ON CONFLICT (id) DO NOTHING
                     RETURNING id, revision
                 )
@@ -416,12 +422,24 @@ impl Statements {
             update: format!(
                 r#"WITH written AS (
                     UPDATE "{table}"
-                    SET record = convert_from($2, 'UTF8')::jsonb, revision = revision + 1,
+                    SET record = convert_from($2, 'UTF8')::jsonb,
+                        revision = greatest(revision + 1,
+                            (extract(epoch FROM clock_timestamp()) * 1000000)::bigint),
                         updated_at = now()
                     WHERE id = $1 AND revision = $4
                     RETURNING id, revision
                 )
                 SELECT revision, pg_notify($3, id)::text FROM written"#
+            ),
+            // Every part of the statement reads one snapshot, so `stored` sees the row the
+            // delete may have just removed: no row deleted and a row stored is a conflict.
+            delete: format!(
+                r#"WITH deleted AS (
+                    DELETE FROM "{table}" WHERE id = $1 AND revision = $3
+                    RETURNING id
+                )
+                SELECT (SELECT count(pg_notify($2, id)::text) FROM deleted) AS deleted,
+                    EXISTS (SELECT 1 FROM "{table}" WHERE id = $1) AS stored"#
             ),
         }
     }
@@ -464,26 +482,28 @@ impl Display for PostgresRevision {
     }
 }
 
-/// The store error of `operation` for `error`. A server error keeps its primary message and
-/// SQLSTATE only: its detail, hint and context may quote the row, and with it the record's
-/// encrypted DEKs. Its `Display` and `Debug` carry all three, so it is not kept as the root cause.
-fn store_error(
-    operation: StoreOperation,
-    error: impl Into<Arc<tokio_postgres::Error>>,
-) -> KeyringError {
-    let error = error.into();
-    if let Some(database) = error.as_db_error() {
-        let message = format!(
-            "{} (SQLSTATE {})",
-            database.message(),
-            database.code().code()
-        );
-        return KeyringError::store(StoreKind::Postgres, operation, &message);
+impl KeyringError {
+    /// The store error of `operation` for `error`. A server error keeps its primary message and
+    /// SQLSTATE only: its detail, hint and context may quote the row, and with it the record's
+    /// encrypted DEKs. Its `Display` and `Debug` carry all three, so it is not kept as the root cause.
+    fn from_postgres_error(
+        operation: StoreOperation,
+        error: impl Into<Arc<tokio_postgres::Error>>,
+    ) -> Self {
+        let error = error.into();
+        if let Some(database) = error.as_db_error() {
+            let message = format!(
+                "{} (SQLSTATE {})",
+                database.message(),
+                database.code().code()
+            );
+            return KeyringError::store(StoreKind::Postgres, operation, &message);
+        }
+        KeyringError::store_caused_by(StoreKind::Postgres, operation, error)
     }
-    KeyringError::store_caused_by(StoreKind::Postgres, operation, error)
 }
 
-fn stored(
+fn stored_record(
     id: &KeyringId,
     document: &str,
     revision: i64,
@@ -515,8 +535,10 @@ where
                 .transpose()
         }
         .await
-        .map_err(|error: Arc<tokio_postgres::Error>| store_error(StoreOperation::Load, error))?;
-        row.map(|(document, revision)| stored(id, &document, revision))
+        .map_err(|error: Arc<tokio_postgres::Error>| {
+            KeyringError::from_postgres_error(StoreOperation::Load, error)
+        })?;
+        row.map(|(document, revision)| stored_record(id, &document, revision))
             .transpose()
     }
 
@@ -535,13 +557,13 @@ where
         }
         .await
         .map_err(|error: Arc<tokio_postgres::Error>| {
-            store_error(StoreOperation::Revalidate, error)
+            KeyringError::from_postgres_error(StoreOperation::Revalidate, error)
         })?;
         match row {
             None => Ok(Revalidation::Missing),
             Some((None, _)) => Ok(Revalidation::Unchanged),
             Some((Some(document), revision)) => {
-                stored(id, &document, revision).map(Revalidation::Changed)
+                stored_record(id, &document, revision).map(Revalidation::Changed)
             }
         }
     }
@@ -568,11 +590,36 @@ where
         }
         .await
         .map_err(|error: Arc<tokio_postgres::Error>| {
-            store_error(StoreOperation::CompareAndSwap, error)
+            KeyringError::from_postgres_error(StoreOperation::CompareAndSwap, error)
         })?;
         Ok(written.map_or(Swap::Conflict, |revision| {
             Swap::Written(PostgresRevision(revision))
         }))
+    }
+
+    /// Deletes the row at its revision. The row's earlier versions stay in the table's files
+    /// until a vacuum reclaims them, and in the database's backups, WAL archives and replicas:
+    /// those are the operator's.
+    async fn delete(&self, id: &KeyringId, expected: &PostgresRevision) -> KeyringResult<Deletion> {
+        let (deleted, stored): (i64, bool) = async {
+            let client = self.connections.client().await?;
+            let row = client
+                .query_one(
+                    &self.statements.delete,
+                    &[&id.as_str(), &self.table.0.as_str(), &expected.0],
+                )
+                .await?;
+            Ok((row.try_get(0)?, row.try_get(1)?))
+        }
+        .await
+        .map_err(|error: Arc<tokio_postgres::Error>| {
+            KeyringError::from_postgres_error(StoreOperation::Delete, error)
+        })?;
+        Ok(if deleted == 0 && stored {
+            Deletion::Conflict
+        } else {
+            Deletion::Deleted
+        })
     }
 
     /// A watch on the store's shared listener. The first watch opens the listener connection,
@@ -586,7 +633,9 @@ where
                     .connections
                     .listen(&self.table, &self.watches)
                     .await
-                    .map_err(|error| store_error(StoreOperation::Watch, error))?;
+                    .map_err(|error| {
+                        KeyringError::from_postgres_error(StoreOperation::Watch, error)
+                    })?;
                 let mut listener_task = self.watches.listener_task.lock().await;
                 // Another watch may have started the listener meanwhile, or a shutdown stopped
                 // it; this listener is then dropped, and its connection closed.
@@ -610,7 +659,7 @@ where
     async fn shutdown(&self, timeout: Option<Duration>) {
         let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
         self.watches.shut_down();
-        join_until(&mut *self.watches.listener_task.lock().await, deadline).await;
+        join_tasks_until(&mut *self.watches.listener_task.lock().await, deadline).await;
     }
 }
 

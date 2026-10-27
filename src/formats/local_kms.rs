@@ -7,18 +7,18 @@ use crate::KmsAeadResult;
 /// An encrypted DEK of the local KMS:
 ///
 /// ```text
-/// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][sealed key][tag: 16]
+/// [0x01][i: u8][KEK id: i bytes][KEK version: u32 BE][nonce: 12][encrypted key][tag: 16]
 /// ```
 ///
-/// The header, up to the version, is the associated data of the AES-256-GCM seal, so neither
+/// The header, up to the version, is the associated data of the AES-256-GCM encrypt, so neither
 /// the id nor the version can be changed without the decryption failing.
 pub(crate) struct LocalEncryptedDek<'w> {
     /// `[0x01][i][KEK id][KEK version]`, the associated data.
     pub(crate) header: &'w [u8],
     pub(crate) kek_id: &'w [u8],
     pub(crate) kek_version: LocalKekVersion,
-    /// `[nonce][sealed key][tag]`, the cipher text of the seal.
-    pub(crate) sealed: &'w [u8],
+    /// `[nonce][encrypted key][tag]`, the cipher text of the encryption.
+    pub(crate) cipher_text: &'w [u8],
 }
 
 impl<'w> LocalEncryptedDek<'w> {
@@ -53,12 +53,12 @@ impl<'w> LocalEncryptedDek<'w> {
             return None;
         };
         let (kek_id, rest) = rest.split_at_checked(usize::from(*id_len))?;
-        let (kek_version, sealed) = rest.split_first_chunk::<4>()?;
+        let (kek_version, cipher_text) = rest.split_first_chunk::<4>()?;
         Some(Self {
-            header: &encrypted[..encrypted.len() - sealed.len()],
+            header: &encrypted[..encrypted.len() - cipher_text.len()],
             kek_id,
             kek_version: LocalKekVersion::from(NonZeroU32::new(u32::from_be_bytes(*kek_version))?),
-            sealed,
+            cipher_text,
         })
     }
 }

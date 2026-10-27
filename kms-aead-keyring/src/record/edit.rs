@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
+use kms_aead::mac::Authenticator;
 use kms_aead::{
     AeadCipher, BeaconMac, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider,
 };
@@ -15,7 +16,7 @@ use crate::errors::{
     RecordInvalidReason,
 };
 use crate::purpose::next_key_id;
-use crate::sweep::{SealMarker, SealRange};
+use crate::sweep::{EncryptionMarker, ReencryptRange};
 use crate::{
     Compromise, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, Purpose, Rotation, Transition,
@@ -62,6 +63,12 @@ impl NewVersion {
                     .await?;
                 encrypted_dek
             }
+            KeyAlgorithm::Mac(algorithm) => {
+                let (_, encrypted_dek) = Authenticator::<B>::new(algorithm)?
+                    .generate_encrypted_dek(provider)
+                    .await?;
+                encrypted_dek
+            }
         };
         Ok(Self {
             algorithm,
@@ -97,16 +104,19 @@ impl KeyringAlgorithms {
 
 impl KeyringRecord {
     /// A record with no version yet, to which the creation of a keyring stages and promotes the
-    /// first version of each purpose. Its seal epoch is 0 until that write finishes.
+    /// first version of each purpose. Its re-encryption epoch is 0 until that write finishes, and
+    /// its canonical digest is set by `RecordEdit::finish`.
     fn new(id: KeyringId, kek: KekRef, algorithms: KeyringAlgorithms, now: Timestamp) -> Self {
         Self {
             id,
             kek,
             algorithms,
-            seal_marker: SealMarker::ENVELOPE,
+            encryption_marker: EncryptionMarker::ENVELOPE,
             versions: Vec::new(),
             created_at: now,
             updated_at: now,
+            signature: None,
+            canonical_digest: [0; 32],
         }
     }
 
@@ -157,6 +167,7 @@ impl KeyringAlgorithms {
             Purpose::Randomized => Some(KeyAlgorithm::Randomized(self.randomized)),
             Purpose::Deterministic => self.deterministic.map(KeyAlgorithm::Deterministic),
             Purpose::Beacon => self.beacon.map(KeyAlgorithm::Beacon),
+            Purpose::Mac => self.mac.map(KeyAlgorithm::Mac),
         }
     }
 }
@@ -168,7 +179,7 @@ impl RetainedDek {
         self.compromised.is_none().then(|| Self {
             encrypted_dek: self.encrypted_dek.clone(),
             compromised: Some(compromise.clone()),
-            seal_range: self.seal_range,
+            reencrypt_range: self.reencrypt_range,
         })
     }
 }
@@ -176,7 +187,7 @@ impl RetainedDek {
 /// A record that an administrative write is changing: the lifecycle transitions apply to it,
 /// and [`finish`](Self::finish) checks the result as a reader would, before it is written.
 ///
-/// A version that a transition makes active starts its seal range at the epoch after the
+/// A version that a transition makes active starts its re-encryption range at the epoch after the
 /// record's, and a version that stops being active keeps an open range: `finish` moves the
 /// epoch on to that start and closes every open range of a version that is not active, in the
 /// same record, so that one compare-and-swap writes the epoch and the ranges together.
@@ -184,9 +195,13 @@ pub(crate) struct RecordEdit {
     record: KeyringRecord,
 }
 
+/// The record as read, without its signature, which covers the record as it was: a signing
+/// write signs the changed record anew.
 impl From<KeyringRecord> for RecordEdit {
     fn from(record: KeyringRecord) -> Self {
-        Self { record }
+        Self {
+            record: record.without_signature(),
+        }
     }
 }
 
@@ -197,51 +212,58 @@ impl RecordEdit {
     }
 
     /// The changed record as a reader parses it from the store, so that a record that would fail
-    /// its invariants or caps there is never written. When a version became active, the seal
-    /// epoch moves on once, however many versions became active, and the seal range of every
-    /// version that is not active and still open ends at the new epoch: no process seals under
-    /// such a version once it holds the new record.
+    /// its invariants or caps there is never written. When a version became active, the
+    /// re-encryption epoch moves on once, however many versions became active, and the
+    /// re-encryption range of every version that is not active and still open ends at the new
+    /// epoch: no process encrypts under such a version once it holds the new record.
     ///
     /// # Errors
     ///
     /// The errors of a read.
     pub(crate) fn finish(self) -> KeyringResult<KeyringRecord> {
         let mut record = self.record;
-        let held = record.seal_marker;
+        let held = record.encryption_marker;
         let activated = record
             .versions
             .iter()
             .find_map(|version| match version.state {
-                VersionState::Active { seal_start, .. } if seal_start > held => Some(seal_start),
+                VersionState::Active {
+                    reencrypt_start, ..
+                } if reencrypt_start > held => Some(reencrypt_start),
                 _ => None,
             });
         if let Some(epoch) = activated {
-            record.seal_marker = epoch;
+            record.encryption_marker = epoch;
             for version in &mut record.versions {
                 let open = match &mut version.state {
                     VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
-                        Some(&mut kept.seal_range)
+                        Some(&mut kept.reencrypt_range)
                     }
-                    VersionState::Destroyed { seal_range, .. } => seal_range.as_mut(),
+                    VersionState::Destroyed {
+                        reencrypt_range, ..
+                    } => reencrypt_range.as_mut(),
                     VersionState::Pending(_) | VersionState::Active { .. } => None,
                 };
                 if let Some(range) = open.filter(|range| range.end().is_none()) {
-                    *range = SealRange::new(range.start(), Some(epoch));
+                    *range = ReencryptRange::new(range.start(), Some(epoch));
                 }
             }
         }
         KeyringRecord::from_json(&record.id, &record.to_json()?)
     }
 
-    /// The marker of the epoch the versions this write makes active start their seal range at:
-    /// the one after the record's.
+    /// The marker of the epoch the versions this write makes active start their re-encryption range
+    /// at: the one after the record's.
     ///
     /// # Errors
     ///
-    /// `RecordInvalid` with `SealEpochOutOfRange` when the epoch cannot count up any more.
-    fn activation_marker(&self) -> KeyringResult<SealMarker> {
-        self.record.seal_marker.next().ok_or_else(|| {
-            KeyringError::record_invalid(&self.record.id, RecordInvalidReason::SealEpochOutOfRange)
+    /// `RecordInvalid` with `ReencryptEpochOutOfRange` when the epoch cannot count up any more.
+    fn activation_marker(&self) -> KeyringResult<EncryptionMarker> {
+        self.record.encryption_marker.next().ok_or_else(|| {
+            KeyringError::record_invalid(
+                &self.record.id,
+                RecordInvalidReason::ReencryptEpochOutOfRange,
+            )
         })
     }
 
@@ -294,16 +316,16 @@ impl RecordEdit {
     ///
     /// # Errors
     ///
-    /// `KeyVersionUnknown`, `RecordInvalid` with `SealEpochOutOfRange` when the seal epoch cannot
-    /// count up any more, and `InvalidTransition` for a version that is not pending.
+    /// `KeyVersionUnknown`, `RecordInvalid` with `ReencryptEpochOutOfRange` when the re-encryption
+    /// epoch cannot count up any more, and `InvalidTransition` for a version that is not pending.
     pub(crate) fn promote(&mut self, key_id: KeyId, now: Timestamp) -> KeyringResult<Rotation> {
         let purpose = self.version_mut(key_id)?.algorithm.purpose();
         let previous = self.record.active(purpose).map(KeyVersion::id);
-        let seal_start = self.activation_marker()?;
+        let reencrypt_start = self.activation_marker()?;
         self.change_state(key_id, Transition::Promote, now, |state| match state {
             VersionState::Pending(encrypted_dek) => Some(VersionState::Active {
                 encrypted_dek: encrypted_dek.clone(),
-                seal_start,
+                reencrypt_start,
             }),
             _ => None,
         })?;
@@ -311,11 +333,11 @@ impl RecordEdit {
             self.change_state(previous, Transition::Promote, now, |state| match state {
                 VersionState::Active {
                     encrypted_dek,
-                    seal_start,
+                    reencrypt_start,
                 } => Some(VersionState::DecryptOnly(RetainedDek {
                     encrypted_dek: encrypted_dek.clone(),
                     compromised: None,
-                    seal_range: SealRange::new(*seal_start, None),
+                    reencrypt_range: ReencryptRange::new(*reencrypt_start, None),
                 })),
                 _ => None,
             })?;
@@ -349,11 +371,11 @@ impl RecordEdit {
                 VersionState::Pending(_) => None,
                 VersionState::Active {
                     encrypted_dek,
-                    seal_start,
+                    reencrypt_start,
                 } => Some(VersionState::DecryptOnly(RetainedDek {
                     encrypted_dek: encrypted_dek.clone(),
                     compromised: Some(compromise.clone()),
-                    seal_range: SealRange::new(*seal_start, None),
+                    reencrypt_range: ReencryptRange::new(*reencrypt_start, None),
                 })),
                 VersionState::DecryptOnly(kept) => {
                     kept.flagged(&compromise).map(VersionState::DecryptOnly)
@@ -365,12 +387,12 @@ impl RecordEdit {
         match replacement {
             Some(new) if was_active => {
                 let purpose = new.algorithm.purpose();
-                let seal_start = self.activation_marker()?;
+                let reencrypt_start = self.activation_marker()?;
                 let current = self.push(
                     new,
                     |encrypted_dek| VersionState::Active {
                         encrypted_dek,
-                        seal_start,
+                        reencrypt_start,
                     },
                     now,
                 )?;
@@ -402,30 +424,20 @@ impl RecordEdit {
         self.change_state(key_id, Transition::Destroy, now, |state| match state {
             VersionState::Pending(_) => Some(VersionState::Destroyed {
                 compromised: None,
-                seal_range: None,
+                reencrypt_range: None,
             }),
             VersionState::Retired(kept) => Some(VersionState::Destroyed {
                 compromised: kept.compromised.clone(),
-                seal_range: Some(kept.seal_range),
+                reencrypt_range: Some(kept.reencrypt_range),
             }),
             _ => None,
         })
     }
 
     /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag
-    /// and its seal range.
+    /// and its re-encryption range.
     pub(crate) fn destroy_all(&mut self, now: Timestamp) {
-        let record = &mut self.record;
-        for version in &mut record.versions {
-            if !matches!(version.state, VersionState::Destroyed { .. }) {
-                version.state = VersionState::Destroyed {
-                    compromised: version.compromised().cloned(),
-                    seal_range: version.seal_range(),
-                };
-                version.state_changed_at = now;
-            }
-        }
-        record.updated_at = now;
+        self.record.destroy_all(now);
     }
 
     /// Puts `encrypted_dek`, the same key encrypted again, in place of `key_id`'s encrypted DEK, in
@@ -462,6 +474,7 @@ impl RecordEdit {
             KeyAlgorithm::Randomized(algorithm) => algorithms.randomized = algorithm,
             KeyAlgorithm::Deterministic(algorithm) => algorithms.deterministic = Some(algorithm),
             KeyAlgorithm::Beacon(algorithm) => algorithms.beacon = Some(algorithm),
+            KeyAlgorithm::Mac(algorithm) => algorithms.mac = Some(algorithm),
         }
         self.record.updated_at = now;
     }

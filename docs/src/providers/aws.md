@@ -43,7 +43,7 @@ Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/mast
 
 `AwsKmsProvider::new` loads the AWS configuration from the environment, as the AWS SDK does:
 environment variables, the shared config and credentials files, the instance or container
-role, etc. It sends no request, so missing credentials or an unreachable endpoint fail the first
+role, and the session of `aws login`. It sends no request, so missing credentials or an unreachable endpoint fail the first
 encryption or decryption.
 
 Without `aws_region` in the key reference, the provider takes the region of the AWS
@@ -92,6 +92,78 @@ DEK: each keyring's with `reencrypt_deks`, the application's own as in
 `PendingImport`: `ListKeyRotations` lists each material with its import state, and the one still
 missing is imported again.
 
+## Asymmetric keys
+
+A KMS key of the spec `RSA_2048`, `RSA_3072` or `RSA_4096` with the usage `ENCRYPT_DECRYPT` is an
+asymmetric KEK, see [Asymmetric KEKs](../asymmetric-kek.md):
+
+- `AwsKmsProvider::public_key()` sends `GetPublicKey` for the configured key and returns the
+  DER SubjectPublicKeyInfo, for the producers. The key must be of usage `ENCRYPT_DECRYPT` and list
+  `RSAES_OAEP_SHA_256` among its `EncryptionAlgorithms`, and the call fails with
+  `ASYMMETRIC_KEK_PUBLIC_KEY` otherwise, and when the response holds no public key;
+- a decryption of a `0x02` encrypted DEK sends `Decrypt` with the configured key as `KeyId`,
+  `EncryptionAlgorithm` `RSAES_OAEP_SHA_256` and the RSA block as `CiphertextBlob`. AWS KMS takes no
+  encryption context with the RSA algorithms. The encrypted DEK records no key version, as under a
+  symmetric key;
+- AWS KMS does not rotate an asymmetric key: a rotation is a new key, by hand, and so a new
+  keyring;
+- the principal of a reader needs `kms:Decrypt` on the key, and the administration also
+  `kms:GetPublicKey`. Nobody needs `kms:Encrypt`.
+
+An asymmetric key is configured by its ARN, as a symmetric key is. AWS prices and limits the RSA
+requests apart from the symmetric ones, see
+[Keyrings under an asymmetric KEK](../asymmetric-kek.md#keyrings-under-an-asymmetric-kek).
+
+## Signing
+
+`AwsKmsSigningProvider` signs with an asymmetric KMS key of the usage `SIGN_VERIFY`, see
+[Signatures and MACs](../signing.md). `AwsKmsSigningKeyRef` names the key as `AwsKmsKeyRef` does,
+and adds the algorithm: `Ed25519` for an `ECC_NIST_EDWARDS25519` key and `EcdsaP256Sha256` for
+`ECC_NIST_P256`.
+
+```rust,no_run
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{AwsKmsSigningKeyRef, AwsKmsSigningProvider};
+use kms_aead::signing::{Signer, SigningAlgorithm};
+
+# async fn example() -> kms_aead::KmsAeadResult<()> {
+let key_ref = AwsKmsSigningKeyRef::new(
+    "123456789012".to_string(),
+    "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".to_string(),
+    SigningAlgorithm::EcdsaP256Sha256,
+);
+
+let provider = AwsKmsSigningProvider::new(&key_ref).await?;
+let signer = Signer::<_, AwsLc>::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+# let _ = jwk;
+# Ok(())
+# }
+```
+
+The provider loads the AWS configuration and takes the region as `AwsKmsProvider` does, and
+`AwsKmsSigningProvider::with_client` takes a client the application built itself. Creating the
+provider sends no request; `Signer::new` sends the first one.
+
+An asymmetric key has no versions, and a rotation is a new key. Configure the key id or the key
+ARN, never an alias: an alias that moves to another key would sign with a key that the key id of
+the signature does not name. An alias name, `alias/…`, or an alias ARN fails at creation with
+`AWS_SIGNING_KEY_ALIAS`, a `SystemError`.
+
+- `sign` sends `Sign` with `MessageType` `RAW` and `ED25519_SHA_512` for Ed25519, and with `DIGEST`
+  and `ECDSA_SHA_256` for P-256, where the message is the SHA-256 of the pre-image. The pre-image
+  is at most 302 bytes, within the 4,096-byte limit of `Message`;
+- a response whose `KeyId` is not the configured key fails with `SIGNING_KEY_MISMATCH`, and one
+  whose `SigningAlgorithm` is not the requested one with `SIGNING_ALGORITHM_MISMATCH`. A P-256
+  signature is DER, converted to `r || s`; one that is not strict DER, or an Ed25519 signature
+  that is not 64 bytes, fails with `SIGNATURE_ENCODING`;
+- `verifying_key` sends `GetPublicKey` and parses the DER `PublicKey`. A `KeySpec` other than the
+  configured one fails with `SIGNING_ALGORITHM_MISMATCH`;
+- the principal needs `kms:Sign` and `kms:GetPublicKey` on the key.
+
 ## Errors
 
 An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyException` or
@@ -99,3 +171,5 @@ An error AWS KMS returned keeps its AWS error code, such as `IncorrectKeyExcepti
 its root cause. A response without the encrypted DEK, the plaintext DEK or the random bytes it was
 asked for fails with `AWS_ERROR`, an `EncryptionError`. Which
 errors are a `NetworkError` and which an `EncryptionError` is in [Retries](../errors.md#retries).
+`AwsKmsSigningProvider` returns the same codes, with a `SignatureError` where the encryption
+provider returns an `EncryptionError`.

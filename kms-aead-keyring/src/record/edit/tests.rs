@@ -190,11 +190,14 @@ fn an_unknown_key_id_is_no_transition() -> KeyringResult<()> {
     Ok(())
 }
 
-/// A new version of `algorithm`.
+/// A new version of `algorithm`, whose encrypted DEK differs between algorithms since no two
+/// versions of a record hold the same bytes.
 fn new_version(algorithm: KeyAlgorithm) -> NewVersion {
     NewVersion {
         algorithm,
-        encrypted_dek: EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec()),
+        encrypted_dek: EncryptedDataEncryptionKey::new(
+            [&ENCRYPTED_DEK[..], algorithm.as_str().as_bytes()].concat(),
+        ),
     }
 }
 
@@ -267,7 +270,7 @@ fn a_promotion_moves_the_active_version_to_decrypt_only() -> TestResult {
 }
 
 #[test]
-fn an_activation_past_the_last_seal_epoch_is_refused() -> TestResult {
+fn an_activation_past_the_last_reencryption_epoch_is_refused() -> TestResult {
     let mut last_epoch = document(vec![
         version(1, "active", false)?,
         version(2, "pending", false)?,
@@ -278,7 +281,7 @@ fn an_activation_past_the_last_seal_epoch_is_refused() -> TestResult {
     assert!(matches!(
         edit.promote(KeyId::new(2), Timestamp::now()),
         Err(KeyringError::RecordInvalid(RecordInvalidError {
-            reason: RecordInvalidReason::SealEpochOutOfRange,
+            reason: RecordInvalidReason::ReencryptEpochOutOfRange,
             ..
         }))
     ));
@@ -360,34 +363,40 @@ fn a_range_a_compromise_left_open_ends_at_the_next_activation() -> TestResult {
     ]))?);
     flag_alone.mark_compromised(randomized, Compromise::new(now, None), None, now)?;
     let record = flag_alone.finish()?;
-    assert_eq!(record.seal_marker(), SealMarker::of_epoch(2));
+    assert_eq!(record.encryption_marker(), EncryptionMarker::of_epoch(2));
     assert_eq!(
-        record.version(randomized).and_then(KeyVersion::seal_range),
-        Some(SealRange::new(SealMarker::of_epoch(2), None))
+        record
+            .version(randomized)
+            .and_then(KeyVersion::reencrypt_range),
+        Some(ReencryptRange::new(EncryptionMarker::of_epoch(2), None))
     );
 
     let mut promotion = RecordEdit::from(record);
     promotion.promote(pending, now)?;
     let record = promotion.finish()?;
 
-    assert_eq!(record.seal_marker(), SealMarker::of_epoch(3));
-    let ended = Some(SealRange::new(
-        SealMarker::of_epoch(2),
-        Some(SealMarker::of_epoch(3)),
+    assert_eq!(record.encryption_marker(), EncryptionMarker::of_epoch(3));
+    let ended = Some(ReencryptRange::new(
+        EncryptionMarker::of_epoch(2),
+        Some(EncryptionMarker::of_epoch(3)),
     ));
     assert_eq!(
-        record.version(randomized).and_then(KeyVersion::seal_range),
+        record
+            .version(randomized)
+            .and_then(KeyVersion::reencrypt_range),
         ended
     );
     assert_eq!(
         record
             .version(deterministic)
-            .and_then(KeyVersion::seal_range),
+            .and_then(KeyVersion::reencrypt_range),
         ended
     );
     assert_eq!(
-        record.version(pending).and_then(KeyVersion::seal_range),
-        Some(SealRange::new(SealMarker::of_epoch(3), None))
+        record
+            .version(pending)
+            .and_then(KeyVersion::reencrypt_range),
+        Some(ReencryptRange::new(EncryptionMarker::of_epoch(3), None))
     );
     Ok(())
 }

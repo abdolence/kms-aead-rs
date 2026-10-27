@@ -59,6 +59,27 @@ mod runbook {}
 #[doc = include_str!("../../docs/src/use-cases/envelope-to-keyring.md")]
 mod envelope_to_keyring {}
 
+/// The streaming chapter, whose examples use both crates, so that this crate compiles them.
+#[cfg(feature = "stream")]
+#[doc = include_str!("../../docs/src/streaming.md")]
+mod streaming {}
+
+/// The use cases that stream, whose examples use both crates, so that this crate compiles them.
+#[cfg(feature = "stream")]
+#[doc = include_str!("../../docs/src/use-cases/large-files.md")]
+mod large_files {}
+
+/// The signing chapter, whose examples use both crates, so that this crate compiles them.
+#[doc = include_str!("../../docs/src/signing.md")]
+mod signing {}
+
+/// The use cases of signed records and MACs, whose examples use both crates.
+#[doc = include_str!("../../docs/src/use-cases/service-integrity.md")]
+mod service_integrity {}
+
+#[doc = include_str!("../../docs/src/use-cases/signed-records.md")]
+mod signed_records {}
+
 /// The README's quick start, compiled so it cannot drift from the API it demonstrates.
 #[doc = include_str!("../README.md")]
 mod readme {}

@@ -19,10 +19,12 @@ jobs:
   # as its AEAD backend is covered. aws-sdk-kms still brings aws-lc-rs into that row.
   #
   # The backend rows build ring and rustcrypto alone, and aws-lc alone in the FIPS row, so that
-  # one backend never hides a missing feature gate in another. deterministic builds beside ring,
-  # never only beside the RustCrypto AEAD crates, so it cannot lean on their dependencies. The
-  # all-backends row runs the cross-backend contract tests and the legacy-format readers. `absent` lists the crates a row's normal dependency
-  # tree must not contain.
+  # one backend never hides a missing feature gate in another. The rustcrypto and FIPS rows build
+  # `stream` as well, so that its code compiles and passes on a backend that is not ring.
+  # deterministic builds beside ring, never only beside the RustCrypto AEAD crates, so it cannot
+  # lean on their dependencies. The all-backends row runs the cross-backend contract tests and the
+  # legacy-format readers. `absent` lists the crates a row's normal dependency tree must not
+  # contain.
   build:
     name: ${{ matrix.name }}
     if: github.event_name != 'schedule'
@@ -32,35 +34,35 @@ jobs:
       matrix:
         include:
           - name: gcp, aws on aws-lc
-            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc
+            features: gcp-kms-encryption,aws-kms-encryption,aws-lc
             absent: ring
           - name: vault roots, aws-lc-rs TLS on aws-lc, opentelemetry
-            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs,opentelemetry
+            features: gcp-kms-encryption,aws-kms-encryption,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs,opentelemetry
             absent: ring opentelemetry_sdk
           - name: vault webpki, ring TLS on ring, legacy formats
-            features: gcp-kms-encryption,aws-kms-encryption,serde,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
+            features: gcp-kms-encryption,aws-kms-encryption,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
           - name: azure native-tls on aws-lc, opentelemetry
-            features: gcp-kms-encryption,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-native-tls,opentelemetry
+            features: gcp-kms-encryption,aws-kms-encryption,aws-lc,azure-kms-encryption-native-tls,opentelemetry
             absent: ring opentelemetry_sdk
           - name: azure rustls aws-lc-rs on aws-lc
-            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,serde,aws-lc,azure-kms-encryption-tls-aws-lc-rs
+            features: gcp-kms-encryption-base,gcloud-sdk/tls-webpki-roots,aws-kms-encryption,aws-lc,azure-kms-encryption-tls-aws-lc-rs
             absent: ring
           - name: azure rustls no-provider on rustcrypto
-            features: aws-kms-encryption,serde,rustcrypto,azure-kms-encryption-tls-no-provider
+            features: aws-kms-encryption,rustcrypto,azure-kms-encryption-tls-no-provider
             absent: ring
           - name: backend ring, deterministic
             features: ring,deterministic
             absent: aws-lc-rs
-          - name: backend rustcrypto
-            features: rustcrypto
+          - name: backend rustcrypto, stream
+            features: rustcrypto,stream
             absent: ring aws-lc-rs
           - name: all backends, legacy formats
-            features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde
-          - name: 'fields: serde-json, postgres, sqlx on ring'
-            features: ring,serde,serde-json,postgres,sqlx
+            features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,stream
+          - name: 'fields: postgres, sqlx on ring'
+            features: ring,postgres,sqlx
             absent: rustls native-tls
-          - name: backend aws-lc FIPS
-            features: aws-lc-fips
+          - name: backend aws-lc FIPS, stream
+            features: aws-lc-fips,stream
             absent: ring aws-lc-sys
             fips: true
     steps:
@@ -92,7 +94,8 @@ jobs:
           done
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
-  # A provider build that names no AEAD backend must fail with the crate's own message.
+  # A provider build that names no AEAD backend must fail with the crate's own message. `stream`
+  # with no backend at all must lint clean, which no build row covers.
   backend-guard:
     name: provider without a backend is refused
     if: github.event_name != 'schedule'
@@ -100,6 +103,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: cargo clippy --features stream -- -Dwarnings
       - run: |
           if output=$(cargo check --features aws-kms-encryption 2>&1); then
             echo "cargo check --features aws-kms-encryption built without a backend"
@@ -118,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
       - name: cargo doc with minimal feature sets
         run: |
           cargo doc --no-deps
@@ -127,9 +133,9 @@ jobs:
       # to the administrative items.
       - name: cargo doc of the keyring
         run: |
-          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream"
           cargo doc --no-deps -p kms-aead-keyring
-          cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3"
+          cargo doc --no-deps -p kms-aead-keyring --features "ring,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3"
   # The book's code compiles as doctests only with each crate's docs.rs feature set, which no build
   # row has.
   book:
@@ -142,9 +148,11 @@ jobs:
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: '0.5.4'
-      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
-      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
+      - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream"
       - run: cd docs && mdbook build
+      # The browser verifier of docs/src/signing.md against the book's vectors, on WebCrypto.
+      - run: node tests/webcrypto_vectors.mjs
   # `rust-version` in the workspace's Cargo.toml: each crate's docs.rs feature set builds on it, on
   # dependencies resolved for it.
   msrv:
@@ -156,8 +164,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
-      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry"
-      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry"
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
+      - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream"
   deny:
     name: cargo deny
     runs-on: ubuntu-latest
@@ -181,6 +189,9 @@ jobs:
       VAULT_ADDR: http://127.0.0.1:8200
       VAULT_TOKEN: root
       VAULT_TRANSIT_KEY: orders
+      VAULT_TRANSIT_SIGNING_KEY_ED25519: signing-ed25519
+      VAULT_TRANSIT_SIGNING_KEY_P256: signing-p256
+      VAULT_TRANSIT_KEY_RSA: orders-rsa
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -191,6 +202,9 @@ jobs:
           done
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"transit"}' "$VAULT_ADDR/v1/sys/mounts/transit"
           curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY"
+          curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"ed25519"}' "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_SIGNING_KEY_ED25519"
+          curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"ecdsa-p256"}' "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_SIGNING_KEY_P256"
+          curl -sf -H "X-Vault-Token: $VAULT_TOKEN" -X POST -d '{"type":"rsa-3072"}' "$VAULT_ADDR/v1/transit/keys/$VAULT_TRANSIT_KEY_RSA"
       - run: cargo test --features hashicorp-vault-transit-kms-encryption,aws-lc --lib -- --ignored hc_vault_transit
   # The keyring stores, one job each. Each job runs the crate's suite with its store's ignored
   # tests included, so that the same two steps serve every store.
@@ -202,7 +216,7 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
-      FEATURES: ring,admin,deterministic,serde,firestore
+      FEATURES: ring,admin,deterministic,firestore-tls-roots
       FIRESTORE_EMULATOR_HOST: 127.0.0.1:8687
       PROJECT_ID: kms-aead-emulator
     steps:
@@ -222,6 +236,15 @@ jobs:
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES,ci-firestore-live" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
       - run: cargo run -p kms-aead-keyring --example sweep_firestore --features "$FEATURES" -- 50
+      # The WebPKI build of the store, for an application without native TLS.
+      - name: Keep native TLS out of firestore-tls-webpki
+        run: |
+          if cargo tree -p kms-aead-keyring -e normal --features ring,admin,firestore-tls-webpki --prefix none -f '{p}' | grep -E '^(native-tls|openssl|openssl-sys) v'; then
+            echo "firestore-tls-webpki pulls in native TLS"
+            exit 1
+          fi
+      - run: cargo clippy -p kms-aead-keyring --all-targets --features ring,admin,firestore-tls-webpki -- -Dwarnings
+      - run: cargo test -p kms-aead-keyring --features ring,admin,firestore-tls-webpki -- --include-ignored
   keyring-postgres:
     name: keyring-postgres
     if: github.event_name != 'schedule'
@@ -239,7 +262,7 @@ jobs:
           --health-timeout 5s
           --health-retries 15
     env:
-      FEATURES: ring,admin,deterministic,serde,postgres,sqlx
+      FEATURES: ring,admin,deterministic,postgres,sqlx
       KMS_AEAD_KEYRING_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v7
@@ -277,7 +300,8 @@ jobs:
           access_token_lifetime: '240s'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
-  # S3 runs on MinIO, so that the job needs no credentials. MinIO publishes no image any more, and
+  # S3 runs on MinIO, so that the job needs no credentials, in a bucket with versioning, which the
+  # delete's noncurrent versions and markers need. MinIO publishes no image any more, and
   # its last one writes an object on an update whose object does not exist, which breaks the
   # compare-and-swap, so the job runs pgsty's build of a later release. Its default command is not
   # `server`, which a service container cannot be given.
@@ -299,13 +323,17 @@ jobs:
       - run: |
           docker run -d -p 9000:9000 -e MINIO_ROOT_USER="$AWS_ACCESS_KEY_ID" \
             -e MINIO_ROOT_PASSWORD="$AWS_SECRET_ACCESS_KEY" \
-            pgsty/minio:RELEASE.2026-08-04T00-00-00Z server /data
+            pgsty/silo:RELEASE.2026-10-18T00-00-00Z server /data
           for attempt in $(seq 1 60); do
             curl -sf "$KEYRING_S3_ENDPOINT/minio/health/ready" && break
             sleep 1
           done
           curl -sf --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
             -X PUT "$KEYRING_S3_ENDPOINT/$KEYRING_S3_BUCKET"
+          curl -sf --aws-sigv4 "aws:amz:us-east-1:s3" --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+            -X PUT "$KEYRING_S3_ENDPOINT/$KEYRING_S3_BUCKET?versioning" \
+            -H "Content-Type: application/xml" \
+            -d '<VersioningConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Status>Enabled</Status></VersioningConfiguration>'
       - run: cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
       - run: cargo test -p kms-aead-keyring --features "$FEATURES" -- --include-ignored
   # The BigQuery keyset export runs against Cloud KMS and BigQuery in the same project, on master
@@ -320,7 +348,7 @@ jobs:
       contents: read
       id-token: write
     env:
-      FEATURES: ring,deterministic,serde,ci-bigquery
+      FEATURES: ring,deterministic,ci-bigquery
       GCP_PROJECT: latestbit
       GCP_PROJECT_ID: 288860578009
       PROJECT_ID: latestbit
@@ -353,11 +381,11 @@ jobs:
       fail-fast: false
       matrix:
         features:
-          - ring,admin
+          - ring,admin,stream
           - aws-lc,admin
           - rustcrypto,admin
-          - ring,admin,deterministic,serde-json,opentelemetry
-          - ring,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,opentelemetry
+          - ring,admin,deterministic,opentelemetry
+          - ring,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,opentelemetry
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -369,6 +397,14 @@ jobs:
         run: |
           cargo clippy -p kms-aead-keyring --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test -p kms-aead-keyring --features "$FEATURES"
+      # The `tink_export` example needs the GCP and AWS providers, which `ci-tink` turns on, and
+      # builds on no other row. It is linted on the aws-lc row, where the providers' TLS already
+      # brings aws-lc-rs.
+      - name: Lint the tink_export example
+        if: matrix.features == 'aws-lc,admin'
+        run: cargo clippy -p kms-aead-keyring --example tink_export --features "$FEATURES,ci-tink" -- -Dwarnings
+        env:
+          FEATURES: ${{ matrix.features }}
   # The keyring's docs.rs feature set, every store at once. The tests that need a store's service
   # stay ignored here; the store jobs above run them. The store clients belong to the keyring, so
   # kms-aead's own tree, with its docs.rs feature set, must not contain them. gcloud-sdk and prost
@@ -378,8 +414,8 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
-      FEATURES: ring,admin,deterministic,serde-json,firestore,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry
-      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,serde,serde-json,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry
+      FEATURES: ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream
       ABSENT: firestore sqlx tokio-postgres aws-sdk-s3
     steps:
       - uses: actions/checkout@v7
@@ -419,6 +455,25 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --features ring,postgres,sqlx --test postgres_fields -- --ignored
+  # Streamed values against pyca/cryptography's Cobblestone-256, an implementation of the same
+  # C2SP format that shares no code with kms-aead: it decrypts the three forms kms-aead writes,
+  # and kms-aead decrypts what it writes. `cryptography.cobblestone` first shipped in 50.0.0.
+  cobblestone-interop:
+    name: cobblestone-interop
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.14'
+      - run: pip install cryptography==50.0.2
+      - run: |
+          cargo run --example cobblestone_interop --features stream,ring -- encrypt > kms-aead.jsonl
+          python -I tests/cobblestone_interop.py decrypt < kms-aead.jsonl
+          python -I tests/cobblestone_interop.py encrypt > pyca.jsonl
+          cargo run --example cobblestone_interop --features stream,ring -- decrypt < pyca.jsonl
   # The Azure provider against the Lowkey Vault Key Vault emulator, which needs no Azure account.
   azure-emulator:
     name: azure-emulator

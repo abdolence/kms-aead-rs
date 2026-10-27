@@ -9,9 +9,9 @@ PostgreSQL. The keyring id names the tenant, see
 
 | | A KEK per tenant | One shared KEK |
 |---|---|---|
-| A DEK copied into another tenant's record | fails at the KMS, which decrypts with the tenant's own KEK | decrypts, since the KMS opens it for any principal allowed to decrypt with the KEK |
+| A DEK copied into another tenant's record | fails at the KMS, which decrypts with the tenant's own KEK | decrypts, since the KMS decrypts it for any principal allowed to decrypt with the KEK |
 | KMS rights | per tenant, so a principal can be limited to some tenants | one grant covers every tenant |
-| Crypto-shredding a tenant | destroying its KEK, backups of the record and exported keysets included | `dangerously_destroy_all_versions`, and then deleting the record's backups and exported keysets, or a KEK rotation for every other keyring |
+| Crypto-shredding a tenant | destroying its KEK, backups of the record and exported keysets included | `dangerously_shred()`, and then deleting the record's backups, the store's other copies and the exported keysets, or a KEK rotation for every other keyring |
 | KMS keys to manage | one per tenant | one |
 
 The first row is the store-writer threat of [Keyring deployment](../security.md#keyring-deployment),
@@ -38,8 +38,9 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
    other providers are built once per keyring;
 3. a `FieldSpec` constant per encrypted field, the same for every tenant, since each keyring
    has DEKs of its own, see [Encrypted fields and AAD](../keyring/fields.md);
-4. on every write, `keyring.sealer()` and its `encrypt`, and the seal marker it gives, see
-   [The seal marker](../operations/sweeps.md#the-seal-marker); on every read, `keyring.decrypt`;
+4. on every write, `keyring.encryptor()` and its `encrypt`, and the encryption marker it gives,
+   see [The encryption marker](../operations/sweeps.md#the-encryption-marker); on every read,
+   `keyring.decrypt`;
 5. `registry.shutdown(None)` before the process exits, see
    [The registry and its handles](../keyring.md#the-registry-and-its-handles).
 

@@ -9,25 +9,26 @@ use kms_aead::cache::DekCache;
 use kms_aead::formats::{TinkKeyType, TinkKeyset};
 #[cfg(feature = "bigquery-export")]
 use kms_aead::providers::GcpKmsProvider;
-use kms_aead::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
+use kms_aead::{DataEncryptionKey, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider};
 
 #[cfg(feature = "bigquery-export")]
 use crate::encodings::BigQuery;
 use crate::encodings::{KeysetEncoding, Tink};
 use crate::errors::{InteropRequirement, KeyVersionError, KeyringError, KeyringResult};
-use crate::purpose::unreserved;
+use crate::purpose::unreserved_key_id;
+use crate::record_signing::MaybeRecordSigner;
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
-use crate::sweep::SealMarker;
+use crate::sweep::EncryptionMarker;
 use crate::{Interop, KeyId, KeyVersionState, KeyringAdmin, KeyringRecord, Purpose};
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeysetSelection {
-    /// Every version of the purpose that decrypts and is not compromised, the pending one
-    /// included, with the active version as the primary: the keyset of a query that reads a
-    /// column. BigQuery and Tink open a value under the key its prefix names, so one keyset reads
-    /// the values of every version it holds.
+    /// Every version of the purpose that decrypts and is not compromised, the pending one included,
+    /// with the active version as the primary: the keyset of a query that reads a column. BigQuery
+    /// and Tink decrypt a value under the key its prefix names, so one keyset reads the values of
+    /// every version it holds.
     Readable(Purpose),
     /// The one version, as the primary, also when it is compromised, and never a pending one:
     /// the keyset of `DETERMINISTIC_ENCRYPT` for the probe of one version, since BigQuery
@@ -44,7 +45,7 @@ impl KeysetSelection {
     fn purpose(self) -> KeyringResult<Purpose> {
         match self {
             KeysetSelection::Readable(purpose) => Ok(purpose),
-            KeysetSelection::Single(key_id) => Ok(Purpose::of(unreserved(key_id)?)),
+            KeysetSelection::Single(key_id) => Ok(Purpose::of(unreserved_key_id(key_id)?)),
         }
     }
 }
@@ -52,8 +53,8 @@ impl KeysetSelection {
 /// A Tink keyset of a keyring's versions, encrypted by the keyring's KEK with no additional
 /// authenticated data, in the encoding `E` of the export that made it.
 ///
-/// The bytes are a KMS ciphertext. They open nothing without the KMS key's decrypt right, which a
-/// principal that reads with them needs anyway. A keyset is a copy of the record at the time of
+/// The bytes are a KMS ciphertext. They decrypt nothing without the KMS key's decrypt right, which
+/// a principal that reads with them needs anyway. A keyset is a copy of the record at the time of
 /// the export: after a rotation, a `Readable` keyset does not read the values of the new version
 /// until it is exported again.
 ///
@@ -63,7 +64,7 @@ pub struct EncryptedKeyset<E: KeysetEncoding> {
     bytes: Vec<u8>,
     key_uri: String,
     key_ids: Vec<KeyId>,
-    seal_marker: SealMarker,
+    encryption_marker: EncryptionMarker,
     /// Tags the bytes with the encoding of the export that made them; holds no `E`.
     encoding: PhantomData<E>,
 }
@@ -84,12 +85,13 @@ impl<E: KeysetEncoding> EncryptedKeyset<E> {
         &self.key_ids
     }
 
-    /// The seal marker of the record the keyset was exported from. The primary of a `Readable`
-    /// keyset is that record's active version of the purpose, so a statement that seals values
-    /// under the keyset, such as a sweep's `AEAD.ENCRYPT` in BigQuery, stores this marker beside
-    /// them, as a write stores the marker of its [`Sealer`](crate::Sealer)'s record.
-    pub fn seal_marker(&self) -> SealMarker {
-        self.seal_marker
+    /// The encryption marker of the record the keyset was exported from. The primary of a
+    /// `Readable` keyset is that record's active version of the purpose, so a statement that
+    /// encrypts values under the keyset, such as a sweep's `AEAD.ENCRYPT` in BigQuery, stores this
+    /// marker beside them, as a write stores the marker of its [`Encryptor`](crate::Encryptor)'s
+    /// record.
+    pub fn encryption_marker(&self) -> EncryptionMarker {
+        self.encryption_marker
     }
 
     /// Tink's key URI of the KMS key that encrypts the keyset, such as
@@ -106,7 +108,7 @@ impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
             .field("encoding", &E::INTEROP)
             .field("key_uri", &self.key_uri)
             .field("key_ids", &self.key_ids)
-            .field("seal_marker", &self.seal_marker)
+            .field("encryption_marker", &self.encryption_marker)
             .finish_non_exhaustive()
     }
 }
@@ -126,7 +128,7 @@ impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
     /// forward-only as a revalidation is, and taken as the cached record: a version another
     /// process flagged compromised is never exported as readable.
     ///
-    /// The keys inside are the versions' own keys. The keyset never opens as a version's key:
+    /// The keys inside are the versions' own keys. The keyset never decrypts as a version's key:
     /// what the KMS decrypts from it is a serialised keyset, which is no serialised Tink key.
     ///
     /// A query binds the export as two parameters, never as SQL text:
@@ -155,11 +157,12 @@ impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
     }
 }
 
-impl<S, P, B> KeyringAdmin<S, P, B>
+impl<S, P, B, R> KeyringAdmin<S, P, B, R>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
+    R: MaybeRecordSigner,
 {
     /// The versions `selection` names as Tink's encrypted keyset, encrypted by the keyring's KEK:
     /// the bytes Tink's keyset readers take with the KMS client of
@@ -173,10 +176,11 @@ where
     ///
     /// - [`KeyringError::Interop`] with [`Interop::Tink`](crate::Interop::Tink) and
     ///   [`InteropRequirement::Kek`], before any store or KMS call, for a KEK without a Tink key
-    ///   URI: an Azure, local or application's own KEK, or an AWS key named without its ARN;
+    ///   URI: an Azure, local or application's own KEK, or an AWS key named without its ARN, and
+    ///   for an asymmetric KEK, which Tink's KMS clients do not decrypt with;
     /// - [`KeyringError::ExportAlgorithmUnsupported`], before any KMS call, for a selected
     ///   version of ChaCha20-Poly1305, which Tink for Python and C++ do not read in a keyset, or
-    ///   of a beacon;
+    ///   of a beacon or a MAC;
     /// - the errors of the selection and of the provider, as `export_bigquery_keyset` has them.
     pub async fn export_tink_keyset(
         &self,
@@ -195,13 +199,16 @@ where
         spans::in_span(spans::export(keyring.id(), selection.purpose()?), async {
             let interop = E::INTEROP;
             let kek = keyring.provider.kek();
-            let key_uri = interop.key_uri(kek).ok_or_else(|| {
-                KeyringError::interop(
-                    keyring.id(),
-                    interop,
-                    InteropRequirement::Kek(kek.provider().clone()),
-                )
-            })?;
+            let key_uri = interop
+                .key_uri(kek)
+                .filter(|_| !keyring.is_asymmetric_kek(&keyring.record()))
+                .ok_or_else(|| {
+                    KeyringError::interop(
+                        keyring.id(),
+                        interop,
+                        InteropRequirement::Kek(kek.provider().clone()),
+                    )
+                })?;
             // The store's record rather than the cached one, so that a version another process
             // flagged compromised since this process last refreshed is never exported.
             let record = keyring.cache.reload(LoadReason::Export).await?;
@@ -236,7 +243,7 @@ where
                 bytes,
                 key_uri,
                 key_ids: versions.iter().map(|(key_id, _, _)| *key_id).collect(),
-                seal_marker: record.seal_marker(),
+                encryption_marker: record.encryption_marker(),
                 encoding: PhantomData,
             })
         })
@@ -311,7 +318,7 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     use kms_aead::formats::{Bare, Envelope};
-    use kms_aead::{AeadAlgorithm, BeaconAlgorithm, Encrypted, KekProvider};
+    use kms_aead::{AeadAlgorithm, BeaconAlgorithm, Encrypted, KmsProvider};
     use secret_vault_value::SecretValue;
 
     use super::*;
@@ -321,7 +328,9 @@ mod tests {
         email_of, TestAdmin, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
     };
     use crate::testing::MemoryKeyringStore;
-    use crate::{Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringRegistryOptions};
+    use crate::{
+        Interop, KeyAlgorithm, KeyVersion, KeyringAlgorithms, KeyringRegistryOptions, MacAlgorithm,
+    };
 
     /// A keyring on `provider` with one version of each purpose `algorithms` names.
     async fn keyring_admin(
@@ -428,7 +437,7 @@ mod tests {
             bytes: marker.to_vec(),
             key_uri: "gcp-kms://projects/p/cryptoKeys/k".to_string(),
             key_ids: vec![KeyId::new(1)],
-            seal_marker: SealMarker::of_epoch(1),
+            encryption_marker: EncryptionMarker::of_epoch(1),
             encoding: PhantomData,
         };
 
@@ -467,8 +476,8 @@ mod tests {
             keyset_of(exporter.keyring(), &provider, 2, &[2]).await?
         );
         assert_eq!(
-            exported.seal_marker(),
-            administrator.keyring().record().seal_marker()
+            exported.encryption_marker(),
+            administrator.keyring().record().encryption_marker()
         );
         Ok(())
     }
@@ -485,7 +494,7 @@ mod tests {
             .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
             .await?;
         keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &"alice@example.com".to_string())
             .await?;
@@ -502,7 +511,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_exported_keyset_does_not_open_as_an_envelope_key() -> TestResult {
+    async fn an_exported_keyset_does_not_decrypt_as_an_envelope_key() -> TestResult {
         let (admin, provider) =
             keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
         let keyring = admin.keyring();
@@ -516,11 +525,11 @@ mod tests {
         let decryptions = provider.calls.decryptions.load(Ordering::SeqCst);
 
         for _ in 0..2 {
-            let opened = keyring
+            let decrypted = keyring
                 .decrypt_envelope_for_migration(b"users:42:email", &value, AeadAlgorithm::Aes256Gcm)
                 .await;
             assert!(matches!(
-                opened,
+                decrypted,
                 Err(KeyringError::KmsAead(error)) if error.code() == "INVALID_KEY_FORMAT"
             ));
         }
@@ -579,6 +588,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mac_keys_are_never_exported() -> TestResult {
+        let algorithms = KeyringAlgorithms::new().with_mac(MacAlgorithm::HmacSha256);
+        let (admin, _) = keyring_admin(TestProvider::cloud_kms()?, algorithms).await?;
+
+        let mac_selection = admin
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Mac))
+            .await;
+        let single = admin
+            .export_keyset::<BigQuery>(KeysetSelection::Single(KeyId::new(0xC000_0001)))
+            .await;
+        let randomized = admin
+            .export_keyset::<BigQuery>(KeysetSelection::Readable(Purpose::Randomized))
+            .await?;
+
+        assert!(matches!(
+            mac_selection,
+            Err(KeyringError::ExportAlgorithmUnsupported(_))
+        ));
+        assert!(matches!(
+            single,
+            Err(KeyringError::ExportAlgorithmUnsupported(_))
+        ));
+        assert_eq!(randomized.key_ids(), [KeyId::new(1)]);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn single_of_a_destroyed_version_fails() -> TestResult {
         let (admin, _) =
             keyring_admin(TestProvider::cloud_kms()?, KeyringAlgorithms::new()).await?;
@@ -618,7 +654,7 @@ mod tests {
             exported,
             Err(KeyringError::Interop(InteropError {
                 interop: Interop::Tink,
-                requirement: InteropRequirement::Kek(KekProvider::Local),
+                requirement: InteropRequirement::Kek(KmsProvider::Local),
                 ..
             }))
         ));

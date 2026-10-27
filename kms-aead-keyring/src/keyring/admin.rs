@@ -5,12 +5,14 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use kms_aead::backends::AeadBackend;
-use kms_aead::providers::KekVersion;
-use kms_aead::{EncryptedDataEncryptionKey, KmsAeadEncryptionProvider};
+use kms_aead::providers::KmsKeyVersion;
+use kms_aead::{EncryptedDataEncryptionKey, KmsAeadDecryptionProvider};
 
 use crate::errors::KeyringResult;
-use crate::purpose::unreserved;
+use crate::purpose::unreserved_key_id;
 use crate::record::{NewVersion, RecordEdit};
+use crate::record_cache::SignedWrite;
+use crate::record_signing::{MaybeRecordSigner, NoRecordSigner, RecordSigner};
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{
@@ -39,18 +41,114 @@ pub use export::{EncryptedKeyset, KeysetSelection};
 /// by every `Keyring` at once. Its writes retry
 /// [`cas_retries`](crate::KeyringOptions::cas_retries) conflicts of the registry's
 /// [`keyring`](crate::KeyringRegistryOptions::keyring) options.
-pub struct KeyringAdmin<S: KeyringStore, P, B> {
+///
+/// # Record signing
+///
+/// `R` is the admin's record signer: [`NoRecordSigner`], the default, or a
+/// [`RecordSigner`](crate::RecordSigner) that [`with_record_signer`](Self::with_record_signer),
+/// [`KeyringRegistry::create_signed`](crate::KeyringRegistry::create_signed) or
+/// [`KeyringRegistry::open_or_create_signed`](crate::KeyringRegistry::open_or_create_signed)
+/// sets. A signing admin's writes re-sign a signed record they read, and refuse to write over an
+/// unsigned one with [`KeyringError::RecordUnsigned`](crate::KeyringError::RecordUnsigned):
+/// only [`sign_record`](Self::sign_record) signs an unsigned record, as an operator's decision.
+/// Before the compare-and-swap, it verifies the signature it is about to write under the
+/// signer's own key on `B`. A `NoRecordSigner` admin refuses to write over a signed record with
+/// [`KeyringError::RecordSignerMissing`](crate::KeyringError::RecordSignerMissing), except
+/// through [`dangerously_unsign_record`](Self::dangerously_unsign_record). Every refusal comes
+/// before any store write.
+pub struct KeyringAdmin<S: KeyringStore, P, B, R = NoRecordSigner> {
     keyring: Keyring<S, P, B>,
+    signer: R,
 }
 
-impl<S, P, B> KeyringAdmin<S, P, B>
+impl<S, P, B> KeyringAdmin<S, P, B, NoRecordSigner>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
-    pub(crate) fn new(keyring: Keyring<S, P, B>) -> Self {
-        Self { keyring }
+    /// The same admin, signing every record it writes with `signer`.
+    ///
+    /// # Errors
+    ///
+    /// `SIGNING_KEY_UNKNOWN`, before any call to the KMS or the store, when the registry's
+    /// [`RecordSignaturePolicy`](crate::RecordSignaturePolicy) does not hold the signer's
+    /// [`verifying_key`](RecordSigner::verifying_key): the admin's next write would refuse its
+    /// own record.
+    pub fn with_record_signer<R: RecordSigner>(
+        self,
+        signer: R,
+    ) -> KeyringResult<KeyringAdmin<S, P, B, R>> {
+        self.keyring
+            .cache
+            .verifier()
+            .ensure_trusts(signer.verifying_key())?;
+        Ok(KeyringAdmin {
+            keyring: self.keyring,
+            signer,
+        })
+    }
+
+    /// Rewrites the record without its signature, with no other change: the one write a
+    /// `NoRecordSigner` admin makes over a signed record, for an administration that stops signing
+    /// a keyring. Switch every reader from `Required` to `VerifyIfSigned` first; running readers
+    /// under `VerifyIfSigned` refuse the result with `RECORD_SIGNATURE_REMOVED` until they restart.
+    ///
+    /// # Errors
+    ///
+    /// The store's errors, and the errors of a write as for [`rotate`](Self::rotate).
+    pub async fn dangerously_unsign_record(&self) -> KeyringResult<()> {
+        let keyring = &self.keyring;
+        keyring
+            .cache
+            .write(
+                keyring.options.cas_retries,
+                &self.signer,
+                SignedWrite::Unsign,
+                async |_: &mut RecordEdit| Ok(()),
+            )
+            .await
+    }
+}
+
+impl<S, P, B, R> KeyringAdmin<S, P, B, R>
+where
+    S: KeyringStore,
+    P: KmsAeadDecryptionProvider + 'static,
+    B: AeadBackend,
+    R: MaybeRecordSigner,
+{
+    pub(crate) fn new(keyring: Keyring<S, P, B>, signer: R) -> Self {
+        if keyring.provider.encrypts_with_public_key() && signer.signer_key().is_none() {
+            spans::unsigned_admin_over_asymmetric_kek(keyring.id());
+        }
+        Self { keyring, signer }
+    }
+
+    /// Rewrites the record signed by this admin's signer, with no other change: for the
+    /// transition to signed records, and after a signing key rotation once every reader holds
+    /// the new public key. The one write of a signing admin that signs a record it read
+    /// unsigned: run it on a keyring whose record was signed before only after checking the
+    /// record against a backup.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::RecordSignerMissing`](crate::KeyringError::RecordSignerMissing) on a
+    /// `NoRecordSigner` admin;
+    /// [`KeyringError::RecordSignatureRemoved`](crate::KeyringError::RecordSignatureRemoved)
+    /// when the admin holds a signed record and the store now holds an unsigned one; the
+    /// signer's errors, and the errors of a write as for [`rotate`](Self::rotate).
+    pub async fn sign_record(&self) -> KeyringResult<()> {
+        let keyring = &self.keyring;
+        keyring
+            .cache
+            .write(
+                keyring.options.cas_retries,
+                &self.signer,
+                SignedWrite::Sign,
+                async |_: &mut RecordEdit| Ok(()),
+            )
+            .await
     }
 
     /// The handle on the same keyring for the calls an application makes, with the same provider
@@ -89,6 +187,8 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         let algorithm = edit.record().algorithm_of(purpose)?;
                         let new = if algorithm == new.algorithm {
@@ -109,7 +209,7 @@ where
     }
 
     /// Makes the pending version `key_id` the active version of its purpose; the version it
-    /// replaces decrypts only. Processes on the old record keep sealing under the previous
+    /// replaces decrypts only. Processes on the old record keep encrypting under the previous
     /// version until their record refreshes, and those values decrypt.
     ///
     /// It refuses until the registry's [`record_ttl`](crate::KeyringRegistryOptions::record_ttl)
@@ -160,13 +260,15 @@ where
 
     /// Promotes `key_id`, refusing while less than `wait` has passed since it was staged.
     async fn promote_after(&self, key_id: KeyId, wait: Duration) -> KeyringResult<Rotation> {
-        unreserved(key_id)?;
+        unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::promote(keyring.id(), key_id), async {
             let rotation = keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         let now = Timestamp::now();
                         edit.ensure_staged_for(key_id, wait, now)?;
@@ -195,6 +297,8 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         let now = Timestamp::now();
                         edit.set_algorithm(algorithm, now);
@@ -217,10 +321,10 @@ where
     /// stops as soon as each process refreshes, and the processes that have not seen the new
     /// version yet reload their record when they read a value under it. The replacement does not
     /// wait for the record TTL as [`promote`](Self::promote) does, since a wait would leave the
-    /// compromised key sealing new values for that long. A pending version of the purpose stays
+    /// compromised key encrypting new values for that long. A pending version of the purpose stays
     /// pending. When the KMS cannot encrypt the new key, during an outage or without the encrypt
     /// right, it writes the flag alone, logs a `WARN` naming the error and returns `Ok(None)`:
-    /// the purpose then has no active version, and a sealer's `encrypt` fails with
+    /// the purpose then has no active version, and an encryptor's `encrypt` fails with
     /// `NoActiveVersion` until a version is promoted. Once the KMS answers,
     /// [`rotate`](Self::rotate) and [`promote_now`](Self::promote_now), or `promote_now` on the
     /// pending version, restore one without waiting out the record TTL. For any other version it
@@ -233,14 +337,14 @@ where
     /// [`KeyringError::KeyVersionUnknown`](crate::KeyringError::KeyVersionUnknown),
     /// [`KeyringError::InvalidTransition`](crate::KeyringError::InvalidTransition) for a pending,
     /// destroyed or already compromised version, and the errors of a write as for
-    /// [`rotate`](Self::rotate). A pending version never sealed a value: [`destroy`](Self::destroy)
-    /// it instead.
+    /// [`rotate`](Self::rotate). A pending version never encrypted a value:
+    /// [`destroy`](Self::destroy) it instead.
     pub async fn mark_compromised(
         &self,
         key_id: KeyId,
         note: Option<String>,
     ) -> KeyringResult<Option<Rotation>> {
-        unreserved(key_id)?;
+        unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::mark_compromised(keyring.id(), key_id), async {
             // `None` when the cached record has no active `key_id`, and `Some(None)` when the
@@ -256,6 +360,8 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         let record = edit.record();
                         let replacement = match record.version(key_id) {
@@ -304,13 +410,15 @@ where
     /// [`KeyringError::InvalidTransition`](crate::KeyringError::InvalidTransition) for any version
     /// that is not decrypt-only, and the errors of a write as for [`rotate`](Self::rotate).
     pub async fn retire(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
+        unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::retire(keyring.id(), key_id), async {
             keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| edit.retire(key_id, Timestamp::now()),
                 )
                 .await
@@ -325,13 +433,15 @@ where
     ///
     /// As [`retire`](Self::retire), for any version that is not retired.
     pub async fn reinstate(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
+        unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::reinstate(keyring.id(), key_id), async {
             keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| edit.reinstate(key_id, Timestamp::now()),
                 )
                 .await
@@ -347,13 +457,15 @@ where
     ///
     /// As [`retire`](Self::retire), for any version that is neither retired nor pending.
     pub async fn destroy(&self, key_id: KeyId) -> KeyringResult<()> {
-        unreserved(key_id)?;
+        unreserved_key_id(key_id)?;
         let keyring = &self.keyring;
         spans::in_span(spans::destroy(keyring.id(), key_id), async {
             keyring
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| edit.destroy(key_id, Timestamp::now()),
                 )
                 .await
@@ -362,8 +474,9 @@ where
     }
 
     /// Destroys every version of every purpose in one write, whatever its state: their encrypted
-    /// DEKs leave the record, and from then on the keyring encrypts nothing and decrypts nothing.
-    /// It cannot be undone from this record, and it is the shredding of one keyring's values
+    /// DEKs leave the record, and from then on the keyring encrypts nothing and decrypts nothing,
+    /// except through a stream encryptor or decryptor already made, which holds the key derived for
+    /// its value until it is dropped. It cannot be undone from this record, and it is the shredding of one keyring's values
     /// under a KEK that other keyrings share.
     ///
     /// A backup of the record still holds the encrypted DEKs, which the KMS decrypts for as long
@@ -381,6 +494,8 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         edit.destroy_all(Timestamp::now());
                         Ok(())
@@ -388,6 +503,41 @@ where
                 )
                 .await
         })
+        .await
+    }
+
+    /// Crypto-shreds the keyring: destroys every version in one write, as
+    /// [`dangerously_destroy_all_versions`](Self::dangerously_destroy_all_versions) does, then
+    /// deletes the record, through [`KeyringStore::delete`] at the revision that write left, with
+    /// the earlier versions of the record the store keeps.
+    ///
+    /// The keyring's handles in this process then hold its record with every version destroyed,
+    /// and the registry's next open of the id reads the store again and fails with
+    /// [`KeyringError::RecordMissing`](crate::KeyringError::RecordMissing). Every other process
+    /// takes the destroyed record or the deletion at its next revalidation, and evicts the
+    /// keyring's keys from its DEK cache then.
+    ///
+    /// A shred that fails is run again: a record whose every version is destroyed already is
+    /// deleted without a write, and a record already gone returns `Ok`. The write follows the
+    /// record-signing rules of every write, so only a signing admin shreds a signed record.
+    ///
+    /// It leaves the KMS untouched, and every copy of the record outside the store's API: its
+    /// backups, the keysets exported from it, and what the store keeps of a deleted record for a
+    /// time, see [Crypto-shredding](https://kms-aead-rust.abdolence.dev/operations/runbook.html#crypto-shredding).
+    ///
+    /// # Errors
+    ///
+    /// The store's errors, the errors of a write as for [`rotate`](Self::rotate), and
+    /// [`KeyringError::RecordConflict`](crate::KeyringError::RecordConflict) after
+    /// [`cas_retries`](crate::KeyringOptions::cas_retries) conflicts of the write or the delete.
+    pub async fn dangerously_shred(&self) -> KeyringResult<()> {
+        let keyring = &self.keyring;
+        spans::in_span(
+            spans::shred(keyring.id()),
+            keyring
+                .cache
+                .shred(keyring.options.cas_retries, &self.signer),
+        )
         .await
     }
 
@@ -417,6 +567,8 @@ where
                 .cache
                 .write(
                     keyring.options.cas_retries,
+                    &self.signer,
+                    SignedWrite::Change,
                     async |edit: &mut RecordEdit| {
                         let encrypted_deks = edit.record().encrypted_deks();
                         let mut reencryptions = Vec::with_capacity(encrypted_deks.len());
@@ -484,9 +636,9 @@ pub struct DekReencryption {
     /// The version whose DEK was encrypted again.
     pub key_id: KeyId,
     /// The KEK version the DEK was under before, as the record held it.
-    pub previous_kek_version: Option<KekVersion>,
+    pub previous_kek_version: Option<KmsKeyVersion>,
     /// The KEK version the KMS encrypted the DEK with now, which the record holds from then on.
-    pub kek_version: Option<KekVersion>,
+    pub kek_version: Option<KmsKeyVersion>,
 }
 
 /// What a promotion, or the replacement of a compromised active version, did.

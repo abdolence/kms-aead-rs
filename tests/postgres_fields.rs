@@ -44,15 +44,15 @@ impl Plaintext for Email {
     }
 }
 
-/// An envelope on a fresh local key, and `EMAILS` sealed under it.
-async fn sealed_emails() -> TestResult<(LocalEnvelope, Vec<Encrypted<Email, Envelope>>)> {
+/// An envelope on a fresh local key, and `EMAILS` encrypted under it.
+async fn encrypted_emails() -> TestResult<(LocalEnvelope, Vec<Encrypted<Email, Envelope>>)> {
     let provider = LocalKmsProvider::ephemeral(LocalKekId::try_from("users".to_string())?)?;
     let envelope = LocalEnvelope::new(provider)?;
-    let mut sealed = Vec::new();
+    let mut encrypted = Vec::new();
     for email in EMAILS {
-        sealed.push(envelope.encrypt(AAD, &Email(email.to_string())).await?);
+        encrypted.push(envelope.encrypt(AAD, &Email(email.to_string())).await?);
     }
-    Ok((envelope, sealed))
+    Ok((envelope, encrypted))
 }
 
 fn stored_bytes(values: &[Encrypted<Email, Envelope>]) -> BTreeSet<Vec<u8>> {
@@ -67,16 +67,16 @@ fn selected_emails() -> BTreeSet<Email> {
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server at DATABASE_URL"]
 async fn tokio_postgres_stores_values_and_checks_them_at_decode() -> TestResult<()> {
-    let (envelope, sealed) = sealed_emails().await?;
+    let (envelope, encrypted) = encrypted_emails().await?;
     let (client, connection) =
         tokio_postgres::connect(&std::env::var("DATABASE_URL")?, tokio_postgres::NoTls).await?;
     tokio::spawn(connection);
     client.execute(CREATE_TABLE, &[]).await?;
-    for value in &sealed {
+    for value in &encrypted {
         client.execute(INSERT, &[value]).await?;
     }
 
-    let rows = client.query(SELECT_ANY, &[&&sealed[..2]]).await?;
+    let rows = client.query(SELECT_ANY, &[&&encrypted[..2]]).await?;
     let selected = rows
         .iter()
         .map(|row| row.try_get(0))
@@ -87,7 +87,7 @@ async fn tokio_postgres_stores_values_and_checks_them_at_decode() -> TestResult<
         .try_get::<_, Encrypted<Email, Envelope>>(0)
         .err();
 
-    assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
+    assert_eq!(stored_bytes(&selected), stored_bytes(&encrypted[..2]));
     let mut emails = BTreeSet::new();
     for value in &selected {
         emails.insert(envelope.decrypt(AAD, value).await?);
@@ -104,10 +104,10 @@ async fn tokio_postgres_stores_values_and_checks_them_at_decode() -> TestResult<
 #[tokio::test]
 #[ignore = "needs a PostgreSQL server at DATABASE_URL"]
 async fn sqlx_stores_values_and_checks_them_at_decode() -> TestResult<()> {
-    let (envelope, sealed) = sealed_emails().await?;
+    let (envelope, encrypted) = encrypted_emails().await?;
     let mut connection = PgConnection::connect(&std::env::var("DATABASE_URL")?).await?;
     sqlx::query(CREATE_TABLE).execute(&mut connection).await?;
-    for value in &sealed {
+    for value in &encrypted {
         sqlx::query(INSERT)
             .bind(value)
             .execute(&mut connection)
@@ -115,7 +115,7 @@ async fn sqlx_stores_values_and_checks_them_at_decode() -> TestResult<()> {
     }
 
     let rows = sqlx::query(SELECT_ANY)
-        .bind(&sealed[..2])
+        .bind(&encrypted[..2])
         .fetch_all(&mut connection)
         .await?;
     let selected = rows
@@ -127,7 +127,7 @@ async fn sqlx_stores_values_and_checks_them_at_decode() -> TestResult<()> {
         .await?
         .try_get::<Encrypted<Email, Envelope>, _>(0);
 
-    assert_eq!(stored_bytes(&selected), stored_bytes(&sealed[..2]));
+    assert_eq!(stored_bytes(&selected), stored_bytes(&encrypted[..2]));
     let mut emails = BTreeSet::new();
     for value in &selected {
         emails.insert(envelope.decrypt(AAD, value).await?);

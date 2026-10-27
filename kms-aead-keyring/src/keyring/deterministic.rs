@@ -1,4 +1,4 @@
-//! The deterministic calls of [`Sealer`] and [`Keyring`], which run AES-SIV and so need the
+//! The deterministic calls of [`Encryptor`] and [`Keyring`], which run AES-SIV and so need the
 //! `deterministic` feature.
 
 use std::cmp::Reverse;
@@ -7,7 +7,7 @@ use kms_aead::backends::AeadBackend;
 use kms_aead::cache::DekCacheOutcome;
 use kms_aead::formats::Deterministic;
 use kms_aead::{
-    DeterministicCipher, Encrypted, EncryptedDataEncryptionKey, KmsAeadEncryptionProvider,
+    DeterministicCipher, Encrypted, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider,
     Plaintext,
 };
 
@@ -17,8 +17,8 @@ use crate::record_cache::VersionLookup;
 use crate::spans;
 use crate::store::KeyringStore;
 use crate::{
-    Decrypted, DeterministicAad, KeyAlgorithm, KeyTrust, KeyVersion, Keyring, KeyringRecord,
-    Purpose, Resealed, Sealer,
+    Decrypted, DeterministicAad, Encryptor, KeyAlgorithm, KeyTrust, KeyVersion, Keyring,
+    KeyringRecord, Purpose, Reencrypted,
 };
 
 /// Deterministic fields: equal plaintexts under one version give equal values, so that a data
@@ -28,24 +28,24 @@ use crate::{
 /// to anyone who reads the column, without any key. Without a nonce, a leaked key lets its
 /// holder test guesses against the whole column offline. It fits fields that are queried and
 /// have high entropy, such as emails and external ids, and never low-cardinality fields, such
-/// as a status or a country, whose values the frequencies give away. A value opens in any row of
+/// as a status or a country, whose values the frequencies give away. A value decrypts in any row of
 /// the same kind and field (see [`DeterministicAad`]), so a deterministic field never decides
 /// identity or authorisation on its own.
-impl<S, P, B> Sealer<'_, S, P, B>
+impl<S, P, B> Encryptor<'_, S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
-    /// Seals `value` with `aad` under the record's active deterministic version: the same `value`
-    /// and `aad` give the same bytes until that version is rotated. The column it goes into leaks
-    /// equality and frequency; see the leaks above.
+    /// Encrypts `value` with `aad` under the record's active deterministic version: the same
+    /// `value` and `aad` give the same bytes until that version is rotated. The column it goes into
+    /// leaks equality and frequency; see the leaks above.
     ///
     /// # Errors
     ///
     /// [`KeyringError::NoActiveVersion`] when the record has no deterministic version, or lost
     /// it to a `mark_compromised` whose new key could not be encrypted; [`KeyringError::Interop`]
-    /// when sealing breaks the [`Interop`](crate::Interop) requirement `aad` carries;
+    /// when encrypting breaks the [`Interop`](crate::Interop) requirement `aad` carries;
     /// [`KeyringError::KmsAead`] with code `INVALID_PLAINTEXT` when the value does not encode; and
     /// the provider's error when the version's key is not in the
     /// [`DekCache`](kms_aead::cache::DekCache) and cannot be decrypted.
@@ -62,46 +62,46 @@ where
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        let seal = spans::in_span(span, async {
+        let encryption = spans::in_span(span, async {
             let (version, encrypted_dek) = self
                 .record
                 .active_dek(Purpose::Deterministic)
                 .ok_or_else(|| {
                     KeyringError::no_active_version(keyring.id(), Purpose::Deterministic)
                 })?;
-            spans::record_sealing_version(version);
+            spans::record_encrypting_version(version);
             call.version(version);
-            keyring.check_interop(aad.interop, version)?;
-            let (sealed, outcome) = keyring
-                .seal_cached(&self.record, version, encrypted_dek, aad, value)
+            keyring.check_interop(aad.interop, &self.record, version)?;
+            let (encrypted, outcome) = keyring
+                .encrypt_cached(&self.record, version, encrypted_dek, aad, value)
                 .await?;
             spans::record_dek_cache(outcome);
-            Ok(sealed)
+            Ok(encrypted)
         });
-        call.sealed(seal).await
+        call.encrypted(encryption).await
     }
 
-    /// `value` sealed again with `aad` under the record's active deterministic version, with the
-    /// trust of the version it was read under, or `None` when it is under that version already,
-    /// by the rule [`reseal`](Self::reseal) follows for randomised values: only a version older
-    /// than the sealer's is sealed again, and a version pending in the sealer's record or missing
-    /// from it fails with [`KeyringError::SealerOutdated`]. Once no value is left under the old
-    /// version, it is retired, and the equality queries of [`Keyring::deterministic_probes`] drop
-    /// its probe.
+    /// `value` encrypted again with `aad` under the record's active deterministic version, with the
+    /// trust of the version it was read under, or `None` when it is under that version already, by
+    /// the rule [`reencrypt`](Self::reencrypt) follows for randomised values: only a version older
+    /// than the encryptor's is encrypted again, and a version pending in the encryptor's record or
+    /// missing from it fails with [`KeyringError::EncryptorOutdated`]. Once no value is left under
+    /// the old version, it is retired, and the equality queries of
+    /// [`Keyring::deterministic_probes`] drop its probe.
     ///
     /// # Errors
     ///
-    /// As `reseal`, with the errors of
+    /// As `reencrypt`, with the errors of
     /// [`Keyring::decrypt_deterministic_with_trust`] and
     /// [`encrypt_deterministic`](Self::encrypt_deterministic).
-    pub async fn reseal_deterministic<T: Plaintext>(
+    pub async fn reencrypt_deterministic<T: Plaintext>(
         &self,
         aad: &DeterministicAad,
         value: &Encrypted<T, Deterministic>,
-    ) -> KeyringResult<Option<Resealed<T, Deterministic>>> {
+    ) -> KeyringResult<Option<Reencrypted<T, Deterministic>>> {
         let call = KeyringCall::new(
             self.keyring.cache.keyring_attribute(),
-            "reseal",
+            "reencrypt",
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
@@ -114,7 +114,7 @@ where
                 .keyring
                 .decrypt_deterministic_with_trust(aad, value)
                 .await?;
-            Ok(Some(Resealed {
+            Ok(Some(Reencrypted {
                 value: self.encrypt_deterministic(aad, &decrypted.value).await?,
                 trust: decrypted.trust,
             }))
@@ -123,15 +123,15 @@ where
     }
 }
 
-/// The reads and probes of deterministic fields; see [`Sealer::encrypt_deterministic`] for what
+/// The reads and probes of deterministic fields; see [`Encryptor::encrypt_deterministic`] for what
 /// a deterministic column leaks.
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
-    /// Opens `value` with `aad`, under the version it names, applying the
+    /// Decrypts `value` with `aad`, under the version it names, applying the
     /// [`compromised_reads`](crate::KeyringOptions::compromised_reads) policy.
     ///
     /// # Errors
@@ -149,7 +149,7 @@ where
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        call.opened(value, async {
+        call.decrypted(value, async {
             let key_id = Purpose::Deterministic.check(value.key_id())?;
             spans::in_span(
                 spans::decrypt(self.id(), Purpose::Deterministic, key_id),
@@ -160,13 +160,13 @@ where
                     call.version(version);
                     self.apply_read_policy(version, compromise)?;
                     let cipher = self.deterministic_cipher(version)?;
-                    let (opened, outcome) = self
+                    let (decrypted, outcome) = self
                         .with_cached_dek(&record, key_id, encrypted_dek, |dek| {
                             cipher.decrypt(&aad.bytes, value, dek)
                         })
                         .await?;
                     spans::record_dek_cache(outcome);
-                    Ok(opened?)
+                    Ok(decrypted?)
                 },
             )
             .await
@@ -174,10 +174,10 @@ where
         .await
     }
 
-    /// Opens `value` with `aad` and reports which version opened it and whether that version is
-    /// compromised, without applying the read policy, as
-    /// [`decrypt_with_trust`](Self::decrypt_with_trust) does for randomised values. A
-    /// compromised version's key is decrypted through the provider, never through the
+    /// Decrypts `value` with `aad` and reports which version decrypted it and whether that version
+    /// is compromised, without applying the read policy, as
+    /// [`decrypt_with_trust`](Self::decrypt_with_trust) does for randomised values. A compromised
+    /// version's key is decrypted through the provider, never through the
     /// [`DekCache`](kms_aead::cache::DekCache).
     ///
     /// # Errors
@@ -195,7 +195,7 @@ where
             Purpose::Deterministic,
             metrics::DETERMINISTIC_BACKEND,
         );
-        call.opened(value, async {
+        call.decrypted(value, async {
             let key_id = Purpose::Deterministic.check(value.key_id())?;
             spans::in_span(
                 spans::decrypt(self.id(), Purpose::Deterministic, key_id),
@@ -205,22 +205,22 @@ where
                     let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                     call.version(version);
                     let cipher = self.deterministic_cipher(version)?;
-                    let open = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
-                    let (opened, trust) = match compromise {
+                    let decrypt = |dek: &_| cipher.decrypt(&aad.bytes, value, dek);
+                    let (decrypted, trust) = match compromise {
                         None => {
-                            let (opened, outcome) = self
-                                .with_cached_dek(&record, key_id, encrypted_dek, open)
+                            let (decrypted, outcome) = self
+                                .with_cached_dek(&record, key_id, encrypted_dek, decrypt)
                                 .await?;
                             spans::record_dek_cache(outcome);
-                            (opened?, KeyTrust::Trusted)
+                            (decrypted?, KeyTrust::Trusted)
                         }
                         Some(compromise) => (
-                            self.with_uncached_dek(encrypted_dek, open).await??,
+                            self.with_uncached_dek(encrypted_dek, decrypt).await??,
                             KeyTrust::Compromised(compromise.clone()),
                         ),
                     };
                     Ok(Decrypted {
-                        value: opened,
+                        value: decrypted,
                         key_id,
                         trust,
                     })
@@ -231,18 +231,18 @@ where
         .await
     }
 
-    /// `value` sealed with `aad` under every deterministic version that decrypts, pending, active
-    /// or decrypt-only, compromised ones included, newest first: the `IN` list of an equality
-    /// query, which finds the rows sealed before a rotation as well as after it. Retired and
-    /// destroyed versions give no probe. A compromised version's key is decrypted for each
-    /// call, never through the [`DekCache`](kms_aead::cache::DekCache).
+    /// `value` encrypted with `aad` under every deterministic version that decrypts, pending,
+    /// active or decrypt-only, compromised ones included, newest first: the `IN` list of an
+    /// equality query, which finds the rows encrypted before a rotation as well as after it.
+    /// Retired and destroyed versions give no probe. A compromised version's key is decrypted for
+    /// each call, never through the [`DekCache`](kms_aead::cache::DekCache).
     ///
     /// A query that sends the list links the values of one plaintext across the versions for
     /// whoever reads the query, so a rotation does not unlink a value's history from that reader.
     ///
     /// # Errors
     ///
-    /// [`KeyringError::Interop`], before any decryption, when sealing under any of the versions
+    /// [`KeyringError::Interop`], before any decryption, when encrypting under any of the versions
     /// breaks the [`Interop`](crate::Interop) requirement `aad` carries; [`KeyringError::KmsAead`]
     /// with code `INVALID_PLAINTEXT` when the value does not encode; and the provider's error
     /// when a version's key cannot be decrypted.
@@ -263,7 +263,7 @@ where
                 .filter_map(|version| {
                     let (encrypted_dek, compromise) = version.readable_dek()?;
                     Some(
-                        self.check_interop(aad.interop, version)
+                        self.check_interop(aad.interop, &record, version)
                             .map(|()| (version, encrypted_dek, compromise)),
                     )
                 })
@@ -273,7 +273,7 @@ where
             for (version, encrypted_dek, compromise) in versions {
                 probes.push(match compromise {
                     None => {
-                        self.seal_cached(&record, version, encrypted_dek, aad, value)
+                        self.encrypt_cached(&record, version, encrypted_dek, aad, value)
                             .await?
                             .0
                     }
@@ -300,7 +300,7 @@ where
     fn deterministic_cipher(&self, version: &KeyVersion) -> KeyringResult<DeterministicCipher<B>> {
         match version.algorithm() {
             KeyAlgorithm::Deterministic(algorithm) => Ok(DeterministicCipher::new(algorithm)?),
-            KeyAlgorithm::Randomized(_) | KeyAlgorithm::Beacon(_) => {
+            KeyAlgorithm::Randomized(_) | KeyAlgorithm::Beacon(_) | KeyAlgorithm::Mac(_) => {
                 Err(KeyringError::record_invalid(
                     self.id(),
                     RecordInvalidReason::PurposeMismatch(version.id()),
@@ -309,10 +309,10 @@ where
         }
     }
 
-    /// Seals `value` with `aad` under `version` of `record`, whose encrypted DEK is
+    /// Encrypts `value` with `aad` under `version` of `record`, whose encrypted DEK is
     /// `encrypted_dek`, with the key through the [`DekCache`](kms_aead::cache::DekCache), and
     /// returns where the key came from.
-    async fn seal_cached<T: Plaintext>(
+    async fn encrypt_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
@@ -321,12 +321,12 @@ where
         value: &T,
     ) -> KeyringResult<(Encrypted<T, Deterministic>, DekCacheOutcome)> {
         let cipher = self.deterministic_cipher(version)?;
-        let (sealed, outcome) = self
+        let (encrypted, outcome) = self
             .with_cached_dek(record, version.id(), encrypted_dek, |dek| {
                 cipher.encrypt(version.id(), &aad.bytes, value, dek)
             })
             .await?;
-        Ok((sealed?, outcome))
+        Ok((encrypted?, outcome))
     }
 }
 
@@ -338,7 +338,7 @@ where
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use kms_aead::{DeterministicAlgorithm, KekProvider};
+    use kms_aead::{DeterministicAlgorithm, KmsProvider};
 
     use crate::errors::InteropRequirement;
     use crate::test_support::{
@@ -379,14 +379,14 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let alice = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
 
         assert_eq!(
             keyring
-                .sealer()
+                .encryptor()
                 .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?,
@@ -394,7 +394,7 @@ mod tests {
         );
         assert_ne!(
             keyring
-                .sealer()
+                .encryptor()
                 .await
                 .encrypt_deterministic(&aad, &"bob@example.com".to_string())
                 .await?,
@@ -413,7 +413,7 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
@@ -435,7 +435,7 @@ mod tests {
         assert_eq!(
             probes[1],
             keyring
-                .sealer()
+                .encryptor()
                 .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?
@@ -461,7 +461,7 @@ mod tests {
         assert!(matches!(
             probes,
             Err(KeyringError::Interop(error))
-                if error.requirement == InteropRequirement::Kek(KekProvider::Local)
+                if error.requirement == InteropRequirement::Kek(KmsProvider::Local)
         ));
         assert_eq!(
             provider.calls.decryptions.load(Ordering::SeqCst),
@@ -517,7 +517,7 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let first = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
@@ -554,7 +554,7 @@ mod tests {
         let keyring = admin.keyring();
         let aad = EMAIL.deterministic_aad();
         let value = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt_deterministic(&aad, &ALICE.to_string())
             .await?;
@@ -575,18 +575,18 @@ mod tests {
     }
 
     /// The deterministic AAD holds no entity id, so a value copied from user 42's row into user 7's
-    /// opens there, where the randomised twin, bound to its row, does not.
+    /// decrypts there, where the randomised twin, bound to its row, does not.
     #[tokio::test]
-    async fn a_deterministic_value_opens_in_another_row() -> TestResult {
+    async fn a_deterministic_value_decrypts_in_another_row() -> TestResult {
         let admin = deterministic_keyring(TestProvider::new("tenant-42-kek")?).await?;
         let keyring = admin.keyring();
         let deterministic = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt_deterministic(&EMAIL.deterministic_aad(), &ALICE.to_string())
             .await?;
         let randomized = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&email_of("42")?, &ALICE.to_string())
             .await?;

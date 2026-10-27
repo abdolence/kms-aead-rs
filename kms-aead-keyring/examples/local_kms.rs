@@ -24,7 +24,7 @@ const EMAIL: FieldSpec = FieldSpec::new(
     FieldName::from_static("email"),
 );
 
-/// The application's email type, sealed as the UTF-8 of the address.
+/// The application's email type, encrypted as the UTF-8 of the address.
 #[derive(Debug, Clone)]
 struct Email(String);
 
@@ -56,13 +56,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aad = EMAIL.aad(&EntityId::try_from("42")?);
     let alice = Email("alice@example.com".to_string());
 
-    let before: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
+    let before: Encrypted<Email, Randomized> =
+        keyring.encryptor().await.encrypt(&aad, &alice).await?;
     let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
     println!("staged key version {}", staged.as_u32());
     // One process, so no other has to see the staged version first; a fleet waits out the
     // record TTL and calls `promote`
     let rotation: Rotation = admin.promote_now(staged).await?;
-    let after: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
+    let after: Encrypted<Email, Randomized> =
+        keyring.encryptor().await.encrypt(&aad, &alice).await?;
 
     match rotation.previous {
         Some(previous) => println!(

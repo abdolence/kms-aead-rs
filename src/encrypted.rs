@@ -10,7 +10,6 @@ use crate::{KeyId, KmsAeadResult};
 
 #[cfg(feature = "postgres")]
 mod postgres;
-#[cfg(feature = "serde")]
 mod serde;
 #[cfg(feature = "sqlx")]
 mod sqlx;
@@ -34,17 +33,17 @@ mod sqlx;
 /// what it holds: `Encrypted<Email, Envelope>`. A value with no type of its own is a
 /// [`SecretValue`](secret_vault_value::SecretValue): `Encrypted<SecretValue, Envelope>`.
 ///
-/// A `Randomized` or `Deterministic` value names the key it was sealed under, which `key_id()`
+/// A `Randomized` or `Deterministic` value names the key it was encrypted under, which `key_id()`
 /// returns. An `Envelope` value carries its encrypted DEK instead, and a `Bare` value names no
 /// key.
 ///
-/// Only `Encrypted<T, Deterministic>` implements `PartialEq`, `Eq` and `Hash`: values sealed
+/// Only `Encrypted<T, Deterministic>` implements `PartialEq`, `Eq` and `Hash`: values encrypted
 /// under one deterministic key are equal exactly when their plaintexts and AADs are, which is
-/// what a lookup by an encrypted value needs. The other formats seal equal plaintexts into
+/// what a lookup by an encrypted value needs. The other formats encrypt equal plaintexts into
 /// different values, so equal bytes say nothing about the plaintexts; compare `value()` to tell
 /// whether two values are the same stored bytes.
 ///
-/// `Debug` shows the length only. The `serde` feature serialises it as bytes, and deserialises it
+/// `Debug` shows the length only. serde serialises it as bytes, and deserialises it
 /// through `TryFrom<Vec<u8>>`. The `postgres` and `sqlx` features store it as `BYTEA` and read it
 /// through `TryFrom<Vec<u8>>` too.
 #[derive(Clone)]
@@ -123,16 +122,16 @@ impl<T, F: Format> Debug for Encrypted<T, F> {
 }
 
 impl<T> Encrypted<T, Randomized> {
-    /// The id of the key this value was sealed under, which its prefix names: the key to open it
-    /// with.
+    /// The id of the key this value was encrypted under, which its prefix names: the key to decrypt
+    /// it with.
     pub fn key_id(&self) -> KeyId {
         self.key_id
     }
 }
 
 impl<T> Encrypted<T, Deterministic> {
-    /// The id of the key this value was sealed under, which its prefix names: the key to open it
-    /// with.
+    /// The id of the key this value was encrypted under, which its prefix names: the key to decrypt
+    /// it with.
     pub fn key_id(&self) -> KeyId {
         self.key_id
     }

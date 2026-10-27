@@ -29,19 +29,21 @@ rsb_derive = { workspace = true }
 secret-vault-value = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The SHA-256 of a record's canonical document, which every store's parse computes on no backend.
+sha2 = { workspace = true }
 subtle = { workspace = true }
 # `rt` runs the task that follows a store's change signals, `time` spaces its revalidations, and
 # `macros` lets it stop on a shutdown while it waits.
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
-firestore = { version = "0.61", optional = true }
+firestore = { version = "0.61", optional = true, default-features = false }
 tokio-postgres = { version = "0.7", optional = true, default-features = false, features = ["runtime"] }
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
 tokio-stream = { version = "0.1", optional = true, default-features = false }
 # The features kms-aead's aws-sdk-kms has, so that both share one HTTPS client and runtime.
 aws-sdk-s3 = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
-serde_bytes = { workspace = true, optional = true }
+serde_bytes = { workspace = true }
 # The buffer `ToSql::to_sql` writes into, which tokio-postgres does not re-export.
 bytes = { workspace = true, optional = true }
 sqlx-core = { workspace = true, optional = true }
@@ -53,6 +55,9 @@ bigquery = { version = "0.9", optional = true }
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
+# The `Stream` of `Bytes` of the streaming chapter's code, which the keyring's book includes.
+bytes = { workspace = true }
+futures = { workspace = true }
 proptest = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 uuid = { version = "1", features = ["v7"] }
@@ -71,6 +76,8 @@ rustls-native-certs = "0.8"
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
 # The meter provider and in-memory exporter of the `opentelemetry` feature's tests.
 opentelemetry_sdk = { workspace = true }
+# The registry the tests capture the crate's events on.
+tracing-subscriber = { workspace = true }
 
 [features]
 default = []
@@ -86,16 +93,16 @@ deterministic = ["kms-aead/deterministic"]
 # DEKs, write the record or export keysets, for the job or service that administers keyrings. An
 # application that only encrypts, decrypts and sweeps builds without it.
 admin = []
-# `Serialize` and `Deserialize` for `Encrypted` and `SealMarker`, as bytes.
-serde = ["kms-aead/serde", "dep:serde_bytes"]
-# `Json<T>`, a plaintext stored as its JSON.
-serde-json = ["serde", "kms-aead/serde-json"]
-# `FirestoreKeyringStore`, on firestore-rs with its default TLS roots and crypto provider.
+# `FirestoreKeyringStore`, on firestore-rs without a TLS root store or crypto provider: it needs a
+# firestore-rs root store feature from the application, or one of the two below, to build.
 firestore = ["dep:firestore"]
+firestore-tls-roots = ["firestore", "firestore/tls-roots", "firestore/auth-default-crypto"]
+firestore-tls-webpki = ["firestore", "firestore/tls-webpki-roots", "firestore/auth-default-crypto"]
 # `PostgresKeyringStore` on tokio-postgres, and `ToSql` and `FromSql` for `Encrypted` and
-# `SealMarker` as `BYTEA`.
+# `EncryptionMarker` as `BYTEA`.
 postgres = ["dep:tokio-postgres", "kms-aead/postgres", "dep:bytes"]
-# sqlx's `Type`, `Encode` and `Decode` for `Encrypted` and `SealMarker` on Postgres, as `BYTEA`.
+# sqlx's `Type`, `Encode` and `Decode` for `Encrypted` and `EncryptionMarker` on Postgres, as
+# `BYTEA`.
 sqlx = ["kms-aead/sqlx", "dep:sqlx-core", "dep:sqlx-postgres"]
 # `GcsKeyringStore`, without a TLS root store or crypto provider: it needs a gcloud-sdk root store
 # feature from the application, or one of the two below, to build.
@@ -117,9 +124,13 @@ ci-tink = ["admin", "kms-aead/gcp-kms-encryption", "kms-aead/aws-kms-encryption"
 # kms-aead's OpenTelemetry metrics, with the keyring's calls and store reads recorded into them per
 # keyring and key version.
 opentelemetry = ["dep:opentelemetry", "kms-aead/opentelemetry"]
+# Streamed values under the keyring's versions: `Encryptor::stream_encryptor`,
+# `Keyring::stream_decryptor`, `Keyring::decrypting_stream` and `Keyring::decrypting_reader`, and
+# kms-aead's `stream` module.
+stream = ["kms-aead/stream", "dep:bytes"]
 # The live test of the Firestore store's one listen stream, with hundreds of keyrings on it, run by
 # hand against Firestore rather than in CI.
-ci-firestore-live = ["firestore"]
+ci-firestore-live = ["firestore-tls-roots"]
 
 [lints]
 workspace = true
@@ -130,14 +141,14 @@ features = [
     "ring",
     "admin",
     "deterministic",
-    "serde-json",
-    "firestore",
+    "firestore-tls-roots",
     "postgres",
     "sqlx",
     "gcs-tls-roots",
     "s3",
     "bigquery-export",
     "opentelemetry",
+    "stream",
 ]
 
 [[example]]
@@ -146,9 +157,19 @@ path = "examples/local_kms.rs"
 required-features = ["ring", "admin"]
 
 [[example]]
+name = "mac"
+path = "examples/mac.rs"
+required-features = ["ring", "admin"]
+
+[[example]]
 name = "migrate"
 path = "examples/migrate.rs"
-required-features = ["ring", "admin", "serde"]
+required-features = ["ring", "admin"]
+
+[[example]]
+name = "record_signing"
+path = "examples/record_signing.rs"
+required-features = ["ring", "admin"]
 
 [[example]]
 name = "rotate"
@@ -156,14 +177,24 @@ path = "examples/rotate.rs"
 required-features = ["ring", "admin"]
 
 [[example]]
+name = "shred"
+path = "examples/shred.rs"
+required-features = ["ring", "admin"]
+
+[[example]]
+name = "stream"
+path = "examples/stream.rs"
+required-features = ["ring", "admin", "stream"]
+
+[[example]]
 name = "sweep_bigquery"
 path = "examples/sweep_bigquery.rs"
-required-features = ["ci-bigquery", "ring", "serde"]
+required-features = ["ci-bigquery", "ring"]
 
 [[example]]
 name = "sweep_firestore"
 path = "examples/sweep_firestore.rs"
-required-features = ["ring", "admin", "serde", "firestore"]
+required-features = ["ring", "admin", "firestore-tls-roots"]
 
 [[example]]
 name = "sweep_postgres"
@@ -178,7 +209,7 @@ required-features = ["ci-tink", "aws-lc"]
 [[test]]
 name = "bigquery_live"
 path = "tests/bigquery_live.rs"
-required-features = ["ci-bigquery", "deterministic", "ring", "serde"]
+required-features = ["ci-bigquery", "deterministic", "ring"]
 
 [[test]]
 name = "metrics"

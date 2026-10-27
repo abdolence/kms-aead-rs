@@ -2,8 +2,8 @@
 
 Two keys rotate, on their own schedules:
 
-- a DEK seals values. A new DEK changes nothing already written, so the values under the old one
-  are re-sealed by a sweep before the old DEK is retired;
+- a DEK encrypts values. A new DEK changes nothing already written, so the values under the old one
+  are re-encrypted by a sweep before the old DEK is retired;
 - the KEK encrypts DEKs in the KMS. A new KEK version changes no value: the DEKs are encrypted
   again under it before the old version is disabled.
 
@@ -14,7 +14,7 @@ and links to the procedure of each step. How often to rotate is in
 
 ## DEK rotation
 
-On a keyring, a DEK rotation is a new key version of a purpose, staged before it seals anything.
+On a keyring, a DEK rotation is a new key version of a purpose, staged before it encrypts anything.
 The administrative job runs every call on its `KeyringAdmin`, and the application runs the sweep,
 see [Applications and administration](../keyring/deployment.md). In order:
 
@@ -22,10 +22,10 @@ see [Applications and administration](../keyring/deployment.md). In order:
    process has the pending version, `promote`. The steps and the waits are in
    [Rotation cadence](../operations/rotation.md#rotation-cadence), and why the wait is needed in
    [Staged rotation](../keyring/lifecycle.md#staged-rotation);
-2. **sweep** the records whose seal marker is below the keyring's current one. They are the records
-   that can hold a value under an older version, and records with no value of the rotated purpose,
-   whose re-seal writes the marker alone, see [Sweeps](../operations/sweeps.md). The query and the
-   write per database:
+2. **sweep** the records whose encryption marker is below the keyring's current one. They are the
+   records that can hold a value under an older version, and records with no value of the rotated
+   purpose, whose re-encryption writes the marker alone, see [Sweeps](../operations/sweeps.md). The
+   query and the write per database:
    - [Firestore](../operations/sweeps-firestore.md);
    - [PostgreSQL](../operations/sweeps-postgres.md);
    - [BigQuery](../operations/sweeps-bigquery.md), in SQL;
@@ -41,9 +41,9 @@ runs the whole cycle on the memory store and the local KMS:
 
 ### Why nothing stops
 
-- A pending version decrypts in every process that has seen it and seals nothing, so by the
+- A pending version decrypts in every process that has seen it and encrypts nothing, so by the
   promotion every process that reads a value under it already knows it;
-- a process that has not taken the promotion yet seals under the previous version, which stays
+- a process that has not taken the promotion yet encrypts under the previous version, which stays
   `DecryptOnly`, so its values decrypt everywhere;
 - the sweep reads a value under the old version and writes it under the new one, conditional on
   the record as it read it, so a write of the application in between is never overwritten;
@@ -53,7 +53,7 @@ runs the whole cycle on the memory store and the local KMS:
 
 - **A process left behind** by a promotion meets a value under the new version and reloads its
   record, see [Staged rotation](../keyring/lifecycle.md#staged-rotation);
-- **a re-seal that fails** is counted and logged, and some failures repeat in every run, see
+- **a re-encryption that fails** is counted and logged, and some failures repeat in every run, see
   [Running a sweep](../operations/sweeps.md#running-a-sweep);
 - **a retire too early** refuses a value the sweep missed, see
   [Retiring the old version](../operations/sweeps.md#retiring-the-old-version);
@@ -64,9 +64,9 @@ runs the whole cycle on the memory store and the local KMS:
 
 ### What to alert on
 
-- "The keyring record could not be revalidated", from the rotation until the old version is
-  retired: a process that logs it is one a promotion can leave behind, and one that can still seal
-  under the old version;
+- "The keyring record could not be revalidated", from the rotation until the old version is retired:
+  a process that logs it is one a promotion can leave behind, and one that can still encrypt under
+  the old version;
 - `error.type` `KEY_VERSION_UNKNOWN` on `kms_aead.operation.duration`, a read that met a version
   its process could not load, and `KEY_VERSION_RETIRED` once the old version is retired;
 - `SweepReport::failed` above zero, and the sweep's `WARN` per record;
@@ -151,12 +151,12 @@ Without a keyring there is no version to stage, and the DEK rotates with the mod
   see [One fixed key](../envelope-encryption.md#one-fixed-key) and
   [Rotating a beacon key](../beacons.md#rotating-a-beacon-key).
 
-A DEK that leaked keeps opening every value sealed under it, whatever the KEK. To retire it:
+A DEK that leaked keeps decrypting every value encrypted under it, whatever the KEK. To retire it:
 
-1. stop sealing under it: a store-less writer renews its DEK after `invalidate` of that DEK, or
+1. stop encrypting under it: a store-less writer renews its DEK after `invalidate` of that DEK, or
    `clear`, on its envelope's DEK cache, in every process, see
    [The DEK lives in the cache](../dek-caching.md#the-dek-lives-in-the-cache);
-2. read each value under it with `decrypt` and seal it again with `encrypt`, which takes a new
+2. read each value under it with `decrypt` and encrypt it again with `encrypt`, which takes a new
    DEK, and write it back only where the stored bytes are still the ones read;
 3. treat backups and exports that hold the old values as exposed, see
    [What rotation does not protect](../security.md#what-rotation-does-not-protect).
@@ -166,6 +166,7 @@ A DEK that leaked keeps opening every value sealed under it, whatever the KEK. T
 The KEK rotates in the KMS, and before the old version is disabled, the DEKs stored in the values
 and apart from them are encrypted again under its new version with `reencrypt_encrypted_dek`, once
 per distinct encrypted DEK, and the application's own encrypted keysets through the provider. No
-value is opened. The procedure, when the sweep starts, its pacing, the checks and a rollback are in
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
-and the alerts are those of the keyring's KEK rotation above, on `kms_aead.kms.duration`.
+value is decrypted. The procedure, when the sweep starts, its pacing, the checks and a rollback are
+in [Re-encrypting DEKs after a KEK
+rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation), and the alerts are
+those of the keyring's KEK rotation above, on `kms_aead.kms.duration`.

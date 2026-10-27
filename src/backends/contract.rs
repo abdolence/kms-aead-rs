@@ -2,6 +2,7 @@
 //! backend and every algorithm it implements, so that the backends cannot drift apart.
 
 use std::collections::HashSet;
+use std::num::NonZeroU32;
 
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -17,9 +18,19 @@ use super::RustCrypto;
 use crate::aead_cipher::AeadKeyBytesOps;
 use crate::backends::AeadBackend;
 use crate::errors::KmsAeadError;
-use crate::formats::Bare;
 #[cfg(feature = "deterministic")]
 use crate::formats::Deterministic;
+use crate::formats::{Bare, PrivateKeyFormat, PublicKeyFormat};
+use crate::mac::{Authenticator, MacAlgorithm};
+use crate::providers::{
+    LocalSigningKey, LocalSigningKeyName, LocalSigningKeyVersion, LocalSigningProvider,
+};
+use crate::signing::{
+    Signature, Signer, SigningAlgorithm, Verifier, VerifyingKey, VerifyingKeySet,
+};
+use crate::test_provider::{
+    Invoice, ED25519_PKCS8_DER, ED25519_SIGNATURE, INVOICE_PAYLOAD, P256_PKCS8_DER, P256_SIGNATURE,
+};
 use crate::{
     AeadAlgorithm, AeadCipher, BeaconAlgorithm, BeaconBits, BeaconMac, DataEncryptionKey,
     Encrypted, KeyId, KmsAeadResult,
@@ -39,8 +50,8 @@ fn ciphers<B: AeadBackend>() -> impl Iterator<Item = AeadCipher<B>> {
         .filter_map(|algorithm| AeadCipher::new(algorithm).ok())
 }
 
-/// A value one backend sealed, for the others to open.
-struct SealedValue<C> {
+/// A value one backend encrypted, for the others to decrypt.
+struct EncryptedValue<C> {
     backend: &'static str,
     dek: DataEncryptionKey,
     cipher_text: C,
@@ -77,13 +88,13 @@ fn ring_refuses_aes_256_gcm_siv_at_construction() {
     assert!(
         matches!(&result, Err(KmsAeadError::UnsupportedAlgorithm(error))
             if error.public.code == "UNSUPPORTED_ALGORITHM"
-                && error.algorithm == AeadAlgorithm::Aes256GcmSiv),
+                && error.algorithm == crate::BackendAlgorithm::Aead(AeadAlgorithm::Aes256GcmSiv)),
         "{result:?}"
     );
 }
 
-/// Opening a sealed value gives back the plain text, for any plain text and AAD, and the value
-/// is the nonce, the cipher text and the tag.
+/// Decrypting an encrypted value gives back the plain text, for any plain text and AAD, and the
+/// value is the nonce, the cipher text and the tag.
 #[test]
 fn every_supported_algorithm_round_trips() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
@@ -117,18 +128,18 @@ fn every_supported_algorithm_round_trips() -> KmsAeadResult<()> {
     Ok(())
 }
 
-/// Every backend writes the same layout, so a value sealed by one backend opens with every other
-/// that implements its algorithm.
+/// Every backend writes the same layout, so a value encrypted by one backend decrypts with every
+/// other that implements its algorithm.
 #[test]
-fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
-    fn seal<B: AeadBackend>(
+fn a_value_encrypted_by_one_backend_decrypts_with_every_other() -> KmsAeadResult<()> {
+    fn encrypt_with<B: AeadBackend>(
         algorithm: AeadAlgorithm,
-        sealed: &mut Vec<SealedValue<Encrypted<SecretValue, Bare>>>,
+        encrypted: &mut Vec<EncryptedValue<Encrypted<SecretValue, Bare>>>,
     ) -> KmsAeadResult<()> {
         if let Ok(cipher) = AeadCipher::<B>::new(algorithm) {
             let dek = cipher.generate_dek()?;
             let cipher_text = cipher.encrypt_bare(AAD, &SecretValue::from(PLAIN_TEXT), &dek)?;
-            sealed.push(SealedValue {
+            encrypted.push(EncryptedValue {
                 backend: B::NAME,
                 dek,
                 cipher_text,
@@ -137,16 +148,16 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
         Ok(())
     }
 
-    fn open<B: AeadBackend>(
+    fn decrypt_with<B: AeadBackend>(
         algorithm: AeadAlgorithm,
-        sealed: &[SealedValue<Encrypted<SecretValue, Bare>>],
+        encrypted: &[EncryptedValue<Encrypted<SecretValue, Bare>>],
     ) -> KmsAeadResult<()> {
         if let Ok(cipher) = AeadCipher::<B>::new(algorithm) {
-            for value in sealed {
+            for value in encrypted {
                 assert_eq!(
                     cipher.decrypt_bare(AAD, &value.cipher_text, &value.dek)?,
                     SecretValue::from(PLAIN_TEXT),
-                    "{algorithm} sealed by {} and opened by {}",
+                    "{algorithm} encrypted by {} and decrypted by {}",
                     value.backend,
                     B::NAME
                 );
@@ -156,37 +167,37 @@ fn a_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
     }
 
     for algorithm in AeadAlgorithm::ALL {
-        let mut sealed = Vec::new();
+        let mut encrypted = Vec::new();
         #[cfg(feature = "ring")]
-        seal::<Ring>(algorithm, &mut sealed)?;
+        encrypt_with::<Ring>(algorithm, &mut encrypted)?;
         #[cfg(feature = "aws-lc-rs")]
-        seal::<AwsLc>(algorithm, &mut sealed)?;
+        encrypt_with::<AwsLc>(algorithm, &mut encrypted)?;
         #[cfg(feature = "rustcrypto")]
-        seal::<RustCrypto>(algorithm, &mut sealed)?;
+        encrypt_with::<RustCrypto>(algorithm, &mut encrypted)?;
 
         #[cfg(feature = "ring")]
-        open::<Ring>(algorithm, &sealed)?;
+        decrypt_with::<Ring>(algorithm, &encrypted)?;
         #[cfg(feature = "aws-lc-rs")]
-        open::<AwsLc>(algorithm, &sealed)?;
+        decrypt_with::<AwsLc>(algorithm, &encrypted)?;
         #[cfg(feature = "rustcrypto")]
-        open::<RustCrypto>(algorithm, &sealed)?;
+        decrypt_with::<RustCrypto>(algorithm, &encrypted)?;
     }
     Ok(())
 }
 
-/// Every backend seals AES-SIV with the same implementation today, so a deterministic value
-/// sealed under one backend is the value every other seals, and opens there.
+/// Every backend encrypts AES-SIV with the same implementation today, so a deterministic value
+/// encrypted under one backend is the value every other encrypts, and decrypts there.
 #[cfg(feature = "deterministic")]
 #[test]
-fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAeadResult<()> {
-    fn seal<B: AeadBackend>(
+fn a_deterministic_value_encrypted_by_one_backend_decrypts_with_every_other() -> KmsAeadResult<()> {
+    fn encrypt_with<B: AeadBackend>(
         algorithm: DeterministicAlgorithm,
-        sealed: &mut Vec<SealedValue<Encrypted<SecretValue, Deterministic>>>,
+        encrypted: &mut Vec<EncryptedValue<Encrypted<SecretValue, Deterministic>>>,
     ) -> KmsAeadResult<()> {
         let cipher = DeterministicCipher::<B>::new(algorithm)?;
         let dek = cipher.generate_dek()?;
         let cipher_text = cipher.encrypt(KEY_ID, AAD, &SecretValue::from(PLAIN_TEXT), &dek)?;
-        sealed.push(SealedValue {
+        encrypted.push(EncryptedValue {
             backend: B::NAME,
             dek,
             cipher_text,
@@ -194,24 +205,24 @@ fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAe
         Ok(())
     }
 
-    fn open<B: AeadBackend>(
+    fn decrypt_with<B: AeadBackend>(
         algorithm: DeterministicAlgorithm,
-        sealed: &[SealedValue<Encrypted<SecretValue, Deterministic>>],
+        encrypted: &[EncryptedValue<Encrypted<SecretValue, Deterministic>>],
     ) -> KmsAeadResult<()> {
         let cipher = DeterministicCipher::<B>::new(algorithm)?;
         let plain_text = SecretValue::from(PLAIN_TEXT);
-        for value in sealed {
+        for value in encrypted {
             assert_eq!(
                 cipher.encrypt(KEY_ID, AAD, &plain_text, &value.dek)?,
                 value.cipher_text,
-                "{algorithm} sealed by {} and by {}",
+                "{algorithm} encrypted by {} and by {}",
                 value.backend,
                 B::NAME
             );
             assert_eq!(
                 cipher.decrypt(AAD, &value.cipher_text, &value.dek)?,
                 plain_text,
-                "{algorithm} sealed by {} and opened by {}",
+                "{algorithm} encrypted by {} and decrypted by {}",
                 value.backend,
                 B::NAME
             );
@@ -220,20 +231,20 @@ fn a_deterministic_value_sealed_by_one_backend_opens_with_every_other() -> KmsAe
     }
 
     for algorithm in DeterministicAlgorithm::ALL {
-        let mut sealed = Vec::new();
+        let mut encrypted = Vec::new();
         #[cfg(feature = "ring")]
-        seal::<Ring>(algorithm, &mut sealed)?;
+        encrypt_with::<Ring>(algorithm, &mut encrypted)?;
         #[cfg(feature = "aws-lc-rs")]
-        seal::<AwsLc>(algorithm, &mut sealed)?;
+        encrypt_with::<AwsLc>(algorithm, &mut encrypted)?;
         #[cfg(feature = "rustcrypto")]
-        seal::<RustCrypto>(algorithm, &mut sealed)?;
+        encrypt_with::<RustCrypto>(algorithm, &mut encrypted)?;
 
         #[cfg(feature = "ring")]
-        open::<Ring>(algorithm, &sealed)?;
+        decrypt_with::<Ring>(algorithm, &encrypted)?;
         #[cfg(feature = "aws-lc-rs")]
-        open::<AwsLc>(algorithm, &sealed)?;
+        decrypt_with::<AwsLc>(algorithm, &encrypted)?;
         #[cfg(feature = "rustcrypto")]
-        open::<RustCrypto>(algorithm, &sealed)?;
+        decrypt_with::<RustCrypto>(algorithm, &encrypted)?;
     }
     Ok(())
 }
@@ -244,20 +255,20 @@ fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()> {
         let deterministic_sized_dek = DataEncryptionKey::from(SecretValue::new(vec![0x42; 64]));
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
-            let sealed = cipher.encrypt_bare(AAD, &plain_text, &deterministic_sized_dek);
+            let encrypted = cipher.encrypt_bare(AAD, &plain_text, &deterministic_sized_dek);
             assert!(
-                matches!(&sealed, Err(KmsAeadError::EncryptionError(error))
+                matches!(&encrypted, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_LENGTH"),
-                "{cipher:?} seals: {sealed:?}"
+                "{cipher:?} encrypts: {encrypted:?}"
             );
 
             let dek = cipher.generate_dek()?;
             let cipher_text = cipher.encrypt_bare(AAD, &plain_text, &dek)?;
-            let opened = cipher.decrypt_bare(AAD, &cipher_text, &deterministic_sized_dek);
+            let decrypted = cipher.decrypt_bare(AAD, &cipher_text, &deterministic_sized_dek);
             assert!(
-                matches!(&opened, Err(KmsAeadError::EncryptionError(error))
+                matches!(&decrypted, Err(KmsAeadError::EncryptionError(error))
                     if error.public.code == "INVALID_KEY_LENGTH"),
-                "{cipher:?} opens: {opened:?}"
+                "{cipher:?} decrypts: {decrypted:?}"
             );
         }
         Ok(())
@@ -273,7 +284,7 @@ fn a_64_byte_key_is_refused_by_every_aead_algorithm() -> KmsAeadResult<()> {
 }
 
 #[test]
-fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
+fn a_tampered_value_fails_to_decrypt() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
@@ -304,11 +315,11 @@ fn a_tampered_value_fails_to_open() -> KmsAeadResult<()> {
                 ("a flipped tag bit", AAD, flipped(last)?, &dek),
             ];
             for (case, aad, value, dek) in cases {
-                let opened = cipher.decrypt_bare(aad, &value, dek);
+                let decrypted = cipher.decrypt_bare(aad, &value, dek);
                 assert!(
-                    matches!(&opened, Err(KmsAeadError::EncryptionError(error))
+                    matches!(&decrypted, Err(KmsAeadError::EncryptionError(error))
                         if error.public.code == "DECRYPT"),
-                    "{cipher:?} with {case}: {opened:?}"
+                    "{cipher:?} with {case}: {decrypted:?}"
                 );
             }
         }
@@ -337,11 +348,11 @@ fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
                 AeadAlgorithm::NONCE_LEN + AeadAlgorithm::TAG_LEN - 1,
             ] {
                 let short = vec![0xAA; len];
-                let opened = cipher.open(AAD, &short, 0, dek.value().ref_sensitive_value());
+                let decrypted = cipher.open(AAD, &short, 0, dek.value().ref_sensitive_value());
                 assert!(
-                    matches!(&opened, Err(KmsAeadError::EncryptionError(error))
+                    matches!(&decrypted, Err(KmsAeadError::EncryptionError(error))
                         if error.public.code == "INVALID_CIPHER_TEXT_FORMAT"),
-                    "{cipher:?} with {len} bytes: {opened:?}"
+                    "{cipher:?} with {len} bytes: {decrypted:?}"
                 );
             }
         }
@@ -358,7 +369,7 @@ fn a_value_shorter_than_nonce_and_tag_is_invalid() -> KmsAeadResult<()> {
 }
 
 #[test]
-fn sealing_twice_gives_different_values() -> KmsAeadResult<()> {
+fn encrypting_twice_gives_different_values() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let plain_text = SecretValue::from(PLAIN_TEXT);
         for cipher in ciphers::<B>() {
@@ -437,7 +448,7 @@ fn random_bytes_have_the_requested_length_and_differ() -> KmsAeadResult<()> {
 
 /// The AEAD layer of every envelope layout: kms-aead 0.28.1 output with the default algorithm.
 #[test]
-fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
+fn a_value_encrypted_by_0_28_1_decrypts() -> KmsAeadResult<()> {
     fn check<B: AeadBackend>() -> KmsAeadResult<()> {
         let dek = DataEncryptionKey::from(SecretValue::new(
             hex::decode("ee1b4efa8e3b1f550edfe8fe963d575b8cbf4e1f686e8c512ac7e4b3b1b7dd0a")
@@ -451,9 +462,14 @@ fn a_value_sealed_by_0_28_1_opens() -> KmsAeadResult<()> {
         )?;
         let cipher = AeadCipher::<B>::new(AeadAlgorithm::ChaCha20Poly1305)?;
 
-        let opened = cipher.decrypt_bare(b"fixture-aad", &cipher_text, &dek)?;
+        let decrypted = cipher.decrypt_bare(b"fixture-aad", &cipher_text, &dek)?;
 
-        assert_eq!(opened, SecretValue::from("fixture-secret"), "{}", B::NAME);
+        assert_eq!(
+            decrypted,
+            SecretValue::from("fixture-secret"),
+            "{}",
+            B::NAME
+        );
         Ok(())
     }
 
@@ -498,6 +514,244 @@ fn a_beacon_is_the_prefix_and_the_truncated_hmac_sha256() -> KmsAeadResult<()> {
                 B::NAME
             );
             assert_eq!(computed.key_id(), KeyId::new(7));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "ring")]
+    check::<Ring>()?;
+    #[cfg(feature = "aws-lc-rs")]
+    check::<AwsLc>()?;
+    #[cfg(feature = "rustcrypto")]
+    check::<RustCrypto>()?;
+    Ok(())
+}
+
+/// The signing provider of `B` over the PKCS#8 test key `pkcs8_der`.
+fn local_signer<B: AeadBackend>(pkcs8_der: &str) -> KmsAeadResult<LocalSigningProvider<B>> {
+    LocalSigningProvider::new(
+        LocalSigningKeyName::try_from("invoices".to_string())?,
+        vec![LocalSigningKey::from_secret(
+            LocalSigningKeyVersion::from(NonZeroU32::MIN),
+            SecretValue::new(hex::decode(pkcs8_der).expect("a test key is hex")),
+            PrivateKeyFormat::Pkcs8Der,
+        )?],
+    )
+}
+
+/// The detached and attached Ed25519 values of the book's test vectors, which every backend signs
+/// into the same bytes: Ed25519 is deterministic.
+#[tokio::test]
+async fn the_ed25519_test_vector_signs_alike_on_every_backend() -> KmsAeadResult<()> {
+    async fn check<B: AeadBackend>() -> KmsAeadResult<()> {
+        let signer = Signer::<_, B>::new(local_signer::<B>(ED25519_PKCS8_DER)?).await?;
+        let invoice = Invoice(INVOICE_PAYLOAD.to_vec());
+
+        let detached = signer.sign(&invoice).await?;
+        let attached = signer.sign_attached(&invoice).await?;
+
+        assert_eq!(
+            hex::encode(detached.value()),
+            format!("0190facafe{ED25519_SIGNATURE}"),
+            "{}",
+            B::NAME
+        );
+        assert_eq!(
+            hex::encode(attached.value()),
+            format!(
+                "0190facafe0040{ED25519_SIGNATURE}{}",
+                hex::encode(INVOICE_PAYLOAD)
+            ),
+            "{}",
+            B::NAME
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "ring")]
+    check::<Ring>().await?;
+    #[cfg(feature = "aws-lc-rs")]
+    check::<AwsLc>().await?;
+    #[cfg(feature = "rustcrypto")]
+    check::<RustCrypto>().await?;
+    Ok(())
+}
+
+/// The P-256 signature of the book's test vectors verifies on every backend, and one with a bit
+/// flipped does not.
+#[test]
+fn the_p256_test_vector_verifies_on_every_backend() -> KmsAeadResult<()> {
+    fn check<B: AeadBackend>() -> KmsAeadResult<()> {
+        let key = VerifyingKey::from_bytes(
+            SigningAlgorithm::EcdsaP256Sha256,
+            &hex::decode(
+                "3059301306072a8648ce3d020106082a8648ce3d030107034200\
+                 0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6\
+                 7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299",
+            )
+            .unwrap(),
+            PublicKeyFormat::SpkiDer,
+        )?;
+        let verifier = Verifier::<B>::new(VerifyingKeySet::new([key.clone()])?)?;
+        let invoice = Invoice(INVOICE_PAYLOAD.to_vec());
+        let mut signature = hex::decode(format!("010cebf1bc{P256_SIGNATURE}")).unwrap();
+
+        assert_eq!(
+            verifier.verify(&invoice, &Signature::try_from(signature.clone())?)?,
+            &key
+        );
+        signature[40] ^= 0x01;
+        let flipped = verifier.verify(&invoice, &Signature::try_from(signature)?);
+        assert!(
+            matches!(&flipped, Err(error) if error.code() == "SIGNATURE_INVALID"),
+            "{}: {flipped:?}",
+            B::NAME
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "ring")]
+    check::<Ring>()?;
+    #[cfg(feature = "aws-lc-rs")]
+    check::<AwsLc>()?;
+    #[cfg(feature = "rustcrypto")]
+    check::<RustCrypto>()?;
+    Ok(())
+}
+
+/// Every backend's P-256 signatures, randomised on ring and aws-lc-rs and derived as RFC 6979
+/// does on p256, verify on every backend.
+#[tokio::test]
+async fn a_p256_signature_of_one_backend_verifies_on_every_other() -> KmsAeadResult<()> {
+    async fn sign<B: AeadBackend>(
+        signatures: &mut Vec<(&'static str, Signature<Invoice>)>,
+    ) -> KmsAeadResult<VerifyingKey> {
+        let signer = Signer::<_, B>::new(local_signer::<B>(P256_PKCS8_DER)?).await?;
+        signatures.push((
+            B::NAME,
+            signer.sign(&Invoice(INVOICE_PAYLOAD.to_vec())).await?,
+        ));
+        Ok(signer.verifying_key().clone())
+    }
+
+    fn verify<B: AeadBackend>(
+        key: &VerifyingKey,
+        signatures: &[(&'static str, Signature<Invoice>)],
+    ) -> KmsAeadResult<()> {
+        let verifier = Verifier::<B>::new(VerifyingKeySet::new([key.clone()])?)?;
+        for (signed_by, signature) in signatures {
+            let result = verifier.verify(&Invoice(INVOICE_PAYLOAD.to_vec()), signature);
+            assert!(
+                result.is_ok(),
+                "signed on {signed_by}, verified on {}: {result:?}",
+                B::NAME
+            );
+        }
+        Ok(())
+    }
+
+    let mut signatures = Vec::new();
+    let mut keys = Vec::new();
+    #[cfg(feature = "ring")]
+    keys.push(sign::<Ring>(&mut signatures).await?);
+    #[cfg(feature = "aws-lc-rs")]
+    keys.push(sign::<AwsLc>(&mut signatures).await?);
+    #[cfg(feature = "rustcrypto")]
+    keys.push(sign::<RustCrypto>(&mut signatures).await?);
+    assert!(keys.windows(2).all(|pair| pair[0] == pair[1]), "{keys:?}");
+
+    #[cfg(feature = "ring")]
+    verify::<Ring>(&keys[0], &signatures)?;
+    #[cfg(feature = "aws-lc-rs")]
+    verify::<AwsLc>(&keys[0], &signatures)?;
+    #[cfg(feature = "rustcrypto")]
+    verify::<RustCrypto>(&keys[0], &signatures)?;
+    Ok(())
+}
+
+/// A P-256 point off the curve is refused when the verifier is built, on every backend.
+#[test]
+fn a_p256_point_off_the_curve_is_refused_by_every_backend() -> KmsAeadResult<()> {
+    fn check<B: AeadBackend>() -> KmsAeadResult<()> {
+        let mut point = hex::decode(
+            "0460fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6\
+             7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299",
+        )
+        .unwrap();
+        point[64] ^= 0x01;
+        let key = VerifyingKey::from_bytes(
+            SigningAlgorithm::EcdsaP256Sha256,
+            &point,
+            PublicKeyFormat::Raw,
+        )?;
+
+        let result = Verifier::<B>::new(VerifyingKeySet::new([key])?);
+
+        assert!(
+            matches!(&result, Err(error) if error.code() == "INVALID_PUBLIC_KEY"),
+            "{}: {result:?}",
+            B::NAME
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "ring")]
+    check::<Ring>()?;
+    #[cfg(feature = "aws-lc-rs")]
+    check::<AwsLc>()?;
+    #[cfg(feature = "rustcrypto")]
+    check::<RustCrypto>()?;
+    Ok(())
+}
+
+/// The HMAC-SHA256 and HMAC-SHA512 tags of the book's test vectors, under keys of `0x42`, on every
+/// backend, detached and attached.
+#[test]
+fn the_mac_test_vectors_tag_alike_on_every_backend() -> KmsAeadResult<()> {
+    fn check<B: AeadBackend>() -> KmsAeadResult<()> {
+        let invoice = Invoice(INVOICE_PAYLOAD.to_vec());
+        for (algorithm, key_id, prefix, tag) in [
+            (
+                MacAlgorithm::HmacSha256,
+                3_221_225_473,
+                "01c0000001",
+                "a2ca416600c31c19620b0b021986b1116ef1186318b32d819659093c125737f9",
+            ),
+            (
+                MacAlgorithm::HmacSha512,
+                3_221_225_474,
+                "01c0000002",
+                "620e50560d4f30c943664d8671c2788db8a1165c742ab379afaf9047dfa3610a\
+                 ca85a98e462c791f19d966e04b90748ce397755de7dc86a49f511a9021331ac3",
+            ),
+        ] {
+            let authenticator = Authenticator::<B>::new(algorithm)?;
+            let key = DataEncryptionKey::from(SecretValue::new(vec![0x42; algorithm.key_len()]));
+
+            let mac = authenticator.mac(KeyId::new(key_id), &invoice, &key)?;
+            let authenticated = authenticator.mac_attached(KeyId::new(key_id), &invoice, &key)?;
+
+            assert_eq!(
+                hex::encode(mac.value()),
+                format!("{prefix}{tag}"),
+                "{algorithm} on {}",
+                B::NAME
+            );
+            assert_eq!(
+                hex::encode(authenticated.value()),
+                format!(
+                    "{prefix}{:04x}{tag}{}",
+                    algorithm.tag_len(),
+                    hex::encode(INVOICE_PAYLOAD)
+                ),
+                "{algorithm} on {}",
+                B::NAME
+            );
+            authenticator.verify(&invoice, &mac, &key)?;
+            assert_eq!(
+                authenticator.verify_with_mac(&authenticated, &key)?.0,
+                INVOICE_PAYLOAD
+            );
         }
         Ok(())
     }

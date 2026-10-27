@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::Weak;
 use std::sync::{Arc, PoisonError, RwLock};
@@ -15,7 +16,7 @@ use tokio::sync::OnceCell;
 
 use crate::errors::KmsAeadSystemError;
 use crate::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadEncryptionProvider, KmsAeadResult,
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadDecryptionProvider, KmsAeadResult,
 };
 
 /// The settings of an enabled [`DekCache`].
@@ -76,13 +77,13 @@ impl Display for DekCacheOutcome {
 /// version an encrypted DEK records is not part of the match.
 ///
 /// [`KekRef`] equality is therefore the cache's trust boundary. A local provider's `KekRef` is
-/// [`KekProvider::Local`](crate::KekProvider::Local) and its id, so a local KEK id must name one
+/// [`KmsProvider::Local`](crate::KmsProvider::Local) and its id, so a local KEK id must name one
 /// set of KEK material: two [`LocalKmsProvider`](crate::providers::LocalKmsProvider)s with one
 /// id share their entries.
 ///
 /// Keys of randomised and deterministic algorithms share the entries: the same encrypted bytes
-/// decrypt to the same key whatever the caller seals with it. An entry holds the key a serialised
-/// Tink key carries, and the cipher a key is used with checks its length.
+/// decrypt to the same key whatever the caller encrypts with it. An entry holds the key a
+/// serialised Tink key carries, and the cipher a key is used with checks its length.
 ///
 /// - A key reaches a caller only inside the closure of [`with_dek`](Self::with_dek), and stays
 ///   intact until the closure returns, whatever leaves the cache meanwhile.
@@ -129,6 +130,9 @@ pub struct DekCache(pub(crate) Option<Arc<EnabledCache>>);
 pub(crate) struct EnabledCache {
     options: DekCacheOptions,
     entries: RwLock<Arc<Snapshot>>,
+    /// Counts the `invalidate` and `clear` calls, each counted under the write lock that applies
+    /// it, so that a store-less renewal can tell that one landed since it began.
+    drops: AtomicU64,
 }
 
 /// The entries at one moment, never changed once the cache holds it. They are keyed by the
@@ -251,6 +255,10 @@ impl EnabledCache {
 
     /// Runs `use_dek` with the key cached for `encrypted_dek` under `kek`, or returns `None`,
     /// without calling a provider, when the cache holds no such key.
+    ///
+    /// It takes no provider, so it is the one lookup the envelope's encrypt-only calls can make:
+    /// call it only with an encrypted DEK this envelope's own renewal produced, and keep it
+    /// crate-private.
     pub(crate) fn with_cached_dek<T>(
         &self,
         kek: &KekRef,
@@ -269,13 +277,17 @@ impl EnabledCache {
 
     /// Caches `dek`, which `kek` has just encrypted into `encrypted_dek`, as a decryption of
     /// `encrypted_dek` would have, so that the first lookup of a new store-less DEK is a hit. Kept
-    /// off the public API: a key cached under the wrong encrypted bytes would seal values that no
-    /// decryption opens. A live entry of another KEK for the same bytes is kept.
+    /// off the public API: a key cached under the wrong encrypted bytes would encrypt values that
+    /// no later decryption can read. A live entry of another KEK for the same bytes is kept.
+    ///
+    /// Caches nothing when an `invalidate` or `clear` has landed since `drops` was read from
+    /// [`drops`](Self::drops): the renewal that began then must not undo it.
     pub(crate) fn insert(
         &self,
         kek: &KekRef,
         encrypted_dek: &EncryptedDataEncryptionKey,
         dek: DataEncryptionKey,
+        drops: u64,
     ) {
         let now = Instant::now();
         self.purge_expired(now);
@@ -285,9 +297,14 @@ impl EnabledCache {
             dek: OnceCell::from(Ok(Arc::new(dek))),
             created_at: now,
         });
-        self.publish(|snapshot| match snapshot.live(encrypted_dek, ttl, now) {
-            Some(live) if !live.serves(kek) => None,
-            _ => Some(snapshot.with(encrypted_dek.clone(), slot, max_entries)),
+        self.publish(|snapshot| {
+            if self.drops.load(Ordering::SeqCst) != drops {
+                return None;
+            }
+            match snapshot.live(encrypted_dek, ttl, now) {
+                Some(live) if !live.serves(kek) => None,
+                _ => Some(snapshot.with(encrypted_dek.clone(), slot, max_entries)),
+            }
         });
     }
 }
@@ -394,6 +411,7 @@ impl DekCache {
         Ok(Self(Some(Arc::new(EnabledCache {
             options,
             entries: RwLock::default(),
+            drops: AtomicU64::new(0),
         }))))
     }
 
@@ -410,7 +428,9 @@ impl DekCache {
     }
 
     /// Runs `use_dek` with the key that `encrypted_dek` holds under `provider.kek()`, decrypted by
-    /// `provider` on a miss, and returns its result with where the key came from.
+    /// `provider` on a miss, and returns its result with where the key came from. `provider` is a
+    /// [`KmsAeadDecryptionProvider`] on a hit too, so that no cached key reaches a caller holding
+    /// a provider that only encrypts, such as the producer of a shared cache.
     ///
     /// `use_dek` runs once, synchronously, after the lookup, and the key stays intact while it
     /// runs. It must not keep the key: a copy taken out of the closure outlives the cache's
@@ -430,7 +450,7 @@ impl DekCache {
         use_dek: impl FnOnce(&DataEncryptionKey) -> T,
     ) -> KmsAeadResult<(T, DekCacheOutcome)>
     where
-        P: KmsAeadEncryptionProvider,
+        P: KmsAeadDecryptionProvider,
     {
         // An encrypted value of the same KEK that is no data encryption key, such as an exported
         // keyset, decrypts too, and the decoding of the decrypted key keeps it out.
@@ -455,7 +475,10 @@ impl DekCache {
     pub fn invalidate(&self, kek: &KekRef, encrypted_dek: &EncryptedDataEncryptionKey) {
         if let Some(enabled) = &self.0 {
             enabled.purge_expired(Instant::now());
-            enabled.publish(|snapshot| snapshot.without_entry(encrypted_dek, kek));
+            enabled.publish(|snapshot| {
+                enabled.drops.fetch_add(1, Ordering::SeqCst);
+                snapshot.without_entry(encrypted_dek, kek)
+            });
         }
     }
 
@@ -470,12 +493,23 @@ impl DekCache {
     }
 
     /// Drops every entry. The decryptions under way return their keys to their callers without
-    /// caching them. A store-less renewal under way may still cache its new DEK after `clear`
-    /// returns, since the renewal started before the clear.
+    /// caching them, and a store-less renewal under way does not cache its new DEK, so that the
+    /// writers that follow renew again.
     pub fn clear(&self) {
         if let Some(enabled) = &self.0 {
-            enabled.publish(|_| Some(Snapshot::default()));
+            enabled.publish(|_| {
+                enabled.drops.fetch_add(1, Ordering::SeqCst);
+                Some(Snapshot::default())
+            });
         }
+    }
+
+    /// How many `invalidate` and `clear` calls the cache has seen, to compare with a later read;
+    /// zero for a disabled cache.
+    pub(crate) fn drops(&self) -> u64 {
+        self.0
+            .as_ref()
+            .map_or(0, |enabled| enabled.drops.load(Ordering::SeqCst))
     }
 }
 
@@ -521,7 +555,7 @@ mod tests {
         encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
         TestKmsProvider, CONCURRENT_CALLS,
     };
-    use crate::{AeadAlgorithm, AeadCipher};
+    use crate::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider};
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";

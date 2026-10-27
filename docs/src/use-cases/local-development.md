@@ -15,9 +15,9 @@ production, with no cloud account. What each one keeps, and for how long, decide
 - **Tests**: `LocalKmsProvider::ephemeral` has one random KEK that lives as long as the provider.
   Every DEK it encrypts, and so every value, is unreadable once the process exits, see
   [Tests and development](../providers/local.md#tests-and-development);
-- **a development environment** whose data outlives a run keeps a KEK in a variable or a file,
-  with `LocalKek::from_env` or `LocalKek::from_file`, see the same section. A value written with
-  the local KMS never opens under a cloud KMS, so a development database starts again empty on the
+- **a development environment** whose data outlives a run keeps a KEK in a variable or a file, with
+  `LocalKek::from_env` or `LocalKek::from_file`, see the same section. A value written with the
+  local KMS never decrypts under a cloud KMS, so a development database starts again empty on the
   move to one.
 
 The provider is in every build, with no feature, and logs its KEK id and where each version came
@@ -39,7 +39,7 @@ from at `INFO` when it is created.
     gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
     gcloud emulators firestore start --host-port=0.0.0.0:8687
   FIRESTORE_EMULATOR_HOST=127.0.0.1:8687 PROJECT_ID=kms-aead-emulator \
-    cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,serde,firestore
+    cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,firestore-tls-roots
   ```
 
 - **PostgreSQL**: a local server, the table of [PostgreSQL](../keyring/stores.md#postgresql), and
@@ -62,4 +62,5 @@ The same with kms-aead alone is in [With an envelope](../getting-started.md#with
 
 - The local KMS has no IAM and no audit log, and the KEK in a variable stays in the process
   environment, see [Local KMS](../providers/local.md#limits);
-- values sealed under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS only.
+- values encrypted under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS
+  only.

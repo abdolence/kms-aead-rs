@@ -25,6 +25,8 @@ rust-version = "1.99"
 [workspace.dependencies]
 async-trait = "0.1"
 bytes = "1"
+futures = "0.3"
+futures-core = "0.3"
 gcloud-sdk = { version = "0.33", default-features = false }
 opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "testing"] }
@@ -34,6 +36,7 @@ secret-vault-value = { version = "1.0.4", features = ["base64"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
+sha2 = { version = "0.11", default-features = false }
 # The smallest sqlx crates that carry its encoding traits and its Postgres types, so that a
 # `sqlx` feature brings in no runtime and no TLS stack.
 sqlx-core = { version = "0.9", default-features = false }
@@ -41,6 +44,7 @@ sqlx-postgres = { version = "0.9", default-features = false }
 subtle = "2.6.1"
 tokio = { version = "1", default-features = false }
 tracing = "0.1"
+tracing-subscriber = "0.3"
 
 [badges]
 maintenance = { status = "actively-developed" }
@@ -59,7 +63,7 @@ bench = false
 
 [dependencies]
 tracing = { workspace = true }
-secret-vault-value = { workspace = true }
+secret-vault-value = { workspace = true, features = ["serde"] }
 rsb_derive = { workspace = true }
 hex = "0.4"
 # The instruments of the `opentelemetry` feature: the API only, never the SDK.
@@ -71,6 +75,8 @@ aws-lc-rs = { version = "1.16.3", default-features = false, optional = true }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes"], optional = true }
 aes-gcm-siv = { version = "0.12.1", default-features = false, features = ["aes"], optional = true }
 chacha20poly1305 = { version = "0.11.0", default-features = false, optional = true }
+# `ChaCha20Rng` seeded from the system generator, the infallible generator RSA key generation takes.
+chacha20 = { version = "0.10", default-features = false, features = ["rng"], optional = true }
 aes-siv = { version = "0.8.0", default-features = false, optional = true }
 # Depended on only to turn on their `zeroize` features. The AES and CMAC key schedules inside
 # aes-gcm-siv and aes-siv are not zeroized otherwise: aes-siv's own `zeroize` does not reach them.
@@ -80,19 +86,39 @@ cmac = { version = "0.8", default-features = false, optional = true }
 # and the POLYVAL key of AES-256-GCM-SIV are not zeroized otherwise.
 poly1305 = { version = "0.9", default-features = false, optional = true }
 polyval = { version = "0.7", default-features = false, optional = true }
-# HMAC-SHA256 of the beacons.
+# HMAC-SHA256 of the beacons on RustCrypto.
 hmac = { version = "0.13", optional = true }
-sha2 = { version = "0.11", default-features = false, optional = true }
+# The RustCrypto backend's hashes, and in every build the SHA-256 of a key's RFC 7638 thumbprint,
+# which a public key's id is derived from on no backend.
+sha2 = { workspace = true }
 # The major version `aead` 0.6 depends on, so that one copy is in the tree.
 getrandom = { version = "0.4", optional = true }
-serde = { workspace = true, optional = true }
-serde_bytes = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_bytes = { workspace = true }
 gcloud-sdk = { workspace = true, optional = true }
-aws-config = { version = "1", optional = true, features = ["behavior-version-latest"] }
+# `credentials-login` is what lets the default credentials chain use the session of `aws login`.
+aws-config = { version = "1", optional = true, features = ["behavior-version-latest", "credentials-login"] }
 aws-sdk-kms = { version = "1", optional = true, default-features = false, features = ["default-https-client", "rt-tokio"] }
 subtle = { workspace = true }
 # Tink's key and keyset messages. The version gcloud-sdk depends on, so that one copy is in the tree.
 prost = "0.14"
+# The framing of keys and signatures: SubjectPublicKeyInfo, PKCS#8, the ECDSA `ECDSA-Sig-Value`
+# and PEM, so that no ASN.1 or PEM parser is the crate's own. `base64ct` is pem-rfc7468's, for the
+# base64url of JSON Web Keys.
+der = { version = "0.8", features = ["alloc", "derive", "oid"] }
+spki = { version = "0.8", features = ["alloc"] }
+pkcs8 = { version = "0.11", default-features = false }
+sec1 = { version = "0.8", default-features = false, features = ["der"] }
+pem-rfc7468 = { version = "1", features = ["alloc"] }
+base64ct = { version = "1", features = ["alloc"] }
+# The signatures of the RustCrypto backend, with their key types zeroised on drop.
+p256 = { version = "0.14", default-features = false, features = ["ecdsa"], optional = true }
+ed25519-dalek = { version = "3", optional = true }
+# RSA-OAEP of the asymmetric KEKs on the RustCrypto backend. A release candidate, required in the
+# caret form so that 0.10.0 and the 0.10 releases after it resolve with no bump of kms-aead.
+rsa = { version = "^0.10.0-rc.19", default-features = false, features = ["encoding"], optional = true }
+# The checksums of Cloud KMS requests and responses.
+crc32c = { version = "0.6", optional = true }
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds
 # the store-less DEK renewal to one caller at a time.
 tokio = { workspace = true, features = ["sync"] }
@@ -105,7 +131,7 @@ rustls-native-certs = { version = "0.8", optional = true }
 webpki-roots = { version = "1", optional = true }
 percent-encoding = { version = "2", optional = true }
 go-duration = { version = "0.2", optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true }
 azure_core = { version = "1.1", optional = true, default-features = false, features = ["reqwest", "tokio"] }
 azure_security_keyvault_keys = { version = "1.0.1", optional = true, default-features = false }
 # Selects the TLS features of the reqwest client azure_core builds, so it must stay on the reqwest
@@ -114,6 +140,8 @@ reqwest = { version = "0.13.2", optional = true, default-features = false }
 postgres-types = { version = "0.2", optional = true }
 # The buffer `ToSql::to_sql` writes into, which postgres-types does not re-export.
 bytes = { workspace = true, optional = true }
+# `Stream`, the trait of `EncryptingStream` and `DecryptingStream`.
+futures-core = { workspace = true, optional = true }
 sqlx-core = { workspace = true, optional = true }
 sqlx-postgres = { workspace = true, optional = true }
 
@@ -121,10 +149,9 @@ sqlx-postgres = { workspace = true, optional = true }
 # The Azure SDK's credential and HTTP client traits, which the Azure tests implement.
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-futures = "0.3"
-serde_json = { workspace = true }
+futures = { workspace = true }
 proptest = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 criterion = { version = "0.8", features = ["async", "async_futures", "cargo_bench_support", "html_reports", "async_tokio"] }
 cargo-husky = { version = "1.5", default-features = false, features = ["run-for-all", "prepush-hook", "run-cargo-fmt"] }
 rustls = "0.23"
@@ -133,12 +160,19 @@ tokio-postgres = "0.7"
 sqlx = { version = "0.9", default-features = false, features = ["postgres", "runtime-tokio"] }
 # The meter provider of the metrics chapter's code.
 opentelemetry_sdk = { workspace = true }
+# The zlib-compressed cipher texts and the SHA-512 message digests of the Wycheproof vectors of
+# streamed values.
+miniz_oxide = "0.8"
+# The `axum_encrypted_stream` example: an axum server that streams items with axum-streams and a
+# reqwest client that decodes them with reqwest-streams. No TLS stack, as the example talks to a
+# loopback port.
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+axum-streams = { version = "0.30", features = ["json"] }
+reqwest-streams = { version = "0.20", features = ["json"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["stream"] }
 
 [features]
 default = []
-serde = ["dep:serde", "dep:serde_bytes", "secret-vault-value/serde"]
-# `Json`, a plaintext stored as its JSON.
-serde-json = ["dep:serde", "dep:serde_json"]
 # `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`.
 postgres = ["dep:postgres-types", "dep:bytes"]
 # sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for `Encrypted` on Postgres, as `BYTEA`.
@@ -158,6 +192,7 @@ rustcrypto = [
     "dep:aes-gcm",
     "dep:aes-gcm-siv",
     "dep:chacha20poly1305",
+    "dep:chacha20",
     "dep:getrandom",
     "aes-gcm/zeroize",
     "aes-gcm-siv/zeroize",
@@ -170,8 +205,12 @@ rustcrypto = [
     "polyval/zeroize",
     "dep:hmac",
     "hmac/zeroize",
-    "dep:sha2",
     "sha2/zeroize",
+    "dep:p256",
+    "dep:ed25519-dalek",
+    "dep:rsa",
+    # `SysRng`, the `rand_core` generator `rsa` draws the OAEP seeds and the blinding from.
+    "getrandom/sys_rng",
 ]
 # `aes-siv/alloc` carries the `siv::Aes256Siv` calls that take the associated data as a list.
 deterministic = [
@@ -186,13 +225,17 @@ deterministic = [
 # Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
 # later breaking release.
 legacy-formats = []
+# Streamed values of any length, C2SP chunked encryption: the `stream` module, its sans-IO encryptor
+# and decryptor, their tokio adapters, which need `io-util`, and their adapters on `Stream`s of
+# `Bytes`.
+stream = ["tokio/io-util", "dep:bytes", "dep:futures-core"]
 # OpenTelemetry metrics of the envelope's calls and the KMS requests, which kms-aead-keyring
 # records its calls into too, on the API crate: the application installs the SDK and an exporter.
 opentelemetry = ["dep:opentelemetry"]
 gcp = ["gcloud-sdk"]
 # The GCP KMS provider without a TLS root store or crypto provider. It needs a gcloud-sdk root
 # store feature from the application to build.
-gcp-kms-encryption-base = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "gcloud-sdk/google-longrunning"]
+gcp-kms-encryption-base = ["gcp", "gcloud-sdk/google-cloud-kms-v1", "gcloud-sdk/google-longrunning", "dep:crc32c"]
 gcp-kms-encryption = ["gcp-kms-encryption-base", "gcloud-sdk/tls-roots", "gcloud-sdk/auth-default-crypto"]
 gcp-kms-encryption-webpki = ["gcp-kms-encryption-base", "gcloud-sdk/tls-webpki-roots", "gcloud-sdk/auth-default-crypto"]
 aws = ["dep:aws-config"]
@@ -213,8 +256,6 @@ hashicorp-vault-transit-kms-encryption-base = [
     "dep:rustls",
     "dep:percent-encoding",
     "dep:go-duration",
-    "dep:serde",
-    "dep:serde_json",
     "tokio/time",
 ]
 # TLS root store variants - user can choose one
@@ -227,7 +268,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "serde", "serde-json", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry", "stream"]
 
 [[example]]
 name = "aws_kms"
@@ -270,6 +311,16 @@ path = "tests/azure_kms_responses.rs"
 required-features = ["azure-kms-encryption-base"]
 
 [[test]]
+name = "azure_kms_signing_responses"
+path = "tests/azure_kms_signing_responses.rs"
+required-features = ["azure-kms-encryption-base"]
+
+[[test]]
+name = "public_key_fingerprint"
+path = "tests/public_key_fingerprint.rs"
+required-features = ["aws-lc"]
+
+[[test]]
 name = "aws_spawned_call"
 path = "tests/aws_spawned_call.rs"
 required-features = ["aws-kms-encryption", "aws-lc"]
@@ -280,6 +331,11 @@ path = "examples/tink_interop.rs"
 required-features = ["gcp-kms-encryption", "aws-kms-encryption", "aws-lc"]
 
 [[example]]
+name = "cobblestone_interop"
+path = "examples/cobblestone_interop.rs"
+required-features = ["stream", "ring"]
+
+[[example]]
 name = "only_aead"
 path = "examples/only_aead.rs"
 required-features = ["ring"]
@@ -288,3 +344,33 @@ required-features = ["ring"]
 name = "tracing"
 path = "examples/tracing.rs"
 required-features = ["ring"]
+
+[[example]]
+name = "stream_range_read"
+path = "examples/stream_range_read.rs"
+required-features = ["stream", "ring"]
+
+[[example]]
+name = "stream_body"
+path = "examples/stream_body.rs"
+required-features = ["stream", "ring"]
+
+[[example]]
+name = "axum_encrypted_stream"
+path = "examples/axum_encrypted_stream.rs"
+required-features = ["stream", "ring"]
+
+[[example]]
+name = "encrypted_json"
+path = "examples/encrypted_json.rs"
+required-features = ["ring"]
+
+[[example]]
+name = "signing"
+path = "examples/signing.rs"
+required-features = ["ring"]
+
+[[example]]
+name = "asymmetric_kek"
+path = "examples/asymmetric_kek.rs"
+required-features = ["aws-lc"]

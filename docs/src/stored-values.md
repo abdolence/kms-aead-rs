@@ -4,7 +4,7 @@ Three types carry what the library writes to a data store and reads back:
 
 - `Encrypted<T, F>`: an encrypted value that decrypts to a `T`, in the layout of the format `F`;
 - `Beacon<T>`: a blind index of a `T`, stored beside its encrypted value for lookups;
-- `Plaintext`: the trait of every `T`, which fixes the bytes a value is sealed as.
+- `Plaintext`: the trait of every `T`, which fixes the bytes a value is encrypted as.
 
 The `T` is a type of the application, such as an `Email` newtype, so a column names what it
 holds: `Encrypted<Email, Envelope>` and `Beacon<Email>`. Neither type holds a `T`, only the bytes
@@ -19,14 +19,14 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
 |---|---|---|---|---|---|
 | `Envelope` | [Tink's KMS envelope](./formats.md#tinks-kms-envelope), the encrypted DEK inside | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
 | `Bare` | `[nonce: 12][ciphertext][tag: 16]` | `KmsAeadEnvelope::encrypt_with_dek`, `AeadCipher::encrypt_bare` | `KmsAeadEnvelope::decrypt_with_dek`, `AeadCipher::decrypt_bare` | no | none |
-| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Sealer::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
-| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Sealer::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
+| `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Encryptor::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
+| `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Encryptor::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
 
-- `key_id()` returns the `KeyId` that the TINK prefix names, the key to open the value with. The
+- `key_id()` returns the `KeyId` that the TINK prefix names, the key to decrypt the value with. The
   prefix is not authenticated: a changed key id fails to decrypt;
 - an `Envelope` value carries its encrypted DEK instead of a key id, and a `Bare` value names no
-  key: the application keeps track of the key that opens it;
-- the randomised formats seal equal plaintexts into different values, so they have no `==`.
+  key: the application keeps track of the key that decrypts it;
+- the randomised formats encrypt equal plaintexts into different values, so they have no `==`.
   Compare `value()` to tell whether two values are the same stored bytes;
 - only `Deterministic` values are equal for equal plaintexts under one key and one AAD, which is
   what a lookup by the encrypted value needs, see [Deterministic encryption](./deterministic.md);
@@ -76,11 +76,11 @@ assert!(Encrypted::<SecretValue, Randomized>::try_from(vec![0x01, 0, 0, 0, 1]).i
 
 ### Storing
 
-Three features store `Encrypted` as bytes, and each one reads it back through `TryFrom`, so a
-malformed stored value fails in the decode:
+`Encrypted` is stored as bytes, and read back through `TryFrom`, so a malformed stored value fails
+in the decode:
 
-- `serde`: `Serialize` and `Deserialize`, a `bytes` value in Firestore and an array of numbers in
-  serde_json;
+- serde, in every build: `Serialize` and `Deserialize`, a `bytes` value in Firestore and an array
+  of numbers in serde_json;
 - `postgres`: `ToSql` and `FromSql` of postgres-types, for tokio-postgres, as `BYTEA`, and a
   slice as `BYTEA[]` for `= ANY($1)`;
 - `sqlx`: sqlx's `Type`, `Encode`, `Decode` and `PgHasArrayType` for PostgreSQL, as `BYTEA`. It
@@ -246,7 +246,7 @@ assert_eq!(read_back, beacon);
 
 The bits trade lookups against leakage, see [Bits](./beacons.md#bits).
 
-`Beacon<T>` is stored as `Encrypted` is, as bytes, with the `serde`, `postgres` and `sqlx`
+`Beacon<T>` is stored as `Encrypted` is, as bytes, with serde and the `postgres` and `sqlx`
 features. A lookup matches the column by equality, so it gets an ordinary index:
 
 ```sql
@@ -283,9 +283,9 @@ beacons under key versions.
 
 ## `Plaintext`
 
-`Plaintext` maps a type to the bytes it is sealed as, and back. Every `T` of `Encrypted<T, F>` and
-`Beacon<T>` implements it. An application type implements it by mapping to one of the built-in
-types, such as a newtype over `String` that is sealed as the same UTF-8 bytes:
+`Plaintext` maps a type to the bytes it is encrypted as, and back. Every `T` of `Encrypted<T, F>`
+and `Beacon<T>` implements it. An application type implements it by mapping to one of the built-in
+types, such as a newtype over `String` that is encrypted as the same UTF-8 bytes:
 
 ```rust
 use kms_aead::{KmsAeadResult, Plaintext};
@@ -341,7 +341,7 @@ assert_eq!(decrypted.0.as_sensitive_str(), "alice@example.com");
 It differs from the `String` newtype as follows:
 
 - the decrypted value is zeroised on drop, and `Debug` prints `***` instead of it;
-- text is sealed as the same bytes as through `String`, so `AEAD.DECRYPT_STRING` still reads it;
+- text is encrypted as the same bytes as through `String`, so `AEAD.DECRYPT_STRING` still reads it;
 - there is no UTF-8 check on read, so bytes that are not UTF-8 decrypt without an error;
 - the text is reached through `SecretValue`'s accessors rather than as a `&str`:
   `as_sensitive_str()`, which panics on bytes that are not UTF-8, or `sensitive_value_to_str()`,
@@ -359,7 +359,7 @@ values, such as BigQuery's `AEAD.DECRYPT_STRING`, decode them:
 | `Vec<u8>`, `SecretValue` | the bytes themselves |
 | `bool` | `true` or `false` |
 | `i32`, `i64`, `u32`, `u64` | decimal ASCII, which SQL reads with `CAST` |
-| `Json<T>`, feature `serde-json` | the compact JSON of any serde type |
+| `JsonEncoded<T>` | the compact JSON of any serde type |
 
 - `decrypt` fails with `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`, and the
   error never quotes the bytes;
@@ -368,14 +368,14 @@ values, such as BigQuery's `AEAD.DECRYPT_STRING`, decode them:
 - a beacon is the HMAC of the encoded bytes, so normalisation, such as lowercasing an email, is
   the newtype's job, see [Beacons](./beacons.md).
 
-`Json<T>` seals a structured value of any serde type as its compact JSON, which BigQuery reads with
-`AEAD.DECRYPT_STRING` and its JSON functions:
+`JsonEncoded<T>` encrypts a structured value of any serde type as its compact JSON, which BigQuery reads
+with `AEAD.DECRYPT_STRING` and its JSON functions:
 
 ```rust
 use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, Json, KmsAeadEnvelope};
+use kms_aead::{Encrypted, JsonEncoded, KmsAeadEnvelope};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -389,14 +389,84 @@ struct Address {
 # let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::new(provider)?;
 
-let address = Json(Address {
+let address = JsonEncoded::new(Address {
     street: "Mannerheimintie 1".to_string(),
     city: "Helsinki".to_string(),
 });
-let encrypted: Encrypted<Json<Address>, Envelope> =
+let encrypted: Encrypted<JsonEncoded<Address>, Envelope> =
     envelope.encrypt(b"users/1042/address", &address).await?;
-let decrypted: Json<Address> = envelope.decrypt(b"users/1042/address", &encrypted).await?;
+let decrypted: JsonEncoded<Address> = envelope.decrypt(b"users/1042/address", &encrypted).await?;
 assert_eq!(decrypted, address);
 # Ok(())
 # }
 ```
+
+### JSON that does not decode
+
+A plaintext that is not the JSON of its type, such as a record written by an older version of the
+application, fails with `INVALID_PLAINTEXT` and logs a `WARN` event with an outline of the JSON.
+By default the outline shows the shape: the type of every value, the nesting, and where serde_json
+stopped reading, with no value and no length, since [a length gives away a hidden
+boolean](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES).
+Finding the field that changed takes more, and a type opts into it with a policy, the second type
+parameter of `JsonEncoded`: a type of the application's own that implements
+[`JsonRedaction`](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html) and
+sets the constants it needs. The rustdoc says what each shows and how
+[`FieldPaths`](https://docs.rs/kms-aead/latest/kms_aead/redaction/struct.FieldPaths.html) names a
+field.
+
+```rust
+use kms_aead::redaction::{FieldPaths, JsonRedaction};
+use kms_aead::JsonEncoded;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Customer {
+    id: String,
+    email: String,
+    plan: String,
+    renewal_date: String,
+}
+
+struct CustomerLog;
+
+impl JsonRedaction for CustomerLog {
+    const FIELD_NAMES: bool = true;
+    const SIZES: bool = true;
+    const REVEALED_FIELDS: FieldPaths = FieldPaths::from_static(&["id", "plan"]);
+}
+
+type CustomerJson = JsonEncoded<Customer, CustomerLog>;
+
+let customer = CustomerJson::from(Customer {
+    id: "cus_4821".to_string(),
+    email: "ada.lovelace@example.com".to_string(),
+    plan: "team".to_string(),
+    renewal_date: "2027-03-01".to_string(),
+});
+```
+
+`JsonEncoded::new` builds a value under the default policy, and `from` a value of a type with a
+policy of its own. A record written when `plan` was a number logs this outline under the default
+policy:
+
+```text
+{<key>: <string>, <key>: <string>, <key>: <number>, <key>: <string>}
+```
+
+and this under `CustomerLog`:
+
+```text
+89 bytes: {"id": "cus_4821", "email": <string, 24 chars>, "plan": 2, "renewal_date": <string, 10 chars>}
+```
+
+The outline names the field and the value that differs, and shows the length of the email and
+nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
+identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
+personal data. `kms_aead::json=off` in an `EnvFilter` turns the event off. The event's fields are
+in [Observability](./observability.md#json-that-does-not-decode). `RedactedJson` outlines any JSON
+the same way, with no encryption, see
+[Log JSON payloads without leaking data](./use-cases/log-json-payloads.md).
+
+Full example available
+[here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/encrypted_json.rs).

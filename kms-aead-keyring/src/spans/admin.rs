@@ -23,6 +23,16 @@ pub(crate) fn export(keyring: &KeyringId, purpose: Purpose) -> Span {
     )
 }
 
+/// A `KeyringAdmin` without a record signer over a provider that encrypts with a public key: its
+/// records carry no signature, so a holder of the public key can add a version to them.
+pub(crate) fn unsigned_admin_over_asymmetric_kek(keyring: &KeyringId) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        "Built an administrative handle without a record signer over an asymmetric KEK; the \
+         records it writes are unsigned, and a holder of the public key can add a version to them"
+    );
+}
+
 /// `Keyring rotate`, for `rotate` and `change_algorithm`, which record the staged version as
 /// `to_key_id`.
 pub(crate) fn rotate(keyring: &KeyringId, purpose: Purpose) -> Span {
@@ -97,6 +107,27 @@ pub(crate) fn destroy_all_versions(keyring: &KeyringId) -> Span {
         "Keyring destroy all versions",
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring shred`.
+pub(crate) fn shred(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring shred",
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_CAS_RETRIES } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring sign record`, around the signing of a record a write is about to store, under the
+/// key `key_id` of the admin's record signer.
+pub(crate) fn sign_record(keyring: &KeyringId, key_id: KeyId) -> Span {
+    debug_span!(
+        "Keyring sign record",
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = %key_id.as_u32(),
         { FIELD_ERROR_CODE } = field::Empty,
     )
 }

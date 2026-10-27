@@ -1,37 +1,39 @@
-//! Migrates a table of store-less envelope values to keyring values: rows written before the
-//! table had a seal marker read as envelope values, a sweep re-seals each under the keyring and
-//! marks it, and every row then reads through the keyring. After a rotation, the same sweep moves
-//! the rows to the new version. The administrative job creates and rotates the keyring, and the
-//! application reads and sweeps the rows. Runs on the memory store with a local KEK, and needs no
-//! cloud credentials.
+//! Migrates a table of store-less envelope values to keyring values. Rows written before the table
+//! had an encryption marker read as `EncryptionMarker::ENVELOPE`, the lowest marker, so one sweep
+//! re-encrypts them under the keyring and marks them, and after a rotation the same sweep moves
+//! every row to the new version. The sweep is `reencrypt` and `sweep_table`, and [Move envelope
+//! values to a keyring](https://kms-aead-rust.abdolence.dev/use-cases/envelope-to-keyring.html)
+//! in the book explains it. The rest of the file writes the envelope rows, runs the migration and
+//! the rotation, and prints the rows.
+//!
+//! It runs on the memory store with a local KEK, and needs no cloud credentials.
 //!
 //! ```sh
-//! cargo run -p kms-aead-keyring --example migrate --features ring,admin,serde
+//! cargo run -p kms-aead-keyring --example migrate --features ring,admin
 //! ```
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::fmt::{self, Display, Formatter};
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::{Mutex, PoisonError};
 
 use futures_util::stream;
 use kms_aead::backends::Ring;
-use kms_aead::errors::KmsAeadError;
+use kms_aead::formats::SymmetricKeyFormat;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
     KmsAeadResult,
 };
 use kms_aead_keyring::formats::{Envelope, Randomized};
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, EncryptionMarker, ReencryptOutcome, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, KeyTrust, Keyring, KeyringAdmin,
-    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions, Plaintext,
-    Purpose, Resealed,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyId, Keyring, KeyringAdmin,
+    KeyringAlgorithms, KeyringError, KeyringId, KeyringRegistry, KeyringRegistryOptions,
+    KeyringResult, Plaintext, Purpose,
 };
 use secret_vault_value::SecretValue;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 /// The keyring of this example: the memory store, a local KEK and the ring backend.
 type UsersKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>;
@@ -45,20 +47,103 @@ const EMAIL: FieldSpec = FieldSpec::new(
 /// record it.
 const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::ChaCha20Poly1305;
 
-/// A row of the users table. Rows written before the migration have no `seal`, and read as
-/// envelope values.
-#[derive(Clone, Serialize, Deserialize)]
+/// A row of the users table as the database stores it. Rows written before the migration have no
+/// `encryption_marker`, and read as envelope values.
+#[derive(Clone, Deserialize)]
 struct UserRow {
     email: Vec<u8>,
+    /// Stored in the row so that the sweep finds the rows still under older versions by a range
+    /// query on it, and so that a read knows the layout of `email`.
     #[serde(default)]
-    seal: SealMarker,
+    encryption_marker: EncryptionMarker,
 }
 
-/// The rows by user id.
-type Table = Mutex<BTreeMap<String, UserRow>>;
+/// The email of a row, parsed once from its bytes and marker. The column holds both layouts until
+/// the sweep has migrated every row, so a row is one of the two.
+enum StoredEmail {
+    Envelope(Encrypted<Email, Envelope>),
+    Keyring {
+        value: Encrypted<Email, Randomized>,
+        marker: EncryptionMarker,
+    },
+}
 
-/// The application's email type, sealed as the UTF-8 of the address.
-#[derive(Debug, Clone)]
+impl TryFrom<UserRow> for StoredEmail {
+    type Error = KeyringError;
+
+    fn try_from(row: UserRow) -> Result<Self, Self::Error> {
+        if row.encryption_marker == EncryptionMarker::ENVELOPE {
+            Ok(StoredEmail::Envelope(row.email.try_into()?))
+        } else {
+            Ok(StoredEmail::Keyring {
+                value: row.email.try_into()?,
+                marker: row.encryption_marker,
+            })
+        }
+    }
+}
+
+/// Re-encrypts the row of `user` under the active version, from an envelope value or a keyring
+/// value under an older version, and writes the encryption marker of the encryptor's record
+/// beside it. A keyring value that is current already gets the marker alone.
+async fn reencrypt(
+    keyring: &UsersKeyring,
+    table: &Table,
+    user: &str,
+) -> KeyringResult<ReencryptOutcome> {
+    let Some(row) = table.borrow().get(user).cloned() else {
+        return Ok(ReencryptOutcome::Skipped);
+    };
+    let encryptor = keyring.encryptor().await;
+    let aad = EMAIL.aad(&EntityId::try_from(user)?);
+    let (email, outcome) = match StoredEmail::try_from(row)? {
+        StoredEmail::Envelope(value) => {
+            let email: Email = keyring
+                .decrypt_envelope_for_migration(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
+                .await?;
+            // Envelope values name no key version, so the record carries no trust to decide on.
+            let reencrypted = ReencryptOutcome::Reencrypted {
+                from_compromised: false,
+            };
+            (encryptor.encrypt(&aad, &email).await?, reencrypted)
+        }
+        StoredEmail::Keyring { value, .. } => {
+            let reencrypted = encryptor.reencrypt(&aad, &value).await?;
+            let outcome = ReencryptOutcome::from(&reencrypted);
+            (
+                reencrypted.map_or(value, |reencrypted| reencrypted.value),
+                outcome,
+            )
+        }
+    };
+    let row = UserRow {
+        email: email.into_value(),
+        encryption_marker: encryptor.record().encryption_marker(),
+    };
+    table.borrow_mut().insert(user.to_string(), row);
+    Ok(outcome)
+}
+
+/// Sweeps every row whose encryption marker is below the keyring's, and prints the report.
+async fn sweep_table(keyring: &UsersKeyring, table: &Table) {
+    let current: EncryptionMarker = keyring.record().encryption_marker();
+    let candidates: Vec<String> = table
+        .borrow()
+        .iter()
+        .filter(|(_, row)| row.encryption_marker < current)
+        .map(|(user, _)| user.clone())
+        .collect();
+    let report: SweepReport = sweep::reencrypt_records(
+        keyring.id(),
+        stream::iter(candidates.into_iter().map(Ok)),
+        NonZeroUsize::MIN,
+        |candidate| async move { reencrypt(keyring, table, &candidate).await },
+    )
+    .await;
+    println!("sweep: {report:?}");
+}
+
+/// The application's email type, encrypted as the UTF-8 of the address.
 struct Email(String);
 
 impl Plaintext for Email {
@@ -71,6 +156,12 @@ impl Plaintext for Email {
     }
 }
 
+// Running the example: the rows, the keyring and a rotation, and a print of the rows after each
+// step.
+
+/// The rows by user id, in memory in place of the database.
+type Table = RefCell<BTreeMap<String, UserRow>>;
+
 /// The AAD the application gave its envelope values.
 fn envelope_aad(user: &str) -> Vec<u8> {
     format!("users:{user}:email").into_bytes()
@@ -78,154 +169,45 @@ fn envelope_aad(user: &str) -> Vec<u8> {
 
 /// A local KMS provider for the KEK `tenant-kek` with `material`, as each process loads it.
 fn provider(material: &SecretValue) -> Result<LocalKmsProvider<Ring>, Box<dyn std::error::Error>> {
-    let kek = LocalKek::from_secret(NonZeroU32::MIN.into(), material.clone())?;
+    let kek = LocalKek::from_secret(
+        NonZeroU32::MIN.into(),
+        material.clone(),
+        SymmetricKeyFormat::Raw,
+    )?;
     Ok(LocalKmsProvider::new(
         LocalKekId::try_from("tenant-kek".to_string())?,
         vec![kek],
     )?)
 }
 
-/// The email of `user`, read through the row's seal marker: `SealMarker::ENVELOPE` for an
-/// envelope value, any other marker for a keyring value.
-async fn read_email(
-    keyring: &UsersKeyring,
-    user: &str,
-    row: UserRow,
-) -> Result<Email, Box<dyn std::error::Error>> {
-    if row.seal == SealMarker::ENVELOPE {
-        let value = Encrypted::<Email, Envelope>::try_from(row.email)?;
-        Ok(keyring
-            .decrypt_envelope_for_migration(&envelope_aad(user), &value, ENVELOPE_ALGORITHM)
-            .await?)
-    } else {
-        let value = Encrypted::<Email, Randomized>::try_from(row.email)?;
-        Ok(keyring
-            .decrypt(&EMAIL.aad(&EntityId::try_from(user)?), &value)
-            .await?)
-    }
-}
-
-/// Prints every row of `table` with its email, read through its marker.
+/// Prints every row of `table` with its email, read through its stored layout.
 async fn print_rows(
     keyring: &UsersKeyring,
     table: &Table,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let rows = table.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    let rows = table.borrow().clone();
     for (user, row) in rows {
-        let seal = row.seal;
-        let Email(email) = read_email(keyring, &user, row).await?;
-        if seal == SealMarker::ENVELOPE {
-            println!("  user {user}: {email}, an envelope value");
-        } else {
-            println!("  user {user}: {email}, a keyring value sealed at seal epoch {seal}");
+        match StoredEmail::try_from(row)? {
+            StoredEmail::Envelope(value) => {
+                let Email(email) = keyring
+                    .decrypt_envelope_for_migration(
+                        &envelope_aad(&user),
+                        &value,
+                        ENVELOPE_ALGORITHM,
+                    )
+                    .await?;
+                println!("  user {user}: {email}, an envelope value");
+            }
+            StoredEmail::Keyring { value, marker } => {
+                let aad = EMAIL.aad(&EntityId::try_from(user.as_str())?);
+                let Email(email) = keyring.decrypt(&aad, &value).await?;
+                println!(
+                    "  user {user}: {email}, a keyring value encrypted at re-encryption epoch {marker}"
+                );
+            }
         }
     }
     Ok(())
-}
-
-/// Why the re-seal of a row failed.
-enum MigrateError {
-    Keyring(KeyringError),
-    /// A stored value that does not parse as the layout its marker names.
-    Value(KmsAeadError),
-}
-
-impl From<KeyringError> for MigrateError {
-    fn from(error: KeyringError) -> Self {
-        MigrateError::Keyring(error)
-    }
-}
-
-impl From<KmsAeadError> for MigrateError {
-    fn from(error: KmsAeadError) -> Self {
-        MigrateError::Value(error)
-    }
-}
-
-/// The text the sweep logs, which names the failure and no value of the row.
-impl Display for MigrateError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            MigrateError::Keyring(error) => write!(f, "the keyring failed with {}", error.code()),
-            MigrateError::Value(error) => write!(f, "a stored value failed with {}", error.code()),
-        }
-    }
-}
-
-/// Re-seals the row of `user` under the active version, from an envelope value or a keyring value
-/// under an older version, and writes the seal marker of the sealer's record beside it. A keyring
-/// value that is current already gets the marker alone.
-async fn reseal(
-    keyring: &UsersKeyring,
-    table: &Table,
-    user: &str,
-) -> Result<ResealOutcome, MigrateError> {
-    let row = table
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .get(user)
-        .cloned();
-    let Some(row) = row else {
-        return Ok(ResealOutcome::Skipped);
-    };
-    let sealer = keyring.sealer().await;
-    let aad = EMAIL.aad(&EntityId::try_from(user)?);
-    let (email, outcome) = if row.seal == SealMarker::ENVELOPE {
-        let email: Email = keyring
-            .decrypt_envelope_for_migration(
-                &envelope_aad(user),
-                &Encrypted::<Email, Envelope>::try_from(row.email)?,
-                ENVELOPE_ALGORITHM,
-            )
-            .await?;
-        // Envelope values name no key version, so the record carries no trust to decide on.
-        let resealed = ResealOutcome::Resealed {
-            from_compromised: false,
-        };
-        (sealer.encrypt(&aad, &email).await?, resealed)
-    } else {
-        let email = Encrypted::<Email, Randomized>::try_from(row.email)?;
-        let resealed: Option<Resealed<Email, Randomized>> = sealer.reseal(&aad, &email).await?;
-        match resealed {
-            Some(resealed) => {
-                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-                (resealed.value, ResealOutcome::Resealed { from_compromised })
-            }
-            None => (email, ResealOutcome::Skipped),
-        }
-    };
-    let row = UserRow {
-        seal: sealer.record().seal_marker(),
-        email: email.into_value(),
-    };
-    table
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(user.to_string(), row);
-    Ok(outcome)
-}
-
-/// Sweeps every row whose seal marker is below the keyring's, and prints the report.
-async fn sweep_table(keyring: &UsersKeyring, table: &Table) {
-    let current: SealMarker = keyring.record().seal_marker();
-    let candidates: Vec<String> = table
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .filter(|(_, row)| row.seal < current)
-        .map(|(user, _)| user.clone())
-        .collect();
-    let report: SweepReport = sweep::run(
-        keyring.id(),
-        stream::iter(candidates.into_iter().map(Ok)),
-        NonZeroUsize::MIN.saturating_add(1),
-        |candidate| async move { reseal(keyring, table, &candidate).await },
-    )
-    .await;
-    println!(
-        "sweep: scanned {}, resealed {}, skipped {}, failed {}",
-        report.scanned, report.resealed, report.skipped, report.failed
-    );
 }
 
 #[tokio::main]
@@ -235,7 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .value()
         .clone();
 
-    // Before the migration: a store-less envelope writes rows without a seal marker.
+    // Before the migration: a store-less envelope writes rows without an encryption marker.
     let table = Table::default();
     let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
         provider(&material)?,
@@ -252,10 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .encrypt(&envelope_aad(user), &Email(email.to_string()))
             .await?;
         let row = serde_json::from_value(serde_json::json!({ "email": value.into_value() }))?;
-        table
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(user.to_string(), row);
+        table.borrow_mut().insert(user.to_string(), row);
     }
     println!("wrote 3 rows with a store-less envelope");
 

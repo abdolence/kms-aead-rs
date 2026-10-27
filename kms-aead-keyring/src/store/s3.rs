@@ -6,7 +6,8 @@ use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 
 use super::{
-    KeyringStore, KeyringWatch, ObjectPrefix, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+    Deletion, KeyringStore, KeyringWatch, ObjectPrefix, Revalidation, StoreKind, StoreOperation,
+    Stored, Swap,
 };
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
@@ -54,6 +55,19 @@ impl Display for S3ETag {
     }
 }
 
+/// The entries of one key in a version listing.
+struct ObjectVersions {
+    /// The latest entry when it is a stored version rather than a delete marker.
+    live: Option<LiveVersion>,
+    /// The version ids of every other entry, stored versions and delete markers.
+    others: Vec<String>,
+}
+
+struct LiveVersion {
+    version_id: String,
+    etag: S3ETag,
+}
+
 /// A keyring store in an Amazon S3 bucket, or in a bucket of an S3-compatible server with
 /// conditional writes, such as MinIO. Each record is the object `<prefix><keyring id>.json`,
 /// and its revision is the object's ETag: a create is conditional on no object existing, an
@@ -65,12 +79,15 @@ impl Display for S3ETag {
 /// `record_ttl`.
 ///
 /// The application's principal needs `s3:GetObject` on the objects, and the administrative one
-/// `s3:PutObject` as well. With versioning on the bucket, every record written is kept as a
-/// noncurrent version.
+/// `s3:PutObject` as well, and for [`delete`](KeyringStore::delete) `s3:ListBucketVersions` on
+/// the bucket, and `s3:DeleteObject` and `s3:DeleteObjectVersion` on the objects. With versioning
+/// on the bucket, every record written is kept as a noncurrent version.
 ///
 /// The compare-and-swap holds only on a server that refuses a write with `If-Match` when no
 /// object exists, as S3 does. A server that writes it instead recreates a deleted record on an
-/// update.
+/// update. The condition of a [delete](KeyringStore::delete) holds only on a server that honours
+/// `If-Match` on `DeleteObject`, as S3 does for general purpose buckets: another deletes the
+/// object whatever its ETag, after the listing that found it unchanged.
 #[derive(Clone)]
 pub struct S3KeyringStore {
     client: aws_sdk_s3::Client,
@@ -120,6 +137,111 @@ impl S3KeyringStore {
 
     fn object_key(&self, id: &KeyringId) -> String {
         format!("{}{id}.json", self.prefix)
+    }
+
+    /// Every stored version and delete marker of the object `key`, paginated.
+    async fn versions(&self, key: &str) -> KeyringResult<ObjectVersions> {
+        let mut found = ObjectVersions {
+            live: None,
+            others: Vec::new(),
+        };
+        let mut key_marker = None;
+        let mut version_id_marker = None;
+        loop {
+            let page = self
+                .client
+                .list_object_versions()
+                .bucket(self.bucket.to_string())
+                .prefix(key)
+                .set_key_marker(key_marker)
+                .set_version_id_marker(version_id_marker)
+                .send()
+                .await
+                .map_err(|error| {
+                    KeyringError::store_caused_by(
+                        StoreKind::S3,
+                        StoreOperation::Delete,
+                        Arc::new(error),
+                    )
+                })?;
+            // An id may contain `.`, so `<id>.json` is also the prefix of another id's object.
+            for version in page
+                .versions()
+                .iter()
+                .filter(|version| version.key() == Some(key))
+            {
+                let version_id = version
+                    .version_id()
+                    .ok_or_else(|| {
+                        KeyringError::store(
+                            StoreKind::S3,
+                            StoreOperation::Delete,
+                            "The version listing returned an entry without a version id",
+                        )
+                    })?
+                    .to_string();
+                if version.is_latest() == Some(true) {
+                    let etag = version.e_tag().ok_or_else(|| {
+                        KeyringError::store(
+                            StoreKind::S3,
+                            StoreOperation::Delete,
+                            "The version listing returned the latest version without an ETag",
+                        )
+                    })?;
+                    found.live = Some(LiveVersion {
+                        version_id,
+                        etag: S3ETag(etag.to_string()),
+                    });
+                } else {
+                    found.others.push(version_id);
+                }
+            }
+            for marker in page
+                .delete_markers()
+                .iter()
+                .filter(|marker| marker.key() == Some(key))
+            {
+                found.others.push(
+                    marker
+                        .version_id()
+                        .ok_or_else(|| {
+                            KeyringError::store(
+                                StoreKind::S3,
+                                StoreOperation::Delete,
+                                "The version listing returned an entry without a version id",
+                            )
+                        })?
+                        .to_string(),
+                );
+            }
+            if page.is_truncated() != Some(true) {
+                return Ok(found);
+            }
+            key_marker = page.next_key_marker().map(str::to_string);
+            version_id_marker = page.next_version_id_marker().map(str::to_string);
+        }
+    }
+
+    /// Deletes one version or delete marker of the object `key` permanently, also when it is gone
+    /// already.
+    async fn delete_version(&self, key: &str, version_id: &str) -> KeyringResult<()> {
+        match self
+            .client
+            .delete_object()
+            .bucket(self.bucket.to_string())
+            .key(key)
+            .version_id(version_id)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(error) if matches!(error.code(), Some("NoSuchKey" | "NoSuchVersion")) => Ok(()),
+            Err(error) => Err(KeyringError::store_caused_by(
+                StoreKind::S3,
+                StoreOperation::Delete,
+                Arc::new(error),
+            )),
+        }
     }
 
     /// The live record of `id` as [`Revalidation::Changed`], or [`Revalidation::Missing`] when
@@ -260,6 +382,69 @@ impl KeyringStore for S3KeyringStore {
                 "The write returned no ETag",
             )),
         }
+    }
+
+    /// Deletes the object of `id` when its latest version has the ETag `expected`, with every
+    /// earlier version and delete marker of the key. It lists the versions of the key first and
+    /// returns [`Deletion::Conflict`] when the latest one has another ETag, before deleting
+    /// anything. Then it deletes the earlier versions and markers permanently by version id, the
+    /// object under `If-Match: expected`, and the version and then the delete marker that the
+    /// delete left in a bucket with versioning. A failure part-way leaves the live object or only
+    /// a delete marker, and the repeated call starts again.
+    ///
+    /// S3 keeps nothing of a version deleted by id. A replica in another bucket, a backup and a
+    /// server that keeps its own history are the operator's to delete.
+    async fn delete(&self, id: &KeyringId, expected: &S3ETag) -> KeyringResult<Deletion> {
+        let key = self.object_key(id);
+        let found = self.versions(&key).await?;
+        if found
+            .live
+            .as_ref()
+            .is_some_and(|live| live.etag != *expected)
+        {
+            return Ok(Deletion::Conflict);
+        }
+        // The earlier versions hold the encrypted DEKs a shred destroys, and a keyring whose live
+        // object is gone reads as shredded, so that no shred deletes again: they go before the
+        // live object, which a shred wrote without any DEK.
+        for version_id in &found.others {
+            self.delete_version(&key, version_id).await?;
+        }
+        let Some(live) = found.live else {
+            return Ok(Deletion::Deleted);
+        };
+        let marker = match self
+            .client
+            .delete_object()
+            .bucket(self.bucket.to_string())
+            .key(&key)
+            .if_match(expected.0.clone())
+            .send()
+            .await
+        {
+            // A bucket without versioning removed the object itself.
+            Ok(response) if response.version_id().is_none() => return Ok(Deletion::Deleted),
+            Ok(response) => response.version_id().map(str::to_string),
+            Err(error) if error.code() == Some("PreconditionFailed") => {
+                return Ok(Deletion::Conflict)
+            }
+            Err(error) if error.code() == Some("NoSuchKey") => None,
+            Err(error) => {
+                return Err(KeyringError::store_caused_by(
+                    StoreKind::S3,
+                    StoreOperation::Delete,
+                    Arc::new(error),
+                ))
+            }
+        };
+        // A bucket with versioning answered the delete with a marker and kept the version. The
+        // version goes first: a failure between the two then leaves a marker, which holds
+        // nothing, where the other order would make the version the live record again.
+        self.delete_version(&key, &live.version_id).await?;
+        if let Some(marker) = marker {
+            self.delete_version(&key, &marker).await?;
+        }
+        Ok(Deletion::Deleted)
     }
 
     async fn watch(&self, _id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {

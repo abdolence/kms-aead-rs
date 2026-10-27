@@ -33,3 +33,14 @@ allow = [
     # foldhash, the default hasher of the hashbrown that sqlx-core builds.
     "Zlib",
 ]
+
+[advisories]
+ignore = [
+    # The rsa crate's private-key operations are not constant time, which reaches only the local
+    # KMS's RSA private half on the RustCrypto backend; the book's security limits state it.
+    # Remove once a fixed release exists.
+    { id = "RUSTSEC-2023-0071", reason = "Marvin timing side channel on rsa private-key operations; used by the local KMS's asymmetric private half on the RustCrypto backend only, stated in the book's security limits; remove once fixed upstream" },
+    # crypto-bigint 0.5.5 is p256 0.13's, which aws-config's `credentials-login` signs the token
+    # requests of an `aws login` session with.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 via aws-config's credentials-login (aws-sdk-signin, p256 0.13): reached only when signing an aws login session's token requests on the machine that holds the session; remove once aws-config moves to p256 0.14" },
+]

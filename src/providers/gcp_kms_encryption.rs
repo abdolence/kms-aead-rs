@@ -1,10 +1,13 @@
 use rsb_derive::*;
 
-use super::kek_version::read_kek_version;
-use super::KekVersion;
-use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
+use super::kms_key_version::read_kek_version;
+use super::KmsKeyVersion;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
+use crate::formats::PublicKeyFormat;
 use crate::spans::{self, kms};
 use crate::*;
+use gcloud_sdk::google::cloud::kms::v1::crypto_key_version::CryptoKeyVersionAlgorithm;
 use gcloud_sdk::google::cloud::kms::v1::key_management_service_client::KeyManagementServiceClient;
 use gcloud_sdk::google::cloud::kms::v1::*;
 use gcloud_sdk::proto_ext::kms::*;
@@ -45,7 +48,11 @@ impl GcpKmsKeyRef {
 
 /// The request with the routing header Cloud KMS expects for `resource`, failing with
 /// `error_code` when `resource` cannot be a header value.
-fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<tonic::Request<T>> {
+pub(super) fn request_with_routing_header<T>(
+    message: T,
+    resource: &str,
+    error_code: &str,
+) -> KmsAeadResult<tonic::Request<T>> {
     let mut request = tonic::Request::new(message);
     let routing = MetadataValue::<tonic::metadata::Ascii>::try_from(format!("name={resource}"))
         .map_err(|e| {
@@ -63,7 +70,7 @@ fn routed<T>(message: T, resource: &str, error_code: &str) -> KmsAeadResult<toni
 /// The `N` of the `…/cryptoKeyVersions/N` name that Cloud KMS returns from encrypt for `key`: the
 /// version that encrypted, which can be the previous primary version while a change of primary
 /// propagates. Decrypt addresses the CryptoKey, and Cloud KMS finds the version in its ciphertext.
-fn crypto_key_version(key: &str, name: &str) -> KmsAeadResult<KekVersion> {
+fn crypto_key_version(key: &str, name: &str) -> KmsAeadResult<KmsKeyVersion> {
     let version = name
         .strip_prefix(key)
         .and_then(|version_path| version_path.strip_prefix("/cryptoKeyVersions/"))
@@ -81,7 +88,7 @@ fn encrypt_request(
     key: &str,
     dek: &DataEncryptionKey,
 ) -> KmsAeadResult<tonic::Request<EncryptRequest>> {
-    routed(
+    request_with_routing_header(
         EncryptRequest {
             name: key.to_string(),
             plaintext: SecretValue::new(dek.value().ref_sensitive_value().clone()),
@@ -97,7 +104,7 @@ fn decrypt_request(
     key: &str,
     encrypted_dek: &EncryptedDataEncryptionKey,
 ) -> KmsAeadResult<tonic::Request<DecryptRequest>> {
-    routed(
+    request_with_routing_header(
         DecryptRequest {
             name: key.to_string(),
             ciphertext: encrypted_dek.value().to_vec(),
@@ -106,6 +113,42 @@ fn decrypt_request(
         key,
         "DECRYPT_KEY",
     )
+}
+
+/// The name of the CryptoKeyVersion `kek_version` of the CryptoKey `key`.
+fn crypto_key_version_name(key: &str, kek_version: &KmsKeyVersion) -> String {
+    format!("{key}/cryptoKeyVersions/{kek_version}")
+}
+
+/// Decrypts `block`, a DEK a public key encrypted, with the CryptoKeyVersion `kek_version` of the
+/// CryptoKey `key`: an asymmetric key has no primary version, so the request names the version.
+fn asymmetric_decrypt_request(
+    key: &str,
+    kek_version: &KmsKeyVersion,
+    block: &[u8],
+) -> KmsAeadResult<tonic::Request<AsymmetricDecryptRequest>> {
+    let name = crypto_key_version_name(key, kek_version);
+    request_with_routing_header(
+        AsymmetricDecryptRequest {
+            name: name.clone(),
+            ciphertext: block.to_vec(),
+            ..Default::default()
+        },
+        &name,
+        "DECRYPT_KEY",
+    )
+}
+
+/// A Cloud KMS client authenticated with the application default credentials.
+pub(super) async fn cloud_kms_client(
+) -> KmsAeadResult<GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>> {
+    GoogleApi::from_function(
+        KeyManagementServiceClient::new,
+        "https://cloudkms.googleapis.com",
+        None,
+    )
+    .await
+    .map_err(KmsAeadError::from_gcp_error)
 }
 
 /// Options for [`GcpKmsProvider`].
@@ -161,17 +204,104 @@ impl GcpKmsProvider {
         kms_key_ref: &GcpKmsKeyRef,
         options: GcpKmsProviderOptions,
     ) -> KmsAeadResult<Self> {
-        let client: GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>> =
-            GoogleApi::from_function(
-                KeyManagementServiceClient::new,
-                "https://cloudkms.googleapis.com",
-                None,
-            )
-            .await
-            .map_err(KmsAeadError::from_gcp_error)?;
-
-        Ok(Self::with_client(kms_key_ref, options, client))
+        Ok(Self::with_client(
+            kms_key_ref,
+            options,
+            cloud_kms_client().await?,
+        ))
     }
+    /// The public key of the CryptoKeyVersion `kek_version` of an asymmetric KEK, a key of
+    /// purpose `ASYMMETRIC_DECRYPT`, from `GetPublicKey` with
+    /// `cloudkms.cryptoKeyVersions.viewPublicKey`: for the administration, which hands it to the
+    /// producers. The version is the one the response names.
+    ///
+    /// # Errors
+    ///
+    /// The KMS's errors, and `ASYMMETRIC_KEK_PUBLIC_KEY` when the version's algorithm is not
+    /// `RSA_DECRYPT_OAEP_2048_SHA256`, `RSA_DECRYPT_OAEP_3072_SHA256` or
+    /// `RSA_DECRYPT_OAEP_4096_SHA256`.
+    pub async fn public_key(
+        &self,
+        kek_version: &KmsKeyVersion,
+    ) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        spans::in_span(kms::kek_public_key_span(&self.kek), async {
+            kms::record_kek_version(kek_version.as_str());
+            let name = crypto_key_version_name(self.kek.key(), kek_version);
+            let request = request_with_routing_header(
+                GetPublicKeyRequest {
+                    name: name.clone(),
+                    ..Default::default()
+                },
+                &name,
+                "GET_PUBLIC_KEY",
+            )?;
+            let response = kms::timed("public_key", self.kek.provider(), async {
+                self.client
+                    .get()
+                    .get_public_key(request)
+                    .await
+                    .map_err(KmsAeadError::from_gcp_status)
+            })
+            .await?;
+            Self::kek_public_key(&self.kek, response.into_inner())
+        })
+        .await
+    }
+
+    /// The public key of a `GetPublicKey` response for a version of `kek`: the version comes from
+    /// the response's `name`, and the algorithm must be an RSA-OAEP decryption with SHA-256.
+    fn kek_public_key(
+        kek: &KekRef,
+        public_key: PublicKey,
+    ) -> KmsAeadResult<AsymmetricKekPublicKey> {
+        let kek_version = crypto_key_version(kek.key(), &public_key.name).map_err(|_| {
+            KmsAeadSystemError::asymmetric_public_key(
+                "The Cloud KMS response names no CryptoKeyVersion of the configured key",
+            )
+        })?;
+        let algorithm = CryptoKeyVersionAlgorithm::try_from(public_key.algorithm).ok();
+        match algorithm {
+            Some(
+                CryptoKeyVersionAlgorithm::RsaDecryptOaep2048Sha256
+                | CryptoKeyVersionAlgorithm::RsaDecryptOaep3072Sha256
+                | CryptoKeyVersionAlgorithm::RsaDecryptOaep4096Sha256,
+            ) => AsymmetricKekPublicKey::new(
+                kek.clone(),
+                Some(kek_version),
+                AsymmetricKekAlgorithm::RsaOaepSha256,
+                public_key.pem.into_bytes(),
+                PublicKeyFormat::SpkiPem,
+            ),
+            _ => Err(KmsAeadSystemError::asymmetric_public_key(&format!(
+                "The CryptoKeyVersion {} is of {}, not of RSA_DECRYPT_OAEP_2048_SHA256, \
+                 RSA_DECRYPT_OAEP_3072_SHA256 or RSA_DECRYPT_OAEP_4096_SHA256",
+                public_key.name,
+                algorithm.map_or("an unknown algorithm", |algorithm| algorithm.as_str_name())
+            ))),
+        }
+    }
+
+    /// The DEK `encrypted_dek` holds, decrypted by its CryptoKeyVersion, in the span of the caller.
+    async fn asymmetric_decrypt(
+        &self,
+        encrypted_dek: PublicKeyEncryptedDek<'_>,
+    ) -> KmsAeadResult<DataEncryptionKey> {
+        let (kek_version, block) = encrypted_dek.into_versioned_block()?;
+        kms::record_kek_version(kek_version.as_str());
+        let request = asymmetric_decrypt_request(self.kek.key(), &kek_version, block)?;
+        let response = kms::timed("decrypt_dek", self.kek.provider(), async {
+            self.client
+                .get()
+                .asymmetric_decrypt(request)
+                .await
+                .map_err(KmsAeadError::from_gcp_status)
+        })
+        .await?;
+        Ok(DataEncryptionKey::from(SecretValue::new(
+            response.into_inner().plaintext,
+        )))
+    }
+
     /// A provider for the key at `kms_key_ref` that sends its requests with `client`.
     pub fn with_client(
         kms_key_ref: &GcpKmsKeyRef,
@@ -181,7 +311,7 @@ impl GcpKmsProvider {
         Self {
             client,
             options,
-            kek: KekRef::new(KekProvider::Gcp, kms_key_ref.to_google_ref()),
+            kek: KekRef::new(KmsProvider::Gcp, kms_key_ref.to_google_ref()),
             location: kms_key_ref.to_location_ref(),
         }
     }
@@ -226,28 +356,6 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
         .await
     }
 
-    async fn decrypt_data_encryption_key(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        spans::in_span(kms::decrypt_span(&self.kek), async {
-            let decrypt_request = decrypt_request(self.kek.key(), encrypted_dek)?;
-            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
-                self.client
-                    .get()
-                    .decrypt(decrypt_request)
-                    .await
-                    .map_err(KmsAeadError::from_gcp_status)
-            })
-            .await?;
-
-            Ok(DataEncryptionKey::from(
-                decrypt_response.into_inner().plaintext,
-            ))
-        })
-        .await
-    }
-
     async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
         if !self.options.use_kms_random_gen {
             return Ok(None);
@@ -260,7 +368,7 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
                     &format!("GCP KMS cannot generate {len} random bytes in one request"),
                 )
             })?;
-            let request = routed(
+            let request = request_with_routing_header(
                 GenerateRandomBytesRequest {
                     location: self.location.clone(),
                     length_bytes,
@@ -284,6 +392,33 @@ impl KmsAeadEncryptionProvider for GcpKmsProvider {
     }
 }
 
+impl KmsAeadDecryptionProvider for GcpKmsProvider {
+    async fn decrypt_data_encryption_key(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
+        spans::in_span(kms::decrypt_span(&self.kek), async {
+            if let Some(public_key_dek) = PublicKeyEncryptedDek::read(encrypted_dek.value()) {
+                return self.asymmetric_decrypt(public_key_dek?).await;
+            }
+            let decrypt_request = decrypt_request(self.kek.key(), encrypted_dek)?;
+            let decrypt_response = kms::timed("decrypt_dek", self.kek.provider(), async {
+                self.client
+                    .get()
+                    .decrypt(decrypt_request)
+                    .await
+                    .map_err(KmsAeadError::from_gcp_status)
+            })
+            .await?;
+
+            Ok(DataEncryptionKey::from(
+                decrypt_response.into_inner().plaintext,
+            ))
+        })
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,7 +427,7 @@ mod tests {
     use gcloud_sdk::tonic::{Code, Status};
 
     use crate::formats::Envelope;
-    use crate::test_provider::{TestBackend, TinkEnvelope};
+    use crate::test_provider::{RsaOaepSuite, TestBackend, TinkEnvelope};
 
     const KEY_NAME: &str =
         "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key";
@@ -345,6 +480,86 @@ mod tests {
         );
         assert!(decrypt.get_ref().additional_authenticated_data.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn an_asymmetric_decryption_names_the_crypto_key_version_of_the_encrypted_dek(
+    ) -> KmsAeadResult<()> {
+        let version_name = format!("{KEY_NAME}/cryptoKeyVersions/3");
+
+        let request = asymmetric_decrypt_request(
+            KEY_NAME,
+            &KmsKeyVersion::try_from("3".to_string())?,
+            b"block",
+        )?;
+
+        assert_eq!(
+            request.get_ref(),
+            &AsymmetricDecryptRequest {
+                name: version_name.clone(),
+                ciphertext: b"block".to_vec(),
+                ..Default::default()
+            }
+        );
+        assert_eq!(
+            request.metadata().get("x-goog-request-params").unwrap(),
+            format!("name={version_name}").as_str()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_public_key_takes_its_version_from_the_response() -> KmsAeadResult<()> {
+        let kek = KekRef::new(KmsProvider::Gcp, KEY_NAME);
+
+        let public_key = GcpKmsProvider::kek_public_key(
+            &kek,
+            PublicKey {
+                pem: RsaOaepSuite::of_bits(2048).spki_pem(),
+                algorithm: CryptoKeyVersionAlgorithm::RsaDecryptOaep2048Sha256.into(),
+                name: format!("{KEY_NAME}/cryptoKeyVersions/4"),
+                ..Default::default()
+            },
+        )?;
+
+        assert_eq!(public_key.kek(), &kek);
+        assert_eq!(
+            public_key.kek_version(),
+            Some(&KmsKeyVersion::try_from("4".to_string())?)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_public_key_of_another_algorithm_or_key_is_refused() {
+        let kek = KekRef::new(KmsProvider::Gcp, KEY_NAME);
+        let other_key = KEY_NAME.replace("my-key", "other-key");
+        for (algorithm, key) in [
+            (
+                CryptoKeyVersionAlgorithm::RsaDecryptOaep4096Sha512,
+                KEY_NAME,
+            ),
+            (CryptoKeyVersionAlgorithm::RsaDecryptOaep2048Sha1, KEY_NAME),
+            (CryptoKeyVersionAlgorithm::RsaSignPss2048Sha256, KEY_NAME),
+            (
+                CryptoKeyVersionAlgorithm::RsaDecryptOaep2048Sha256,
+                other_key.as_str(),
+            ),
+        ] {
+            let result = GcpKmsProvider::kek_public_key(
+                &kek,
+                PublicKey {
+                    pem: RsaOaepSuite::of_bits(2048).spki_pem(),
+                    algorithm: algorithm.into(),
+                    name: format!("{key}/cryptoKeyVersions/4"),
+                    ..Default::default()
+                },
+            );
+            assert!(
+                matches!(&result, Err(error) if error.code() == "ASYMMETRIC_KEK_PUBLIC_KEY"),
+                "{algorithm:?} {key}: {result:?}"
+            );
+        }
     }
 
     #[test]
@@ -430,7 +645,7 @@ mod tests {
                 KEY_NAME,
                 "projects/my-project/locations/global/keyRings/my-ring/cryptoKeys/my-key/cryptoKeyVersions/18"
             )?,
-            KekVersion::try_from("18".to_string())?
+            KmsKeyVersion::try_from("18".to_string())?
         );
         assert!(crypto_key_version(
             KEY_NAME,
@@ -517,6 +732,125 @@ mod tests {
                 tink.algorithm
             );
         }
+        Ok(())
+    }
+
+    /// The asymmetric KEK of the live tests, `KMS_DECRYPT_KEY_RSA`: a CryptoKey of purpose
+    /// `ASYMMETRIC_DECRYPT` and algorithm `RSA_DECRYPT_OAEP_3072_SHA256` in the project, location
+    /// and key ring of the other live keys, read at version 1.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    fn live_rsa_key_ref() -> (GcpKmsKeyRef, KmsKeyVersion) {
+        (
+            GcpKmsKeyRef::new(
+                std::env::var("PROJECT_ID").expect("PROJECT_ID is set"),
+                std::env::var("PROJECT_LOCATION").expect("PROJECT_LOCATION is set"),
+                std::env::var("KMS_KEY_RING").expect("KMS_KEY_RING is set"),
+                std::env::var("KMS_DECRYPT_KEY_RSA").expect("KMS_DECRYPT_KEY_RSA is set"),
+            ),
+            KmsKeyVersion::try_from("1".to_string()).expect("1 is a key version"),
+        )
+    }
+
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_key_decrypts_what_its_public_key_encrypts() -> KmsAeadResult<()> {
+        use crate::providers::PublicKeyKekProvider;
+        use crate::test_provider::RsaTestBackend;
+        let (key_ref, kek_version) = live_rsa_key_ref();
+        let reader = GcpKmsProvider::new(&key_ref).await?;
+
+        let public_key = reader.public_key(&kek_version).await?;
+        let producer = KmsAeadEnvelope::<_, RsaTestBackend>::new(PublicKeyKekProvider::<
+            RsaTestBackend,
+        >::new(public_key)?)?;
+        let reader = KmsAeadEnvelope::<_, RsaTestBackend>::new(reader)?;
+        let encrypted: Encrypted<SecretValue, Envelope> = producer
+            .encrypt(b"orders/gcp/rsa", &SecretValue::from(KEY_MARKER))
+            .await?;
+
+        assert_eq!(
+            producer.provider().public_key().kek(),
+            reader.provider().kek()
+        );
+        assert_eq!(
+            producer.provider().public_key().kek_version(),
+            Some(&kek_version)
+        );
+        assert_eq!(
+            reader
+                .decrypt::<SecretValue>(b"orders/gcp/rsa", &encrypted)
+                .await?,
+            SecretValue::from(KEY_MARKER)
+        );
+        Ok(())
+    }
+
+    /// The administration's re-encryption decrypts through Cloud KMS and encrypts again locally.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_administration_reencrypts_a_value_the_readers_decrypt() -> KmsAeadResult<()> {
+        use crate::providers::AsymmetricKekProvider;
+        use crate::test_provider::RsaTestBackend;
+        let (key_ref, kek_version) = live_rsa_key_ref();
+        let reader = GcpKmsProvider::new(&key_ref).await?;
+        let administration = KmsAeadEnvelope::<_, RsaTestBackend>::new(AsymmetricKekProvider::<
+            RsaTestBackend,
+            _,
+        >::new(
+            reader.public_key(&kek_version).await?,
+            reader.clone(),
+        )?)?;
+        let reader = KmsAeadEnvelope::<_, RsaTestBackend>::new(reader)?;
+        let encrypted: Encrypted<SecretValue, Envelope> = administration
+            .encrypt(b"orders/gcp/rsa", &SecretValue::from(KEY_MARKER))
+            .await?;
+
+        let reencrypted = administration.reencrypt_dek(&encrypted).await?;
+
+        assert_ne!(reencrypted.separate()?.1, encrypted.separate()?.1);
+        assert_eq!(
+            reader
+                .decrypt::<SecretValue>(b"orders/gcp/rsa", &reencrypted)
+                .await?,
+            SecretValue::from(KEY_MARKER)
+        );
+        Ok(())
+    }
+
+    /// A block of another key under the live key's version is refused by Cloud KMS, with the code
+    /// the book names for it.
+    #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
+    async fn live_key_refuses_a_block_of_another_key() -> KmsAeadResult<()> {
+        use crate::providers::{LocalAsymmetricKmsProvider, LocalKekId, PublicKeyKekProvider};
+        use crate::test_provider::RsaTestBackend;
+        let (key_ref, kek_version) = live_rsa_key_ref();
+        let reader = GcpKmsProvider::new(&key_ref).await?;
+        let another_key = LocalAsymmetricKmsProvider::<RsaTestBackend>::ephemeral(
+            LocalKekId::try_from("another".to_string())?,
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+        )?;
+        let impostor = PublicKeyKekProvider::<RsaTestBackend>::new(AsymmetricKekPublicKey::new(
+            reader.kek().clone(),
+            Some(kek_version),
+            AsymmetricKekAlgorithm::RsaOaepSha256,
+            another_key.public_key(None)?.spki_der().to_vec(),
+            PublicKeyFormat::SpkiDer,
+        )?)?;
+        let encrypted_dek = impostor
+            .encrypt_data_encryption_key(&DataEncryptionKey::from(SecretValue::from(KEY_MARKER)))
+            .await?;
+
+        let result = reader.decrypt_data_encryption_key(&encrypted_dek).await;
+
+        assert!(
+            matches!(&result, Err(KmsAeadError::EncryptionError(error))
+                if error.public.code == "InvalidArgument"),
+            "{result:?}"
+        );
         Ok(())
     }
 

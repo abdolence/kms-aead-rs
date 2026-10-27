@@ -1,6 +1,5 @@
 //! [`Keyring`]: field encryption under the key versions of one keyring record.
 
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use kms_aead::backends::AeadBackend;
@@ -8,7 +7,7 @@ use kms_aead::cache::{DekCache, DekCacheOutcome};
 use kms_aead::formats::{Envelope, Format, Randomized};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey,
-    KmsAeadEncryptionProvider, Plaintext,
+    KmsAeadDecryptionProvider, Plaintext,
 };
 use rsb_derive::Builder;
 
@@ -17,10 +16,10 @@ use crate::errors::{
     RecordInvalidReason,
 };
 use crate::metrics::KeyringCall;
-use crate::record::withdrawn_deks;
 use crate::record_cache::{RecordCache, VersionLookup};
 use crate::spans::{self, LoadReason};
 use crate::store::KeyringStore;
+use crate::sweep::ReencryptOutcome;
 use crate::{
     Compromise, FieldAad, Interop, KeyAlgorithm, KeyId, KeyVersion, KeyVersionState, KeyringId,
     KeyringRecord, Purpose,
@@ -33,21 +32,27 @@ pub use admin::{DekReencryption, EncryptedKeyset, KeyringAdmin, KeysetSelection,
 
 mod beacon;
 
+mod mac;
+pub use mac::MacVerified;
+
 #[cfg(feature = "deterministic")]
 mod deterministic;
 
-mod sealer;
-pub use sealer::Sealer;
+mod encryptor;
+pub use encryptor::Encryptor;
+
+#[cfg(feature = "stream")]
+mod stream;
 
 /// A handle on one keyring of a [`KeyringRegistry`](crate::KeyringRegistry), for field
 /// encryption under the keyring's key versions: its record lives in the store `S` and is cached
 /// in the process, its keys are encrypted by the provider `P`, and AEAD runs on the backend `B`.
 ///
-/// A [`Sealer`] from [`sealer`](Self::sealer) seals the fields of one write under the active
-/// versions of one record, and `decrypt` opens under the version the value names, without a call
-/// to the store while the cached record is younger than
+/// An [`Encryptor`] from [`encryptor`](Self::encryptor) encrypts the fields of one write under the
+/// active versions of one record, and `decrypt` decrypts under the version the value names, without
+/// a call to the store while the cached record is younger than
 /// [`record_ttl`](crate::KeyringRegistryOptions::record_ttl), and without a call to the KMS while
-/// the version's key is in the [`DekCache`]. Every decryption of a key for sealing or for
+/// the version's key is in the [`DekCache`]. Every decryption of a key for encrypting or for
 /// `decrypt` goes through that cache, which drops expired keys only when it is called: a process
 /// that can sit idle while it holds keys, and needs the cache's TTL to bound their time in memory,
 /// calls [`DekCache::purge_expired`] on [`dek_cache`](Self::dek_cache) from a timer of its own.
@@ -63,39 +68,37 @@ pub use sealer::Sealer;
 ///
 /// ```compile_fail,E0599
 /// use kms_aead::backends::AeadBackend;
-/// use kms_aead::KmsAeadEncryptionProvider;
+/// use kms_aead::KmsAeadDecryptionProvider;
 /// use kms_aead_keyring::store::KeyringStore;
 /// use kms_aead_keyring::{KeyId, Keyring, KeyringResult, Purpose};
 ///
 /// async fn rotate<S, P, B>(keyring: &Keyring<S, P, B>) -> KeyringResult<KeyId>
 /// where
 ///     S: KeyringStore,
-///     P: KmsAeadEncryptionProvider + 'static,
+///     P: KmsAeadDecryptionProvider + 'static,
 ///     B: AeadBackend,
 /// {
 ///     keyring.rotate(Purpose::Randomized).await
 /// }
 /// ```
 pub struct Keyring<S: KeyringStore, P, B> {
-    cache: Arc<RecordCache<S>>,
+    cache: Arc<RecordCache<S, B>>,
     provider: P,
     options: KeyringOptions,
-    backend: PhantomData<B>,
 }
 
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
     /// A handle on the keyring `cache` holds, with `provider`, whose KEK the record names.
-    pub(crate) fn new(cache: Arc<RecordCache<S>>, provider: P, options: KeyringOptions) -> Self {
+    pub(crate) fn new(cache: Arc<RecordCache<S, B>>, provider: P, options: KeyringOptions) -> Self {
         Self {
             cache,
             provider,
             options,
-            backend: PhantomData,
         }
     }
 
@@ -117,8 +120,8 @@ where
     }
 
     /// The cached record, as the keyring currently uses it. Its
-    /// [`seal_marker`](KeyringRecord::seal_marker) is the bound of a sweep's query; a write
-    /// stores the marker of its [`Sealer`]'s record instead.
+    /// [`encryption_marker`](KeyringRecord::encryption_marker) is the bound of a sweep's query; a
+    /// write stores the marker of its [`Encryptor`]'s record instead.
     pub fn record(&self) -> Arc<KeyringRecord> {
         self.cache.record()
     }
@@ -128,15 +131,16 @@ where
     ///
     /// # Errors
     ///
-    /// The store's errors, [`KeyringError::RecordMissing`] when the store holds no record,
-    /// [`KeyringError::RecordInvalid`], and [`KeyringError::RecordRegressed`] when the stored
-    /// record moves a version backwards from the cached one. The cached record stays in use in
-    /// every case.
+    /// The store's errors, [`KeyringError::RecordInvalid`], and
+    /// [`KeyringError::RecordRegressed`] when the stored record moves a version backwards from
+    /// the cached one: the cached record stays in use. [`KeyringError::RecordMissing`] when the
+    /// store holds no record, which destroys every version of the cached one, or held none at an
+    /// earlier read, see [`KeyringRegistry`](crate::KeyringRegistry).
     pub async fn reload(&self) -> KeyringResult<Arc<KeyringRecord>> {
         self.cache.reload(LoadReason::Forced).await
     }
 
-    /// Opens `value` with `aad`, under the version it names, applying the
+    /// Decrypts `value` with `aad`, under the version it names, applying the
     /// [`compromised_reads`](KeyringOptions::compromised_reads) policy.
     ///
     /// # Errors
@@ -163,7 +167,7 @@ where
             Purpose::Randomized,
             B::NAME,
         );
-        call.opened(value, async {
+        call.decrypted(value, async {
             let key_id = Purpose::Randomized.check(value.key_id())?;
             spans::in_span(
                 spans::decrypt(self.id(), Purpose::Randomized, key_id),
@@ -173,7 +177,7 @@ where
                     let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                     call.version(version);
                     self.apply_read_policy(version, compromise)?;
-                    self.open_cached(&record, version, encrypted_dek, aad, value)
+                    self.decrypt_cached(&record, version, encrypted_dek, aad, value)
                         .await
                 },
             )
@@ -182,10 +186,10 @@ where
         .await
     }
 
-    /// Opens `value` with `aad` and reports which version opened it and whether that version is
-    /// compromised, without applying the read policy: the call for a sweep, and for a reader
-    /// that handles untrusted values itself. A compromised version's key is decrypted through
-    /// the provider, never through the [`DekCache`], so that it does not return to the cache.
+    /// Decrypts `value` with `aad` and reports which version decrypted it and whether that version
+    /// is compromised, without applying the read policy: the call for a sweep, and for a reader
+    /// that handles untrusted values itself. A compromised version's key is decrypted through the
+    /// provider, never through the [`DekCache`], so that it does not return to the cache.
     ///
     /// # Errors
     ///
@@ -201,7 +205,7 @@ where
             Purpose::Randomized,
             B::NAME,
         );
-        call.opened(value, async {
+        call.decrypted(value, async {
             let key_id = Purpose::Randomized.check(value.key_id())?;
             spans::in_span(
                 spans::decrypt(self.id(), Purpose::Randomized, key_id),
@@ -210,20 +214,20 @@ where
                     spans::record_reload(reload);
                     let (version, encrypted_dek, compromise) = self.readable(&record, key_id)?;
                     call.version(version);
-                    let (opened, trust) = match compromise {
+                    let (decrypted, trust) = match compromise {
                         None => (
-                            self.open_cached(&record, version, encrypted_dek, aad, value)
+                            self.decrypt_cached(&record, version, encrypted_dek, aad, value)
                                 .await?,
                             KeyTrust::Trusted,
                         ),
                         Some(compromise) => (
-                            self.open_uncached(version, encrypted_dek, aad, value)
+                            self.decrypt_uncached(version, encrypted_dek, aad, value)
                                 .await?,
                             KeyTrust::Compromised(compromise.clone()),
                         ),
                     };
                     Ok(Decrypted {
-                        value: opened,
+                        value: decrypted,
                         key_id: version.id(),
                         trust,
                     })
@@ -293,10 +297,15 @@ where
         }
     }
 
-    /// Fails with the first requirement of `interop` that sealing under `version` breaks. The
+    /// Fails with the first requirement of `interop` that encrypting under `version` breaks. The
     /// AAD requirement holds by construction: an AAD that SQL cannot rebuild carries no
     /// [`Interop`].
-    fn check_interop(&self, interop: Option<Interop>, version: &KeyVersion) -> KeyringResult<()> {
+    fn check_interop(
+        &self,
+        interop: Option<Interop>,
+        record: &KeyringRecord,
+        version: &KeyVersion,
+    ) -> KeyringResult<()> {
         let Some(interop) = interop else {
             return Ok(());
         };
@@ -309,8 +318,8 @@ where
             ));
         }
         match interop.key_uri(kek) {
-            Some(_) => Ok(()),
-            None => Err(KeyringError::interop(
+            Some(_) if !self.is_asymmetric_kek(record) => Ok(()),
+            _ => Err(KeyringError::interop(
                 self.id(),
                 interop,
                 InteropRequirement::Kek(kek.provider().clone()),
@@ -318,10 +327,18 @@ where
         }
     }
 
+    /// Whether the KEK is asymmetric: the provider encrypts DEKs with a public key, or `record`
+    /// holds a DEK encrypted with one, so that an application holding a plain KMS provider decides
+    /// as the administration does. The BigQuery and Tink readers decrypt a keyset with their KMS's
+    /// symmetric decryption, so no keyset of such a KEK decrypts under either.
+    pub(crate) fn is_asymmetric_kek(&self, record: &KeyringRecord) -> bool {
+        self.provider.encrypts_with_public_key() || record.holds_public_key_encrypted_dek()
+    }
+
     fn cipher(&self, version: &KeyVersion) -> KeyringResult<AeadCipher<B>> {
         match version.algorithm() {
             KeyAlgorithm::Randomized(algorithm) => Ok(AeadCipher::new(algorithm)?),
-            KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Beacon(_) => {
+            KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Beacon(_) | KeyAlgorithm::Mac(_) => {
                 Err(KeyringError::record_invalid(
                     self.id(),
                     RecordInvalidReason::PurposeMismatch(version.id()),
@@ -330,9 +347,9 @@ where
         }
     }
 
-    /// Opens `value` with `aad` under `version` of `record`, whose encrypted DEK is
+    /// Decrypts `value` with `aad` under `version` of `record`, whose encrypted DEK is
     /// `encrypted_dek`, with the key through the [`DekCache`].
-    async fn open_cached<T: Plaintext>(
+    async fn decrypt_cached<T: Plaintext>(
         &self,
         record: &KeyringRecord,
         version: &KeyVersion,
@@ -341,13 +358,13 @@ where
         value: &Encrypted<T, Randomized>,
     ) -> KeyringResult<T> {
         let cipher = self.cipher(version)?;
-        let (opened, outcome) = self
+        let (decrypted, outcome) = self
             .with_cached_dek(record, version.id(), encrypted_dek, |dek| {
                 cipher.decrypt(&aad.bytes, value, dek)
             })
             .await?;
         spans::record_dek_cache(outcome);
-        Ok(opened?)
+        Ok(decrypted?)
     }
 
     /// Runs `use_dek` with the key that `encrypted_dek` holds, through the [`DekCache`], and
@@ -372,7 +389,8 @@ where
         if outcome == DekCacheOutcome::Miss {
             let current = self.cache.record();
             if !std::ptr::eq(record, &*current)
-                && withdrawn_deks(record, &current)
+                && record
+                    .withdrawn_deks(&current)
                     .any(|withdrawn| withdrawn == (key_id, encrypted_dek))
             {
                 self.dek_cache()
@@ -396,9 +414,9 @@ where
         Ok(result)
     }
 
-    /// Opens `value` with a key the provider decrypts for this call only, which never enters the
+    /// Decrypts `value` with a key the provider decrypts for this call only, which never enters the
     /// [`DekCache`].
-    async fn open_uncached<T: Plaintext>(
+    async fn decrypt_uncached<T: Plaintext>(
         &self,
         version: &KeyVersion,
         encrypted_dek: &EncryptedDataEncryptionKey,
@@ -411,14 +429,13 @@ where
             .await??)
     }
 
-    /// Opens `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
-    /// store-less, so that a sweep can seal it again as a keyring value with
-    /// [`Sealer::encrypt`]; a keyring never writes envelope values. The `aad` is the one the
+    /// Decrypts `value`, an envelope value of kms-aead's `KmsAeadEnvelope` written per call or
+    /// store-less, so that a sweep can encrypt it again as a keyring value with
+    /// [`Encryptor::encrypt`]; a keyring never writes envelope values. The `aad` is the one the
     /// application gave it and the `algorithm` that of the envelope that wrote it: the read of a
-    /// record whose
-    /// [`SealMarker`](crate::sweep::SealMarker) is
-    /// [`SealMarker::ENVELOPE`](crate::sweep::SealMarker::ENVELOPE), until a sweep re-seals it. A
-    /// value stored as hex is read with `Encrypted::try_from_hex_string`.
+    /// record whose [`EncryptionMarker`](crate::sweep::EncryptionMarker) is
+    /// [`EncryptionMarker::ENVELOPE`](crate::sweep::EncryptionMarker::ENVELOPE), until a sweep
+    /// re-encrypts it. A value stored as hex is read with `Encrypted::try_from_hex_string`.
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
@@ -441,19 +458,19 @@ where
     ) -> KeyringResult<T> {
         let call =
             KeyringCall::envelope_migration(self.cache.keyring_attribute(), B::NAME, algorithm);
-        let open = spans::in_span(spans::decrypt_envelope_for_migration(self.id()), async {
+        let decryption = spans::in_span(spans::decrypt_envelope_for_migration(self.id()), async {
             let (bare, encrypted_dek) = value.separate()?;
             let cipher = AeadCipher::<B>::new(algorithm)?;
-            let (opened, outcome) = self
+            let (decrypted, outcome) = self
                 .dek_cache()
                 .with_dek(&self.provider, &encrypted_dek, |dek| {
                     cipher.decrypt_bare(aad, &bare, dek)
                 })
                 .await?;
             spans::record_dek_cache(outcome);
-            Ok(opened?)
+            Ok(decrypted?)
         });
-        call.opened(value, open).await
+        call.decrypted(value, decryption).await
     }
 }
 
@@ -494,35 +511,62 @@ pub enum CompromisedReadPolicy {
     Allow,
 }
 
-/// A decrypted value, with the version that opened it and whether that version is trusted.
+/// A decrypted value, with the version that decrypted it and whether that version is trusted.
 #[non_exhaustive]
 pub struct Decrypted<T> {
     /// The value.
     pub value: T,
-    /// The version that opened it.
+    /// The version that decrypted it.
     pub key_id: KeyId,
     /// Whether the version is compromised.
     pub trust: KeyTrust,
 }
 
-/// A value sealed again under the active version of its purpose, by [`Sealer::reseal`] or
-/// `Sealer::reseal_deterministic`, with the trust of the version the old value was read under.
+/// A value encrypted again under the active version of its purpose, by [`Encryptor::reencrypt`] or
+/// `Encryptor::reencrypt_deterministic`, with the trust of the version the old value was read
+/// under.
 #[non_exhaustive]
-pub struct Resealed<T, F: Format> {
+pub struct Reencrypted<T, F: Format> {
     /// The value under the active version, to write in place of the old one.
     pub value: Encrypted<T, F>,
     /// Whether the version the old value was read under is compromised: a value forged under a
-    /// leaked key reads as trusted once it is re-sealed, so the caller decides before it writes.
+    /// leaked key reads as trusted once it is re-encrypted, so the caller decides before it writes.
     pub trust: KeyTrust,
 }
 
-/// Whether the version that opened a value is trusted.
+impl<T, F: Format> Reencrypted<T, F> {
+    /// The sweep outcome of this re-encryption: [`ReencryptOutcome::Reencrypted`], with
+    /// `from_compromised` set when [`trust`](Self::trust) is [`KeyTrust::Compromised`].
+    ///
+    /// A re-encryption that found the value current returns no `Reencrypted`; the outcome of the
+    /// `Option` that `Encryptor::reencrypt` returns is `ReencryptOutcome::from(&option)`.
+    ///
+    /// ```
+    /// use kms_aead_keyring::formats::Randomized;
+    /// use kms_aead_keyring::sweep::ReencryptOutcome;
+    /// use kms_aead_keyring::{Encrypted, Reencrypted};
+    ///
+    /// fn to_write(
+    ///     reencrypted: Reencrypted<String, Randomized>,
+    /// ) -> (Encrypted<String, Randomized>, ReencryptOutcome) {
+    ///     let outcome = reencrypted.outcome();
+    ///     (reencrypted.value, outcome)
+    /// }
+    /// ```
+    pub fn outcome(&self) -> ReencryptOutcome {
+        ReencryptOutcome::Reencrypted {
+            from_compromised: matches!(self.trust, KeyTrust::Compromised(_)),
+        }
+    }
+}
+
+/// Whether the version that decrypted a value is trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyTrust {
     /// The version is not compromised.
     Trusted,
-    /// The version is compromised: whoever holds its leaked key can have sealed the value, so
-    /// re-sealing it does not make it trusted.
+    /// The version is compromised: whoever holds its leaked key can have encrypted the value, so
+    /// re-encrypting it does not make it trusted.
     Compromised(Compromise),
 }
 

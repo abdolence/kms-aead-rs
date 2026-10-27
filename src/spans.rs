@@ -11,7 +11,9 @@ use std::future::Future;
 use tracing::{debug_span, field, Instrument, Span};
 
 use crate::cache::{DekCache, DekCacheOutcome};
-use crate::KmsAeadResult;
+use crate::errors::KmsAeadError;
+use crate::redaction::RedactedJson;
+use crate::{KeyId, KmsAeadResult, SignedPayloadType};
 
 const FIELD_MODE: &str = "/kms_aead/mode";
 const FIELD_ALGORITHM: &str = "/kms_aead/algorithm";
@@ -19,6 +21,11 @@ const FIELD_BACKEND: &str = "/kms_aead/backend";
 const FIELD_DEK_CACHE: &str = "/kms_aead/dek_cache";
 const FIELD_PURPOSE: &str = "/kms_aead/purpose";
 const FIELD_ERROR_CODE: &str = "/kms_aead/error_code";
+const FIELD_KEY_ID: &str = "/kms_aead/key_id";
+const FIELD_PAYLOAD_TYPE: &str = "/kms_aead/payload_type";
+const FIELD_DECODED_TYPE: &str = "/kms_aead/decoded_type";
+const FIELD_JSON_ERROR: &str = "/kms_aead/json_error";
+const FIELD_OUTLINE: &str = "/kms_aead/outline";
 
 /// The `dek_cache` value of a call that decrypts through the provider although the envelope has
 /// a cache.
@@ -33,13 +40,17 @@ pub(crate) mod kms {
     use tracing::{debug_span, field, Span};
 
     use super::FIELD_ERROR_CODE;
-    use crate::{KekProvider, KekRef, KmsAeadResult};
+    use crate::providers::KmsKeyVersion;
+    use crate::signing::SigningKeyRef;
+    use crate::{AsymmetricKekFingerprint, KekRef, KmsAeadResult, KmsProvider};
 
     const FIELD_PROVIDER: &str = "/kms_aead/provider";
     const FIELD_KEY: &str = "/kms_aead/key";
     const FIELD_KEK_VERSION: &str = "/kms_aead/kek_version";
     const FIELD_KEK_VERSIONS: &str = "/kms_aead/kek_versions";
+    const FIELD_KEY_VERSIONS: &str = "/kms_aead/key_versions";
     const FIELD_RESPONSE_TIME: &str = "/kms_aead/response_time";
+    const FIELD_FINGERPRINT: &str = "/kms_aead/fingerprint";
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
     const FIELD_LEN: &str = "/kms_aead/len";
 
@@ -67,10 +78,53 @@ pub(crate) mod kms {
         )
     }
 
+    /// `KMS public key`, around a KMS provider's fetch of the public key of an asymmetric KEK.
+    #[cfg_attr(
+        not(any(
+            feature = "gcp-kms-encryption-base",
+            feature = "aws-kms-encryption",
+            feature = "azure-kms-encryption-base",
+            feature = "hashicorp-vault-transit-kms-encryption-base"
+        )),
+        expect(dead_code, reason = "the cloud KMS providers fetch public keys")
+    )]
+    pub(crate) fn kek_public_key_span(kek: &KekRef) -> Span {
+        debug_span!(
+            "KMS public key",
+            { FIELD_PROVIDER } = %kek.provider(),
+            { FIELD_KEY } = kek.key(),
+            { FIELD_KEK_VERSION } = field::Empty,
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
+        )
+    }
+
+    /// `KMS sign`, around a signing provider's `sign`.
+    pub(crate) fn sign_span(signing_key: &SigningKeyRef) -> Span {
+        debug_span!(
+            "KMS sign",
+            { FIELD_PROVIDER } = %signing_key.provider(),
+            { FIELD_KEY } = signing_key.key(),
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
+        )
+    }
+
+    /// `KMS public key`, around a signing provider's `verifying_key`.
+    pub(crate) fn public_key_span(signing_key: &SigningKeyRef) -> Span {
+        debug_span!(
+            "KMS public key",
+            { FIELD_PROVIDER } = %signing_key.provider(),
+            { FIELD_KEY } = signing_key.key(),
+            { FIELD_RESPONSE_TIME } = field::Empty,
+            { FIELD_ERROR_CODE } = field::Empty,
+        )
+    }
+
     /// `KMS random`, around a call to a KMS generator. `key` is what the request names, if
     /// anything.
     #[cfg(any(feature = "gcp-kms-encryption-base", feature = "aws-kms-encryption"))]
-    pub(crate) fn random_span(provider: &KekProvider, key: Option<&str>, len: usize) -> Span {
+    pub(crate) fn random_span(provider: &KmsProvider, key: Option<&str>, len: usize) -> Span {
         let span = debug_span!(
             "KMS random",
             { FIELD_PROVIDER } = %provider,
@@ -95,6 +149,50 @@ pub(crate) mod kms {
         );
     }
 
+    /// The `INFO` event of a new provider that holds the public key of an asymmetric KEK: the KEK,
+    /// the version it encrypts under and the key's fingerprint, which an operator compares across
+    /// the producers and the administration.
+    pub(crate) fn public_key_loaded(
+        kek: &KekRef,
+        kek_version: Option<&KmsKeyVersion>,
+        fingerprint: AsymmetricKekFingerprint,
+    ) {
+        tracing::info!(
+            { FIELD_PROVIDER } = %kek.provider(),
+            { FIELD_KEY } = kek.key(),
+            { FIELD_KEK_VERSION } = kek_version.map(KmsKeyVersion::as_str),
+            { FIELD_FINGERPRINT } = %fingerprint,
+            "A public key encrypts data encryption keys"
+        );
+    }
+
+    /// The `INFO` event of a new local KMS provider with an asymmetric KEK: its KEK id and its
+    /// versions, each with where it came from, and the version that encrypts with its fingerprint.
+    pub(crate) fn local_asymmetric_kek_loaded(
+        key: &impl std::fmt::Display,
+        versions: &str,
+        kek_version: &KmsKeyVersion,
+        fingerprint: AsymmetricKekFingerprint,
+    ) {
+        tracing::info!(
+            { FIELD_KEY } = %key,
+            { FIELD_KEK_VERSIONS } = versions,
+            { FIELD_KEK_VERSION } = kek_version.as_str(),
+            { FIELD_FINGERPRINT } = %fingerprint,
+            "A local asymmetric KEK encrypts and decrypts data encryption keys"
+        );
+    }
+
+    /// The `INFO` event of a new local signing provider: its key id and its versions, each with
+    /// its algorithm, key id and where it came from.
+    pub(crate) fn local_signing_key_loaded(key: &impl std::fmt::Display, versions: &str) {
+        tracing::info!(
+            { FIELD_KEY } = %key,
+            { FIELD_KEY_VERSIONS } = versions,
+            "A local signing key signs"
+        );
+    }
+
     /// Records on the current KMS span the version of the KEK that encrypts or encrypted the DEK:
     /// from the KMS response on encryption, from the encrypted DEK on decryption.
     pub(crate) fn record_kek_version(kek_version: &str) {
@@ -103,11 +201,12 @@ pub(crate) mod kms {
 
     /// Sends a request to `provider`'s KMS and records how long it took on the current span, in
     /// milliseconds, and with the `opentelemetry` feature in the KMS duration histogram, under
-    /// `operation`: `encrypt_dek`, `decrypt_dek` or `random`. `request` maps the KMS's error, so
-    /// that the histogram records its code.
+    /// `operation`: `encrypt_dek`, `decrypt_dek`, `random`, `sign` or `public_key`, or
+    /// `encrypt_dek_with_public_key` for an encryption with a public key, which is a local
+    /// operation. `request` maps the KMS's error, so that the histogram records its code.
     pub(crate) fn timed<'a, T: 'a>(
         operation: &'static str,
-        provider: &'a KekProvider,
+        provider: &'a KmsProvider,
         request: impl Future<Output = KmsAeadResult<T>> + Send + 'a,
     ) -> impl Future<Output = KmsAeadResult<T>> + 'a {
         // Boxed as a trait object before the returned future holds it, which keeps the SDK's
@@ -246,6 +345,93 @@ fn record_bypassed_cache(span: &Span, dek_cache: &DekCache) {
     } else {
         span.record(FIELD_DEK_CACHE, field::display(DekCacheOutcome::Disabled));
     }
+}
+
+/// `Signature sign`, around a `Signer`'s calls, and `Signature verify`, around a `Verifier`'s:
+/// `name` is the span. The algorithm is unrecorded for a verification whose key id the set does
+/// not hold.
+pub(crate) fn signature(
+    name: IntegritySpan,
+    algorithm: Option<&str>,
+    backend: &str,
+    key_id: KeyId,
+    payload_type: SignedPayloadType,
+) -> Span {
+    let span = match name {
+        IntegritySpan::Sign => debug_span!(
+            "Signature sign",
+            { FIELD_ALGORITHM } = field::Empty,
+            { FIELD_BACKEND } = backend,
+            { FIELD_KEY_ID } = key_id.as_u32(),
+            { FIELD_PAYLOAD_TYPE } = payload_type.as_str(),
+            { FIELD_ERROR_CODE } = field::Empty,
+        ),
+        IntegritySpan::Verify => debug_span!(
+            "Signature verify",
+            { FIELD_ALGORITHM } = field::Empty,
+            { FIELD_BACKEND } = backend,
+            { FIELD_KEY_ID } = key_id.as_u32(),
+            { FIELD_PAYLOAD_TYPE } = payload_type.as_str(),
+            { FIELD_ERROR_CODE } = field::Empty,
+        ),
+        IntegritySpan::MacCompute => debug_span!(
+            "MAC compute",
+            { FIELD_ALGORITHM } = field::Empty,
+            { FIELD_BACKEND } = backend,
+            { FIELD_KEY_ID } = key_id.as_u32(),
+            { FIELD_PAYLOAD_TYPE } = payload_type.as_str(),
+            { FIELD_ERROR_CODE } = field::Empty,
+        ),
+        IntegritySpan::MacVerify => debug_span!(
+            "MAC verify",
+            { FIELD_ALGORITHM } = field::Empty,
+            { FIELD_BACKEND } = backend,
+            { FIELD_KEY_ID } = key_id.as_u32(),
+            { FIELD_PAYLOAD_TYPE } = payload_type.as_str(),
+            { FIELD_ERROR_CODE } = field::Empty,
+        ),
+    };
+    if let Some(algorithm) = algorithm {
+        span.record(FIELD_ALGORITHM, algorithm);
+    }
+    span
+}
+
+/// The spans of signatures and MACs, which share their fields. The span name is a literal of
+/// tracing's macro, hence one arm per span.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum IntegritySpan {
+    /// `Signature sign`.
+    Sign,
+    /// `Signature verify`.
+    Verify,
+    /// `MAC compute`.
+    MacCompute,
+    /// `MAC verify`.
+    MacVerify,
+}
+
+/// The `WARN` event, on the `kms_aead::json` target, of JSON that does not decode to `T`: the
+/// code of the `error` returned for it, `T`'s name, the payload type of a signed value, and
+/// serde_json's `json_error` and the `outline` of the JSON, as far as the outline's policy shows
+/// them.
+pub(crate) fn json_not_decoded<T>(
+    error: &KmsAeadError,
+    payload_type: Option<SignedPayloadType>,
+    json_error: &serde_json::Error,
+    outline: &RedactedJson<'_>,
+) {
+    tracing::warn!(
+        target: "kms_aead::json",
+        {
+            { FIELD_ERROR_CODE } = error.code(),
+            { FIELD_DECODED_TYPE } = std::any::type_name::<T>(),
+            { FIELD_PAYLOAD_TYPE } = payload_type.as_ref().map(SignedPayloadType::as_str),
+            { FIELD_JSON_ERROR } = %outline.describe(json_error),
+            { FIELD_OUTLINE } = %outline,
+        },
+        "JSON that does not decode to its type"
+    );
 }
 
 /// Runs the synchronous `operation` inside `span`, and records the code of the error it returns.

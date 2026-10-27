@@ -1,16 +1,16 @@
-//! The beacon calls of [`Sealer`] and [`Keyring`]: a field's blind index under the beacon
+//! The beacon calls of [`Encryptor`] and [`Keyring`]: a field's blind index under the beacon
 //! versions.
 
 use std::cmp::Reverse;
 
 use kms_aead::backends::AeadBackend;
-use kms_aead::{Beacon, BeaconMac, KmsAeadEncryptionProvider, Plaintext};
+use kms_aead::{Beacon, BeaconMac, KmsAeadDecryptionProvider, Plaintext};
 
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
 use crate::metrics::KeyringCall;
 use crate::spans;
 use crate::store::KeyringStore;
-use crate::{FieldSpec, KeyAlgorithm, KeyVersion, Keyring, Purpose, Sealer};
+use crate::{Encryptor, FieldSpec, KeyAlgorithm, KeyVersion, Keyring, Purpose};
 
 /// Beacons, or blind indexes: a truncated HMAC-SHA256 of a field's plaintext under a beacon
 /// version's key, stored beside the encrypted field, which a data store matches by equality.
@@ -22,10 +22,10 @@ use crate::{FieldSpec, KeyAlgorithm, KeyVersion, Keyring, Purpose, Sealer};
 /// `<kind>/<field>`, with no entity id, and the bits are the field's
 /// [`with_beacon_bits`](FieldSpec::with_beacon_bits). Normalising a value, such as lowercasing an
 /// email, is its `Plaintext` type's.
-impl<S, P, B> Sealer<'_, S, P, B>
+impl<S, P, B> Encryptor<'_, S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The beacon of `value` in `field` under the record's active beacon version, to store
@@ -54,7 +54,7 @@ where
                 .record
                 .active_dek(Purpose::Beacon)
                 .ok_or_else(|| KeyringError::no_active_version(keyring.id(), Purpose::Beacon))?;
-            spans::record_sealing_version(version);
+            spans::record_encrypting_version(version);
             call.version(version);
             let mac = keyring.beacon_mac(version)?;
             let context = field.context();
@@ -70,12 +70,12 @@ where
     }
 }
 
-/// The probes of a beacon lookup across a rotation; see [`Sealer::beacon`] for what a beacon
+/// The probes of a beacon lookup across a rotation; see [`Encryptor::beacon`] for what a beacon
 /// column leaks.
 impl<S, P, B> Keyring<S, P, B>
 where
     S: KeyringStore,
-    P: KmsAeadEncryptionProvider + 'static,
+    P: KmsAeadDecryptionProvider + 'static,
     B: AeadBackend,
 {
     /// The beacon of `value` in `field` under every beacon version that is pending, active or
@@ -136,7 +136,7 @@ where
     fn beacon_mac(&self, version: &KeyVersion) -> KeyringResult<BeaconMac<B>> {
         match version.algorithm() {
             KeyAlgorithm::Beacon(algorithm) => Ok(BeaconMac::new(algorithm)?),
-            KeyAlgorithm::Randomized(_) | KeyAlgorithm::Deterministic(_) => {
+            KeyAlgorithm::Randomized(_) | KeyAlgorithm::Deterministic(_) | KeyAlgorithm::Mac(_) => {
                 Err(KeyringError::record_invalid(
                     self.id(),
                     RecordInvalidReason::PurposeMismatch(version.id()),
@@ -198,7 +198,7 @@ mod tests {
         let first = KeyId::new((1 << 30) | 1);
         let alice = ALICE.to_string();
 
-        let beacon = keyring.sealer().await.beacon(&EMAIL, &alice).await?;
+        let beacon = keyring.encryptor().await.beacon(&EMAIL, &alice).await?;
 
         let record = keyring.record();
         let encrypted_dek = record
@@ -213,12 +213,18 @@ mod tests {
             .await?;
         assert_eq!(beacon, expected?);
         assert_eq!(beacon.key_id(), first);
-        assert_eq!(keyring.sealer().await.beacon(&EMAIL, &alice).await?, beacon);
-        assert_ne!(keyring.sealer().await.beacon(&NAME, &alice).await?, beacon);
+        assert_eq!(
+            keyring.encryptor().await.beacon(&EMAIL, &alice).await?,
+            beacon
+        );
+        assert_ne!(
+            keyring.encryptor().await.beacon(&NAME, &alice).await?,
+            beacon
+        );
         let wide = EMAIL.with_beacon_bits(BeaconBits::new(64).ok_or("64 bits are in range")?);
         assert_eq!(
             keyring
-                .sealer()
+                .encryptor()
                 .await
                 .beacon(&wide, &alice)
                 .await?
@@ -234,7 +240,7 @@ mod tests {
         let admin = beacon_keyring(TestProvider::new("tenant-42-kek")?).await?;
         let keyring = admin.keyring();
         let alice = ALICE.to_string();
-        let first = keyring.sealer().await.beacon(&EMAIL, &alice).await?;
+        let first = keyring.encryptor().await.beacon(&EMAIL, &alice).await?;
         let second = admin.rotate(Purpose::Beacon).await?;
         admin.promote_now(second).await?;
         let pending = admin.rotate(Purpose::Beacon).await?;
@@ -246,7 +252,7 @@ mod tests {
         );
         assert_eq!(
             probes[1],
-            keyring.sealer().await.beacon(&EMAIL, &alice).await?
+            keyring.encryptor().await.beacon(&EMAIL, &alice).await?
         );
         assert_eq!(probes[2], first);
 

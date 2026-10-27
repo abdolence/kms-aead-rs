@@ -17,9 +17,9 @@ Checked with Tink 1.16.1 for Python (`pip install 'tink[gcpkms,awskms]==1.16.1'`
         | python -I tests/tink_interop.py read-keysets
 
 `encrypt` and `decrypt` use Tink's KmsEnvelopeAead. `read-keysets` reads each keyset kms-aead
-exported with KeysetHandle.read and the KMS client of the key URI kms-aead gave, opens the value
-kms-aead sealed with it, and writes a value of its own sealed with the keyset for a keyset line
-with "encrypted_dek"; it reports on stderr.
+exported with KeysetHandle.read and the KMS client of the key URI kms-aead gave, decrypts the
+value kms-aead encrypted with it, and writes a value of its own encrypted with the keyset for a
+keyset line with "encrypted_dek"; it reports on stderr.
 
 The keys come from the variables of the live tests: PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING
 and KMS_KEY for Cloud KMS, and KMS_KEY_ID, the key ARN, for AWS KMS, with ACCOUNT_ID for the
@@ -28,7 +28,7 @@ credentials, AWS KMS the credentials boto3 finds.
 
 Each line is one value: {"kms": "gcp" or "aws", "algorithm": the kms-aead name, "aad",
 "plain_text" and "value" in hex}, and for a keyset "key_uri", "keyset" and "encrypted_dek", the key
-encrypted by the KMS key, which kms-aead opens Tink's value with. Tink for Python has no
+encrypted by the KMS key, which kms-aead decrypts Tink's value with. Tink for Python has no
 ChaCha20Poly1305Key, so `decrypt` and `read-keysets` skip the chacha20-poly1305 values that
 kms-aead writes.
 """

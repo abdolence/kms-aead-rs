@@ -2,8 +2,8 @@
 //!
 //! A keyring is the record of one scope's key versions, such as a tenant's, held in a
 //! [`KeyringStore`](store::KeyringStore). Each version is a data encryption key (DEK) encrypted by
-//! a key encryption key (KEK) in a KMS, with a lifecycle state. A [`Keyring`] encrypts fields
-//! under the active versions, through a [`Sealer`] per write, and decrypts them under the version
+//! a key encryption key (KEK) in a KMS, with a lifecycle state. A [`Keyring`] encrypts fields under
+//! the active versions, through an [`Encryptor`] per write, and decrypts them under the version
 //! each value names, without a call to the store or the KMS on the hot path: the record is cached
 //! in the process, and the decrypted keys in kms-aead's [`DekCache`](kms_aead::cache::DekCache).
 //!
@@ -13,9 +13,9 @@
 //!
 //! # Applications and administration
 //!
-//! A [`Keyring`] is the application's handle. It decrypts, and its [`Sealer`] encrypts, computes
-//! beacons and re-seals, with the KMS's decrypt right and read access to the store, and it has no
-//! call that encrypts a DEK or writes the record. Those calls, the creation of a keyring, its
+//! A [`Keyring`] is the application's handle. It decrypts, and its [`Encryptor`] encrypts, computes
+//! beacons and re-encrypts, with the KMS's decrypt right and read access to the store, and it has
+//! no call that encrypts a DEK or writes the record. Those calls, the creation of a keyring, its
 //! lifecycle and the keyset exports, are on `KeyringAdmin`, which the `admin` feature adds together
 //! with the registry's `create`, `open_or_create` and `admin`. An application builds without the
 //! feature and runs under a principal without the rights those calls need; infrastructure
@@ -25,10 +25,10 @@
 //!
 //! # Values
 //!
-//! A value is in Tink's TINK-prefixed layout: the key id of the version that sealed it, then
+//! A value is in Tink's TINK-prefixed layout: the key id of the version that encrypted it, then
 //! what kms-aead's cipher of the version's algorithm writes. Under AES-256-GCM, the default of
 //! a new keyring, the bytes are those Tink and BigQuery's `AEAD.DECRYPT_STRING` read. The key id
-//! is not authenticated: a value relabelled with another id opens under no key. The bytes of
+//! is not authenticated: a value relabelled with another id decrypts under no key. The bytes of
 //! values, key ids and records are in the
 //! [formats chapter](https://kms-aead-rust.abdolence.dev/formats.html) of the book.
 //!
@@ -37,21 +37,21 @@
 //! each `T` encodes, so that other readers decode it, and an application newtype such as `Email`
 //! implements it to name what a field holds.
 //!
-//! A write seals every encrypted field of a record through one [`Sealer`], and stores the
-//! [`SealMarker`](sweep::SealMarker) of the sealer's record beside them. The marker names the
-//! versions the fields are under: a sweep finds the records behind the active versions by it, and
-//! the records that can hold a value under one version by that version's
-//! [`seal_range`](KeyVersion::seal_range), see [`sweep`].
+//! A write encrypts every encrypted field of a record through one [`Encryptor`], and stores the
+//! [`EncryptionMarker`](sweep::EncryptionMarker) of the encryptor's record beside them. The marker
+//! names the versions the fields are under: a sweep finds the records behind the active versions by
+//! it, and the records that can hold a value under one version by that version's
+//! [`reencrypt_range`](KeyVersion::reencrypt_range), see [`sweep`].
 //!
 //! # Associated data
 //!
 //! The default associated data of a value is its place in the application's model,
-//! `<kind>/<id>/<field>` such as `user/42/email`, built by [`FieldSpec::aad`]: a value opens only
-//! in its own row and field, and moves between data stores without being encrypted again.
+//! `<kind>/<id>/<field>` such as `user/42/email`, built by [`FieldSpec::aad`]: a value decrypts
+//! only in its own row and field, and moves between data stores without being encrypted again.
 //! [`FieldSpec::custom_aad`] takes any bytes instead, on a field that BigQuery does not read.
 //!
 //! A field that BigQuery also decrypts is declared with
-//! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to seal
+//! [`FieldSpec::with_interop`]`(`[`Interop::BigQuery`]`)`, and the keyring then refuses to encrypt
 //! it under an algorithm or a KEK that BigQuery cannot read. With the `bigquery-export` feature,
 //! `KeyringAdmin::export_bigquery_keyset` exports the keyset that BigQuery's `KEYS.KEYSET_CHAIN`
 //! reads such fields with. A field that Tink also decrypts is declared with [`Interop::Tink`],
@@ -66,12 +66,12 @@
 //! such as emails and external ids, and never low-cardinality fields such as a status or a
 //! country.
 //!
-//! With the `deterministic` feature, `Sealer::encrypt_deterministic` seals a value under the
+//! With the `deterministic` feature, `Encryptor::encrypt_deterministic` encrypts a value under the
 //! active AES-SIV version, so that equal plaintexts give equal [`Encrypted<T,
-//! Deterministic>`](formats::Deterministic) values, and `Keyring::deterministic_probes` seals a plaintext
-//! under every version that still decrypts, for the `IN` list of an equality query across a
-//! rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id,
-//! so a value opens in any row of its kind and field, and a deterministic field never decides
+//! Deterministic>`](formats::Deterministic) values, and `Keyring::deterministic_probes` encrypts a
+//! plaintext under every version that still decrypts, for the `IN` list of an equality query across
+//! a rotation. The AAD, [`FieldSpec::deterministic_aad`], is `<kind>/<field>` with no entity id, so
+//! a value decrypts in any row of its kind and field, and a deterministic field never decides
 //! identity or authorisation on its own.
 //!
 //! # Beacons
@@ -80,7 +80,7 @@
 //! version, stored beside the field's randomised value so that a data store finds rows by
 //! equality. A keyring created with a [`beacon`](KeyringAlgorithms::beacon) algorithm has beacon
 //! versions:
-//! [`Sealer::beacon`] computes the beacon of a value under the active one, and
+//! [`Encryptor::beacon`] computes the beacon of a value under the active one, and
 //! [`Keyring::beacon_probes`] under every version a lookup matches across a rotation. A beacon
 //! column leaks which rows are likely to hold equal values; [`FieldSpec::with_beacon_bits`] sets
 //! how much of the HMAC it keeps, and so how many rows a lookup returns to decrypt and filter.
@@ -97,13 +97,15 @@
 //! `KeyringAdmin::mark_compromised` flags a version for good, and replaces an active one with a
 //! version that is active at once. Under the default [`CompromisedReadPolicy::Block`] values
 //! under a compromised version stop decrypting through [`Keyring::decrypt`];
-//! [`Keyring::decrypt_with_trust`] still opens them and reports them as untrusted.
+//! [`Keyring::decrypt_with_trust`] still decrypts them and reports them as untrusted.
 //!
-//! The record's integrity rests on the store's access control. The processes that serve
-//! requests need the KMS's decrypt right and read access to the store; only a `KeyringAdmin`, in
-//! an administrative job, encrypts DEKs and writes the record. A running process takes a record
-//! from the store only
-//! if it moves every version forward from the one it holds, and logs an `ERROR` otherwise.
+//! The processes that serve requests need the KMS's decrypt right and read access to the store;
+//! only a `KeyringAdmin`, in an administrative job, encrypts DEKs and writes the record. A running
+//! process takes a record from the store only if it moves every version forward from the one it
+//! holds, and logs an `ERROR` otherwise. An unsigned record's integrity rests on the store's
+//! access control. A `KeyringAdmin` with a `RecordSigner` signs every record it writes, and the
+//! registry verifies each record it reads under its [`RecordSignaturePolicy`] before it uses any
+//! field: `Required` refuses a record without a signature.
 //!
 //! # Caching
 //!
@@ -126,20 +128,24 @@
 //!
 //! # Features
 //!
+//! serde is in every build: `Serialize` and `Deserialize` for [`Encrypted`] and
+//! [`EncryptionMarker`](sweep::EncryptionMarker), as bytes, and [`JsonEncoded`], a plaintext stored as its
+//! JSON.
+//!
 //! | Feature | Enables |
 //! |---|---|
 //! | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the kms-aead backend of the same name |
 //! | `admin` | `KeyringAdmin`, and the registry's `create`, `open_or_create` and `admin`: the calls that encrypt DEKs, write the record or export keysets |
-//! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic` and `reseal_deterministic` on a `Sealer`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes` on a `Keyring`; the deterministic types are in every build |
-//! | `serde` | `Serialize` and `Deserialize` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker), as bytes |
-//! | `serde-json` | `serde`, and `Json`, a plaintext stored as its JSON |
-//! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs |
-//! | `postgres` | `store::PostgresKeyringStore` on tokio-postgres, with the TLS connector the application passes, and `ToSql` and `FromSql` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker) as `BYTEA` |
-//! | `sqlx` | sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] and [`SealMarker`](sweep::SealMarker) on PostgreSQL, as `BYTEA` |
+//! | `deterministic` | deterministic key versions and every call on them: `encrypt_deterministic` and `reencrypt_deterministic` on an `Encryptor`, `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes` on a `Keyring`; the deterministic types are in every build |
+//! | `firestore` | `store::FirestoreKeyringStore`, on firestore-rs with no TLS root store: the application enables one of firestore-rs's |
+//! | `firestore-tls-roots`, `firestore-tls-webpki` | `firestore`, with firestore-rs's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
+//! | `postgres` | `store::PostgresKeyringStore` on tokio-postgres, with the TLS connector the application passes, and `ToSql` and `FromSql` for [`Encrypted`] and [`EncryptionMarker`](sweep::EncryptionMarker) as `BYTEA` |
+//! | `sqlx` | sqlx's `Type`, `Encode` and `Decode` for [`Encrypted`] and [`EncryptionMarker`](sweep::EncryptionMarker) on PostgreSQL, as `BYTEA` |
 //! | `gcs` | `store::GcsKeyringStore`, with no TLS root store: the application enables one of gcloud-sdk's |
 //! | `gcs-tls-roots`, `gcs-tls-webpki` | `gcs`, with gcloud-sdk's `tls-roots` or `tls-webpki-roots` and its default crypto provider |
 //! | `s3` | `store::S3KeyringStore`, on aws-sdk-s3 with the SDK's default HTTPS client, rustls on aws-lc-rs |
 //! | `bigquery-export` | `admin`, and `KeyringAdmin::export_bigquery_keyset` on kms-aead's GCP provider with no TLS root store: the application enables kms-aead's `gcp-kms-encryption` |
+//! | `stream` | `Encryptor::stream_encryptor`, `Keyring::stream_decryptor`, `decrypting_stream` and `decrypting_reader`, streamed values under the keyring's versions, and kms-aead's `stream` module re-exported as `stream` |
 //! | `opentelemetry` | kms-aead's `opentelemetry`, with every keyring call and store read recorded in its instruments, per keyring and key version. The application installs the meter provider before the first call, since the instruments stay bound to the provider they find then |
 //!
 //! # Example
@@ -194,7 +200,8 @@
 //!
 //! let aad = EMAIL.aad(&EntityId::try_from("42")?);
 //! let alice = Email("alice@example.com".to_string());
-//! let value: Encrypted<Email, Randomized> = keyring.sealer().await.encrypt(&aad, &alice).await?;
+//! let value: Encrypted<Email, Randomized> =
+//!     keyring.encryptor().await.encrypt(&aad, &alice).await?;
 //! let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 //! admin.promote_now(staged).await?;
 //!
@@ -223,11 +230,13 @@ mod keyring;
 pub use keyring::*;
 
 pub use kms_aead::formats;
-#[cfg(feature = "serde-json")]
-pub use kms_aead::Json;
+pub use kms_aead::mac::{Mac, MacAlgorithm, WithMac};
+pub use kms_aead::redaction;
+#[cfg(feature = "stream")]
+pub use kms_aead::stream;
 pub use kms_aead::{
-    AeadAlgorithm, Beacon, BeaconAlgorithm, BeaconBits, DeterministicAlgorithm, Encrypted, KeyId,
-    Plaintext,
+    AeadAlgorithm, Beacon, BeaconAlgorithm, BeaconBits, DeterministicAlgorithm, Encrypted,
+    JsonEncoded, KeyId, Plaintext, Signable, SignableType, SignedPayloadType,
 };
 
 mod metrics;
@@ -240,17 +249,21 @@ pub use record::*;
 
 mod record_cache;
 
+mod record_signing;
+pub use record_signing::RecordSignaturePolicy;
+#[cfg(feature = "admin")]
+pub use record_signing::{MaybeRecordSigner, NoRecordSigner, RecordSigner};
+
 mod registry;
 pub use registry::*;
 
-// The book's code uses the administrative calls, the deterministic fields, serde, every store and
-// the BigQuery export, so it compiles in the build with the docs.rs feature set only.
+// The book's code uses the administrative calls, the deterministic fields, every store and the
+// BigQuery export, so it compiles in the build with the docs.rs feature set only.
 #[cfg(all(
     doctest,
     feature = "ring",
     feature = "admin",
     feature = "deterministic",
-    feature = "serde-json",
     feature = "firestore",
     feature = "postgres",
     feature = "gcs",

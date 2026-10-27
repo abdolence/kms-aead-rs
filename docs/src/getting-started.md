@@ -4,7 +4,7 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.30", features = ["gcp-kms-encryption", "aws-lc"] }
+kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "aws-lc"] }
 ```
 
 The crate has no default features. A build makes three choices, and they do not constrain each
@@ -21,7 +21,7 @@ Every feature of both crates is in [Cargo features](./features.md).
 ## Choosing a backend
 
 There is no default backend: each backend feature adds a type to `kms_aead::backends`, `Ring`,
-`AwsLc` or `RustCrypto`, and every type that seals or encrypts takes one as its backend type
+`AwsLc` or `RustCrypto`, and every type that encrypts takes one as its backend type
 parameter. Which one fits a build, FIPS and the C toolchain included, is in
 [Choose a provider and a backend](./use-cases/choosing.md#crypto-backends).
 

@@ -36,7 +36,9 @@ Notes on the table:
   with `algorithm` set to `AzureKmsAlgorithm::Aes256KeyWrap`, see
   [Azure Key Vault](../providers/azure.md#options) and [Keyring limits](../security.md#keyring-limits);
 - the local KMS has no IAM, no audit log and no HSM, see [Local KMS](../providers/local.md#limits);
-- crypto-shredding per KMS is in [A leaked key or a shredded tenant](./incidents.md#crypto-shredding).
+- crypto-shredding per KMS is in [A leaked key or a shredded
+  tenant](./incidents.md#crypto-shredding); a keyring under a shared KEK is shredded with
+  `dangerously_shred()`, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring).
 
 The TLS root store and the TLS crypto provider are a feature choice for Google Cloud KMS, Azure and
 Vault Transit, with the rules in [Feature rules](../features.md#feature-rules).
@@ -46,15 +48,19 @@ Vault Transit, with the rules in [Feature rules](../features.md#feature-rules).
 | | `ring` | `aws-lc` | `aws-lc-fips` | `rustcrypto` |
 |---|---|---|---|---|
 | AES-256-GCM-SIV | no | yes | yes | yes |
+| RSA-OAEP encryption, for a producer under an asymmetric KEK | no | yes | yes | yes |
 | FIPS module | no | no | yes | no |
 | Needs a C toolchain | yes | yes | yes, with CMake and Go | no |
 | A second crypto library beside a cloud provider | yes | no | no | yes |
 | Key schedules zeroised | no | yes, by AWS-LC's allocator | yes, by AWS-LC's allocator | yes |
 
-Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the same bytes, and opens
-the values of any other, so a move from one backend to another needs no migration of the data, see
-[Cross-backend compatibility](../crypto-backends.md#cross-backend-compatibility).
+Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the same bytes, and
+decrypts the values of any other, so a move from one backend to another needs no migration of the
+data, see [Cross-backend compatibility](../crypto-backends.md#cross-backend-compatibility).
 
+- **Producers under an asymmetric KEK**: a producer that encrypts DEKs with a public key fails at
+  construction with `UNSUPPORTED_ALGORITHM` on `ring`, which has no RSA encryption. Readers need
+  nothing of RSA on any backend, see [Writers that can never read](./write-only-producers.md);
 - **No second crypto library**: the default features of the four cloud providers already build
   aws-lc-rs for TLS, so `aws-lc` adds nothing to a provider build;
 - **FIPS**: `aws-lc-fips` runs the backend on the AWS-LC FIPS module and moves every user of

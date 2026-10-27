@@ -9,31 +9,43 @@ use crate::test_support::{TestResult, TENANT};
 const CREATED: &str = "2026-01-10T09:00:00Z";
 const ROTATED: &str = "2026-04-10T09:00:00Z";
 pub(super) const COMPROMISED: &str = "2026-05-01T12:00:00Z";
-/// The encrypted bytes of every fixture version: distinctive, so that a test can look for them.
+/// The first bytes of every fixture version's encrypted DEK: distinctive, so that a test can look
+/// for them. The version's key id follows, since no two versions hold the same bytes.
 pub(super) const ENCRYPTED_DEK: [u8; 6] = [0xC0, 0xFF, 0xEE, 0xC0, 0xFF, 0xEE];
-/// [`ENCRYPTED_DEK`] in standard base64, as the record stores it.
+/// [`ENCRYPTED_DEK`] in standard base64, as the record stores it: the start of every fixture
+/// version's.
 const ENCRYPTED_DEK_BASE64: &str = "wP/uwP/u";
+
+/// The encrypted DEK of the fixture version `key_id`.
+fn encrypted_dek_of(key_id: u32) -> Vec<u8> {
+    [&ENCRYPTED_DEK[..], &key_id.to_be_bytes()].concat()
+}
 /// The KEK version of every fixture version's encrypted DEK.
 const KEK_VERSION: &str = "4";
 
 /// A version as the stored form writes it, with an encrypted DEK and its KEK version unless it is
-/// destroyed, and a seal range that fits its state in a [`document`] at epoch 2: open from 2 while
-/// active, from 1 to 2 once decrypt-only or retired, and none while pending or once destroyed.
+/// destroyed, and a re-encryption range that fits its state in a [`document`] at epoch 2: open from
+/// 2 while active, from 1 to 2 once decrypt-only or retired, and none while pending or once
+/// destroyed.
 pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringResult<Value> {
-    let algorithm = if key_id >> 31 == 1 {
-        "aes-256-siv"
-    } else {
-        "aes-256-gcm"
+    let algorithm = match key_id >> 30 {
+        0 => "aes-256-gcm",
+        1 => "hmac-sha256",
+        2 => "aes-256-siv",
+        _ => "mac-hmac-sha256",
     };
     let (encrypted_dek, kek_version) = match state {
         "destroyed" => (Value::Null, Value::Null),
-        _ => (json!(ENCRYPTED_DEK_BASE64), json!(KEK_VERSION)),
+        _ => (
+            json!(STANDARD.encode(encrypted_dek_of(key_id))),
+            json!(KEK_VERSION),
+        ),
     };
     let compromised = match compromised {
         true => json!({ "at": COMPROMISED, "note": "laptop lost" }),
         false => Value::Null,
     };
-    let seal_epochs = match state {
+    let reencrypt_epochs = match state {
         "active" => json!({ "start": 2, "end": null }),
         "decrypt_only" | "retired" => json!({ "start": 1, "end": 2 }),
         _ => Value::Null,
@@ -43,7 +55,7 @@ pub(super) fn version(key_id: u32, state: &str, compromised: bool) -> KeyringRes
         "algorithm": algorithm,
         "state": state,
         "compromised": compromised,
-        "seal_epochs": seal_epochs,
+        "seal_epochs": reencrypt_epochs,
         "created_at": CREATED,
         "state_changed_at": ROTATED,
         "encrypted_dek": encrypted_dek,
@@ -60,6 +72,7 @@ pub(super) fn document(versions: Vec<Value>) -> Value {
             "randomized": "aes-256-gcm",
             "deterministic": "aes-256-siv",
             "beacon": "hmac-sha256",
+            "mac": null,
         },
         "seal_epoch": 2,
         "versions": versions,
@@ -106,9 +119,45 @@ fn a_record_round_trips_through_its_json() -> TestResult {
     assert_eq!(
         reparsed.kek(),
         &KekRef::new(
-            kms_aead::KekProvider::Gcp,
+            kms_aead::KmsProvider::Gcp,
             "projects/p/locations/europe-west1/keyRings/app/cryptoKeys/keyring-kek"
         )
+    );
+    Ok(())
+}
+
+#[test]
+fn a_mac_version_round_trips_through_the_record() -> TestResult {
+    let mut document = document(vec![
+        version(1, "active", false)?,
+        version(0xC000_0001, "active", false)?,
+    ]);
+    document["algorithms"]["mac"] = json!("mac-hmac-sha256");
+
+    let record = parse(&document)?;
+
+    assert_eq!(
+        record.active(Purpose::Mac).map(KeyVersion::algorithm),
+        Some(KeyAlgorithm::Mac(MacAlgorithm::HmacSha256))
+    );
+    assert_eq!(record.algorithms().mac, Some(MacAlgorithm::HmacSha256));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&record.to_json()?)?,
+        document
+    );
+    Ok(())
+}
+
+#[test]
+fn two_versions_with_one_encrypted_dek_are_rejected() -> KeyringResult<()> {
+    let mut beacon = version(0x4000_0001, "active", false)?;
+    beacon["encrypted_dek"] = version(1, "active", false)?["encrypted_dek"].clone();
+    let document = document(vec![version(1, "active", false)?, beacon]);
+    assert_eq!(
+        refusal(&document),
+        Some(RecordInvalidReason::DuplicateEncryptedDek(KeyId::new(
+            0x4000_0001
+        )))
     );
     Ok(())
 }
@@ -292,20 +341,20 @@ fn names_of_other_schemas_algorithms_and_states_are_rejected() -> KeyringResult<
 }
 
 #[test]
-fn a_seal_epoch_of_zero_is_rejected() -> KeyringResult<()> {
+fn a_reencryption_epoch_of_zero_is_rejected() -> KeyringResult<()> {
     let mut envelope_epoch = rotated()?;
     envelope_epoch["seal_epoch"] = json!(0);
     assert_eq!(
         refusal(&envelope_epoch),
-        Some(RecordInvalidReason::SealEpochOutOfRange)
+        Some(RecordInvalidReason::ReencryptEpochOutOfRange)
     );
     Ok(())
 }
 
 #[test]
-fn a_seal_range_that_does_not_fit_its_state_or_the_epoch_is_rejected() -> KeyringResult<()> {
+fn a_reencryption_range_that_does_not_fit_its_state_or_epoch_is_rejected() -> KeyringResult<()> {
     let open_from_one = json!({ "start": 1, "end": null });
-    for (state, seal_epochs) in [
+    for (state, reencrypt_epochs) in [
         ("pending", open_from_one.clone()),
         ("active", Value::Null),
         ("active", json!({ "start": 1, "end": 2 })),
@@ -317,11 +366,11 @@ fn a_seal_range_that_does_not_fit_its_state_or_the_epoch_is_rejected() -> Keyrin
         ("active", json!({ "start": 3, "end": null })),
     ] {
         let mut stored = version(1, state, false)?;
-        stored["seal_epochs"] = seal_epochs.clone();
+        stored["seal_epochs"] = reencrypt_epochs.clone();
         assert_eq!(
             refusal(&document(vec![stored])),
-            Some(RecordInvalidReason::SealRangeInvalid(KeyId::new(1))),
-            "{state} with {seal_epochs}"
+            Some(RecordInvalidReason::ReencryptRangeInvalid(KeyId::new(1))),
+            "{state} with {reencrypt_epochs}"
         );
     }
     let mut destroyed = version(1, "destroyed", false)?;
@@ -477,11 +526,11 @@ fn a_regressed_record_is_refused() -> TestResult {
         ),
         (
             |next| next["versions"][1]["seal_epochs"]["start"] = json!(1),
-            RegressionRule::SealRangeReverted(KeyId::new(2)),
+            RegressionRule::ReencryptRangeReverted(KeyId::new(2)),
         ),
         (
             |next| next["versions"][0]["seal_epochs"]["end"] = json!(3),
-            RegressionRule::SealRangeReverted(KeyId::new(1)),
+            RegressionRule::ReencryptRangeReverted(KeyId::new(1)),
         ),
         (
             |next| {
@@ -490,14 +539,14 @@ fn a_regressed_record_is_refused() -> TestResult {
                 next["versions"][2]["encrypted_dek"] = Value::Null;
                 next["versions"][2]["kek_version"] = Value::Null;
             },
-            RegressionRule::SealRangeReverted(KeyId::new(3)),
+            RegressionRule::ReencryptRangeReverted(KeyId::new(3)),
         ),
         (
             |next| {
                 next["versions"][1]["state"] = json!("decrypt_only");
                 next["versions"][1]["seal_epochs"]["end"] = json!(3);
             },
-            RegressionRule::SealRangeReverted(KeyId::new(2)),
+            RegressionRule::ReencryptRangeReverted(KeyId::new(2)),
         ),
         (
             |next| {
@@ -507,11 +556,11 @@ fn a_regressed_record_is_refused() -> TestResult {
                 next["versions"][4]["state"] = json!("active");
                 next["versions"][4]["seal_epochs"] = json!({ "start": 3, "end": null });
             },
-            RegressionRule::SealRangeReverted(KeyId::new(5)),
+            RegressionRule::ReencryptRangeReverted(KeyId::new(5)),
         ),
         (
             |next| next["seal_epoch"] = json!(2),
-            RegressionRule::SealEpochReverted,
+            RegressionRule::ReencryptEpochReverted,
         ),
     ];
     let held_record = parse(&held()?)?;
@@ -519,7 +568,7 @@ fn a_regressed_record_is_refused() -> TestResult {
         let mut next = held()?;
         change(&mut next);
         let next = parse(&next)?;
-        assert_eq!(check_successor(&held_record, &next), Err(rule));
+        assert_eq!(held_record.check_successor(&next), Err(rule));
     }
     Ok(())
 }
@@ -541,21 +590,21 @@ fn forward_moves_are_accepted_however_many_steps_they_skip() -> TestResult {
     if let Some(versions) = next["versions"].as_array_mut() {
         versions.push(version(6, "pending", false)?);
     }
-    assert_eq!(check_successor(&held_record, &parse(&next)?), Ok(()));
-    assert_eq!(check_successor(&held_record, &held_record), Ok(()));
+    assert_eq!(held_record.check_successor(&parse(&next)?), Ok(()));
+    assert_eq!(held_record.check_successor(&held_record), Ok(()));
 
     let mut destroyed = held()?;
     destroyed["versions"][4]["state"] = json!("destroyed");
     destroyed["versions"][4]["encrypted_dek"] = Value::Null;
     destroyed["versions"][4]["kek_version"] = Value::Null;
-    assert_eq!(check_successor(&held_record, &parse(&destroyed)?), Ok(()));
+    assert_eq!(held_record.check_successor(&parse(&destroyed)?), Ok(()));
     let mut retired = held()?;
     retired["seal_epoch"] = json!(5);
     retired["versions"][1]["state"] = json!("decrypt_only");
     retired["versions"][1]["seal_epochs"]["end"] = json!(4);
     retired["versions"][4]["state"] = json!("retired");
     retired["versions"][4]["seal_epochs"] = json!({ "start": 4, "end": 5 });
-    assert_eq!(check_successor(&held_record, &parse(&retired)?), Ok(()));
+    assert_eq!(held_record.check_successor(&parse(&retired)?), Ok(()));
     Ok(())
 }
 
@@ -576,8 +625,8 @@ fn versions_taken_out_of_use_are_withdrawn() -> TestResult {
         versions.push(version(6, "active", false)?);
     }
     let next = parse(&next)?;
-    assert_eq!(withdrawn_deks(&held_record, &next).count(), 3);
-    assert_eq!(withdrawn_deks(&held_record, &held_record).count(), 0);
+    assert_eq!(held_record.withdrawn_deks(&next).count(), 3);
+    assert_eq!(held_record.withdrawn_deks(&held_record).count(), 0);
     Ok(())
 }
 
@@ -587,12 +636,12 @@ fn a_reencrypted_key_withdraws_the_bytes_it_replaces() -> TestResult {
     let mut next = held()?;
     next["versions"][1]["encrypted_dek"] = json!(STANDARD.encode([0x0B, 0xAD]));
     let next = parse(&next)?;
-    let withdrawn: Vec<_> = withdrawn_deks(&held_record, &next).collect();
+    let withdrawn: Vec<_> = held_record.withdrawn_deks(&next).collect();
     assert_eq!(
         withdrawn,
         [(
             KeyId::new(2),
-            &EncryptedDataEncryptionKey::new(ENCRYPTED_DEK.to_vec())
+            &EncryptedDataEncryptionKey::new(encrypted_dek_of(2))
         )]
     );
     Ok(())
@@ -650,6 +699,9 @@ fn state_and_algorithm_names_parse_back() -> TestResult {
     for algorithm in [
         KeyAlgorithm::Randomized(AeadAlgorithm::Aes256Gcm),
         KeyAlgorithm::Deterministic(DeterministicAlgorithm::Aes256Siv),
+        KeyAlgorithm::Beacon(BeaconAlgorithm::HmacSha256),
+        KeyAlgorithm::Mac(MacAlgorithm::HmacSha256),
+        KeyAlgorithm::Mac(MacAlgorithm::HmacSha512),
     ] {
         assert_eq!(algorithm.to_string().parse::<KeyAlgorithm>()?, algorithm);
     }

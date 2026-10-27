@@ -3,15 +3,16 @@ use std::sync::Arc;
 
 use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
 use gcloud_sdk::google::storage::v2::{
-    write_object_request, write_object_response, ChecksummedData, Object, ReadObjectRequest,
-    WriteObjectRequest, WriteObjectSpec,
+    write_object_request, write_object_response, ChecksummedData, DeleteObjectRequest,
+    ListObjectsRequest, Object, ReadObjectRequest, WriteObjectRequest, WriteObjectSpec,
 };
 use gcloud_sdk::tonic::metadata::{Ascii, MetadataValue};
 use gcloud_sdk::tonic::{self, Code};
 use gcloud_sdk::{GoogleApi, GoogleAuthMiddleware};
 
 use super::{
-    KeyringStore, KeyringWatch, ObjectPrefix, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+    Deletion, KeyringStore, KeyringWatch, ObjectPrefix, Revalidation, StoreKind, StoreOperation,
+    Stored, Swap,
 };
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::record::stored::MAX_RECORD_DOCUMENT_LEN;
@@ -65,6 +66,14 @@ impl Display for GcsGeneration {
     }
 }
 
+/// The generations of one object a bucket holds, as a listing with versions returns them.
+struct ObjectGenerations {
+    /// The live generation, the one without a `delete_time`.
+    live: Option<GcsGeneration>,
+    /// The generations that became noncurrent, which a bucket with versioning keeps.
+    noncurrent: Vec<GcsGeneration>,
+}
+
 /// A keyring store in a Cloud Storage bucket, through the `google.storage.v2` gRPC API. Each
 /// record is the object `<prefix><keyring id>.json`, and its revision is the object's
 /// generation: a write is conditional on the generation the writer read, and a revalidation
@@ -76,8 +85,9 @@ impl Display for GcsGeneration {
 ///
 /// The application's principal needs `storage.objects.get` on the bucket, and the administrative
 /// one `storage.objects.create` and `storage.objects.delete` as well, since a write replaces the
-/// object. With object versioning on the bucket, every record written is kept as a noncurrent
-/// version.
+/// object, and `storage.objects.list` for [`delete`](KeyringStore::delete), which lists the
+/// generations of the object. With object versioning on the bucket, every record written is kept
+/// as a noncurrent version.
 #[derive(Clone)]
 pub struct GcsKeyringStore {
     client: GoogleApi<StorageClient<GoogleAuthMiddleware>>,
@@ -151,6 +161,94 @@ impl GcsKeyringStore {
             .metadata_mut()
             .insert("x-goog-request-params", self.routing.clone());
         request
+    }
+
+    /// Every generation of the object `name`, live and noncurrent, paginated.
+    async fn generations(&self, name: &str) -> KeyringResult<ObjectGenerations> {
+        let mut found = ObjectGenerations {
+            live: None,
+            noncurrent: Vec::new(),
+        };
+        let mut page_token = String::new();
+        loop {
+            let request = self.request(ListObjectsRequest {
+                parent: self.bucket.clone(),
+                prefix: name.to_string(),
+                versions: true,
+                page_token,
+                ..Default::default()
+            });
+            let page = self
+                .client
+                .get()
+                .list_objects(request)
+                .await
+                .map_err(|status| {
+                    KeyringError::store_caused_by(
+                        StoreKind::Gcs,
+                        StoreOperation::Delete,
+                        Arc::new(status),
+                    )
+                })?
+                .into_inner();
+            // An id may contain `.`, so `<id>.json` is also the prefix of another id's object.
+            for object in page
+                .objects
+                .into_iter()
+                .filter(|object| object.name == name)
+            {
+                let generation = GcsGeneration(object.generation);
+                if object.delete_time.is_none() {
+                    found.live = Some(generation);
+                } else {
+                    found.noncurrent.push(generation);
+                }
+            }
+            if page.next_page_token.is_empty() {
+                return Ok(found);
+            }
+            page_token = page.next_page_token;
+        }
+    }
+
+    /// Deletes one `generation` of the object `name` permanently, also when it is gone already.
+    async fn delete_generation(&self, name: &str, generation: GcsGeneration) -> KeyringResult<()> {
+        let request = self.request(DeleteObjectRequest {
+            bucket: self.bucket.clone(),
+            object: name.to_string(),
+            generation: generation.0,
+            ..Default::default()
+        });
+        match self.client.get().delete_object(request).await {
+            Ok(_) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => Ok(()),
+            Err(status) => Err(KeyringError::store_caused_by(
+                StoreKind::Gcs,
+                StoreOperation::Delete,
+                Arc::new(status),
+            )),
+        }
+    }
+
+    /// Deletes the live object `name` when its generation is `expected`. A bucket with versioning
+    /// keeps the generation as a noncurrent one.
+    async fn delete_live(&self, name: &str, expected: GcsGeneration) -> KeyringResult<Deletion> {
+        let request = self.request(DeleteObjectRequest {
+            bucket: self.bucket.clone(),
+            object: name.to_string(),
+            if_generation_match: Some(expected.0),
+            ..Default::default()
+        });
+        match self.client.get().delete_object(request).await {
+            Ok(_) => Ok(Deletion::Deleted),
+            Err(status) if status.code() == Code::NotFound => Ok(Deletion::Deleted),
+            Err(status) if status.code() == Code::FailedPrecondition => Ok(Deletion::Conflict),
+            Err(status) => Err(KeyringError::store_caused_by(
+                StoreKind::Gcs,
+                StoreOperation::Delete,
+                Arc::new(status),
+            )),
+        }
     }
 
     /// The live record of `id` as [`Revalidation::Changed`], or [`Revalidation::Missing`] when
@@ -289,6 +387,36 @@ impl KeyringStore for GcsKeyringStore {
                 "The write returned no finalised object",
             )),
         }
+    }
+
+    /// Deletes the object of `id` when its live generation is `expected`, with every noncurrent
+    /// generation the bucket keeps. It lists the generations of the object first and returns
+    /// [`Deletion::Conflict`] when the live one is another, before deleting anything. Then it
+    /// deletes the noncurrent generations permanently, the live object under the precondition of
+    /// its generation, and the generation `expected` that a bucket with versioning kept as
+    /// noncurrent. A failure part-way leaves the live object, and the repeated call starts again.
+    ///
+    /// A bucket with soft delete keeps every generation this call deletes restorable for its
+    /// retention, 7 days by default, outside this API, and a backup of the bucket keeps what it
+    /// copied: both are the operator's.
+    async fn delete(&self, id: &KeyringId, expected: &GcsGeneration) -> KeyringResult<Deletion> {
+        let name = self.object_name(id);
+        let found = self.generations(&name).await?;
+        if found.live.is_some_and(|live| live != *expected) {
+            return Ok(Deletion::Conflict);
+        }
+        // The noncurrent generations hold the encrypted DEKs a shred destroys, and a keyring
+        // whose live object is gone reads as shredded, so that no shred deletes again: they go
+        // before the live object, which a shred wrote without any DEK. Generation numbers are
+        // unique but need not increase, so the listing, not the number, says which is live.
+        for generation in found.noncurrent {
+            self.delete_generation(&name, generation).await?;
+        }
+        if found.live.is_some() && self.delete_live(&name, *expected).await? == Deletion::Conflict {
+            return Ok(Deletion::Conflict);
+        }
+        self.delete_generation(&name, *expected).await?;
+        Ok(Deletion::Deleted)
     }
 
     async fn watch(&self, _id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {

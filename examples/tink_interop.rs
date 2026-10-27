@@ -1,10 +1,10 @@
 //! kms-aead's typed fields against Tink on a Cloud KMS key and an AWS KMS key, both ways:
 //!
 //! - `encrypt` writes one `Encrypted<Message, Envelope>` per KMS and algorithm, which
-//!   `python -I tests/tink_interop.py decrypt` opens with Tink's `KmsEnvelopeAead`;
+//!   `python -I tests/tink_interop.py decrypt` decrypts with Tink's `KmsEnvelopeAead`;
 //! - `export` writes a keyset of one new key per KMS and algorithm, encrypted by the KMS key, and
 //!   an `Encrypted<Message, Randomized>` of the key, which
-//!   `python -I tests/tink_interop.py read-keysets` opens with the keyset;
+//!   `python -I tests/tink_interop.py read-keysets` decrypts with the keyset;
 //! - `decrypt` reads what `python -I tests/tink_interop.py encrypt` and `read-keysets` write.
 //!
 //! The script lists the commands and the variables that name the keys; a KMS whose variables are
@@ -18,12 +18,13 @@ use kms_aead::formats::{Envelope, Randomized, TinkKeyType, TinkKeyset};
 use kms_aead::providers::{AwsKmsKeyRef, AwsKmsProvider, GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::{
     AeadAlgorithm, AeadCipher, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions, KmsAeadResult, Plaintext,
+    KmsAeadDecryptionProvider, KmsAeadEncryptionProvider, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
+    KmsAeadResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde_json::{json, Value};
 
-/// The text each side seals for the other, an application newtype stored as the UTF-8 bytes of
+/// The text each side encrypts for the other, an application newtype stored as the UTF-8 bytes of
 /// its string, as Tink's side writes and reads it.
 #[derive(Clone)]
 struct Message(String);
@@ -132,7 +133,10 @@ where
         KmsAeadEnvelopeOptions::new().with_algorithm(algorithm),
     )?;
     let aad = format!("orders/{kms}/{algorithm}");
-    let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
+    let message = Message(format!(
+        "encrypted by kms-aead {}",
+        env!("CARGO_PKG_VERSION")
+    ));
     let value: Encrypted<Message, Envelope> = envelope.encrypt(&aad, &message).await?;
     println!(
         "{}",
@@ -148,7 +152,7 @@ where
 }
 
 /// A keyset of a new key, encrypted by `provider` for Tink, with a value of the key and the key
-/// encrypted by `provider`, from which `decrypt` opens the value Tink seals with the keyset.
+/// encrypted by `provider`, from which `decrypt` decrypts the value Tink encrypts with the keyset.
 async fn export<P>(kms: &str, provider: P, algorithm: AeadAlgorithm) -> KmsAeadResult<()>
 where
     P: KmsAeadEncryptionProvider,
@@ -158,7 +162,10 @@ where
     let mut keyset = TinkKeyset::new(EXPORTED_KEY_ID);
     keyset.add_key(EXPORTED_KEY_ID, TinkKeyType::from(algorithm), &dek)?;
     let aad = format!("orders/{kms}/{algorithm}");
-    let message = Message(format!("sealed by kms-aead {}", env!("CARGO_PKG_VERSION")));
+    let message = Message(format!(
+        "encrypted by kms-aead {}",
+        env!("CARGO_PKG_VERSION")
+    ));
     let value: Encrypted<Message, Randomized> =
         cipher.encrypt(EXPORTED_KEY_ID, &aad, &message, &dek)?;
     println!(
@@ -180,7 +187,7 @@ where
 /// The value of `case`: a Tink envelope, or with `encrypted_dek` a value of that key.
 async fn decrypt<P>(provider: P, case: &Value) -> KmsAeadResult<Message>
 where
-    P: KmsAeadEncryptionProvider,
+    P: KmsAeadDecryptionProvider,
 {
     let algorithm: AeadAlgorithm = case["algorithm"]
         .as_str()

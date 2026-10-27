@@ -4,10 +4,10 @@ use sqlx_core::error::BoxDynError;
 use sqlx_core::types::Type;
 use sqlx_postgres::{PgArgumentBuffer, PgTypeInfo, PgValueRef, Postgres};
 
-use super::SealMarker;
+use super::EncryptionMarker;
 
 /// `BYTEA`.
-impl Type<Postgres> for SealMarker {
+impl Type<Postgres> for EncryptionMarker {
     fn type_info() -> PgTypeInfo {
         <Vec<u8> as Type<Postgres>>::type_info()
     }
@@ -18,18 +18,18 @@ impl Type<Postgres> for SealMarker {
 }
 
 /// The marker's bytes.
-impl Encode<'_, Postgres> for SealMarker {
+impl Encode<'_, Postgres> for EncryptionMarker {
     fn encode_by_ref(&self, buf: &mut PgArgumentBuffer) -> Result<IsNull, BoxDynError> {
         <&[u8] as Encode<Postgres>>::encode(self.value(), buf)
     }
 }
 
 /// Checked as `TryFrom<Vec<u8>>` checks the bytes.
-impl Decode<'_, Postgres> for SealMarker {
+impl Decode<'_, Postgres> for EncryptionMarker {
     fn decode(value: PgValueRef<'_>) -> Result<Self, BoxDynError> {
-        Ok(SealMarker::try_from(
-            <Vec<u8> as Decode<Postgres>>::decode(value)?,
-        )?)
+        Ok(EncryptionMarker::try_from(<Vec<u8> as Decode<
+            Postgres,
+        >>::decode(value)?)?)
     }
 }
 
@@ -46,20 +46,21 @@ mod tests {
     async fn a_marker_round_trips_through_sqlx_as_bytea() -> TestResult {
         let mut connection =
             PgConnection::connect(&std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?).await?;
-        let marker = SealMarker::of_epoch(65_536);
-        let read: SealMarker = sqlx::query_scalar::<Postgres, SealMarker>("SELECT $1::bytea")
-            .bind(marker)
-            .fetch_one(&mut connection)
-            .await?;
+        let marker = EncryptionMarker::of_epoch(65_536);
+        let read: EncryptionMarker =
+            sqlx::query_scalar::<Postgres, EncryptionMarker>("SELECT $1::bytea")
+                .bind(marker)
+                .fetch_one(&mut connection)
+                .await?;
 
         assert_eq!(read, marker);
-        let malformed = sqlx::query_scalar::<Postgres, SealMarker>("SELECT '\\x02'::bytea")
+        let malformed = sqlx::query_scalar::<Postgres, EncryptionMarker>("SELECT '\\x02'::bytea")
             .fetch_one(&mut connection)
             .await;
         assert!(matches!(
             malformed,
             Err(sqlx::Error::ColumnDecode { source, .. })
-                if matches!(source.downcast_ref::<KeyringError>(), Some(KeyringError::InvalidSealMarker))
+                if matches!(source.downcast_ref::<KeyringError>(), Some(KeyringError::InvalidEncryptionMarker))
         ));
         Ok(())
     }

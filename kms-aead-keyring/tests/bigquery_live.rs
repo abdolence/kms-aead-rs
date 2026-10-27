@@ -32,7 +32,7 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn env(name: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn required_env_var(name: &str) -> Result<String, Box<dyn std::error::Error>> {
     std::env::var(name).map_err(|error| format!("{name}: {error}").into())
 }
 
@@ -49,12 +49,15 @@ struct Row {
 #[tokio::test]
 #[ignore = "needs the Cloud KMS key PROJECT_ID, PROJECT_LOCATION, KMS_KEY_RING and KMS_KEY name, and BigQuery in that project"]
 async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
-    let (project, location) = (env("PROJECT_ID")?, env("PROJECT_LOCATION")?);
+    let (project, location) = (
+        required_env_var("PROJECT_ID")?,
+        required_env_var("PROJECT_LOCATION")?,
+    );
     let key_ref = GcpKmsKeyRef::new(
         project.clone(),
         location.clone(),
-        env("KMS_KEY_RING")?,
-        env("KMS_KEY")?,
+        required_env_var("KMS_KEY_RING")?,
+        required_env_var("KMS_KEY")?,
     );
     let admin: KeyringAdmin<MemoryKeyringStore, GcpKmsProvider, Ring> =
         KeyringRegistry::<MemoryKeyringStore, Ring>::new(
@@ -73,7 +76,7 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
     let deterministic_aad = field.deterministic_aad();
 
     let first = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
@@ -81,14 +84,14 @@ async fn bigquery_reads_values_through_exported_keysets() -> TestResult {
         .promote_now(admin.rotate(Purpose::Randomized).await?)
         .await?;
     let second = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt(&aad, &ALICE.to_string())
         .await?;
     let mut relabelled = first.value().to_vec();
     relabelled[1..5].copy_from_slice(&ABSENT_KEY_ID.to_be_bytes());
     let deterministic = keyring
-        .sealer()
+        .encryptor()
         .await
         .encrypt_deterministic(&deterministic_aad, &ALICE.to_string())
         .await?;
