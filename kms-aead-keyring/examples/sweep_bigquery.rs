@@ -1,29 +1,19 @@
-//! A sweep on BigQuery: writes users through a `Sealer`, each with its seal marker, through the
-//! Storage Write API, rotates and
-//! promotes the randomised version, re-seals every row whose marker is below the current one with
-//! one `UPDATE` in SQL through an exported keyset, and prints the rows it re-sealed. The statement
-//! is the one of
-//! [Sweeps on BigQuery](https://kms-aead-rust.abdolence.dev/operations/sweeps-bigquery.html) in the book: a
-//! field BigQuery reads is re-sealed without a Rust loop and without a value leaving BigQuery, so
-//! the sweep is that statement rather than `sweep::run`.
-//!
-//! The sweep is `sweep_users`. `seed_test_data`, `count_readable_users` and `delete_test_data`, at
-//! the end of the file, only write the example's users before it, check them after, and drop them.
-//!
-//! A sweep is a job that runs on a schedule, and again until it re-seals no row. Retiring the
-//! previous version is a separate administrative step, see
-//! [Rotation cadence](https://kms-aead-rust.abdolence.dev/operations/rotation.html#rotation-cadence).
+//! A keyring sweep on BigQuery: one SQL `UPDATE` through a keyset exported from the keyring
+//! re-encrypts every row whose encryption marker is below the current one. BigQuery re-encrypts the
+//! field itself, with no Rust loop and no value leaving it, so the sweep is `sweep_users` and not
+//! `sweep::reencrypt_records`. [Sweeps on
+//! BigQuery](https://kms-aead-rust.abdolence.dev/operations/sweeps-bigquery.html) in the book
+//! explains it. The rest of the file runs it: it seeds users, rotates, sweeps, checks that
+//! BigQuery reads every user, and drops the dataset.
 //!
 //! The example runs against the Cloud KMS key that `PROJECT_ID`, `PROJECT_LOCATION`,
 //! `KMS_KEY_RING` and `KMS_KEY` name, under the application default credentials, which need the
-//! key's encrypt and decrypt rights and BigQuery's `bigquery.datasets.create` and
-//! `bigquery.jobs.create` in the project. BigQuery opens the keyset through the same key. The
-//! example creates a dataset of its own in `PROJECT_LOCATION`, and drops it at the end. The
-//! keyring record stays in memory.
+//! key's encrypt and decrypt rights and `bigquery.datasets.create` and `bigquery.jobs.create` in
+//! the project. It creates a dataset of its own, and its keyring record stays in memory.
 //!
 //! ```sh
 //! PROJECT_ID=my-project PROJECT_LOCATION=europe-north1 KMS_KEY_RING=my-key-ring KMS_KEY=my-key \
-//!   cargo run -p kms-aead-keyring --example sweep_bigquery --features ring,serde,ci-bigquery -- 1000
+//!   cargo run -p kms-aead-keyring --example sweep_bigquery --features ring,ci-bigquery -- 1000
 //! ```
 //!
 //! The argument is the number of users, 100 by default.
@@ -40,7 +30,7 @@ use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadResult;
 use kms_aead_keyring::encodings::BigQuery;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::SealMarker;
+use kms_aead_keyring::sweep::EncryptionMarker;
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Encrypted, EncryptedKeyset, EntityId, EntityKind, FieldName, FieldSpec, Interop, Keyring,
@@ -61,17 +51,46 @@ const EMAIL: FieldSpec = FieldSpec::new(
 .with_interop(Interop::BigQuery);
 /// The users table, which the statements name as `users` in the example's default dataset: a
 /// table name cannot be a query parameter.
-const USERS: BigQueryTableId = BigQueryTableId::from_static("users");
-/// The rows one sealer seals, which share its marker. The writer sends rows in requests of up to
-/// 19 MB whatever this is, so it bounds only how long one sealer is held.
-const SEAL_ROWS: usize = 1000;
+const USERS_TABLE: BigQueryTableId = BigQueryTableId::from_static("users");
 /// The type of the `@keyset` parameter, the serialised keyset.
-const KEYSET_PARAM_TYPE: BigQueryFieldType = BigQueryFieldType::Bytes { max_length: None };
-const DEFAULT_USERS: u32 = 100;
+const KEYSET_PARAMETER_TYPE: BigQueryFieldType = BigQueryFieldType::Bytes { max_length: None };
+/// The rows one encryptor encrypts, which share its marker.
+const ROWS_PER_ENCRYPTOR: usize = 1000;
+const DEFAULT_USER_COUNT: u32 = 100;
 
-/// The application's email type, sealed as the UTF-8 of the address, which BigQuery reads as a
+/// Re-encrypts, in one `UPDATE` through `keyset`, every user whose marker is below the keyset's.
+/// The statement is atomic and its `WHERE` is the checkpoint: a failed run changed nothing, and the
+/// next one finds every row this one did not write.
+async fn sweep_users(
+    db: &BigQueryDb,
+    dataset: &BigQueryDatasetId,
+    keyset: &EncryptedKeyset<BigQuery>,
+) -> BigQueryResult<BigQueryQueryOutcome> {
+    db.fluent()
+        .query(
+            "UPDATE users
+             SET email = AEAD.ENCRYPT(
+                   KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                   AEAD.DECRYPT_BYTES(
+                     KEYS.KEYSET_CHAIN(@kms_key, @keyset),
+                     email,
+                     CAST(CONCAT('user/', id, '/email') AS BYTES)
+                   ),
+                   CAST(CONCAT('user/', id, '/email') AS BYTES)
+                 ),
+                 encryption_marker = @encryption_marker
+             WHERE encryption_marker < @encryption_marker",
+        )
+        .default_dataset(dataset.clone())
+        .param("kms_key", keyset.key_uri())
+        .param_as("keyset", KEYSET_PARAMETER_TYPE, keyset.value())
+        .param("encryption_marker", keyset.encryption_marker())
+        .execute()
+        .await
+}
+
+/// The application's email type, encrypted as the UTF-8 of the address, which BigQuery reads as a
 /// `STRING`.
-#[derive(Clone)]
 struct Email(String);
 
 impl Plaintext for Email {
@@ -84,25 +103,14 @@ impl Plaintext for Email {
     }
 }
 
-/// A row of the users table.
-#[derive(Serialize)]
-struct User {
-    id: String,
-    email: Encrypted<Email, Randomized>,
-    seal: SealMarker,
-}
-
-/// The one cell of a `SELECT … AS count`.
-#[derive(Deserialize)]
-struct Count {
-    count: u64,
-}
+// Running the example: creates the dataset, seeds the users, rotates, sweeps, checks, and drops the
+// dataset.
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let count: u32 = match std::env::args().nth(1) {
         Some(count) => count.parse()?,
-        None => DEFAULT_USERS,
+        None => DEFAULT_USER_COUNT,
     };
     let project = std::env::var("PROJECT_ID")?;
     let location = std::env::var("PROJECT_LOCATION")?;
@@ -136,8 +144,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Seeds `count` users, rotates, sweeps, prints the rows the sweep re-sealed, and checks that
-/// BigQuery reads every user.
+/// Seeds `count` users, rotates, sweeps, prints the number of rows the sweep re-encrypted, and
+/// checks that BigQuery reads every user.
 async fn run(
     registry: &KeyringRegistry<MemoryKeyringStore, Ring>,
     db: &BigQueryDb,
@@ -162,19 +170,17 @@ async fn run(
         .await?;
 
     // Exported after the promotion: the keyset's primary is the active version, and its marker
-    // is the one the statement stores beside the values it seals.
+    // is the one the statement stores beside the values it encrypts.
     let started = Instant::now();
     let keyset: EncryptedKeyset<BigQuery> = admin
         .export_bigquery_keyset(KeysetSelection::Readable(Purpose::Randomized))
         .await?;
     let swept: BigQueryQueryOutcome = sweep_users(db, dataset, &keyset).await?;
     println!(
-        "swept to seal marker {} in {:.2?}: resealed {}",
-        keyset.seal_marker(),
+        "swept to encryption marker {} in {:.2?}: reencrypted {:?} rows",
+        keyset.encryption_marker(),
         started.elapsed(),
-        swept
-            .num_dml_affected_rows
-            .map_or_else(|| "unknown".to_string(), |rows| rows.to_string())
+        swept.num_dml_affected_rows
     );
 
     let readable: u64 = count_readable_users(db, dataset, &keyset).await?;
@@ -185,42 +191,19 @@ async fn run(
     Ok(())
 }
 
-/// Re-seals, in one `UPDATE` through `keyset`, every user whose marker is below the keyset's,
-/// leaving out envelope values, which do not open under a keyring's keyset.
-async fn sweep_users(
-    db: &BigQueryDb,
-    dataset: &BigQueryDatasetId,
-    keyset: &EncryptedKeyset<BigQuery>,
-) -> BigQueryResult<BigQueryQueryOutcome> {
-    db.fluent()
-        .query(
-            "UPDATE users
-             SET email = AEAD.ENCRYPT(
-                   KEYS.KEYSET_CHAIN(@kms_key, @keyset),
-                   AEAD.DECRYPT_BYTES(
-                     KEYS.KEYSET_CHAIN(@kms_key, @keyset),
-                     email,
-                     CAST(CONCAT('user/', id, '/email') AS BYTES)
-                   ),
-                   CAST(CONCAT('user/', id, '/email') AS BYTES)
-                 ),
-                 seal = @seal
-             WHERE seal < @seal AND seal > @envelope",
-        )
-        .default_dataset(dataset.clone())
-        .param("kms_key", keyset.key_uri())
-        .param_as("keyset", KEYSET_PARAM_TYPE, keyset.value())
-        .param("seal", keyset.seal_marker())
-        .param("envelope", SealMarker::ENVELOPE)
-        .execute()
-        .await
+// The example's own data: a users table written before the sweep, read back after it, and dropped
+// with the dataset.
+
+/// A row of the users table.
+#[derive(Serialize)]
+struct User {
+    id: String,
+    email: Encrypted<Email, Randomized>,
+    encryption_marker: EncryptionMarker,
 }
 
-// The example's own data, not part of a sweep: its users table, written before the sweep, read
-// back after it, and dropped with the dataset at the end.
-
 /// Creates the users table and writes users `1..=count` to it through the Storage Write API,
-/// [`SEAL_ROWS`] at a time through one sealer.
+/// [`ROWS_PER_ENCRYPTOR`] at a time through one encryptor.
 async fn seed_test_data(
     db: &BigQueryDb,
     dataset: &BigQueryDatasetId,
@@ -229,12 +212,12 @@ async fn seed_test_data(
 ) -> Result<(), Box<dyn Error>> {
     db.fluent()
         .schema()
-        .table(dataset.table(USERS))
+        .table(dataset.table(USERS_TABLE))
         .columns(|columns| {
             columns.fields([
                 columns.field("id").string().required(),
                 columns.field("email").bytes().required(),
-                columns.field("seal").bytes().required(),
+                columns.field("encryption_marker").bytes().required(),
             ])
         })
         .sync()
@@ -242,23 +225,29 @@ async fn seed_test_data(
 
     let started = Instant::now();
     // The table's default stream, whose rows an `UPDATE` can modify as soon as they are
-    // acknowledged. The writer holds only the requests in flight, so memory stays flat.
+    // acknowledged.
     let (mut writer, _) = db
-        .create_streaming_writer::<User>(dataset.table(USERS))
+        .create_streaming_writer::<User>(dataset.table(USERS_TABLE))
         .await?;
-    for first in (1..=count).step_by(SEAL_ROWS) {
-        // Every row stores the marker of the record its values were sealed under
-        let sealer = keyring.sealer().await;
-        let seal: SealMarker = sealer.record().seal_marker();
-        for id in (first..=count).take(SEAL_ROWS) {
+    let ids: Vec<u32> = (1..=count).collect();
+    for ids in ids.chunks(ROWS_PER_ENCRYPTOR) {
+        let encryptor = keyring.encryptor().await;
+        let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
+        for id in ids {
             let id = id.to_string();
-            let email: Encrypted<Email, Randomized> = sealer
+            let email: Encrypted<Email, Randomized> = encryptor
                 .encrypt(
                     &EMAIL.aad(&EntityId::try_from(id.as_str())?),
                     &Email(format!("user-{id}@example.com")),
                 )
                 .await?;
-            writer.write(&User { id, email, seal }).await?;
+            writer
+                .write(&User {
+                    id,
+                    email,
+                    encryption_marker,
+                })
+                .await?;
         }
     }
     let written: BigQueryWriteSummary = writer.finish().await?;
@@ -266,11 +255,17 @@ async fn seed_test_data(
         return Err(format!("{} of {count} users failed to write", written.rows_failed).into());
     }
     println!(
-        "wrote {count} users at seal marker {} in {:.2?}",
-        keyring.record().seal_marker(),
+        "wrote {count} users at encryption marker {} in {:.2?}",
+        keyring.record().encryption_marker(),
         started.elapsed()
     );
     Ok(())
+}
+
+/// The one cell of a `SELECT … AS count`.
+#[derive(Deserialize)]
+struct Count {
+    count: u64,
 }
 
 /// The users whose email BigQuery decrypts through `keyset` to the address the seeding wrote.
@@ -289,7 +284,7 @@ async fn count_readable_users(
         )
         .default_dataset(dataset.clone())
         .param("kms_key", keyset.key_uri())
-        .param_as("keyset", KEYSET_PARAM_TYPE, keyset.value())
+        .param_as("keyset", KEYSET_PARAMETER_TYPE, keyset.value())
         .obj::<Count>()
         .query()
         .await?
