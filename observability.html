@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -184,17 +184,24 @@ took: the mode, the algorithm and backend, whether the DEK came from the cache, 
 its version, and the error code.</p>
 <p>The spans are:</p>
 <ul>
-<li><code>KMS AEAD encrypt</code>: the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code> and
-<code>encrypt_with_encrypted_dek</code>;</li>
-<li><code>KMS AEAD decrypt</code>: the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code> and
-<code>decrypt_with_encrypted_dek</code>;</li>
+<li><code>KMS AEAD encrypt</code>: the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code>, <code>encrypt_with_encrypted_dek</code>,
+<code>stream_encryptor</code> and <code>stream_encryptor_bare</code>;</li>
+<li><code>KMS AEAD decrypt</code>: the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code>, <code>decrypt_with_encrypted_dek</code>,
+<code>stream_decryptor</code> and <code>stream_decryptor_bare</code>;</li>
 <li><code>KMS AEAD generate DEK</code>: <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>;</li>
 <li><code>KMS AEAD decrypt DEK</code>: <code>decrypt_deterministic_dek</code>;</li>
 <li><code>KMS AEAD re-encrypt DEK</code>: <code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code>;</li>
 <li><code>KMS AEAD beacon</code>: the envelope’s <code>beacon</code>;</li>
-<li><code>KMS encrypt DEK</code>: each provider’s encryption of a DEK;</li>
+<li><code>KMS encrypt DEK</code>: each provider’s encryption of a DEK, or its encryption with a public key;</li>
 <li><code>KMS decrypt DEK</code>: each provider’s decryption of a DEK;</li>
-<li><code>KMS random</code>: a call to the GCP or AWS KMS generator, when the provider uses it.</li>
+<li><code>KMS random</code>: a call to the GCP or AWS KMS generator, when the provider uses it;</li>
+<li><code>Signature sign</code>: a <code>Signer</code>’s <code>sign</code>, <code>sign_attached</code> and <code>sign_digest</code>;</li>
+<li><code>Signature verify</code>: a <code>Verifier</code>’s <code>verify</code>, <code>verify_signed</code> and <code>verify_digest</code>;</li>
+<li><code>MAC compute</code>: an <code>Authenticator</code>’s <code>mac</code> and <code>mac_attached</code>;</li>
+<li><code>MAC verify</code>: an <code>Authenticator</code>’s <code>verify</code> and <code>verify_with_mac</code>;</li>
+<li><code>KMS sign</code>: each signing provider’s sign request;</li>
+<li><code>KMS public key</code>: each signing provider’s request for the public key of its key, and each KMS
+provider’s <code>public_key</code> of an asymmetric KEK.</li>
 </ul>
 <p>The KMS spans nest inside the envelope span, so a DEK the envelope had to decrypt shows its KMS call
 as a child, and a DEK served by the cache shows none. <code>AeadCipher</code> and <code>DeterministicCipher</code> open
@@ -263,7 +270,7 @@ left unrecorded, never recorded as <code>0</code> or an empty string.</p>
 <tr><th>Field</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td><code>mode</code></td><td><code>per_call</code> for <code>encrypt</code> and <code>decrypt</code>, <code>store_less</code> for both on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
+<tr><td><code>mode</code></td><td><code>per_call</code> for <code>encrypt</code>, <code>decrypt</code> and the stream calls, <code>store_less</code> for them on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
 <tr><td><code>algorithm</code></td><td><code>chacha20-poly1305</code>, <code>aes-128-gcm</code>, <code>aes-256-gcm</code> or <code>aes-256-gcm-siv</code></td></tr>
 <tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
 <tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> for a call that decrypts through an enabled cache, a failed decryption recording <code>miss</code>; unrecorded for a call that looks nothing up</td></tr>
@@ -324,7 +331,7 @@ under the current one.</p>
 <tbody>
 <tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
 <tr><td><code>key</code></td><td>the KEK, see below; for <code>KMS random</code> the GCP location, and unrecorded on AWS</td></tr>
-<tr><td><code>kek_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, from the encrypted DEK’s bytes on decryption for Azure, Vault Transit and the local KMS; unrecorded when neither has one, as for AWS and a GCP decryption</td></tr>
+<tr><td><code>kek_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, and the public key’s version on an encryption with a public key; from the encrypted DEK’s bytes on decryption for Azure, Vault Transit, the local KMS and every DEK a public key encrypted; unrecorded when neither has one, as for AWS and a GCP decryption of a symmetric key</td></tr>
 <tr><td><code>len</code></td><td>random only: the bytes requested from the KMS generator</td></tr>
 <tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
 <tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
@@ -340,6 +347,38 @@ under the current one.</p>
 when none is set;</li>
 <li>local: the KEK id.</li>
 </ul>
+<h3 id="signature-sign-signature-verify-mac-compute-and-mac-verify"><a class="header" href="#signature-sign-signature-verify-mac-compute-and-mac-verify">Signature sign, Signature verify, MAC compute and MAC verify</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>algorithm</code></td><td><code>ed25519</code> or <code>ecdsa-p256-sha256</code> for a signature; <code>mac-hmac-sha256</code> or <code>mac-hmac-sha512</code> for a MAC</td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
+<tr><td><code>key_id</code></td><td>the decimal key id the signature or MAC names</td></tr>
+<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of the signed type</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="kms-sign-and-kms-public-key"><a class="header" href="#kms-sign-and-kms-public-key">KMS sign and KMS public key</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
+<tr><td><code>key</code></td><td>the signing key, see <code>SigningKeyRef::key</code>, or the KEK of an asymmetric KEK’s public key</td></tr>
+<tr><td><code>kek_version</code></td><td>the public key of an asymmetric KEK only: the version asked for, or the one the response names when none was</td></tr>
+<tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>With the <code>opentelemetry</code> feature the signing and MAC calls record their duration as the envelope
+calls do. The spans carry no payload, signature, tag or key bytes.</p>
 <h2 id="events"><a class="header" href="#events">Events</a></h2>
 <p>Besides the spans, the library logs:</p>
 <ul>
@@ -348,10 +387,52 @@ when none is set;</li>
 <code>legacy-formats</code>;</li>
 <li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
 CA certificate that cannot be loaded;</li>
+<li><code>WARN</code>, on the <code>kms_aead::json</code> target: a <code>JsonEncoded</code> value that does not decode, see
+<a href="#json-that-does-not-decode">JSON that does not decode</a>;</li>
+<li><code>INFO</code>, when a provider that holds the public key of an asymmetric KEK is created
+(<code>PublicKeyKekProvider</code>, <code>AsymmetricKekProvider</code> and <code>LocalAsymmetricKmsProvider</code>): the KEK, its
+version and the public key’s fingerprint, the SHA-256 of its SubjectPublicKeyInfo in hex, so that
+an operator compares the producer’s and the administration’s;</li>
 <li><code>INFO</code>, when a local KMS provider is created: its KEK id and versions, each with where it came
-from, in the <code>key</code> and <code>kek_versions</code> fields.</li>
+from, in the <code>key</code> and <code>kek_versions</code> fields;</li>
+<li><code>INFO</code>, when a local signing provider is created: its key id and versions, each with its
+algorithm, key id and where it came from, in the <code>key</code> and <code>key_versions</code> fields.</li>
 </ul>
 <p>The library retries nothing itself, so there is no retry field.</p>
+<h2 id="json-that-does-not-decode"><a class="header" href="#json-that-does-not-decode">JSON that does not decode</a></h2>
+<p>A <code>JsonEncoded</code> value whose bytes are not the JSON of its type, a decrypted plaintext or the
+payload of an attached signature or MAC after it verified, fails with <code>INVALID_PLAINTEXT</code> or
+<code>INVALID_PAYLOAD</code>. The error never quotes the bytes, and names serde_json’s category of failure
+(<code>Syntax</code>, <code>Data</code> or <code>Eof</code>) without the line and column, which are byte offsets that give
+away the length of the values before them. The library logs one <code>WARN</code> event on the
+<code>kms_aead::json</code> target beside it, with an outline of the JSON.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>error_code</code></td><td><code>INVALID_PLAINTEXT</code> or <code>INVALID_PAYLOAD</code></td></tr>
+<tr><td><code>decoded_type</code></td><td>the Rust type the JSON does not decode to</td></tr>
+<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of a signed type; unrecorded for a plaintext</td></tr>
+<tr><td><code>json_error</code></td><td>serde_json’s error: the message of a syntax error, such as <code>EOF while parsing a string</code>, or <code>Data error</code> for JSON of another shape than the type, with the line and column under <code>SIZES</code></td></tr>
+<tr><td><code>outline</code></td><td>the outline of the JSON</td></tr>
+</tbody>
+</table>
+</div>
+<p>By default the outline shows the shape of the JSON: the type of every value, <code>&lt;key&gt;</code> for every
+key, the nesting, and where serde_json stopped reading it, with serde_json’s message for a syntax
+error. That message is fixed text, and it can state a property of a value the outline hides, such
+as <code>number out of range</code>, <code>invalid unicode code point</code> or <code>unexpected end of hex escape</code>. The
+default shows no length and no position, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
+boolean</a>.</p>
+<p>A type opts into more with a policy, the second type parameter of <code>JsonEncoded</code>.
+A signed payload is often public, so its policy may show more than an encrypted plaintext’s. See
+<a href="./stored-values.html#json-that-does-not-decode">JSON that does not decode</a> for a policy and the
+outlines it produces.
+<code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off.</p>
+<p>An application outlines JSON of its own with <code>RedactedJson</code>, with no encryption involved, see
+<a href="./use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
 <h2 id="keyring-spans"><a class="header" href="#keyring-spans">Keyring spans</a></h2>
 <p>The <code>kms-aead-keyring</code> crate follows the same rules: one <code>DEBUG</code> span per call, field names with
 the <code>/kms_aead_keyring/</code> prefix, and nothing recorded for a value nobody reported. kms-aead’s spans
@@ -365,18 +446,22 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Keyring encrypt</code></td><td>a sealer’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>deterministic_probes</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring beacon</code></td><td>a sealer’s <code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring encrypt</code></td><td>an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>deterministic_probes</code>, and <code>stream_encryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code>, and <code>stream_decryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code>, including a <code>shred</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring beacon</code></td><td>an encryptor’s <code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring mac</code></td><td>an encryptor’s <code>mac</code> and <code>mac_attached</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring verify mac</code></td><td><code>verify_mac</code>, <code>verify_mac_with_trust</code> and <code>verify_with_mac</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring rotate</code></td><td><code>rotate</code>, <code>change_algorithm</code></td><td><code>keyring</code>, <code>purpose</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring promote</code></td><td><code>promote</code></td><td><code>keyring</code>, <code>key_id</code>, <code>from_key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring mark compromised</code></td><td><code>mark_compromised</code></td><td><code>keyring</code>, <code>key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring retire</code>, <code>Keyring reinstate</code>, <code>Keyring destroy</code></td><td>the call of that name</td><td><code>keyring</code>, <code>key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring shred</code></td><td><code>shred</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring sweep</code></td><td><code>sweep::run</code>, <code>sweep::run_batched</code></td><td><code>keyring</code>, <code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
+<tr><td><code>Keyring sign record</code></td><td>each write of a signed record by the administration</td><td><code>keyring</code>, <code>key_id</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring sweep</code></td><td><code>sweep::reencrypt_records</code>, <code>sweep::reencrypt_records_batched</code></td><td><code>keyring</code>, <code>scanned</code>, <code>reencrypted</code>, <code>reencrypted_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -387,22 +472,22 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 </thead>
 <tbody>
 <tr><td><code>keyring</code></td><td>the keyring id, which can name a tenant</td></tr>
-<tr><td><code>purpose</code></td><td><code>randomized</code>, <code>deterministic</code> or <code>beacon</code></td></tr>
+<tr><td><code>purpose</code></td><td><code>randomized</code>, <code>deterministic</code>, <code>beacon</code> or <code>mac</code></td></tr>
 <tr><td><code>key_id</code></td><td>the decimal key id; unrecorded for an envelope value, which names no version, and for <code>deterministic_probes</code> and <code>beacon_probes</code>, which run under several</td></tr>
-<tr><td><code>algorithm</code></td><td>the version’s algorithm, such as <code>aes-256-gcm</code> or <code>hmac-sha256</code>; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
+<tr><td><code>algorithm</code></td><td>the version’s algorithm, such as <code>aes-256-gcm</code>, <code>hmac-sha256</code> or <code>mac-hmac-sha256</code>; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
 <tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring’s backend</td></tr>
 <tr><td><code>key_state</code></td><td><code>pending</code>, <code>active</code>, <code>decrypt_only</code>, <code>retired</code>, <code>destroyed</code>, <code>compromised</code>, or <code>unknown</code> for a key id the record does not have</td></tr>
 <tr><td><code>reload</code></td><td>what an unknown key id caused: <code>none</code>, <code>reloaded</code> or <code>rate_limited</code></td></tr>
 <tr><td><code>dek_cache</code></td><td><code>hit</code>, <code>miss</code> or <code>disabled</code>; <code>bypassed</code> for <code>reencrypt_deks</code>, the export, and a compromised version read past the cache; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
 <tr><td><code>store</code></td><td><code>memory</code>, <code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>, or an application store’s name</td></tr>
-<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>pending_key_id</code> for a re-seal under a version the cached record holds as pending, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
-<tr><td><code>changed</code></td><td><code>true</code> for a new record taken, <code>false</code>, or <code>regressed</code> for one refused because it moves a version backwards</td></tr>
+<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>pending_key_id</code> for a re-encryption under a version the cached record holds as pending, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
+<tr><td><code>changed</code></td><td><code>true</code> for a new record taken, <code>false</code>, <code>regressed</code> for one refused because it moves a version backwards, <code>refused</code> for one refused by record verification, or <code>deleted</code> for a read that found the store holds no record, which the process takes as a shredded keyring</td></tr>
 <tr><td><code>revision</code></td><td>the store’s revision of the record read, as text</td></tr>
 <tr><td><code>response_time</code></td><td>milliseconds the store call took</td></tr>
 <tr><td><code>from_key_id</code>, <code>to_key_id</code></td><td>the version a promotion or a compromise replaced, and the new active one; for <code>rotate</code>, <code>to_key_id</code> is the staged version</td></tr>
 <tr><td><code>cas_retries</code></td><td>the compare-and-swap conflicts before the write landed</td></tr>
 <tr><td><code>versions</code></td><td>the versions <code>reencrypt_deks</code> encrypted again, or an export put in the keyset</td></tr>
-<tr><td><code>scanned</code>, <code>resealed</code>, <code>resealed_from_compromised</code>, <code>skipped</code>, <code>failed</code></td><td>the counts of the <code>SweepReport</code></td></tr>
+<tr><td><code>scanned</code>, <code>reencrypted</code>, <code>reencrypted_from_compromised</code>, <code>skipped</code>, <code>failed</code></td><td>the counts of the <code>SweepReport</code></td></tr>
 <tr><td><code>error_code</code></td><td><code>KeyringError::code()</code> of the error returned: kms-aead’s code for a KMS or AEAD error, such as <code>DECRYPT</code>, and the variant’s name in upper snake case otherwise, such as <code>KEY_VERSION_COMPROMISED</code></td></tr>
 </tbody>
 </table>
@@ -412,10 +497,27 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <li><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy, with the key id;</li>
 <li><code>WARN</code>: a read refused because its version is retired or destroyed, for an operator watching a
 sweep;</li>
-<li><code>WARN</code>: a failed revalidation, and a record the store no longer holds, the cached one staying in
-use;</li>
+<li><code>WARN</code>: a record that holds a DEK encrypted with a public key, loaded under any record
+verification mode but <code>Required</code>, with the keyring id, once per record loaded. Under an asymmetric
+KEK anyone holding the public key can plant a version, see <a href="./asymmetric-kek.html#keyrings-under-an-asymmetric-kek">Keyrings under an asymmetric
+KEK</a>;</li>
+<li><code>WARN</code>: a <code>KeyringAdmin</code> without a record signer built over a provider whose
+<code>encrypts_with_public_key()</code> is <code>true</code>;</li>
+<li><code>WARN</code>: a failed revalidation, the cached record staying in use;</li>
+<li><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this
+process”, when a read finds the record gone: the process then holds the record with every
+version destroyed and stops revalidating the keyring, see
+<a href="./keyring/record-cache.html#a-record-gone-from-the-store">A record gone from the store</a>. It is an
+<code>INFO</code>, “The keyring store no longer holds the keyring record of a shredded keyring; every
+version is destroyed in this process”, when the record the process held had every version
+destroyed already, which a <a href="./operations/runbook.html#shredding-a-keyring">shred</a> leaves before it
+deletes the record. The process that ran the shred logs nothing for it;</li>
 <li><code>ERROR</code>: a refreshed record refused because it moves a version backwards, with the first rule it
 breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
+<li><code>ERROR</code>: a refreshed record refused by record verification, with its code,
+<code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or <code>RECORD_SIGNATURE_REMOVED</code>; the process keeps
+the record it holds, and the <code>Keyring load</code> span records the code. Alert on it as on the previous
+one;</li>
 <li><code>WARN</code>: a compromised flag written without a rotation because the new DEK could not be encrypted;</li>
 <li><code>INFO</code>: the active version of a purpose changed, with the old and new key ids;</li>
 <li><code>WARN</code>: the store’s listener disconnected, reconnected, or did not start, and a keyring
@@ -423,13 +525,13 @@ opened with no tokio runtime to follow the store’s signals;</li>
 <li><code>WARN</code>: a <code>KeyringRegistry</code> dropped while its background tasks run, which aborts them, with the
 count of open keyrings, and a <code>shutdown</code> whose timeout aborted the tasks still running, with
 their count;</li>
-<li><code>WARN</code>: a record a sweep could not re-seal, with the <code>Display</code> of the application’s candidate
+<li><code>WARN</code>: a record a sweep could not re-encrypt, with the <code>Display</code> of the application’s candidate
 in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
 values, secrets and personal data out of them. A record id is often an entity id, so the
 sweep’s log is an administrative log;</li>
 <li><code>WARN</code>: a candidate the sweep’s stream returned as an error, with the <code>Display</code> of the error in
 <code>error</code>;</li>
-<li><code>WARN</code>: a batch of <code>sweep::run_batched</code> whose re-seal failed as a whole, with its number of
+<li><code>WARN</code>: a batch of <code>sweep::reencrypt_records_batched</code> whose re-encryption failed as a whole, with its number of
 candidates in <code>candidates</code> and the <code>Display</code> of the error in <code>error</code>, and a batch that returned
 a different number of outcomes from it was given candidates, with both counts in <code>candidates</code> and
 <code>outcomes</code>;</li>
@@ -508,43 +610,57 @@ call has no <code>error.type</code>.</p>
 <tr><td><code>kms_aead.operation.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.operation</code>, <code>kms_aead.mode</code>, <code>kms_aead.algorithm</code>, <code>kms_aead.backend</code>, <code>error.type</code></td><td><code>kms_aead.keyring</code>, <code>kms_aead.purpose</code></td></tr>
 <tr><td><code>kms_aead.kms.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.provider</code>, <code>kms_aead.operation</code>, <code>error.type</code></td><td></td></tr>
 <tr><td><code>kms_aead.store.duration</code></td><td>histogram</td><td><code>s</code></td><td><code>kms_aead.keyring</code>, <code>kms_aead.store</code>, <code>kms_aead.reason</code>, <code>error.type</code></td><td></td></tr>
+<tr><td><code>kms_aead.record.refusals</code></td><td>counter</td><td><code>{record}</code></td><td><code>kms_aead.keyring</code>, <code>error.type</code></td><td></td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><code>kms_aead.plaintext.size</code> records the plaintext length of each value sealed or opened: its count
-is the values, and its sum their bytes. It has no buckets. The SDK also keeps the smallest and
-the largest value of each series and OTLP exports them, unless a view turns them off as above.
+<li><code>kms_aead.plaintext.size</code> records the plaintext length of each value encrypted or decrypted: its
+count is the values, and its sum their bytes. It has no buckets. The SDK also keeps the smallest
+and the largest value of each series and OTLP exports them, unless a view turns them off as above.
 A failed call records no value;</li>
 <li><code>kms_aead.operation</code> of a value is <code>encrypt</code> or <code>decrypt</code>. The envelope also times <code>beacon</code>,
 <code>generate_dek</code> for <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>,
 <code>decrypt_dek</code> for <code>decrypt_deterministic_dek</code>, and <code>reencrypt_dek</code> for <code>reencrypt_dek</code>,
 <code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and
 <code>upgrade_legacy_encrypted_dek</code>;</li>
-<li><code>kms_aead.mode</code> is the envelope’s <code>per_call</code> or <code>store_less</code> for <code>encrypt</code>, <code>decrypt</code>,
-<code>reencrypt_dek</code> and <code>upgrade_legacy_value</code>, <code>caller_dek</code> for the <code>*_with_dek</code> and
+<li><code>kms_aead.mode</code> is the envelope’s <code>per_call</code> or <code>store_less</code> for <code>encrypt</code>, <code>decrypt</code>, the
+stream calls, <code>reencrypt_dek</code> and <code>upgrade_legacy_value</code>, <code>caller_dek</code> for the <code>*_with_dek</code> and
 <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK,
 <code>reencrypt_encrypted_dek</code> and <code>upgrade_legacy_encrypted_dek</code>, and <code>keyring</code> for a keyring’s
-calls;</li>
+calls. A <code>Signer</code> and a <code>Verifier</code> record <code>sign</code> and <code>verify</code> with the mode <code>signature</code>, and an
+<code>Authenticator</code> records <code>mac</code> and <code>verify_mac</code> with the mode <code>caller_dek</code>;</li>
 <li><code>kms_aead.algorithm</code> and <code>kms_aead.backend</code> are those of the span. <code>kms_aead.algorithm</code> is
 absent where it is unknown: on a re-encryption, in which the algorithm plays no part, on a probe,
 which runs under every version, and on a keyring call that fails before it finds its version. A keyring’s
 deterministic call has <code>kms_aead.backend</code> <code>rustcrypto</code>, since AES-SIV runs on RustCrypto
 whatever the keyring’s backend;</li>
-<li>a keyring call is recorded once, with <code>kms_aead.mode</code> <code>keyring</code>: it runs kms-aead’s ciphers,
-never its envelope. <code>encrypt</code> is a sealer’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>decrypt</code> is
-<code>decrypt</code>, <code>decrypt_with_trust</code> and their deterministic pair, <code>reseal</code> is <code>reseal</code> and
-<code>reseal_deterministic</code>, which also record the <code>decrypt</code> and <code>encrypt</code> they make, <code>beacon</code> is a
-sealer’s <code>beacon</code>, and <code>probe</code> is <code>beacon_probes</code> and <code>deterministic_probes</code>.
+<li>a keyring call is recorded once, with <code>kms_aead.mode</code> <code>keyring</code>: it runs kms-aead’s ciphers, never
+its envelope. <code>encrypt</code> is an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>decrypt</code> is
+<code>decrypt</code>, <code>decrypt_with_trust</code> and their deterministic pair, <code>reencrypt</code> is <code>reencrypt</code> and
+<code>reencrypt_deterministic</code>, which also record the <code>decrypt</code> and <code>encrypt</code> they make, <code>beacon</code> is an
+encryptor’s <code>beacon</code>, and <code>probe</code> is <code>beacon_probes</code> and <code>deterministic_probes</code>.
 <code>decrypt_envelope_for_migration</code> is a <code>decrypt</code> with no <code>kms_aead.purpose</code>. <code>kms_aead.key_id</code> is
 the version’s key id, as a number;</li>
 <li>probes and beacons record no value. A probe is never stored, and a beacon is an HMAC-SHA256
-output: HMAC takes no nonce, and its bound as a PRF is far beyond the values one key can seal;</li>
+output: HMAC takes no nonce, and its bound as a PRF is far beyond the values one key can encrypt.
+Signatures and MACs record no value either. A keyring’s MAC calls add no keyring call of their
+own: the <code>Authenticator</code> they run records each one;</li>
 <li><code>kms_aead.kms.duration</code> covers the request to the KMS only, as the span’s <code>response_time</code> does.
-<code>kms_aead.operation</code> is <code>encrypt_dek</code>, <code>decrypt_dek</code> or <code>random</code>, and <code>kms_aead.provider</code> is the
-span’s <code>provider</code>. The KEK name is left out;</li>
+<code>kms_aead.operation</code> is <code>encrypt_dek</code>, <code>decrypt_dek</code>, <code>random</code>, <code>sign</code> or <code>public_key</code>, or
+<code>encrypt_dek_with_public_key</code> for an encryption with the public key of an asymmetric KEK, which is
+a local operation and no KMS request, so that the duration tells the two apart.
+<code>kms_aead.provider</code> is the span’s <code>provider</code>. The KEK name is left out;</li>
 <li><code>kms_aead.store.duration</code> covers every read of a keyring record, with the <code>store</code> and <code>reason</code>
-of the <code>Keyring load</code> span.</li>
+of the <code>Keyring load</code> span;</li>
+<li>the stream calls of an envelope, <code>stream_encryptor</code>, <code>stream_decryptor</code> and their bare forms, and
+a keyring’s <code>stream_encryptor</code> and <code>stream_decryptor</code> are recorded in
+<code>kms_aead.operation.duration</code> with <code>kms_aead.operation</code> <code>stream_encrypt</code> and <code>stream_decrypt</code>. The
+plaintext size instrument records nothing for them, since the size is not known at the call.
+<code>AeadCipher</code>’s stream calls open no span;</li>
+<li><code>kms_aead.record.refusals</code> counts each keyring record a process refused because of its
+signature, by code in <code>error.type</code>: <code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or
+<code>RECORD_SIGNATURE_REMOVED</code>. It is the metric of the <code>ERROR</code> event above.</li>
 </ul>
 <p>No attribute names a DEK, so the envelope’s values are recorded per algorithm, not per key. A
 store-less envelope needs no alert on them: it renews its DEK at <code>max_uses</code> and <code>max_bytes</code>, see
@@ -576,14 +692,20 @@ above drops it from them. The view’s <code>with_allowed_attribute_keys</code> 
 minus a fixed overhead, and a length tells short values such as <code>yes</code>, <code>no</code> or a country code
 apart.</li>
 </ul>
-<p>The <code>kms_aead.plaintext.size</code> histogram is the exception: it adds up plaintext lengths. A keyring
-or an envelope that seals one value per export interval gives that value’s length to whoever reads
+<p>The <code>kms_aead.plaintext.size</code> histogram is the exception: it adds up plaintext lengths. A keyring or
+an envelope that encrypts one value per export interval gives that value’s length to whoever reads
 the metrics. The SDK also keeps the smallest and the largest value of each series, under cumulative
 temporality since the process started, and OTLP exports them: the exact length of the shortest and
 the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
 The OpenTelemetry API gives kms-aead’s instrument no setting to leave them out, so the view in
-<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat the histogram like the
-values themselves where traffic is low, and everywhere without that view.</p>
+<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat the histogram like the values
+themselves where traffic is low, and everywhere without that view.</p>
+<p>The <code>kms_aead::json</code> event is the other exception, under a policy that opts in: its outline then
+carries the length of the values and keys of the JSON that did not decode, <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">which gives away a
+hidden boolean</a>, and the values the
+policy reveals. The default policy carries neither, but every policy shows serde_json’s message for
+a syntax error, which is fixed text and can state a property of a hidden value, such as
+<code>number out of range</code>.</p>
 <p>Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
 project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
 <code>key</code> field accordingly in a trace pipeline.</p>

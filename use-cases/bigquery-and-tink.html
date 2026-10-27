@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -187,7 +187,7 @@ whether the key rotates:</p>
 <tr><th></th><th>Envelope values</th><th>One fixed key</th><th>Keyring</th></tr>
 </thead>
 <tbody>
-<tr><td>Written by</td><td><code>KmsAeadEnvelope::encrypt</code>, per call or store-less</td><td><code>AeadCipher::encrypt</code> or <code>DeterministicCipher::encrypt</code>, with a key the KMS encrypts once</td><td>a sealer’s <code>encrypt</code> or <code>encrypt_deterministic</code></td></tr>
+<tr><td>Written by</td><td><code>KmsAeadEnvelope::encrypt</code>, per call or store-less</td><td><code>AeadCipher::encrypt</code> or <code>DeterministicCipher::encrypt</code>, with a key the KMS encrypts once</td><td>an encryptor’s <code>encrypt</code> or <code>encrypt_deterministic</code></td></tr>
 <tr><td>A value carries</td><td>its encrypted DEK</td><td>a 4-byte key id</td><td>a 4-byte key id</td></tr>
 <tr><td>Tink reads with</td><td><code>KmsEnvelopeAead</code>, on a Cloud KMS or AWS KMS key</td><td>a keyset of the key, as <code>TinkKeyset</code> builds it</td><td><code>export_tink_keyset</code>, on a Cloud KMS key, an AWS KMS key named by its ARN, or a Vault Transit key for Tink for Go</td></tr>
 <tr><td>BigQuery reads with</td><td>nothing: SQL has no KMS envelope</td><td><code>KEYS.KEYSET_CHAIN</code> over the keyset encrypted by a Cloud KMS key</td><td><code>KEYS.KEYSET_CHAIN</code> over <code>export_bigquery_keyset</code>, on a Cloud KMS key</td></tr>
@@ -198,8 +198,8 @@ whether the key rotates:</p>
 </table>
 </div>
 <h2 id="the-aad"><a class="header" href="#the-aad">The AAD</a></h2>
-<p>The reader opens a value only with the AAD it was sealed with, so the AAD is one the reader can
-build:</p>
+<p>The reader decrypts a value only with the AAD it was encrypted with, so the AAD is one the reader
+can build:</p>
 <ul>
 <li>envelope values and one fixed key: the application’s own bytes, which a Tink reader passes as
 they are, and SQL builds from the row when they are text, see
@@ -212,8 +212,8 @@ custom AAD fails on a field declared for BigQuery.</li>
 <ol>
 <li>
 <p>Declare each field the reader decrypts with <code>FieldSpec::with_interop(Interop::BigQuery)</code> or
-<code>Interop::Tink</code>: the keyring then refuses to seal it under an algorithm or a KEK the reader does
-not read, see <a href="../keyring/bigquery.html#fields-bigquery-reads">Fields BigQuery reads</a> and
+<code>Interop::Tink</code>: the keyring then refuses to encrypt it under an algorithm or a KEK the reader
+does not read, see <a href="../keyring/bigquery.html#fields-bigquery-reads">Fields BigQuery reads</a> and
 <a href="../keyring/bigquery.html#fields-tink-reads">Fields Tink reads</a>;</p>
 </li>
 <li>
@@ -228,7 +228,7 @@ query or the reader takes them;</p>
 every <code>mark_compromised</code> and every KEK rotation;</li>
 <li>the <code>Single</code> keyset of a new deterministic version after its promotion, since a pending
 version has none. Until then, an equality lookup in SQL computes no probe under the new
-version and misses the rows sealed under it, with no error.</li>
+version and misses the rows encrypted under it, with no error.</li>
 </ul>
 <p>See <a href="../operations/rotation.html#rotation-cadence">Rotation cadence</a>,
 <a href="../operations/sweeps.html#retiring-the-old-version">Retiring the old version</a> and
@@ -252,7 +252,7 @@ calculate a beacon: a beacon lookup in BigQuery matches beacons the application 
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="../use-cases/rotation.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="../use-cases/large-files.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -266,7 +266,7 @@ calculate a beacon: a beacon lookup in BigQuery matches beacons the application 
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="../use-cases/rotation.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="../use-cases/large-files.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

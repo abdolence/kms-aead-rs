@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,7 +182,7 @@
 <ul>
 <li><code>Encrypted&lt;T, F&gt;</code>: an encrypted value that decrypts to a <code>T</code>, in the layout of the format <code>F</code>;</li>
 <li><code>Beacon&lt;T&gt;</code>: a blind index of a <code>T</code>, stored beside its encrypted value for lookups;</li>
-<li><code>Plaintext</code>: the trait of every <code>T</code>, which fixes the bytes a value is sealed as.</li>
+<li><code>Plaintext</code>: the trait of every <code>T</code>, which fixes the bytes a value is encrypted as.</li>
 </ul>
 <p>The <code>T</code> is a type of the application, such as an <code>Email</code> newtype, so a column names what it
 holds: <code>Encrypted&lt;Email, Envelope&gt;</code> and <code>Beacon&lt;Email&gt;</code>. Neither type holds a <code>T</code>, only the bytes
@@ -198,17 +198,17 @@ to store.</p>
 <tbody>
 <tr><td><code>Envelope</code></td><td><a href="./formats.html#tinks-kms-envelope">Tink’s KMS envelope</a>, the encrypted DEK inside</td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
 <tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td><code>KmsAeadEnvelope::encrypt_with_dek</code>, <code>AeadCipher::encrypt_bare</code></td><td><code>KmsAeadEnvelope::decrypt_with_dek</code>, <code>AeadCipher::decrypt_bare</code></td><td>no</td><td>none</td></tr>
-<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Sealer::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
-<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Sealer::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
+<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Encryptor::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
+<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Encryptor::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
 </tbody>
 </table>
 </div>
 <ul>
-<li><code>key_id()</code> returns the <code>KeyId</code> that the TINK prefix names, the key to open the value with. The
+<li><code>key_id()</code> returns the <code>KeyId</code> that the TINK prefix names, the key to decrypt the value with. The
 prefix is not authenticated: a changed key id fails to decrypt;</li>
 <li>an <code>Envelope</code> value carries its encrypted DEK instead of a key id, and a <code>Bare</code> value names no
-key: the application keeps track of the key that opens it;</li>
-<li>the randomised formats seal equal plaintexts into different values, so they have no <code>==</code>.
+key: the application keeps track of the key that decrypts it;</li>
+<li>the randomised formats encrypt equal plaintexts into different values, so they have no <code>==</code>.
 Compare <code>value()</code> to tell whether two values are the same stored bytes;</li>
 <li>only <code>Deterministic</code> values are equal for equal plaintexts under one key and one AAD, which is
 what a lookup by the encrypted value needs, see <a href="./deterministic.html">Deterministic encryption</a>;</li>
@@ -251,11 +251,11 @@ assert!(Encrypted::&lt;SecretValue, Randomized&gt;::try_from(vec![0x01, 0, 0, 0,
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <h3 id="storing"><a class="header" href="#storing">Storing</a></h3>
-<p>Three features store <code>Encrypted</code> as bytes, and each one reads it back through <code>TryFrom</code>, so a
-malformed stored value fails in the decode:</p>
+<p><code>Encrypted</code> is stored as bytes, and read back through <code>TryFrom</code>, so a malformed stored value fails
+in the decode:</p>
 <ul>
-<li><code>serde</code>: <code>Serialize</code> and <code>Deserialize</code>, a <code>bytes</code> value in Firestore and an array of numbers in
-serde_json;</li>
+<li>serde, in every build: <code>Serialize</code> and <code>Deserialize</code>, a <code>bytes</code> value in Firestore and an array
+of numbers in serde_json;</li>
 <li><code>postgres</code>: <code>ToSql</code> and <code>FromSql</code> of postgres-types, for tokio-postgres, as <code>BYTEA</code>, and a
 slice as <code>BYTEA[]</code> for <code>= ANY($1)</code>;</li>
 <li><code>sqlx</code>: sqlx’s <code>Type</code>, <code>Encode</code>, <code>Decode</code> and <code>PgHasArrayType</code> for PostgreSQL, as <code>BYTEA</code>. It
@@ -401,7 +401,7 @@ assert_eq!(read_back, beacon);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>The bits trade lookups against leakage, see <a href="./beacons.html#bits">Bits</a>.</p>
-<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, as bytes, with the <code>serde</code>, <code>postgres</code> and <code>sqlx</code>
+<p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, as bytes, with serde and the <code>postgres</code> and <code>sqlx</code>
 features. A lookup matches the column by equality, so it gets an ordinary index:</p>
 <pre><code class="language-sql">CREATE TABLE users (
   id BIGINT PRIMARY KEY,
@@ -430,9 +430,9 @@ async fn candidates(
 normalisation and key rotation, and <a href="./keyring/beacons.html">Beacons</a> in kms-aead-keyring for
 beacons under key versions.</p>
 <h2 id="plaintext"><a class="header" href="#plaintext"><code>Plaintext</code></a></h2>
-<p><code>Plaintext</code> maps a type to the bytes it is sealed as, and back. Every <code>T</code> of <code>Encrypted&lt;T, F&gt;</code> and
-<code>Beacon&lt;T&gt;</code> implements it. An application type implements it by mapping to one of the built-in
-types, such as a newtype over <code>String</code> that is sealed as the same UTF-8 bytes:</p>
+<p><code>Plaintext</code> maps a type to the bytes it is encrypted as, and back. Every <code>T</code> of <code>Encrypted&lt;T, F&gt;</code>
+and <code>Beacon&lt;T&gt;</code> implements it. An application type implements it by mapping to one of the built-in
+types, such as a newtype over <code>String</code> that is encrypted as the same UTF-8 bytes:</p>
 <pre><code class="language-rust">use kms_aead::{KmsAeadResult, Plaintext};
 use secret_vault_value::SecretValue;
 
@@ -480,7 +480,7 @@ assert_eq!(decrypted.0.as_sensitive_str(), "alice@example.com");
 <p>It differs from the <code>String</code> newtype as follows:</p>
 <ul>
 <li>the decrypted value is zeroised on drop, and <code>Debug</code> prints <code>***</code> instead of it;</li>
-<li>text is sealed as the same bytes as through <code>String</code>, so <code>AEAD.DECRYPT_STRING</code> still reads it;</li>
+<li>text is encrypted as the same bytes as through <code>String</code>, so <code>AEAD.DECRYPT_STRING</code> still reads it;</li>
 <li>there is no UTF-8 check on read, so bytes that are not UTF-8 decrypt without an error;</li>
 <li>the text is reached through <code>SecretValue</code>’s accessors rather than as a <code>&amp;str</code>:
 <code>as_sensitive_str()</code>, which panics on bytes that are not UTF-8, or <code>sensitive_value_to_str()</code>,
@@ -500,7 +500,7 @@ values, such as BigQuery’s <code>AEAD.DECRYPT_STRING</code>, decode them:</p>
 <tr><td><code>Vec&lt;u8&gt;</code>, <code>SecretValue</code></td><td>the bytes themselves</td></tr>
 <tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr>
 <tr><td><code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code></td><td>decimal ASCII, which SQL reads with <code>CAST</code></td></tr>
-<tr><td><code>Json&lt;T&gt;</code>, feature <code>serde-json</code></td><td>the compact JSON of any serde type</td></tr>
+<tr><td><code>JsonEncoded&lt;T&gt;</code></td><td>the compact JSON of any serde type</td></tr>
 </tbody>
 </table>
 </div>
@@ -512,12 +512,12 @@ zeroised on drop; <code>String</code> and <code>Vec&lt;u8&gt;</code> take over t
 <li>a beacon is the HMAC of the encoded bytes, so normalisation, such as lowercasing an email, is
 the newtype’s job, see <a href="./beacons.html">Beacons</a>.</li>
 </ul>
-<p><code>Json&lt;T&gt;</code> seals a structured value of any serde type as its compact JSON, which BigQuery reads with
-<code>AEAD.DECRYPT_STRING</code> and its JSON functions:</p>
+<p><code>JsonEncoded&lt;T&gt;</code> encrypts a structured value of any serde type as its compact JSON, which BigQuery reads
+with <code>AEAD.DECRYPT_STRING</code> and its JSON functions:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Envelope;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::{Encrypted, Json, KmsAeadEnvelope};
+use kms_aead::{Encrypted, JsonEncoded, KmsAeadEnvelope};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -531,22 +531,79 @@ struct Address {
 </span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
 </span>let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
 
-let address = Json(Address {
+let address = JsonEncoded::new(Address {
     street: "Mannerheimintie 1".to_string(),
     city: "Helsinki".to_string(),
 });
-let encrypted: Encrypted&lt;Json&lt;Address&gt;, Envelope&gt; =
+let encrypted: Encrypted&lt;JsonEncoded&lt;Address&gt;, Envelope&gt; =
     envelope.encrypt(b"users/1042/address", &amp;address).await?;
-let decrypted: Json&lt;Address&gt; = envelope.decrypt(b"users/1042/address", &amp;encrypted).await?;
+let decrypted: JsonEncoded&lt;Address&gt; = envelope.decrypt(b"users/1042/address", &amp;encrypted).await?;
 assert_eq!(decrypted, address);
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
+<h3 id="json-that-does-not-decode"><a class="header" href="#json-that-does-not-decode">JSON that does not decode</a></h3>
+<p>A plaintext that is not the JSON of its type, such as a record written by an older version of the
+application, fails with <code>INVALID_PLAINTEXT</code> and logs a <code>WARN</code> event with an outline of the JSON.
+By default the outline shows the shape: the type of every value, the nesting, and where serde_json
+stopped reading, with no value and no length, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
+boolean</a>.
+Finding the field that changed takes more, and a type opts into it with a policy, the second type
+parameter of <code>JsonEncoded</code>: a type of the application’s own that implements
+<a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html"><code>JsonRedaction</code></a> and
+sets the constants it needs. The rustdoc says what each shows and how
+<a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/struct.FieldPaths.html"><code>FieldPaths</code></a> names a
+field.</p>
+<pre><code class="language-rust">use kms_aead::redaction::{FieldPaths, JsonRedaction};
+use kms_aead::JsonEncoded;
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct Customer {
+    id: String,
+    email: String,
+    plan: String,
+    renewal_date: String,
+}
+
+struct CustomerLog;
+
+impl JsonRedaction for CustomerLog {
+    const FIELD_NAMES: bool = true;
+    const SIZES: bool = true;
+    const REVEALED_FIELDS: FieldPaths = FieldPaths::from_static(&amp;["id", "plan"]);
+}
+
+type CustomerJson = JsonEncoded&lt;Customer, CustomerLog&gt;;
+
+let customer = CustomerJson::from(Customer {
+    id: "cus_4821".to_string(),
+    email: "ada.lovelace@example.com".to_string(),
+    plan: "team".to_string(),
+    renewal_date: "2027-03-01".to_string(),
+});</code></pre>
+<p><code>JsonEncoded::new</code> builds a value under the default policy, and <code>from</code> a value of a type with a
+policy of its own. A record written when <code>plan</code> was a number logs this outline under the default
+policy:</p>
+<pre><code class="language-text">{&lt;key&gt;: &lt;string&gt;, &lt;key&gt;: &lt;string&gt;, &lt;key&gt;: &lt;number&gt;, &lt;key&gt;: &lt;string&gt;}
+</code></pre>
+<p>and this under <code>CustomerLog</code>:</p>
+<pre><code class="language-text">89 bytes: {"id": "cus_4821", "email": &lt;string, 24 chars&gt;, "plan": 2, "renewal_date": &lt;string, 10 chars&gt;}
+</code></pre>
+<p>The outline names the field and the value that differs, and shows the length of the email and
+nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
+identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
+personal data. <code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off. The event’s fields are
+in <a href="./observability.html#json-that-does-not-decode">Observability</a>. <code>RedactedJson</code> outlines any JSON
+the same way, with no encryption, see
+<a href="./use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/encrypted_json.rs">here</a>.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="migrating-from-0.29.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="migrating-from-0.30.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -560,7 +617,7 @@ assert_eq!(decrypted, address);
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="migrating-from-0.29.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="migrating-from-0.30.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

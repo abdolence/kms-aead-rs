@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,18 +181,19 @@
 <p>A sweep of a BigQuery table, in two paths: one <code>UPDATE</code> in SQL for the fields BigQuery reads, and a
 Rust path for the rest. The mechanism is in <a href="./sweeps.html">Sweeps</a>. The Rust path has the five
 properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>, and the SQL path states its own below.</p>
-<p>The marker is a <code>BYTES</code> column. BigQuery gives a column added to a table <code>NULL</code> in the rows already
-there, so the column’s default goes with a write of <code>SealMarker::ENVELOPE</code> into them:</p>
-<pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTES;
-ALTER TABLE users ALTER COLUMN seal SET DEFAULT b'\x01\x00\x00\x00\x00';
-UPDATE users SET seal = b'\x01\x00\x00\x00\x00' WHERE seal IS NULL;
+<p>The marker is a <code>BYTES</code> column that every write of the encrypted fields sets:</p>
+<pre><code class="language-sql">CREATE TABLE users (
+  id STRING NOT NULL,
+  phone BYTES NOT NULL,
+  encryption_marker BYTES NOT NULL
+);
 </code></pre>
-<p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-sealed by one <code>UPDATE</code> in SQL,
+<p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-encrypted by one <code>UPDATE</code> in SQL,
 with no Rust loop and no value leaving BigQuery. Its parameters come from a
-<code>Readable(Purpose::Randomized)</code> export, see
-<a href="../keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>: <code>@kms_key</code>
-is the export’s <code>key_uri()</code>, <code>@keyset</code> its <code>value()</code>, and <code>@seal</code> the bytes of its marker,
-<code>keyset.seal_marker().value()</code>:</p>
+<code>Readable(Purpose::Randomized)</code> export, see <a href="../keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to
+BigQuery</a>: <code>@kms_key</code> is the export’s
+<code>key_uri()</code>, <code>@keyset</code> its <code>value()</code>, and <code>@encryption_marker</code> the bytes of its marker,
+<code>keyset.encryption_marker().value()</code>:</p>
 <pre><code class="language-sql">UPDATE users
 SET
   email = AEAD.ENCRYPT(
@@ -200,23 +201,21 @@ SET
     AEAD.DECRYPT_BYTES(
       KEYS.KEYSET_CHAIN(@kms_key, @keyset), email, CAST(CONCAT('user/', id, '/email') AS BYTES)),
     CAST(CONCAT('user/', id, '/email') AS BYTES)),
-  seal = @seal
-WHERE seal &lt; @seal AND seal &gt; b'\x01\x00\x00\x00\x00';
+  encryption_marker = @encryption_marker
+WHERE encryption_marker &lt; @encryption_marker;
 </code></pre>
-<p><code>AEAD.DECRYPT_BYTES</code>, and <code>AEAD.ENCRYPT</code> of bytes, take the AAD as <code>BYTES</code>, the UTF-8 of the
-same text. <code>AEAD.ENCRYPT</code> seals under the keyset’s primary, which a <code>Readable</code> export sets to the
-active version of the record it reads from the store, and <code>EncryptedKeyset::seal_marker()</code> is that
-record’s marker. So every row the statement re-seals lies in the
-<a href="./sweeps.html#records-under-a-version">range</a> of the primary, as a row written through a <code>Sealer</code> does. A
-keyset exported before a promotion has the previous version as its primary and the previous
-epoch’s marker, and the rows it re-seals stay in the next sweep’s query, so the sweep exports its
+<p><code>AEAD.DECRYPT_BYTES</code>, and <code>AEAD.ENCRYPT</code> of bytes, take the AAD as <code>BYTES</code>, the UTF-8 of the same
+text. <code>AEAD.ENCRYPT</code> encrypts under the keyset’s primary, which a <code>Readable</code> export sets to the
+active version of the record it reads from the store, and <code>EncryptedKeyset::encryption_marker()</code> is
+that record’s marker. So every row the statement re-encrypts lies in the
+<a href="./sweeps.html#records-under-a-version">range</a> of the primary, as a row written through an <code>Encryptor</code>
+does. A keyset exported before a promotion has the previous version as its primary and the previous
+epoch’s marker, and the rows it re-encrypts stay in the next sweep’s query, so the sweep exports its
 keyset after the promotion. The export is a <code>KeyringAdmin</code> call of the administrative job.</p>
-<p>The statement re-seals every encrypted field of the row, since the marker it writes covers all of
-them. Fields of several purposes are sealed under one <code>Readable</code> keyset each, and the statement
-stamps the marker only when their <code>seal_marker()</code> is the same; otherwise it exports them again. A
-row with a beacon, which SQL does not compute, goes through the Rust path below, and so does a row
-under <code>SealMarker::ENVELOPE</code>, the lowest marker, which the statement leaves out: an envelope value
-does not open under a keyring’s keyset.</p>
+<p>The statement re-encrypts every encrypted field of the row, since the marker it writes covers all of
+them. Fields of several purposes are encrypted under one <code>Readable</code> keyset each, and the statement
+stamps the marker only when their <code>encryption_marker()</code> is the same; otherwise it exports them again.
+A row with a beacon, which SQL does not compute, goes through the Rust path below.</p>
 <p>This sweep:</p>
 <ul>
 <li>resumes without a checkpoint: the statement is atomic, a failed one changed nothing, and the
@@ -224,28 +223,29 @@ next run’s <code>WHERE</code> finds every row it did not write;</li>
 <li>loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
 statements on the same rows one fails and runs again, and its <code>WHERE</code> then sees the other’s
 marker;</li>
-<li>makes no KMS call per record: BigQuery opens the keyset through Cloud KMS for the statement;</li>
-<li>runs on a schedule until it re-seals no row. The administrative job retires the old version
+<li>makes no KMS call per record: BigQuery decrypts the keyset through Cloud KMS for the statement;</li>
+<li>runs on a schedule until it re-encrypts no row. The administrative job retires the old version
 once its range query,
-<code>SELECT COUNT(*) FROM users WHERE seal &gt;= @start AND (@end IS NULL OR seal &lt; @end)</code>, returns 0.</li>
+<code>SELECT COUNT(*) FROM users WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>,
+returns 0.</li>
 </ul>
 <p>A <code>Readable</code> keyset leaves a compromised version out, so the values under it fail
 <code>AEAD.DECRYPT_BYTES</code> and the whole statement with them. After a compromise those rows go through
-the Rust path below, where the sealer’s <code>reseal</code> reports their trust.</p>
-<p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-sealed in
+the Rust path below, where the encryptor’s <code>reencrypt</code> reports their trust.</p>
+<p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-encrypted in
 Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one <code>MERGE</code>
 per batch of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
 <pre><code class="language-sql">MERGE users u
 USING UNNEST(@rows) p
 ON u.id = p.id AND u.phone = p.old_phone
-WHEN MATCHED THEN UPDATE SET phone = p.phone, seal = @seal;
+WHEN MATCHED THEN UPDATE SET phone = p.phone, encryption_marker = @encryption_marker;
 </code></pre>
 <p>The rows stream from the application’s BigQuery client, one query of
-<code>SELECT id, phone, seal FROM users WHERE seal &lt; @current</code> with the current marker, and
-<code>sweep::run_batched</code> cuts them into batches. Each batch is re-sealed through one sealer, and the
-client runs the <code>MERGE</code> with <code>@seal</code> bound to the marker of the sealer’s record. Every row of a
-batch goes into <code>@rows</code>, the current ones with their bytes as they are, so that each gets the
-marker:</p>
+<code>SELECT id, phone, encryption_marker FROM users WHERE encryption_marker &lt; @current</code> with the current
+marker, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
+encryptor, and the client runs the <code>MERGE</code> with <code>@encryption_marker</code> bound to the marker of the
+encryptor’s record. Every row of a batch goes into <code>@rows</code>, the current ones with their bytes as
+they are, so that each gets the marker:</p>
 <pre><code class="language-rust">use std::fmt::{self, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
@@ -253,18 +253,18 @@ use std::num::NonZeroUsize;
 use futures_util::Stream;
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
-use kms_aead::{AeadAlgorithm, KmsAeadResult};
-use kms_aead_keyring::formats::{Envelope, Randomized};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ReencryptOutcome, EncryptionMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringResult, Plaintext, Resealed, Sealer,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringError, KeyringResult,
+    Plaintext, Encryptor,
 };
 use secret_vault_value::SecretValue;
 
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
-type UsersSealer&lt;'k&gt; = Sealer&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
+type UsersEncryptor&lt;'k&gt; = Encryptor&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 
 const PHONE: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -273,8 +273,6 @@ const PHONE: FieldSpec = FieldSpec::new(
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 /// BigQuery runs 2 mutating DML statements on a table at once and queues the rest.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
-/// The algorithm of the store-less envelope that wrote the values before the migration.
-const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
 <span class="boring">#[derive(Clone)]
 </span><span class="boring">struct Phone(String);
@@ -289,12 +287,10 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>/// A row of `SELECT id, phone, seal FROM users WHERE seal &lt; @current`.
+</span>/// A row of `SELECT id, phone FROM users WHERE encryption_marker &lt; @current`.
 struct UserRow {
     id: String,
-    /// An envelope value under `SealMarker::ENVELOPE`, a keyring value under any other marker.
-    phone: Vec&lt;u8&gt;,
-    seal: SealMarker,
+    phone: Encrypted&lt;Phone, Randomized&gt;,
 }
 
 /// The row id, and nothing of its columns.
@@ -311,48 +307,24 @@ struct PhoneUpdate {
     phone: Encrypted&lt;Phone, Randomized&gt;,
 }
 
-/// The AAD the application gave its envelope values.
-fn envelope_aad(id: &amp;str) -&gt; Vec&lt;u8&gt; {
-    format!("users:{id}:phone").into_bytes()
-}
-
-/// `phone`, the stored bytes of user `id` under the marker `seal`, under the active version of
-/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
-/// is, with `ResealOutcome::Skipped`.
-async fn reseal_phone(
-    keyring: &amp;UsersKeyring,
-    sealer: &amp;UsersSealer&lt;'_&gt;,
+/// `phone` of user `id` under the active version of `encryptor`, and the outcome of its
+/// re-encryption. A value under that version comes back as it is, with `ReencryptOutcome::Skipped`.
+async fn reencrypt_phone(
+    encryptor: &amp;UsersEncryptor&lt;'_&gt;,
     id: &amp;str,
-    seal: SealMarker,
-    phone: &amp;[u8],
-) -&gt; KeyringResult&lt;(Encrypted&lt;Phone, Randomized&gt;, ResealOutcome)&gt; {
+    phone: &amp;Encrypted&lt;Phone, Randomized&gt;,
+) -&gt; KeyringResult&lt;(Encrypted&lt;Phone, Randomized&gt;, ReencryptOutcome)&gt; {
     let aad = PHONE.aad(&amp;EntityId::try_from(id)?);
-    if seal == SealMarker::ENVELOPE {
-        let value = Encrypted::&lt;Phone, Envelope&gt;::try_from(phone.to_vec())?;
-        let opened: Phone = keyring
-            .decrypt_envelope_for_migration(&amp;envelope_aad(id), &amp;value, ENVELOPE_ALGORITHM)
-            .await?;
-        // Envelope values name no key version, so the record carries no trust to decide on
-        let resealed = ResealOutcome::Resealed {
-            from_compromised: false,
-        };
-        return Ok((sealer.encrypt(&amp;aad, &amp;opened).await?, resealed));
-    }
-    let phone = Encrypted::&lt;Phone, Randomized&gt;::try_from(phone.to_vec())?;
-    let resealed: Option&lt;Resealed&lt;Phone, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;phone).await?;
-    Ok(match resealed {
-        Some(resealed) =&gt; {
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, ResealOutcome::Resealed { from_compromised })
-        }
-        // The value is current: the row gets the marker alone
-        None =&gt; (phone, ResealOutcome::Skipped),
-    })
+    let reencrypted = encryptor.reencrypt(&amp;aad, phone).await?;
+    let outcome = ReencryptOutcome::from(&amp;reencrypted);
+    // A current value still gets the encryptor's marker, so that it leaves the query.
+    let phone = reencrypted.map_or_else(|| phone.clone(), |reencrypted| reencrypted.value);
+    Ok((phone, outcome))
 }
 
-/// Re-seals the `rows` of the query in batches, one sealer per batch, and writes each batch
-/// through `merge`, which runs the `MERGE` with `@seal` bound to the marker it is given, the
-/// marker of the batch's sealer, and returns its number of affected rows. `ClientError` is the
+/// Re-encrypts the `rows` of the query in batches, one encryptor per batch, and writes each batch
+/// through `merge`, which runs the `MERGE` with `@encryption_marker` bound to the marker it is given, the
+/// marker of the batch's encryptor, and returns its number of affected rows. `ClientError` is the
 /// error of the application's BigQuery client, which a row that did not read returns and a
 /// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failure.
 async fn sweep_phones&lt;Rows, Merge, Merged, ClientError&gt;(
@@ -362,27 +334,27 @@ async fn sweep_phones&lt;Rows, Merge, Merged, ClientError&gt;(
 ) -&gt; SweepReport
 where
     Rows: Stream&lt;Item = Result&lt;UserRow, ClientError&gt;&gt;,
-    Merge: Fn(Vec&lt;PhoneUpdate&gt;, SealMarker) -&gt; Merged,
+    Merge: Fn(Vec&lt;PhoneUpdate&gt;, EncryptionMarker) -&gt; Merged,
     Merged: Future&lt;Output = Result&lt;u64, ClientError&gt;&gt;,
     ClientError: From&lt;KeyringError&gt; + Display,
 {
     let options: BatchedSweepOptions = BatchedSweepOptions::new()
         .with_batch_size(BATCH_SIZE)
         .with_concurrency(CONCURRENCY);
-    sweep::run_batched(keyring.id(), rows, options, |batch: Vec&lt;UserRow&gt;| {
+    sweep::reencrypt_records_batched(keyring.id(), rows, options, |batch: Vec&lt;UserRow&gt;| {
         let merge = &amp;merge;
         async move {
-            let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-            let mut done: Vec&lt;(UserRow, Result&lt;ResealOutcome, ClientError&gt;)&gt; =
+            let encryptor: UsersEncryptor&lt;'_&gt; = keyring.encryptor().await;
+            let mut done: Vec&lt;(UserRow, Result&lt;ReencryptOutcome, ClientError&gt;)&gt; =
                 Vec::with_capacity(batch.len());
-            let mut queued: Vec&lt;(UserRow, ResealOutcome)&gt; = Vec::with_capacity(batch.len());
+            let mut queued: Vec&lt;(UserRow, ReencryptOutcome)&gt; = Vec::with_capacity(batch.len());
             let mut updates: Vec&lt;PhoneUpdate&gt; = Vec::with_capacity(batch.len());
             for row in batch {
-                match reseal_phone(keyring, &amp;sealer, &amp;row.id, row.seal, &amp;row.phone).await {
+                match reencrypt_phone(&amp;encryptor, &amp;row.id, &amp;row.phone).await {
                     Ok((phone, outcome)) =&gt; {
                         updates.push(PhoneUpdate {
                             id: row.id.clone(),
-                            old_phone: row.phone.clone(),
+                            old_phone: row.phone.value().to_vec(),
                             phone,
                         });
                         queued.push((row, outcome));
@@ -390,12 +362,12 @@ where
                     Err(error) =&gt; done.push((row, Err(error.into()))),
                 }
             }
-            let merged: u64 = merge(updates, sealer.record().seal_marker()).await?;
+            let merged: u64 = merge(updates, encryptor.record().encryption_marker()).await?;
             // A `MERGE` returns a count, not the rows: a batch with one row a concurrent writer
             // changed counts every row as skipped
             let all_written = u64::try_from(queued.len()) == Ok(merged);
             done.extend(queued.into_iter().map(|(row, outcome)| {
-                (row, Ok(if all_written { outcome } else { ResealOutcome::Skipped }))
+                (row, Ok(if all_written { outcome } else { ReencryptOutcome::Skipped }))
             }));
             Ok(done)
         }
@@ -404,23 +376,24 @@ where
 }
 <span class="boring">
 </span><span class="boring">fn main() {}</span></code></pre>
-<p>A batch is re-sealed sequentially inside its call, and <code>concurrency</code> bounds the batches in flight,
-which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per batch: a
-row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for the next
-run.</p>
+<p>A batch is re-encrypted sequentially inside its call, and <code>concurrency</code> bounds the batches in
+flight, which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per
+batch: a row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for
+the next run.</p>
 <p>A <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its rows
-as <code>Skipped</code>, the ones it wrote included. Its re-seals from a compromised version then drop out of
-<code>SweepReport::resealed_from_compromised</code>, although they went through the trust decision below, so
-on this path that count is a lower bound.</p>
+as <code>Skipped</code>, the ones it wrote included. Its re-encryptions from a compromised version then drop
+out of <code>SweepReport::reencrypted_from_compromised</code>, although they went through the trust decision
+below, so on this path that count is a lower bound.</p>
 <p>The marker takes 7 bytes of a row: its 5 bytes and the 2 BigQuery counts for every <code>BYTES</code> value.
-Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep’s query processed
-700,000 bytes, the <code>seal</code> column alone. BigQuery does not cluster a <code>BYTES</code> column, so the query
-reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB
-on demand, and its storage about $0.0013 a month at $0.02 per GiB.</p>
-<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs"><code>sweep_bigquery</code> example</a>
-runs the <code>UPDATE</code> above end to end, from the writes to the count of re-sealed rows, against Cloud
-KMS and BigQuery. It writes the rows through the Storage Write API, and the <code>UPDATE</code> re-seals them
-straight after: DML can modify rows recently written through its gRPC interface.</p>
+Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep’s query processed 700,000
+bytes, the <code>encryption_marker</code> column alone. BigQuery does not cluster a <code>BYTES</code> column, so the query
+reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB on
+demand, and its storage about $0.0013 a month at $0.02 per GiB.</p>
+<p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs"><code>sweep_bigquery</code>
+example</a>
+runs the <code>UPDATE</code> above end to end, from the writes to the count of re-encrypted rows, against Cloud
+KMS and BigQuery. It writes the rows through the Storage Write API, and the <code>UPDATE</code> re-encrypts
+them straight after: DML can modify rows recently written through its gRPC interface.</p>
 
                     </main>
 

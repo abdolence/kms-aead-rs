@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,22 +178,22 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="sweeps-on-firestore"><a class="header" href="#sweeps-on-firestore">Sweeps on Firestore</a></h1>
-<p>A sweep of a Firestore collection: the seal marker as a field, the query for the documents behind,
-and the conditional write back. The mechanism is in <a href="./sweeps.html">Sweeps</a>, and the example has the
-five properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
-<p>The marker is a <code>bytes</code> field, <code>seal</code>, and the query is one range filter on it. Firestore indexes a
-field ascending and descending by default, and the query needs the ascending index only, so a
-field override keeps just that one. firestore-rs declares it with its index management, behind its
-<code>admin</code> feature:</p>
+<p>A sweep of a Firestore collection: the encryption marker as a field, the query for the documents
+behind, and the conditional write back. The mechanism is in <a href="./sweeps.html">Sweeps</a>, and the example
+has the five properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
+<p>The marker is a <code>bytes</code> field, <code>encryption_marker</code>, and the query is one range filter on it.
+Firestore indexes a field ascending and descending by default, and the query needs the ascending
+index only, so a field override keeps just that one. firestore-rs declares it with its index
+management, behind its <code>admin</code> feature:</p>
 <pre><code class="language-rust ignore">use firestore::{FirestoreDb, FirestoreIndexSyncReport, FirestoreResult};
 
-/// Keeps the ascending index of `seal` in the `users` collection group, and drops the descending
+/// Keeps the ascending index of `encryption_marker` in the `users` collection group, and drops the descending
 /// one.
 async fn sync_users_indexes(db: &amp;FirestoreDb) -&gt; FirestoreResult&lt;FirestoreIndexSyncReport&gt; {
     db.fluent()
         .indexes()
         .collection_group("users")
-        .field_overrides(|f| f.fields([f.field("seal").indexes([f.ascending()])]))
+        .field_overrides(|f| f.fields([f.field("encryption_marker").indexes([f.ascending()])]))
         .sync()
         .await
 }</code></pre>
@@ -202,13 +202,13 @@ Firestore Admin API and <code>roles/datastore.indexAdmin</code>; the application
 The <a href="https://firestore-rust.abdolence.dev/index-management.html">index management chapter</a> of
 firestore-rs covers <code>.plan()</code>, <code>.sync()</code> and running them from a deploy.</p>
 <p>A project that manages its indexes outside Rust sets the same override with <code>gcloud</code>:</p>
-<pre><code class="language-sh">gcloud firestore indexes fields update seal --collection-group=users --index=order=ASCENDING
+<pre><code class="language-sh">gcloud firestore indexes fields update encryption_marker --collection-group=users --index=order=ASCENDING
 </code></pre>
 <p>The query streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a
-failed candidate, and the sweep never ends early on it. <code>sweep::run_batched</code> cuts the documents into
-batches of 500, each re-sealed through one sealer and written back in one <code>BatchWrite</code>. Each write
-of the batch carries its document’s update time as its precondition, and Firestore refuses it once
-anything changed the document since the query read it:</p>
+failed candidate, and the sweep never ends early on it. <code>sweep::reencrypt_records_batched</code> cuts the documents into
+batches of 500, each re-encrypted through one encryptor and written back in one <code>BatchWrite</code>. Each
+write of the batch carries its document’s update time as its precondition, and Firestore refuses it
+once anything changed the document since the query read it:</p>
 <pre><code class="language-rust no_run">use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 use std::time::Duration;
@@ -223,13 +223,12 @@ use firestore::{
 use futures_util::TryStreamExt;
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
-use kms_aead::{AeadAlgorithm, KmsAeadResult};
-use kms_aead_keyring::formats::{Envelope, Randomized};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ReencryptOutcome, EncryptionMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    KeyringResult, Plaintext, Resealed, Sealer,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringError, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use serde::{Deserialize, Serialize};
@@ -237,7 +236,6 @@ use serde::{Deserialize, Serialize};
 </span><span class="boring">use kms_aead_keyring::{KeyringId, KeyringRegistry, KeyringRegistryOptions};
 </span>
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
-type UsersSealer&lt;'k&gt; = Sealer&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 
 const USERS: &amp;str = "users";
 const EMAIL: FieldSpec = FieldSpec::new(
@@ -253,8 +251,6 @@ const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
 const BATCH_WRITE_RETRY_LIMIT: Duration = Duration::from_secs(5);
 /// How long a request waits for an answer, so that one to a Firestore that stopped answering fails.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// The algorithm of the store-less envelope that wrote the values before the migration.
-const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
 <span class="boring">#[derive(Clone)]
 </span><span class="boring">struct Email(String);
@@ -275,19 +271,15 @@ struct UserDoc {
     id: String,
     #[serde(rename = "_firestore_updated")]
     updated: FirestoreTimestamp,
-    /// An envelope value under `SealMarker::ENVELOPE`, a keyring value under any other marker.
-    #[serde(with = "serde_bytes")]
-    email: Vec&lt;u8&gt;,
-    #[serde(default)]
-    seal: SealMarker,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
-/// The fields a re-seal writes: the encrypted fields and the marker of the sealer that sealed
+/// The fields a re-encryption writes: the encrypted fields and the marker of the encryptor that encrypted
 /// them.
 #[derive(Serialize, Deserialize)]
 struct UserFields {
     email: Encrypted&lt;Email, Randomized&gt;,
-    seal: SealMarker,
+    encryption_marker: EncryptionMarker,
 }
 
 /// The document id, and nothing of its fields.
@@ -337,104 +329,69 @@ impl Display for SweepError {
     }
 }
 
-/// Re-seals every user whose marker is below the current one, in batches of [`BATCH_SIZE`] with
+/// Re-encrypts every user whose marker is below the current one, in batches of [`BATCH_SIZE`] with
 /// [`CONCURRENCY`] in flight, and returns the sweep's report.
 async fn sweep_users(
     keyring: &amp;UsersKeyring,
     writer: &amp;FirestoreSimpleBatchWriter,
 ) -&gt; Result&lt;SweepReport, FirestoreError&gt; {
-    let current: SealMarker = keyring.record().seal_marker();
+    let current: EncryptionMarker = keyring.record().encryption_marker();
     let candidates = writer
         .db
         .fluent()
         .select()
-        .fields(paths!(UserFields::{email, seal}))
+        .fields(paths!(UserFields::{email, encryption_marker}))
         .from(USERS)
-        .filter(|q| q.field("seal").less_than(current))
+        .filter(|q| q.field("encryption_marker").less_than(current))
         .obj::&lt;UserDoc&gt;()
         .stream_query_with_errors()
         .await?
         .err_into::&lt;SweepError&gt;();
-    let report: SweepReport = sweep::run_batched(
+    let report: SweepReport = sweep::reencrypt_records_batched(
         keyring.id(),
         candidates,
         BatchedSweepOptions::new()
             .with_batch_size(BATCH_SIZE)
             .with_concurrency(CONCURRENCY),
-        |docs: Vec&lt;UserDoc&gt;| reseal_batch(keyring, writer, docs),
+        |docs: Vec&lt;UserDoc&gt;| reencrypt_batch(keyring, writer, docs),
     )
     .await;
     Ok(report)
 }
 
-/// The AAD the application gave its envelope values.
-fn envelope_aad(id: &amp;str) -&gt; Vec&lt;u8&gt; {
-    format!("users:{id}:email").into_bytes()
-}
-
-/// `email`, the stored bytes of user `id` under the marker `seal`, under the active version of
-/// `sealer`, and the outcome of its re-seal. A keyring value under that version comes back as it
-/// is, with `ResealOutcome::Skipped`.
-async fn reseal_email(
-    keyring: &amp;UsersKeyring,
-    sealer: &amp;UsersSealer&lt;'_&gt;,
-    id: &amp;str,
-    seal: SealMarker,
-    email: &amp;[u8],
-) -&gt; KeyringResult&lt;(Encrypted&lt;Email, Randomized&gt;, ResealOutcome)&gt; {
-    let aad = EMAIL.aad(&amp;EntityId::try_from(id)?);
-    if seal == SealMarker::ENVELOPE {
-        let value = Encrypted::&lt;Email, Envelope&gt;::try_from(email.to_vec())?;
-        let opened: Email = keyring
-            .decrypt_envelope_for_migration(&amp;envelope_aad(id), &amp;value, ENVELOPE_ALGORITHM)
-            .await?;
-        // Envelope values name no key version, so the record carries no trust to decide on
-        let resealed = ResealOutcome::Resealed {
-            from_compromised: false,
-        };
-        return Ok((sealer.encrypt(&amp;aad, &amp;opened).await?, resealed));
-    }
-    let email = Encrypted::&lt;Email, Randomized&gt;::try_from(email.to_vec())?;
-    let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;email).await?;
-    Ok(match resealed {
-        Some(resealed) =&gt; {
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, ResealOutcome::Resealed { from_compromised })
-        }
-        // The value is current: the record gets the marker alone
-        None =&gt; (email, ResealOutcome::Skipped),
-    })
-}
-
-/// Re-seals a batch of documents through one sealer and writes them back in one `BatchWrite`,
-/// each write stamped with the sealer's marker and conditional on the update time the query read.
-/// A batch is not atomic: a conflict fails its own write only.
-async fn reseal_batch(
+/// Re-encrypts a batch of documents through one encryptor and writes them back in one `BatchWrite`,
+/// each write stamped with the encryptor's marker and conditional on the update time the query read.
+/// A batch is not atomic: a document changed since the query fails its own write only, and the
+/// sweep counts it as skipped.
+async fn reencrypt_batch(
     keyring: &amp;UsersKeyring,
     writer: &amp;FirestoreSimpleBatchWriter,
     docs: Vec&lt;UserDoc&gt;,
-) -&gt; Result&lt;Vec&lt;(UserDoc, Result&lt;ResealOutcome, SweepError&gt;)&gt;, SweepError&gt; {
-    let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-    let seal: SealMarker = sealer.record().seal_marker();
+) -&gt; Result&lt;Vec&lt;(UserDoc, Result&lt;ReencryptOutcome, SweepError&gt;)&gt;, SweepError&gt; {
+    let encryptor = keyring.encryptor().await;
+    let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
     let mut batch = writer.new_batch();
-    let mut done: Vec&lt;(UserDoc, Result&lt;ResealOutcome, SweepError&gt;)&gt; =
+    let mut done: Vec&lt;(UserDoc, Result&lt;ReencryptOutcome, SweepError&gt;)&gt; =
         Vec::with_capacity(docs.len());
-    let mut queued: Vec&lt;(UserDoc, ResealOutcome)&gt; = Vec::with_capacity(docs.len());
+    let mut queued: Vec&lt;(UserDoc, ReencryptOutcome)&gt; = Vec::with_capacity(docs.len());
     for doc in docs {
         let queue = async {
-            let (email, outcome) =
-                reseal_email(keyring, &amp;sealer, &amp;doc.id, doc.seal, &amp;doc.email).await?;
+            let aad = EMAIL.aad(&amp;EntityId::try_from(doc.id.as_str())?);
+            let reencrypted = encryptor.reencrypt(&amp;aad, &amp;doc.email).await?;
+            let outcome = ReencryptOutcome::from(&amp;reencrypted);
+            // A current value still gets the encryptor's marker, so that it leaves the query.
+            let email = reencrypted.map_or_else(|| doc.email.clone(), |reencrypted| reencrypted.value);
             writer
                 .db
                 .fluent()
                 .update()
-                .fields(paths!(UserFields::{email, seal}))
+                .fields(paths!(UserFields::{email, encryption_marker}))
                 .in_col(USERS)
                 .precondition(FirestoreWritePrecondition::UpdateTime(doc.updated.into()))
                 .document_id(&amp;doc.id)
-                .object(&amp;UserFields { email, seal })
+                .object(&amp;UserFields { email, encryption_marker })
                 .add_to_batch(&amp;mut batch)?;
-            Ok::&lt;ResealOutcome, SweepError&gt;(outcome)
+            Ok::&lt;ReencryptOutcome, SweepError&gt;(outcome)
         };
         match queue.await {
             Ok(outcome) =&gt; queued.push((doc, outcome)),
@@ -452,8 +409,8 @@ async fn reseal_batch(
             .and_then(|status| Code::try_from(status.code).ok());
         let outcome = match code {
             Some(Code::Ok) =&gt; Ok(outcome),
-            // A write since the query: the writer re-sealed the document itself
-            Some(Code::FailedPrecondition) =&gt; Ok(ResealOutcome::Skipped),
+            // Written since the query: the writer encrypted the document under its own record.
+            Some(Code::FailedPrecondition) =&gt; Ok(ReencryptOutcome::Skipped),
             _ =&gt; Err(SweepError::Write(code)),
         };
         (doc, outcome)
@@ -493,9 +450,12 @@ println!("{report:?}");
 </span><span class="boring">}</span></code></pre>
 <p>The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
 candidate query included.</p>
-<p>A range filter never matches a document without the field. <code>#[serde(default)]</code> reads a document
-written before the marker as <code>SealMarker::ENVELOPE</code>, and the query finds it only once its <code>seal</code>
-holds those bytes, see <a href="../use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
+<p><code>CONCURRENCY</code> batches of 500 writes in flight are a high write rate for a collection that has seen
+little traffic. Firestore advises starting a new collection at 500 writes a second and raising the
+rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step on one.</p>
+<p>A range filter never matches a document without the field, so a document written before the marker
+needs the marker written first, see <a href="../use-cases/envelope-to-keyring.html">Move envelope values to a
+keyring</a>.</p>
 <p>A partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers would
 read every document, the current ones included.</p>
 <p>The marker takes 10 bytes of a document: the field name as a 5-byte string and the 5 bytes of the

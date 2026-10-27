@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -214,7 +214,7 @@ let cipher_text = envelope
 <h2 id="authentication-and-region"><a class="header" href="#authentication-and-region">Authentication and region</a></h2>
 <p><code>AwsKmsProvider::new</code> loads the AWS configuration from the environment, as the AWS SDK does:
 environment variables, the shared config and credentials files, the instance or container
-role, etc. It sends no request, so missing credentials or an unreachable endpoint fail the first
+role, and the session of <code>aws login</code>. It sends no request, so missing credentials or an unreachable endpoint fail the first
 encryption or decryption.</p>
 <p>Without <code>aws_region</code> in the key reference, the provider takes the region of the AWS
 configuration it loads. Set one with <code>AwsKmsKeyRef::new(..).with_aws_region(region)</code>.</p>
@@ -251,12 +251,78 @@ DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own 
 <a href="../envelope-encryption.html#the-check">The check</a>. An error means the key is still in
 <code>PendingImport</code>: <code>ListKeyRotations</code> lists each material with its import state, and the one still
 missing is imported again.</p>
+<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<p>A KMS key of the spec <code>RSA_2048</code>, <code>RSA_3072</code> or <code>RSA_4096</code> with the usage <code>ENCRYPT_DECRYPT</code> is an
+asymmetric KEK, see <a href="../asymmetric-kek.html">Asymmetric KEKs</a>:</p>
+<ul>
+<li><code>AwsKmsProvider::public_key()</code> sends <code>GetPublicKey</code> for the configured key and returns the
+DER SubjectPublicKeyInfo, for the producers. The key must be of usage <code>ENCRYPT_DECRYPT</code> and list
+<code>RSAES_OAEP_SHA_256</code> among its <code>EncryptionAlgorithms</code>, and the call fails with
+<code>ASYMMETRIC_KEK_PUBLIC_KEY</code> otherwise, and when the response holds no public key;</li>
+<li>a decryption of a <code>0x02</code> encrypted DEK sends <code>Decrypt</code> with the configured key as <code>KeyId</code>,
+<code>EncryptionAlgorithm</code> <code>RSAES_OAEP_SHA_256</code> and the RSA block as <code>CiphertextBlob</code>. AWS KMS takes no
+encryption context with the RSA algorithms. The encrypted DEK records no key version, as under a
+symmetric key;</li>
+<li>AWS KMS does not rotate an asymmetric key: a rotation is a new key, by hand, and so a new
+keyring;</li>
+<li>the principal of a reader needs <code>kms:Decrypt</code> on the key, and the administration also
+<code>kms:GetPublicKey</code>. Nobody needs <code>kms:Encrypt</code>.</li>
+</ul>
+<p>An asymmetric key is configured by its ARN, as a symmetric key is. AWS prices and limits the RSA
+requests apart from the symmetric ones, see
+<a href="../asymmetric-kek.html#keyrings-under-an-asymmetric-kek">Keyrings under an asymmetric KEK</a>.</p>
+<h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
+<p><code>AwsKmsSigningProvider</code> signs with an asymmetric KMS key of the usage <code>SIGN_VERIFY</code>, see
+<a href="../signing.html">Signatures and MACs</a>. <code>AwsKmsSigningKeyRef</code> names the key as <code>AwsKmsKeyRef</code> does,
+and adds the algorithm: <code>Ed25519</code> for an <code>ECC_NIST_EDWARDS25519</code> key and <code>EcdsaP256Sha256</code> for
+<code>ECC_NIST_P256</code>.</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{AwsKmsSigningKeyRef, AwsKmsSigningProvider};
+use kms_aead::signing::{Signer, SigningAlgorithm};
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let key_ref = AwsKmsSigningKeyRef::new(
+    "123456789012".to_string(),
+    "arn:aws:kms:eu-west-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab".to_string(),
+    SigningAlgorithm::EcdsaP256Sha256,
+);
+
+let provider = AwsKmsSigningProvider::new(&amp;key_ref).await?;
+let signer = Signer::&lt;_, AwsLc&gt;::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+<span class="boring">let _ = jwk;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The provider loads the AWS configuration and takes the region as <code>AwsKmsProvider</code> does, and
+<code>AwsKmsSigningProvider::with_client</code> takes a client the application built itself. Creating the
+provider sends no request; <code>Signer::new</code> sends the first one.</p>
+<p>An asymmetric key has no versions, and a rotation is a new key. Configure the key id or the key
+ARN, never an alias: an alias that moves to another key would sign with a key that the key id of
+the signature does not name. An alias name, <code>alias/…</code>, or an alias ARN fails at creation with
+<code>AWS_SIGNING_KEY_ALIAS</code>, a <code>SystemError</code>.</p>
+<ul>
+<li><code>sign</code> sends <code>Sign</code> with <code>MessageType</code> <code>RAW</code> and <code>ED25519_SHA_512</code> for Ed25519, and with <code>DIGEST</code>
+and <code>ECDSA_SHA_256</code> for P-256, where the message is the SHA-256 of the pre-image. The pre-image
+is at most 302 bytes, within the 4,096-byte limit of <code>Message</code>;</li>
+<li>a response whose <code>KeyId</code> is not the configured key fails with <code>SIGNING_KEY_MISMATCH</code>, and one
+whose <code>SigningAlgorithm</code> is not the requested one with <code>SIGNING_ALGORITHM_MISMATCH</code>. A P-256
+signature is DER, converted to <code>r || s</code>; one that is not strict DER, or an Ed25519 signature
+that is not 64 bytes, fails with <code>SIGNATURE_ENCODING</code>;</li>
+<li><code>verifying_key</code> sends <code>GetPublicKey</code> and parses the DER <code>PublicKey</code>. A <code>KeySpec</code> other than the
+configured one fails with <code>SIGNING_ALGORITHM_MISMATCH</code>;</li>
+<li>the principal needs <code>kms:Sign</code> and <code>kms:GetPublicKey</code> on the key.</li>
+</ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>An error AWS KMS returned keeps its AWS error code, such as <code>IncorrectKeyException</code> or
 <code>NotFoundException</code>, and the message AWS KMS returned. An <code>EncryptionError</code> keeps the SDK error as
 its root cause. A response without the encrypted DEK, the plaintext DEK or the random bytes it was
 asked for fails with <code>AWS_ERROR</code>, an <code>EncryptionError</code>. Which
-errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>.</p>
+errors are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>.
+<code>AwsKmsSigningProvider</code> returns the same codes, with a <code>SignatureError</code> where the encryption
+provider returns an <code>EncryptionError</code>.</p>
 
                     </main>
 

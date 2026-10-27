@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -211,11 +211,12 @@ let cipher_text = envelope
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs">here</a>.</p>
 <p>The provider sends no request until the first encryption or decryption. The principal needs the
-wrapKey and unwrapKey key operations, as in the “Key Vault Crypto User” role.</p>
+<code>wrapKey</code> and <code>unwrapKey</code> key operations, Key Vault’s names for encrypting and decrypting a DEK, as
+in the “Key Vault Crypto User” role.</p>
 <h2 id="options"><a class="header" href="#options">Options</a></h2>
 <p><code>AzureKmsProviderOptions</code> has:</p>
 <ul>
-<li><code>algorithm</code>: an <code>AzureKmsAlgorithm</code>, Key Vault’s <code>alg</code> of the wrapKey and unwrapKey
+<li><code>algorithm</code>: an <code>AzureKmsAlgorithm</code>, Key Vault’s <code>alg</code> of the <code>wrapKey</code> and <code>unwrapKey</code>
 operations, which must suit the key type: <code>RsaOaepSha256</code> (<code>RSA-OAEP-256</code>) for RSA keys,
 <code>Aes256KeyWrap</code> (<code>A256KW</code>) for Managed HSM AES keys. The default, <code>DEFAULT_ALGORITHM</code>, is
 <code>RsaOaepSha256</code> for every key, so a Managed HSM AES key needs <code>algorithm</code> set to
@@ -267,10 +268,77 @@ version Key Vault encrypted with, read from the <code>kid</code> of its response
 disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
 Key Vault deletes a key with all its versions and never one version alone, so the old version stays
 disabled rather than destroyed.</p>
+<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<p>An RSA key of 2048, 3072 or 4096 bits, <code>RSA</code> or <code>RSA-HSM</code>, is an asymmetric KEK, see <a href="../asymmetric-kek.html">Asymmetric
+KEKs</a>. The provider has always encrypted with it through <code>wrapKey</code>; a <code>0x02</code>
+encrypted DEK moves the encryption into the producer, and the provider still decrypts through
+<code>unwrapKey</code>:</p>
+<ul>
+<li><code>AzureKmsProvider::public_key(None)</code> sends <code>GetKey</code> for the latest version, or
+<code>public_key(Some(&amp;version))</code> for one, and returns the JSON Web Key’s <code>n</code> and <code>e</code> as the public key
+of the version the <code>kid</code> of the response names. It fails with <code>ASYMMETRIC_KEK_PUBLIC_KEY</code> for a
+key whose <code>kty</code> is not <code>RSA</code> or <code>RSA-HSM</code>, whose <code>key_ops</code> lack <code>unwrapKey</code>, or whose <code>kid</code> names
+no version or another key;</li>
+<li>a decryption of a <code>0x02</code> encrypted DEK sends <code>unwrapKey</code> on the key and the version the encrypted
+DEK names, with <code>alg</code> <code>RSA-OAEP-256</code>. This path ignores <code>AzureKmsProviderOptions::algorithm</code>,
+which stays the algorithm of the <code>0x01</code> layout;</li>
+<li>the principal of a reader needs <code>keys/unwrap/action</code>, and the administration also <code>keys/get</code>. “Key
+Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no decrypt. Nobody
+needs <code>keys/wrap/action</code>.</li>
+</ul>
+<p>An existing deployment on an RSA key is under an asymmetric KEK already and needs no re-encryption
+to move its encryptions to the producers, see
+<a href="../asymmetric-kek.html#migrating-an-azure-or-transit-rsa-deployment">Migrating an Azure or Transit RSA deployment</a>.
+A Managed HSM AES key stays on <code>wrapKey</code> and <code>unwrapKey</code> with <code>Aes256KeyWrap</code>: it is a symmetric KEK
+and has no public half.</p>
+<h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
+<p><code>AzureKmsSigningProvider</code> signs with one version of an EC <code>P-256</code> key, <code>EC</code> or <code>EC-HSM</code>, with
+<code>ES256</code>, see <a href="../signing.html">Signatures and MACs</a>. Key Vault signs no Ed25519, so the provider’s
+algorithm is <code>EcdsaP256Sha256</code>. <code>AzureKmsSigningKeyRef</code> names the vault, the key and the version,
+which a signer requires: it never follows the latest version.</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{AzureKmsSigningKeyRef, AzureKmsSigningProvider, KmsKeyVersion};
+use kms_aead::signing::Signer;
+
+<span class="boring">async fn example() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let key_ref = AzureKmsSigningKeyRef::new(
+    "https://my-vault.vault.azure.net".to_string(),
+    "my-signing-key".to_string(),
+    KmsKeyVersion::try_from("4387e9f3d6e14c459867679a90fd0f79".to_string())?,
+);
+let credential = azure_identity::DeveloperToolsCredential::new(None)?;
+
+let provider = AzureKmsSigningProvider::new(&amp;key_ref, credential)?;
+let signer = Signer::&lt;_, AwsLc&gt;::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+<span class="boring">let _ = jwk;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>AzureKmsSigningProvider::with_client_options</code> takes the settings of the Azure SDK, such as a
+custom HTTP transport or retry policy. Creating the provider sends no request and fails with
+<code>AZURE_KEY_NAME</code> or <code>AZURE_VAULT_URL</code> as <code>AzureKmsProvider</code> does; <code>Signer::new</code> sends the first
+request.</p>
+<ul>
+<li><code>sign</code> calls the sign operation with <code>ES256</code>, the SHA-256 of the pre-image as <code>value</code> and the
+version in the request path. The <code>result</code> is <code>r || s</code> as RFC 7518 defines it, 64 bytes; another
+length fails with <code>SIGNATURE_ENCODING</code>;</li>
+<li>a response whose <code>kid</code> is not the configured vault, key and version, or has none, fails with
+<code>SIGNING_KEY_MISMATCH</code>;</li>
+<li><code>verifying_key</code> calls <code>get_key</code> with the version and reads the <code>crv</code>, <code>x</code> and <code>y</code> of the JSON Web
+Key. A key that is not <code>EC</code> or <code>EC-HSM</code> on <code>P-256</code> fails with <code>SIGNING_ALGORITHM_MISMATCH</code>;</li>
+<li>the principal needs the <code>sign</code> and <code>get</code> key operations: the data actions
+<code>Microsoft.KeyVault/vaults/keys/sign/action</code> and <code>Microsoft.KeyVault/vaults/keys/read</code>, which
+“Key Vault Crypto User” grants.</li>
+</ul>
+<p>A rotation is a new key version that a new signer names, see <a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
 <code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. Which statuses are a <code>NetworkError</code> and which an
-<code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. A decryption of an encrypted DEK in another
+<code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. <code>AzureKmsSigningProvider</code> returns the same
+codes, with a <code>SignatureError</code> where the encryption provider returns an <code>EncryptionError</code>. A decryption of an encrypted DEK in another
 layout fails with <code>AZURE_ENCRYPTED_DEK_FORMAT</code>, before any request.</p>
 
                     </main>

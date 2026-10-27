@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,20 +178,20 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h1>
-<p>A sweep re-seals stored values under the active versions: after a rotation, to retire the old
+<p>A sweep re-encrypts stored values under the active versions: after a rotation, to retire the old
 version, after a compromise, and to migrate envelope values. It is a job the application runs, a
 CLI or a Kubernetes Job, never a task inside the library: only the application knows its tables,
 its queries and its write rules. The job runs on a schedule, and again until its <code>SweepReport</code>
 shows nothing scanned. A run that stops part-way or fails on some records needs no checkpoint: the
 next run’s marker query returns exactly the records it did not write. Retiring the old version is
 a separate step of the administrative job, see <a href="#retiring-the-old-version">Retiring the old version</a>.</p>
-<h2 id="the-seal-marker"><a class="header" href="#the-seal-marker">The seal marker</a></h2>
-<p>A keyring record counts a seal epoch, which moves on by one with every administrative write that
-makes a version active:</p>
+<h2 id="the-encryption-marker"><a class="header" href="#the-encryption-marker">The encryption marker</a></h2>
+<p>A keyring record counts a re-encryption epoch, which moves on by one with every administrative write
+that makes a version active:</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Call</th><th>Seal epoch</th></tr>
+<tr><th>Call</th><th>Re-encryption epoch</th></tr>
 </thead>
 <tbody>
 <tr><td><code>create</code>, and <code>open_or_create</code> when it creates</td><td>1</td></tr>
@@ -203,45 +203,65 @@ makes a version active:</p>
 </tbody>
 </table>
 </div>
-<p>A write moves the epoch once, however many versions it makes active. <code>KeyringRecord::seal_marker()</code>
-returns it as a <code>SealMarker</code>:</p>
-<pre><code class="language-text">[0x01][seal epoch: u32 BE]
+<p>A write moves the epoch once, however many versions it makes active.
+<code>KeyringRecord::encryption_marker()</code> returns it as an <code>EncryptionMarker</code>:</p>
+<pre><code class="language-text">[0x01][re-encryption epoch: u32 BE]
 </code></pre>
 <p>Markers compare as their epochs do, and so do their bytes, in Firestore, PostgreSQL and BigQuery
-alike. <code>SealMarker::ENVELOPE</code> is epoch 0, <code>01 00 00 00 00</code>, the marker of a record of envelope
+alike. <code>EncryptionMarker::ENVELOPE</code> is epoch 0, <code>01 00 00 00 00</code>, the marker of a record of envelope
 values, below the marker of every keyring.</p>
 <p>Each record of the application keeps the marker in one field beside its encrypted fields. A write
-that touches any encrypted field of a record takes one <code>Sealer</code> from <code>keyring.sealer()</code>, seals all
-of the record’s encrypted fields again through it, computes its beacons again, and stores
-<code>sealer.record().seal_marker()</code> in the same write, as <code>write_user</code> does in
-<a href="#running-a-sweep">Running a sweep</a>. The sealer keeps the record it took from the cache, so the
-marker names the epoch whose active versions the fields are under, also when the cache refreshes
-during the write.</p>
+that touches any encrypted field of a record takes one <code>Encryptor</code> from <code>keyring.encryptor()</code>,
+encrypts all of the record’s encrypted fields again through it, computes its beacons again, and
+stores <code>encryptor.record().encryption_marker()</code> in the same write, as <code>write_user</code> does in <a href="#running-a-sweep">Running a
+sweep</a>. The encryptor keeps the record it took from the cache, so the marker names
+the epoch whose active versions the fields are under, also when the cache refreshes during the
+write.</p>
 <p>A marker read from <code>keyring.record()</code> names whichever record the cache held when it was read. Read
-before the sealing, it can name an older epoch than the versions the fields are under, which puts
+before the encrypting, it can name an older epoch than the versions the fields are under, which puts
 the record outside the <a href="#records-under-a-version">range</a> of those versions. Read after, it can name
 a newer one, and the record then drops out of every sweep.</p>
+<h2 id="why-the-row-holds-an-encryption-marker"><a class="header" href="#why-the-row-holds-an-encryption-marker">Why the row holds an encryption marker</a></h2>
+<p>Decryption never reads the marker. Every keyring value carries its key id in its prefix, <code>0x01</code>
+followed by the key id, so a read finds the version that encrypted a value from the value alone.</p>
+<p>The marker lets the database find rows, where the library cannot: encrypted bytes cannot be indexed
+or compared, and the library does not scan the application’s tables. A row carries one small
+column that a range query can use, and the column answers two questions:</p>
+<ul>
+<li>which rows are still to be re-encrypted after a rotation: those with <code>encryption_marker &lt; current</code>;</li>
+<li>which rows can still hold a value under a version, before it is destroyed: those with a marker
+in the <code>ReencryptRange</code> of the version. A query that returns nothing makes the destroy safe.</li>
+</ul>
+<p>The marker is an epoch and not a key version because the fields of a row are under different
+purposes, randomised, deterministic and beacon, and the versions of each purpose rotate
+independently. A version marker would need a column per purpose. The epoch is one counter that the
+keyring moves on whenever any version becomes active. An <code>Encryptor</code> is a snapshot of all active
+versions at one epoch, and each version records the epochs it was active in, so both questions are
+one range query on one column.</p>
+<p>An application that never sweeps, because it keeps old versions alive or re-encrypts a row when it
+next writes it, may leave the column out. Bulk re-encryption and the safe destruction of old
+versions need it.</p>
 <h2 id="finding-records-behind"><a class="header" href="#finding-records-behind">Finding records behind</a></h2>
 <p>The records a sweep still has to visit are those whose marker is below the current one:</p>
 <ul>
-<li><code>seal &lt; $1</code> with the marker of <code>keyring.record().seal_marker()</code>, on one indexed field, in every
-store;</li>
-<li><code>row.seal &lt; current</code> in Rust, on a record read back before its re-seal.</li>
+<li><code>encryption_marker &lt; $1</code> with the marker of <code>keyring.record().encryption_marker()</code>, on one indexed
+field, in every store;</li>
+<li><code>row.encryption_marker &lt; current</code> in Rust, on a record read back before its re-encryption.</li>
 </ul>
-<p>The query also matches a record with nothing to re-seal: after a rotation of a purpose the record
+<p>The query also matches a record with nothing to re-encrypt: after a rotation of a purpose the record
 holds no value of, such as a beacon rotation for a record without beacons, its marker is below the
-current one all the same. The re-seal then writes the sealer’s marker alone, without decrypting
-anything or calling the KMS, and the record matches once.</p>
+current one all the same. The re-encryption then writes the encryptor’s marker alone, without
+decrypting anything or calling the KMS, and the record matches once.</p>
 <p>Each process stamps the epoch of the record it caches. A process that has not refreshed its record
-since a promotion seals under the previous version and stamps the previous epoch, so its writes stay
-in the query and the next sweep visits them. So the final check that the query returns nothing runs
-once the longest time any process may run without a successful refresh of its record has passed
+since a promotion encrypts under the previous version and stamps the previous epoch, so its writes
+stay in the query and the next sweep visits them. So the final check that the query returns nothing
+runs once the longest time any process may run without a successful refresh of its record has passed
 since the promotion.</p>
 <p>The marker comes from the cached record, so a job that starts right after a promotion in another
 process calls <code>reload()</code> first.</p>
 <h2 id="records-under-a-version"><a class="header" href="#records-under-a-version">Records under a version</a></h2>
-<p><code>KeyVersion::seal_range()</code> returns the markers of the records that can hold a value under the
-version, as a <code>SealRange</code>:</p>
+<p><code>KeyVersion::reencrypt_range()</code> returns the markers of the records that can hold a value under the
+version, as a <code>ReencryptRange</code>:</p>
 <ul>
 <li><code>start()</code>, the epoch of the write that made the version active;</li>
 <li><code>end()</code>, the epoch of the first write after it stopped being active that moved the epoch on, or
@@ -256,21 +276,21 @@ an unknown key id: <code>record.version(key_id)</code> is <code>None</code>. The
 <tr><th>Store</th><th>Query</th></tr>
 </thead>
 <tbody>
-<tr><td>Firestore</td><td>two range filters on <code>seal</code>, as below</td></tr>
-<tr><td>PostgreSQL</td><td><code>WHERE seal &gt;= $1 AND ($2::BYTEA IS NULL OR seal &lt; $2)</code> with <code>&amp;range.start()</code> and <code>&amp;range.end()</code></td></tr>
-<tr><td>BigQuery</td><td><code>WHERE seal &gt;= @start AND (@end IS NULL OR seal &lt; @end)</code>, with <code>@end</code> a <code>NULL</code> of type <code>BYTES</code> for an open range</td></tr>
-<tr><td>Rust</td><td><code>range.contains(row.seal)</code></td></tr>
+<tr><td>Firestore</td><td>two range filters on <code>encryption_marker</code>, as below</td></tr>
+<tr><td>PostgreSQL</td><td><code>WHERE encryption_marker &gt;= $1 AND ($2::BYTEA IS NULL OR encryption_marker &lt; $2)</code> with <code>&amp;range.start()</code> and <code>&amp;range.end()</code></td></tr>
+<tr><td>BigQuery</td><td><code>WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>, with <code>@end</code> a <code>NULL</code> of type <code>BYTES</code> for an open range</td></tr>
+<tr><td>Rust</td><td><code>range.contains(row.encryption_marker)</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>Firestore takes both bounds on the one field and serves them from its ascending index on <code>seal</code>,
-and an open range is one filter:</p>
+<p>Firestore takes both bounds on the one field and serves them from its ascending index on
+<code>encryption_marker</code>, and an open range is one filter:</p>
 <pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
 use futures_util::stream::{self, BoxStream, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
 use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{SealMarker, SealRange};
+use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
 use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
 use serde::{Deserialize, Serialize};
 
@@ -279,7 +299,7 @@ struct UserDoc {
     #[serde(rename = "_firestore_id", skip_serializing)]
     id: String,
     #[serde(default)]
-    seal: SealMarker,
+    encryption_marker: EncryptionMarker,
 }
 
 /// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
@@ -289,11 +309,11 @@ async fn users_under&lt;'a&gt;(
     key_id: KeyId,
 ) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
     // The store's record: a compromise or promotion in another process is in it
-    let range: Option&lt;SealRange&gt; = keyring
+    let range: Option&lt;ReencryptRange&gt; = keyring
         .reload()
         .await?
         .version(key_id)
-        .and_then(KeyVersion::seal_range);
+        .and_then(KeyVersion::reencrypt_range);
     let Some(range) = range else {
         // Never active: no record holds a value under it
         return Ok(stream::empty().boxed());
@@ -304,8 +324,8 @@ async fn users_under&lt;'a&gt;(
         .from("users")
         .filter(|q| {
             q.for_all([
-                q.field("seal").greater_than_or_equal(range.start()),
-                range.end().and_then(|end| q.field("seal").less_than(end)),
+                q.field("encryption_marker").greater_than_or_equal(range.start()),
+                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
             ])
         })
         .obj()
@@ -317,65 +337,68 @@ async fn users_under&lt;'a&gt;(
 </span><span class="boring">fn main() {}</span></code></pre>
 <p>The range serves two decisions:</p>
 <ul>
-<li>after <code>mark_compromised</code>, the range of the compromised version returns every record to re-seal
-and decide on, see <a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>. The writes
-of processes that have not seen the compromise yet are in it too: they seal under the version and
-stamp an epoch below the range’s end. Run the query again once the longest time any process may
-run without a successful refresh of its record has passed since the compromise, for the writes
-of the last of them. A version flagged compromised after it stopped being active moves no epoch,
-and keeps the range it had;</li>
+<li>after <code>mark_compromised</code>, the range of the compromised version returns every record to re-encrypt
+and decide on, see <a href="#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a>. The
+writes of processes that have not seen the compromise yet are in it too: they encrypt under the
+version and stamp an epoch below the range’s end. Run the query again once the longest time any
+process may run without a successful refresh of its record has passed since the compromise, for
+the writes of the last of them. A version flagged compromised after it stopped being active moves
+no epoch, and keeps the range it had;</li>
 <li>before <code>retire</code>, and again before <code>destroy</code>, the query of the version returning nothing shows
 that no record holds a value under it, see <a href="#retiring-the-old-version">Retiring the old version</a>.
 That check needs one record at most: <code>limit(1)</code> in Firestore, <code>EXISTS</code> in SQL.</li>
 </ul>
-<p>One epoch counts the activations of every purpose of the keyring, so a range can match a record
-with no field of the version’s purpose, such as a record without beacons in the range of a beacon
-version. Its re-seal finds every value current and writes the marker alone. No range holds
-<code>SealMarker::ENVELOPE</code>, since every range starts at epoch 1 or later. Records of several keyrings
-in one table add the keyring’s id to the query, as the sweep’s query does, see
-<a href="#sweeps-by-store">Sweeps by store</a>.</p>
-<h2 id="re-sealing-a-value"><a class="header" href="#re-sealing-a-value">Re-sealing a value</a></h2>
-<p><code>Sealer::reseal(aad, value)</code> returns <code>None</code> for a value under the active randomised version of the
-sealer’s record, without decrypting it or calling the KMS. A value under an older version the
-sealer’s record holds, a decrypt-only version with a higher key id than the active one included, is
-read with <code>decrypt_with_trust</code> and sealed again under the active version. The <code>Resealed</code> it returns
-holds the new <code>value</code> and the <code>trust</code> of the version the old value was read under, so the
-compromised-value decision stays with the caller, see
-<a href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a>. <code>reseal_deterministic</code> does the
-same for deterministic values, under the <code>deterministic</code> feature.</p>
-<p>A sealer never seals a value back under an older version. A value under a version that is pending
-in the sealer’s record, or missing from it, was sealed by a process with a newer record, and a
-sealer taken before a <code>mark_compromised</code> would otherwise move it back under the compromised
-version. The re-seal fails with <code>KeyringError::SealerOutdated</code>, after reloading the cached record
-when it lacks the version or holds it as pending, under the same rate limit as <code>decrypt</code>’s reload
-for a key id it lacks. The sealer keeps its own record, so that its marker still names every
-version the write seals under. The write is safe to retry: it takes a new sealer and runs again,
-and the new sealer, taken from the reloaded record, finds the value current or seals it under its
-active version. Inside <code>reload_min_interval</code> of another such reload the cached record may not have
-moved yet, and the retry fails the same way until it does. When the store’s record itself holds the
-version as pending, as for a value from another keyring whose key id is pending here or after a
-restore from an older backup, every retry fails with <code>SEALER_OUTDATED</code>, at no more than one store
-read per <code>reload_min_interval</code>. A key id the reloaded record lacks too fails with
-<code>KeyVersionUnknown</code>.</p>
-<p>A beacon cannot be re-sealed: it is a MAC of the plaintext. <code>sealer.is_current(beacon.key_id())</code>
-applies the same rule to it: <code>true</code> under the active beacon version of the sealer’s record, and the
-beacon stays as it is; <code>false</code> under an older one, and the field is read with <code>decrypt_with_trust</code>,
-whose plaintext gives both the value under the active version, through the sealer’s <code>encrypt</code>, and
-the beacon under the active beacon version, through its <code>beacon(field, &amp;plaintext)</code>; and
-<code>SealerOutdated</code> under a version newer than the sealer’s record.</p>
-<p>When nothing needs a re-seal, the write still stores the sealer’s marker, conditional on the record
-as the sweep read it, and the re-seal returns <code>ResealOutcome::Skipped</code>.</p>
+<p>One epoch counts the activations of every purpose of the keyring, so a range can match a record with
+no field of the version’s purpose, such as a record without beacons in the range of a beacon
+version. Its re-encryption finds every value current and writes the marker alone. No range holds
+<code>EncryptionMarker::ENVELOPE</code>, since every range starts at epoch 1 or later. Records of several
+keyrings in one table add the keyring’s id to the query, as the sweep’s query does, see <a href="#sweeps-by-store">Sweeps by
+store</a>.</p>
+<h2 id="re-encrypting-a-value"><a class="header" href="#re-encrypting-a-value">Re-encrypting a value</a></h2>
+<p><code>Encryptor::reencrypt(aad, value)</code> returns <code>None</code> for a value under the active randomised version of
+the encryptor’s record, without decrypting it or calling the KMS. A value under an older version the
+encryptor’s record holds, a decrypt-only version with a higher key id than the active one included,
+is read with <code>decrypt_with_trust</code> and encrypted again under the active version. The <code>Reencrypted</code> it
+returns holds the new <code>value</code> and the <code>trust</code> of the version the old value was read under, so the
+compromised-value decision stays with the caller, see <a href="#the-trust-of-re-encrypted-values">The trust of re-encrypted
+values</a>. <code>Reencrypted::outcome()</code> is the record’s
+<code>ReencryptOutcome::Reencrypted</code>, with <code>from_compromised</code> set from that trust, and
+<code>ReencryptOutcome::from(&amp;reencrypted)</code> of the returned <code>Option</code> is <code>Skipped</code> for <code>None</code>.
+<code>reencrypt_deterministic</code> does the same for deterministic values, under the <code>deterministic</code>
+feature.</p>
+<p>An encryptor never encrypts a value back under an older version. A value under a version that is
+pending in the encryptor’s record, or missing from it, was encrypted by a process with a newer
+record, and an encryptor taken before a <code>mark_compromised</code> would otherwise move it back under the
+compromised version. The re-encryption fails with <code>KeyringError::EncryptorOutdated</code>, after reloading
+the cached record when it lacks the version or holds it as pending, under the same rate limit as
+<code>decrypt</code>’s reload for a key id it lacks. The encryptor keeps its own record, so that its marker
+still names every version the write encrypts under. The write is safe to retry: it takes a new
+encryptor and runs again, and the new encryptor, taken from the reloaded record, finds the value
+current or encrypts it under its active version. Inside <code>reload_min_interval</code> of another such reload
+the cached record may not have moved yet, and the retry fails the same way until it does. When the
+store’s record itself holds the version as pending, as for a value from another keyring whose key id
+is pending here or after a restore from an older backup, every retry fails with
+<code>ENCRYPTOR_OUTDATED</code>, at no more than one store read per <code>reload_min_interval</code>. A key id the
+reloaded record lacks too fails with <code>KeyVersionUnknown</code>.</p>
+<p>A beacon cannot be re-encrypted: it is a MAC of the plaintext.
+<code>encryptor.is_current(beacon.key_id())</code> applies the same rule to it: <code>true</code> under the active beacon
+version of the encryptor’s record, and the beacon stays as it is; <code>false</code> under an older one, and
+the field is read with <code>decrypt_with_trust</code>, whose plaintext gives both the value under the active
+version, through the encryptor’s <code>encrypt</code>, and the beacon under the active beacon version, through
+its <code>beacon(field, &amp;plaintext)</code>; and <code>EncryptorOutdated</code> under a version newer than the encryptor’s
+record.</p>
+<p>When nothing needs a re-encryption, the write still stores the encryptor’s marker, conditional on
+the record as the sweep read it, and the re-encryption returns <code>ReencryptOutcome::Skipped</code>.</p>
 <h2 id="running-a-sweep"><a class="header" href="#running-a-sweep">Running a sweep</a></h2>
-<p><code>sweep::run</code> drives the application’s re-seal over a stream of candidates, with at most
-<code>concurrency</code> in flight, and counts what happened. <code>sweep::run_batched</code> cuts the same stream into
-batches, re-sealed and written back one batch per call, as <code>BatchedSweepOptions</code> sets: 100
+<p><code>sweep::reencrypt_records</code> drives the application’s re-encryption over a stream of candidates, with at most
+<code>concurrency</code> in flight, and counts what happened. <code>sweep::reencrypt_records_batched</code> cuts the same stream into
+batches, re-encrypted and written back one batch per call, as <code>BatchedSweepOptions</code> sets: 100
 candidates a batch and 4 batches in flight by default, <code>DEFAULT_BATCH_SIZE</code> and
-<code>DEFAULT_CONCURRENCY</code>. The stream returns each candidate as a
-<code>Result</code>, so that the query that finds them can fail into the report rather than end the sweep in
-silence. A sweep is data plane: it takes a <code>Keyring</code>
-and needs the application’s rights only, since a re-seal encrypts under a DEK the record already
-holds. The rotation before it and the <code>retire</code> after it are the administrative job’s, on a
-<code>KeyringAdmin</code>. Here over an in-memory table, with both in one process:</p>
+<code>DEFAULT_CONCURRENCY</code>. The stream returns each candidate as a <code>Result</code>, so that the query that finds
+them can fail into the report rather than end the sweep in silence. A sweep is data plane: it takes
+a <code>Keyring</code> and needs the application’s rights only, since a re-encryption encrypts under a DEK the
+record already holds. The rotation before it and the <code>retire</code> after it are the administrative job’s,
+on a <code>KeyringAdmin</code>. Here over an in-memory table, with both in one process:</p>
 <pre><code class="language-rust">use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::sync::Mutex;
@@ -384,11 +407,10 @@ use futures_util::stream;
 use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, ReencryptOutcome, EncryptionMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringResult,
-    Resealed,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringResult,
 };
 <span class="boring">use kms_aead::providers::LocalKekId;
 </span><span class="boring">use kms_aead::KmsAeadResult;
@@ -422,39 +444,34 @@ const EMAIL: FieldSpec = FieldSpec::new(
 #[derive(Clone)]
 struct UserRow {
     email: Encrypted&lt;Email, Randomized&gt;,
-    seal: SealMarker,
+    encryption_marker: EncryptionMarker,
 }
 
 /// The users table, by user id.
 type Table = Mutex&lt;BTreeMap&lt;String, UserRow&gt;&gt;;
 
-/// Re-seals the row of `user` under the active version, with the marker of the sealer's record.
-async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ResealOutcome&gt; {
+/// Re-encrypts the row of `user` under the active version, with the marker of the encryptor's record.
+async fn reencrypt(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ReencryptOutcome&gt; {
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
-        return Ok(ResealOutcome::Skipped);
+        return Ok(ReencryptOutcome::Skipped);
     };
     let read: Vec&lt;u8&gt; = row.email.value().to_vec();
-    let sealer = keyring.sealer().await;
+    let encryptor = keyring.encryptor().await;
     let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
-    let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;row.email).await?;
-    let (email, outcome) = match resealed {
-        Some(resealed) =&gt; {
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (resealed.value, ResealOutcome::Resealed { from_compromised })
-        }
-        // The value is current: the rotation was of a purpose this row holds no value of
-        None =&gt; (row.email, ResealOutcome::Skipped),
-    };
-    let seal: SealMarker = sealer.record().seal_marker();
+    let reencrypted = encryptor.reencrypt(&amp;aad, &amp;row.email).await?;
+    let outcome = ReencryptOutcome::from(&amp;reencrypted);
+    // The value is current when the rotation was of a purpose this row holds no value of
+    let email = reencrypted.map_or(row.email, |reencrypted| reencrypted.value);
+    let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
     // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
-    // own value, which it sealed under the active versions anyway.
+    // own value, which it encrypted under the active versions anyway.
     let mut table = table.lock().unwrap();
     match table.get_mut(user) {
         Some(stored) if stored.email.value() == read.as_slice() =&gt; {
-            *stored = UserRow { email, seal };
+            *stored = UserRow { email, encryption_marker };
             Ok(outcome)
         }
-        _ =&gt; Ok(ResealOutcome::Skipped),
+        _ =&gt; Ok(ReencryptOutcome::Skipped),
     }
 }
 
@@ -472,60 +489,61 @@ async fn reseal(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -
 </span><span class="boring">let keyring: &amp;UsersKeyring = admin.keyring();
 </span><span class="boring">let table = Table::default();
 </span><span class="boring">for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-</span><span class="boring">    let sealer = keyring.sealer().await;
-</span><span class="boring">    let email = sealer
+</span><span class="boring">    let encryptor = keyring.encryptor().await;
+</span><span class="boring">    let email = encryptor
 </span><span class="boring">        .encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;Email(email.to_string()))
 </span><span class="boring">        .await?;
-</span><span class="boring">    let seal: SealMarker = sealer.record().seal_marker();
-</span><span class="boring">    table.lock().unwrap().insert(user.to_string(), UserRow { email, seal });
+</span><span class="boring">    let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
+</span><span class="boring">    table.lock().unwrap().insert(user.to_string(), UserRow { email, encryption_marker });
 </span><span class="boring">}
 </span><span class="boring">let staged: KeyId = admin.rotate(Purpose::Randomized).await?;
 </span><span class="boring">admin.promote_now(staged).await?;
 </span>// Every row whose marker is below the keyring's
-let current: SealMarker = keyring.record().seal_marker();
+let current: EncryptionMarker = keyring.record().encryption_marker();
 let candidates = table
     .lock()
     .unwrap()
     .iter()
-    .filter(|(_, row)| row.seal &lt; current)
+    .filter(|(_, row)| row.encryption_marker &lt; current)
     .map(|(user, _)| user.clone())
     .collect::&lt;Vec&lt;String&gt;&gt;();
 
-let report: SweepReport = sweep::run(
+let report: SweepReport = sweep::reencrypt_records(
     keyring.id(),
     stream::iter(candidates.into_iter().map(Ok)),
     NonZeroUsize::new(8).unwrap(),
     |candidate| {
         let table = &amp;table;
-        async move { reseal(keyring, table, &amp;candidate).await }
+        async move { reencrypt(keyring, table, &amp;candidate).await }
     },
 )
 .await;
 println!("{report:?}");
-<span class="boring">assert_eq!(report.resealed, 2);
+<span class="boring">assert_eq!(report.reencrypted, 2);
 </span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>resealed</code>, <code>skipped</code> or
+<p>The <code>SweepReport</code> counts every candidate once in <code>scanned</code>, and once in <code>reencrypted</code>, <code>skipped</code> or
 <code>failed</code>. A candidate the stream returns as an error is counted in <code>scanned</code> and <code>failed</code>, and
-logged at <code>WARN</code> with the error’s <code>Display</code>; a stream whose query cannot go on returns its error
-and ends. A re-seal that fails does not stop the sweep either: it is counted in <code>failed</code> and logged at
-<code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code>. A re-seal that fails with
-<code>SealerOutdated</code> is one of them: a process with a newer record rewrote the record after the query
-returned it. The record is counted as failed, and the next run’s query no longer returns it,
-because the process that sealed it stamped a newer marker. A value under a version the store’s
-record itself holds as pending, such as a value from another keyring whose key id is pending here,
-fails in every run instead. A candidate is the application’s own type, such as a record id, a
-struct of key columns or the record itself, and its <code>Display</code> names the record and nothing else. A
-record id is often an entity id, so read the sweep’s log as an administrative log.</p>
-<p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-seal <code>Result&lt;ResealOutcome, E&gt;</code>, with the
+logged at <code>WARN</code> with the error’s <code>Display</code>; a stream whose query cannot go on returns its error and
+ends. A re-encryption that fails does not stop the sweep either: it is counted in <code>failed</code> and
+logged at <code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code>. A re-encryption that
+fails with <code>EncryptorOutdated</code> is one of them: a process with a newer record rewrote the record
+after the query returned it. The record is counted as failed, and the next run’s query no longer
+returns it, because the process that encrypted it stamped a newer marker. A value under a version
+the store’s record itself holds as pending, such as a value from another keyring whose key id is
+pending here, fails in every run instead. A candidate is the application’s own type, such as a
+record id, a struct of key columns or the record itself, and its <code>Display</code> names the record and
+nothing else. A record id is often an entity id, so read the sweep’s log as an administrative log.</p>
+<p>The stream returns <code>Result&lt;T, E&gt;</code> and the re-encryption <code>Result&lt;ReencryptOutcome, E&gt;</code>, with the
 application’s own error type, any type that implements <code>Display</code>. The keyring’s calls inside it
 return a <code>KeyringError</code>, and a <code>From</code> impl on the application’s error lets <code>?</code> convert it, as the
 examples on <a href="./sweeps-firestore.html">Firestore</a>, <a href="./sweeps-postgres.html">PostgreSQL</a> and
-<a href="./sweeps-bigquery.html">BigQuery</a> do with an error of their data store; a re-seal with no errors of
-its own returns <code>KeyringResult&lt;ResealOutcome&gt;</code>, as above. The error’s <code>Display</code> is the application’s text and goes to the log as it is, so it carries
-no value, secret or personal data. The report counts failures and keeps no error: an application
-that wants the errors themselves records them inside its re-seal.</p>
+<a href="./sweeps-bigquery.html">BigQuery</a> do with an error of their data store; a re-encryption with no
+errors of its own returns <code>KeyringResult&lt;ReencryptOutcome&gt;</code>, as above. The error’s <code>Display</code> is the
+application’s text and goes to the log as it is, so it carries no value, secret or personal data.
+The report counts failures and keeps no error: an application that wants the errors themselves
+records them inside its re-encryption.</p>
 <h2 id="retiring-the-old-version"><a class="header" href="#retiring-the-old-version">Retiring the old version</a></h2>
 <p>Once the sweep is done, the administrative job retires the version a promotion replaced, and later
 destroys it, on its <code>KeyringAdmin</code>:</p>
@@ -533,7 +551,7 @@ destroys it, on its <code>KeyringAdmin</code>:</p>
 <li>wait, from the promotion, the longest time any process may run without a successful refresh of
 its record, see <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation</a>, and check that no
 process logged “The keyring record could not be revalidated” meanwhile. Until then a process
-on the old record seals under the old version and stamps the old epoch, see
+on the old record encrypts under the old version and stamps the old epoch, see
 <a href="#finding-records-behind">Finding records behind</a>;</li>
 <li>run the sweep until a run reports nothing scanned and nothing failed;</li>
 <li>run the old version’s <a href="#records-under-a-version">range query</a>. When it returns nothing,
@@ -547,7 +565,7 @@ values under the retired version in SQL and in Tink;</li>
 sweep are kept. A destroyed version makes the values in them unreadable, as a destroyed KEK
 version does, see
 <a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
-and only a backup of the record from before the destroy still opens them, see below.
+and only a backup of the record from before the destroy still decrypts them, see below.
 A value the sweep missed fails with <code>KeyVersionRetired</code>: <code>reinstate(key_id)</code>, export the
 keysets again, sweep again, and go back to step 3;</li>
 <li>run the range query again. When it still returns nothing, delete every copy of the keysets
@@ -556,47 +574,48 @@ as the <code>Single</code> keyset of the active deterministic version and the <c
 purposes, keep reading their values in SQL and in Tink. No call brings a destroyed version
 back.</li>
 </ol>
-<p><code>destroy</code> removes the encrypted DEK from the record only. A backup of the record still holds it,
-and so does every copy of a keyset exported while the version decrypted, both opened by the KMS as
+<p><code>destroy</code> removes the encrypted DEK from the record only. A backup of the record still holds it, and
+so does every copy of a keyset exported while the version decrypted, both decrypted by the KMS as
 long as the KEK version that encrypted them exists, see
-<a href="./runbook.html#crypto-shredding">Crypto-shredding</a>.</p>
+<a href="./runbook.html#crypto-shredding">Crypto-shredding</a>. <code>dangerously_shred()</code> destroys every version and
+deletes the record, with the same copies left behind.</p>
 <h2 id="sweeps-by-store"><a class="header" href="#sweeps-by-store">Sweeps by store</a></h2>
 <p>At millions of records a sweep streams its candidates from the store in one query and never holds
 its result in memory, and it writes them back in batches. Every example, on
 <a href="./sweeps-firestore.html">Firestore</a>, <a href="./sweeps-postgres.html">PostgreSQL</a> and
 <a href="./sweeps-bigquery.html">BigQuery</a>, has the same five properties:</p>
 <ul>
-<li>it resumes without a checkpoint: the query is the checkpoint, since a re-sealed record no longer
-matches it, so a cancelled or failed run is started again over the same query;</li>
+<li>it resumes without a checkpoint: the query is the checkpoint, since a re-encrypted record no
+longer matches it, so a cancelled or failed run is started again over the same query;</li>
 <li>a concurrent writer wins: the write is conditional on the record the sweep read, and a record
-that changed in between is <code>Skipped</code>. The application’s own write re-seals every field under
+that changed in between is <code>Skipped</code>. The application’s own write re-encrypts every field under
 the active versions anyway;</li>
 <li><code>concurrency</code> bounds the batches in flight, and with them the load on both the store and the
 KMS. The DEK cache keeps each version’s key, so a sweep makes one KMS decrypt per key version
 and cache TTL, never one per record. The keys of a compromised version are the exception: they are decrypted
 for every value and never cached;</li>
-<li>each write stores the marker of the sealer that re-sealed the record, so the record lies in the
-range of every version it is under;</li>
+<li>each write stores the marker of the encryptor that re-encrypted the record, so the record lies in
+the range of every version it is under;</li>
 <li>it runs on a schedule until a run reports nothing scanned. The <code>retire</code>, and later the
 <code>destroy</code>, of the old version are the administrative job’s, see
 <a href="#retiring-the-old-version">Retiring the old version</a>.</li>
 </ul>
 <p>The examples keep one keyring’s records in a collection or table. Each keyring counts its own
 epochs, so records of several keyrings in one table keep their keyring’s id beside the marker, and
-the query compares within one keyring, <code>tenant = $2 AND seal &lt; $1</code>, on an index over both fields: a
-composite index in Firestore.</p>
-<h2 id="the-trust-of-re-sealed-values"><a class="header" href="#the-trust-of-re-sealed-values">The trust of re-sealed values</a></h2>
-<p>A sweep reads every field with <code>decrypt_with_trust</code>, and reports in <code>ResealOutcome::Resealed</code>
-whether the <code>KeyTrust</code> of any of them is compromised. A value read under a compromised version is untrusted data: whoever holds the
-leaked DEK can have forged it. Re-sealing it under a new version makes it read as trusted
+the query compares within one keyring, <code>tenant = $2 AND encryption_marker &lt; $1</code>, on an index over
+both fields: a composite index in Firestore.</p>
+<h2 id="the-trust-of-re-encrypted-values"><a class="header" href="#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a></h2>
+<p>A sweep reads every field with <code>decrypt_with_trust</code>, and reports in <code>ReencryptOutcome::Reencrypted</code>
+whether the <code>KeyTrust</code> of any of them is compromised. A value read under a compromised version is
+untrusted data: whoever holds the leaked DEK can have forged it. Re-encrypting it under a new version makes it read as trusted
 everywhere afterwards.</p>
-<p>So after a compromise the application decides per record before it re-seals:</p>
+<p>So after a compromise the application decides per record before it re-encrypts:</p>
 <ul>
 <li>a quarantine field beside the marker, for a person to review;</li>
 <li>a comparison against a backup taken before the compromise;</li>
 <li>or acceptance, when forged values do no harm.</li>
 </ul>
-<p><code>SweepReport::resealed_from_compromised</code> counts the records that went through that decision, or
+<p><code>SweepReport::reencrypted_from_compromised</code> counts the records that went through that decision, or
 fewer on the <a href="./sweeps-bigquery.html">BigQuery <code>MERGE</code> path</a>, whose batches with a conflict count as skipped.</p>
 
                     </main>

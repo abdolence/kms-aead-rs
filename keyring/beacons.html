@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -196,7 +196,7 @@ id: equal values in different rows give equal beacons, which is what a lookup ma
 one field never matches a beacon of another.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
 <p>A keyring with beacon versions names their algorithm in its <code>KeyringAlgorithms</code>: HMAC-SHA256, the
-one <code>BeaconAlgorithm</code> has. A sealer’s <code>beacon</code> computes the beacon of a value under the active
+one <code>BeaconAlgorithm</code> has. An encryptor’s <code>beacon</code> computes the beacon of a value under the active
 beacon version, in the same write as the field’s value, and <code>Keyring::beacon_probes</code> the beacons of
 a value under every beacon version a lookup matches:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -253,12 +253,12 @@ let admin: KeyringAdmin&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
     .await?;
 let keyring: &amp;Keyring&lt;MemoryKeyringStore, LocalKmsProvider&lt;Ring&gt;, Ring&gt; = admin.keyring();
 
-// On every write: the field and its beacon, through one sealer
+// On every write: the field and its beacon, through one encryptor
 let aad = EMAIL.aad(&amp;EntityId::try_from("42")?);
 let email = Email::new("Alice@Example.com");
-let sealer = keyring.sealer().await;
-let encrypted: Encrypted&lt;Email, Randomized&gt; = sealer.encrypt(&amp;aad, &amp;email).await?;
-let beacon: Beacon&lt;Email&gt; = sealer.beacon(&amp;EMAIL, &amp;email).await?;
+let encryptor = keyring.encryptor().await;
+let encrypted: Encrypted&lt;Email, Randomized&gt; = encryptor.encrypt(&amp;aad, &amp;email).await?;
+let beacon: Beacon&lt;Email&gt; = encryptor.beacon(&amp;EMAIL, &amp;email).await?;
 
 // A lookup: the probes of the value looked for, then a decryption of each matching row
 let probes: Vec&lt;Beacon&lt;Email&gt;&gt; = keyring
@@ -305,17 +305,17 @@ process has seen the promotion;</li>
 <li>after the wait, <code>promote</code> it. Writes compute beacons under it from each process’s next refresh;</li>
 <li>lookups use <code>beacon_probes</code> throughout: one probe per pending, active or decrypt-only beacon
 version, compromised ones included, newest first;</li>
-<li>the promotion moved the keyring’s seal epoch on, so every row written before it has a
-<code>SealMarker</code> below the current one, and a re-index sweep visits them, see
+<li>the promotion moved the keyring’s re-encryption epoch on, so every row written before it has a
+<code>EncryptionMarker</code> below the current one, and a re-index sweep visits them, see
 <a href="../operations/sweeps.html">Sweeps</a>. It computes each row’s beacon again under the active version
-of its sealer and writes the sealer’s marker; a row without a beacon gets the marker alone;</li>
+of its encryptor and writes the encryptor’s marker; a row without a beacon gets the marker alone;</li>
 <li>once the sweep reports no failure and that query returns nothing, <code>retire</code> the old version, and
 its probe drops out of every lookup.</li>
 </ol>
 <p><code>beacon.key_id()</code> reads the key id of a stored beacon, so that the sweep recomputes only the beacons
-under an older version. Here a re-index over an in-memory table, run by <code>sweep::run</code> as any sweep
+under an older version. Here a re-index over an in-memory table, run by <code>sweep::reencrypt_records</code> as any sweep
 is, see <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a>. A beacon under the active
-version keeps its bytes and only the value is re-sealed; any other gives both again from the
+version keeps its bytes and only the value is re-encrypted; any other gives both again from the
 plaintext:</p>
 <pre><code class="language-rust">use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
@@ -326,7 +326,7 @@ use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
 use kms_aead::{Beacon, BeaconBits};
 use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, ReencryptOutcome, EncryptionMarker, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{
     Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring,
@@ -365,47 +365,43 @@ const EMAIL: FieldSpec = FieldSpec::new(
 struct UserRow {
     email: Encrypted&lt;Email, Randomized&gt;,
     email_beacon: Beacon&lt;Email&gt;,
-    seal: SealMarker,
+    encryption_marker: EncryptionMarker,
 }
 
 /// The users table, by user id.
 type Table = Mutex&lt;BTreeMap&lt;String, UserRow&gt;&gt;;
 
-/// Computes the beacon of the row of `user` again under the active beacon version, and re-seals
-/// its value under the active randomised version, with the marker of the sealer's record.
-async fn reindex(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ResealOutcome&gt; {
+/// Computes the beacon of the row of `user` again under the active beacon version, and re-encrypts
+/// its value under the active randomised version, with the marker of the encryptor's record.
+async fn reindex(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) -&gt; KeyringResult&lt;ReencryptOutcome&gt; {
     let Some(row) = table.lock().unwrap().get(user).cloned() else {
-        return Ok(ResealOutcome::Skipped);
+        return Ok(ReencryptOutcome::Skipped);
     };
     let read: Vec&lt;u8&gt; = row.email.value().to_vec();
-    let sealer = keyring.sealer().await;
+    let encryptor = keyring.encryptor().await;
     let aad = EMAIL.aad(&amp;EntityId::try_from(user)?);
-    let (email, email_beacon, outcome) = if sealer.is_current(row.email_beacon.key_id()).await? {
-        match sealer.reseal(&amp;aad, &amp;row.email).await? {
-            Some(resealed) =&gt; {
-                let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-                let outcome = ResealOutcome::Resealed { from_compromised };
-                (resealed.value, row.email_beacon, outcome)
-            }
-            None =&gt; (row.email, row.email_beacon, ResealOutcome::Skipped),
-        }
+    let (email, email_beacon, outcome) = if encryptor.is_current(row.email_beacon.key_id()).await? {
+        let reencrypted = encryptor.reencrypt(&amp;aad, &amp;row.email).await?;
+        let outcome = ReencryptOutcome::from(&amp;reencrypted);
+        let email = reencrypted.map_or(row.email, |reencrypted| reencrypted.value);
+        (email, row.email_beacon, outcome)
     } else {
         let decrypted: Decrypted&lt;Email&gt; = keyring.decrypt_with_trust(&amp;aad, &amp;row.email).await?;
-        let from_compromised = matches!(decrypted.trust, KeyTrust::Compromised(_));
-        let email = sealer.encrypt(&amp;aad, &amp;decrypted.value).await?;
-        let email_beacon = sealer.beacon(&amp;EMAIL, &amp;decrypted.value).await?;
-        (email, email_beacon, ResealOutcome::Resealed { from_compromised })
+        let from_compromised = decrypted.trust != KeyTrust::Trusted;
+        let email = encryptor.encrypt(&amp;aad, &amp;decrypted.value).await?;
+        let email_beacon = encryptor.beacon(&amp;EMAIL, &amp;decrypted.value).await?;
+        (email, email_beacon, ReencryptOutcome::Reencrypted { from_compromised })
     };
-    let seal: SealMarker = sealer.record().seal_marker();
+    let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
     // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
-    // own value, which it sealed under the active versions anyway.
+    // own value, which it encrypted under the active versions anyway.
     let mut table = table.lock().unwrap();
     match table.get_mut(user) {
         Some(stored) if stored.email.value() == read.as_slice() =&gt; {
-            *stored = UserRow { email, email_beacon, seal };
+            *stored = UserRow { email, email_beacon, encryption_marker };
             Ok(outcome)
         }
-        _ =&gt; Ok(ResealOutcome::Skipped),
+        _ =&gt; Ok(ReencryptOutcome::Skipped),
     }
 }
 
@@ -427,28 +423,28 @@ async fn reindex(keyring: &amp;UsersKeyring, table: &amp;Table, user: &amp;str) 
 </span><span class="boring">let keyring: &amp;UsersKeyring = admin.keyring();
 </span><span class="boring">let table = Table::default();
 </span><span class="boring">for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-</span><span class="boring">    let sealer = keyring.sealer().await;
+</span><span class="boring">    let encryptor = keyring.encryptor().await;
 </span><span class="boring">    let email = Email(email.to_string());
 </span><span class="boring">    let row = UserRow {
-</span><span class="boring">        email: sealer.encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;email).await?,
-</span><span class="boring">        email_beacon: sealer.beacon(&amp;EMAIL, &amp;email).await?,
-</span><span class="boring">        seal: sealer.record().seal_marker(),
+</span><span class="boring">        email: encryptor.encrypt(&amp;EMAIL.aad(&amp;EntityId::try_from(user)?), &amp;email).await?,
+</span><span class="boring">        email_beacon: encryptor.beacon(&amp;EMAIL, &amp;email).await?,
+</span><span class="boring">        encryption_marker: encryptor.record().encryption_marker(),
 </span><span class="boring">    };
 </span><span class="boring">    table.lock().unwrap().insert(user.to_string(), row);
 </span><span class="boring">}
 </span><span class="boring">let staged: KeyId = admin.rotate(Purpose::Beacon).await?;
 </span><span class="boring">admin.promote_now(staged).await?;
 </span>// Every row whose marker is below the keyring's, after the promotion of a beacon version
-let current: SealMarker = keyring.record().seal_marker();
+let current: EncryptionMarker = keyring.record().encryption_marker();
 let candidates = table
     .lock()
     .unwrap()
     .iter()
-    .filter(|(_, row)| row.seal &lt; current)
+    .filter(|(_, row)| row.encryption_marker &lt; current)
     .map(|(user, _)| user.clone())
     .collect::&lt;Vec&lt;String&gt;&gt;();
 
-let report: SweepReport = sweep::run(
+let report: SweepReport = sweep::reencrypt_records(
     keyring.id(),
     stream::iter(candidates.into_iter().map(Ok)),
     NonZeroUsize::new(8).unwrap(),
@@ -459,12 +455,12 @@ let report: SweepReport = sweep::run(
 )
 .await;
 println!("{report:?}");
-<span class="boring">assert_eq!(report.resealed, 2);
+<span class="boring">assert_eq!(report.reencrypted, 2);
 </span><span class="boring">assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
 </span><span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>A deterministic field is re-sealed the same way, with <code>reseal_deterministic</code>, under the
+<p>A deterministic field is re-encrypted the same way, with <code>reencrypt_deterministic</code>, under the
 <code>deterministic</code> feature.</p>
 <p>Beacon versions are rotated by policy and on compromise only: each one adds a probe to every lookup
 until the re-index is done.</p>

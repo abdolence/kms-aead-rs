@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -263,11 +263,75 @@ version: Vault then refuses to decrypt under older versions, with <code>VAULT_ST
 it again restores them. Once
 nothing needs them, the backups included, <code>min_available_version</code> and a trim of the key delete the
 older versions for good.</p>
+<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<p>A Transit key of the type <code>rsa-2048</code>, <code>rsa-3072</code> or <code>rsa-4096</code> is an asymmetric KEK, see
+<a href="../asymmetric-kek.html">Asymmetric KEKs</a>:</p>
+<ul>
+<li><code>HcVaultTransitProvider::public_key(None)</code> reads <code>&lt;mount&gt;/keys/&lt;key&gt;</code> for the latest version, and
+<code>public_key(Some(&amp;version))</code> for one, and returns the PEM public key of that version, for the
+producers. It fails with <code>ASYMMETRIC_KEK_PUBLIC_KEY</code> for a key of another type or a version the
+key does not list;</li>
+<li>a decryption of a <code>0x02</code> encrypted DEK sends <code>&lt;mount&gt;/decrypt/&lt;key&gt;</code> with the ciphertext
+<code>vault:v&lt;version&gt;:</code> and the standard base64 of the RSA block, <code>padding_scheme</code> <code>oaep</code> and
+<code>hash_algorithm</code> <code>sha2-256</code>. Both are always set and never left to the server’s defaults;</li>
+<li>the token of a reader needs <code>update</code> on <code>&lt;mount&gt;/decrypt/&lt;key&gt;</code>, and the administration also
+<code>read</code> on <code>&lt;mount&gt;/keys/&lt;key&gt;</code> or on <code>&lt;mount&gt;/export/public-key/&lt;key&gt;</code>. Nobody needs <code>update</code> on
+<code>&lt;mount&gt;/encrypt/&lt;key&gt;</code>.</li>
+</ul>
+<h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
+<p><code>HcVaultTransitSigningProvider</code> signs with one version of a Transit key of the type <code>ed25519</code> or
+<code>ecdsa-p256</code>, see <a href="../signing.html">Signatures and MACs</a>. <code>HcVaultTransitSigningKeyRef</code> names the key
+and the mount, <code>transit</code> unless set with <code>with_mount</code>, and adds the version and the algorithm:
+<code>Ed25519</code> for an <code>ed25519</code> key and <code>EcdsaP256Sha256</code> for <code>ecdsa-p256</code>. The version is required and
+never zero, so a signer never signs with the latest version.</p>
+<pre><code class="language-rust no_run">use std::num::NonZeroU32;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{HcVaultTransitSigningKeyRef, HcVaultTransitSigningProvider};
+use kms_aead::signing::{Signer, SigningAlgorithm};
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>// VAULT_ADDR, VAULT_TOKEN, VAULT_NAMESPACE, VAULT_CACERT and VAULT_CLIENT_TIMEOUT are read by
+// the provider
+let key_ref = HcVaultTransitSigningKeyRef::new(
+    "invoices".to_string(),
+    NonZeroU32::MIN,
+    SigningAlgorithm::Ed25519,
+);
+
+let provider = HcVaultTransitSigningProvider::new(&amp;key_ref)?;
+let signer = Signer::&lt;_, AwsLc&gt;::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+<span class="boring">let _ = jwk;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>HcVaultTransitSigningProvider::with_options</code> takes the options of
+<a href="#options"><code>HcVaultTransitProviderOptions</code></a>. Creating the provider sends no request; <code>Signer::new</code>
+sends the first one.</p>
+<ul>
+<li><code>sign</code> posts to <code>&lt;mount&gt;/sign/&lt;key&gt;</code> with <code>input</code>, <code>key_version</code>, <code>hash_algorithm</code> <code>sha2-256</code> and
+<code>marshaling_algorithm</code> <code>jws</code>. The <code>input</code> is the base64 of the pre-image for Ed25519, and for
+P-256 the base64 of its SHA-256 with <code>prehashed</code> set;</li>
+<li>Vault answers <code>vault:vN:&lt;base64url&gt;</code> with the 64-byte Ed25519 signature, or <code>r || s</code> for P-256. An <code>N</code> other than the configured version
+fails with <code>SIGNING_KEY_MISMATCH</code>, and a signature that is not base64url without padding or not
+64 bytes with <code>SIGNATURE_ENCODING</code>;</li>
+<li><code>verifying_key</code> reads <code>&lt;mount&gt;/keys/&lt;key&gt;</code> and takes the <code>public_key</code> of the configured version:
+base64 of the raw key for Ed25519, PEM for P-256. A key of another <code>type</code> fails with
+<code>SIGNING_ALGORITHM_MISMATCH</code>, and a version the key does not list with <code>INVALID_PUBLIC_KEY</code>;</li>
+<li>the token needs <code>update</code> on <code>&lt;mount&gt;/sign/&lt;key&gt;</code> and <code>read</code> on <code>&lt;mount&gt;/keys/&lt;key&gt;</code>.</li>
+</ul>
+<p>A rotation is <code>&lt;mount&gt;/keys/&lt;key&gt;/rotate</code>, and a new signer names the new version, see
+<a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are
 for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code> and
 <code>VAULT_CIPHERTEXT</code> for a response or an encrypted DEK that cannot be read. Which codes are a
-<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>. Invalid options
+<code>NetworkError</code> and which an <code>EncryptionError</code> is in <a href="../errors.html#retries">Retries</a>.
+<code>HcVaultTransitSigningProvider</code> returns the same codes, with a <code>SignatureError</code> where the encryption
+provider returns an <code>EncryptionError</code>. Invalid options
 fail at creation with <code>VAULT_INVALID_OPTIONS</code>, or <code>VAULT_TLS</code> when the TLS configuration cannot be
 built. A request body that cannot be serialised fails with <code>VAULT_REQUEST</code>, a <code>SystemError</code>,
 before any request is sent.</p>

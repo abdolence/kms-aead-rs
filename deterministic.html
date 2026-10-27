@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,12 +180,13 @@
                         <h1 id="deterministic-encryption"><a class="header" href="#deterministic-encryption">Deterministic encryption</a></h1>
 <p>Feature <code>deterministic</code>.</p>
 <p>Randomised encryption gives a different cipher text every time, even for the same value. A
-deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so a
-sealed column can be compared, joined or looked up by equality without opening it.</p>
-<p>The library provides AES-SIV (RFC 5297) with a 64-byte key, <code>DeterministicAlgorithm::Aes256Siv</code>.
-Its name for <code>FromStr</code> and <code>Display</code> is <code>aes-256-siv</code>. <code>DeterministicCipher</code> takes a backend, as
-<code>AeadCipher</code> does, and draws its keys from the backend’s CSPRNG. Every backend seals and opens with
-the RustCrypto <code>aes-siv</code> crate, so a value sealed under one backend opens under any other.</p>
+deterministic algorithm gives equal cipher texts for equal values under one key and one AAD, so an
+encrypted column can be compared, joined or looked up by equality without decrypting it.</p>
+<p>The library provides AES-SIV (RFC 5297) with a 64-byte key, <code>DeterministicAlgorithm::Aes256Siv</code>. Its
+name for <code>FromStr</code> and <code>Display</code> is <code>aes-256-siv</code>. <code>DeterministicCipher</code> takes a backend, as
+<code>AeadCipher</code> does, and draws its keys from the backend’s CSPRNG. Every backend encrypts and decrypts
+with the RustCrypto <code>aes-siv</code> crate, so a value encrypted under one backend decrypts under any
+other.</p>
 <p>AES-SIV is not a FIPS-approved mode. A FIPS deployment keeps deterministic fields outside its
 validated boundary, also on <code>aws-lc-fips</code>, where the keys come from the FIPS module’s DRBG.</p>
 <p>Deterministic encryption fits exact-match lookups where the leak of equality is acceptable. When
@@ -212,11 +213,11 @@ kind.</li>
 <p>The AAD narrows what leaks: values are equal only under the same AAD, so a per-tenant AAD keeps
 equal values of two tenants apart.</p>
 <p>An AAD that a lookup can rebuild names the field and never the row, so a deterministic value also
-opens in any other row of the same field. A deterministic field never decides identity or
+decrypts in any other row of the same field. A deterministic field never decides identity or
 authorisation on its own; where identity matters, the check reads a randomised copy of the field,
 bound to the row by its AAD.</p>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<p><code>DeterministicCipher</code> seals and opens with a <code>DataEncryptionKey</code> of
+<p><code>DeterministicCipher</code> encrypts and decrypts with a <code>DataEncryptionKey</code> of
 <code>DeterministicAlgorithm::key_len()</code> bytes, 64 for AES-SIV, and refuses a key of another length
 with <code>INVALID_KEY_LENGTH</code>, such as the 16 or 32 bytes of a randomised algorithm’s key. The
 application keeps track of which key serves which algorithm, as kms-aead-keyring does with its
@@ -268,9 +269,9 @@ let (dek, encrypted_dek) = envelope.generate_encrypted_deterministic_dek(algorit
 let decrypted_dek = envelope.decrypt_deterministic_dek(algorithm, &amp;encrypted_dek).await?;
 
 let cipher = DeterministicCipher::&lt;Ring&gt;::new(algorithm)?;
-let sealed: Encrypted&lt;SecretValue, Deterministic&gt; =
+let encrypted: Encrypted&lt;SecretValue, Deterministic&gt; =
     cipher.encrypt(KeyId::new(1), b"aad", &amp;SecretValue::from("value"), &amp;dek)?;
-let decrypted: SecretValue = cipher.decrypt(b"aad", &amp;sealed, &amp;decrypted_dek)?;
+let decrypted: SecretValue = cipher.decrypt(b"aad", &amp;encrypted, &amp;decrypted_dek)?;
 assert_eq!(decrypted, SecretValue::from("value"));
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>

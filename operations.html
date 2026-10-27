@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,19 +192,20 @@ every lookup until a sweep. See <a href="./operations/rotation.html#rotation-cad
 its current version without changing any value, before the old KEK version is disabled. See
 <a href="./operations/rotation.html#rotating-the-kek">Rotating the KEK</a>.</p>
 <h2 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h2>
-<p>A sweep re-seals stored values under the active versions, after a rotation, after a compromise
+<p>A sweep re-encrypts stored values under the active versions, after a rotation, after a compromise
 and to migrate envelope values: a job the application runs on a schedule, which finds the records
-behind by their seal marker. <a href="./operations/sweeps.html">Sweeps</a> has the mechanism, and the sweeps by
-store have the queries and writes of <a href="./operations/sweeps-firestore.html">Firestore</a>,
+behind by their encryption marker. <a href="./operations/sweeps.html">Sweeps</a> has the mechanism, and the
+sweeps by store have the queries and writes of <a href="./operations/sweeps-firestore.html">Firestore</a>,
 <a href="./operations/sweeps-postgres.html">PostgreSQL</a> and <a href="./operations/sweeps-bigquery.html">BigQuery</a>.</p>
 <h2 id="migrating-from-envelope-values"><a class="header" href="#migrating-from-envelope-values">Migrating from envelope values</a></h2>
-<p>Values that <code>KmsAeadEnvelope</code> wrote move to keyring values in five steps, with the seal marker
-telling the two layouts apart and a sweep re-sealing the envelope values. See
-<a href="./use-cases/envelope-to-keyring.html">Move envelope values to a keyring</a>.</p>
+<p>Values that <code>KmsAeadEnvelope</code> wrote move to keyring values in five steps, with the encryption
+marker telling the two layouts apart and a sweep re-encrypting the envelope values. See <a href="./use-cases/envelope-to-keyring.html">Move
+envelope values to a keyring</a>.</p>
 <h2 id="emergency-runbook"><a class="header" href="#emergency-runbook">Emergency runbook</a></h2>
-<p>What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant,
-a version the administrative job did not create, a deleted or corrupted record or a KMS outage,
-and how to crypto-shred a scope. See <a href="./operations/runbook.html">Emergency runbook</a>.</p>
+<p>What to do after a leak of a plaintext DEK, an encrypted DEK or the record, a KMS IAM over-grant, a
+version the administrative job did not create, a deleted or corrupted record or a KMS outage, and
+how to crypto-shred a scope with <code>dangerously_shred()</code> or a KEK per scope. See <a href="./operations/runbook.html">Emergency
+runbook</a>.</p>
 
                     </main>
 

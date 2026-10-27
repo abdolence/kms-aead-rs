@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,10 +191,13 @@ a type in <code>kms_aead::providers</code>, enabled by its feature:</p>
 <tr><td>Azure Key Vault and Managed HSM</td><td><code>AzureKmsProvider</code></td><td><code>azure-kms-encryption</code></td></tr>
 <tr><td>HashiCorp Vault Transit</td><td><code>HcVaultTransitProvider</code></td><td><code>hashicorp-vault-transit-kms-encryption</code></td></tr>
 <tr><td>A KEK the process holds</td><td><code>LocalKmsProvider</code></td><td>none, in every build</td></tr>
+<tr><td>An RSA KEK the process holds</td><td><code>LocalAsymmetricKmsProvider</code></td><td>none, in every build</td></tr>
 </tbody>
 </table>
 </div>
-<p>Every provider implements <code>KmsAeadEncryptionProvider</code>, and <code>KmsAeadEnvelope</code> takes any of them:</p>
+<p>Every KMS provider above implements the two provider traits, <code>KmsAeadEncryptionProvider</code>, which
+encrypts DEKs, and <code>KmsAeadDecryptionProvider</code>, which decrypts them, and <code>KmsAeadEnvelope</code> takes
+any of them:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
 use kms_aead::KmsAeadEnvelope;
@@ -212,10 +215,44 @@ let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, AwsLc&gt;::new(provider)?;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
-fails at the KMS and never opens a value. <code>provider.kek()</code> returns that KEK as a <code>KekRef</code>: the KMS
-and the key name. It is also the <code>provider</code> and <code>key</code> field of the <a href="./observability.html">KMS spans</a>
-and the key of the <a href="./dek-caching.html">DEK cache</a>. Nothing else is checked: an encrypted DEK carries
-no context that the KMS authenticates, see <a href="./security.html#threat-model">Security considerations</a>.</p>
+fails at the KMS and never decrypts a value. <code>provider.kek()</code> returns that KEK as a <code>KekRef</code>: the
+KMS and the key name. It is also the <code>provider</code> and <code>key</code> field of the <a href="./observability.html">KMS
+spans</a> and the key of the <a href="./dek-caching.html">DEK cache</a>. Nothing else is
+checked: an encrypted DEK carries no context that the KMS authenticates, see <a href="./security.html#threat-model">Security
+considerations</a>.</p>
+<h2 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h2>
+<p>A KEK can be an RSA key pair: its public half encrypts a DEK with RSA-OAEP (RSA encryption with OAEP
+padding), in the process of whoever holds the public key, and its private half decrypts it. Each
+provider above reads the <code>0x02</code> encrypted DEK of such an encryption beside its own bytes, and
+fetches the public key for the administration with a <code>public_key</code> call. No side needs the KMS
+encrypt right: the encryption is a local operation, and the KMS only decrypts. The layout, the
+choices and the limits are in <a href="./asymmetric-kek.html">Asymmetric KEKs</a>.</p>
+<p>Two further providers are in every build and hold the public key:</p>
+<ul>
+<li><code>PublicKeyKekProvider</code> encrypts, for a producer that must never decrypt. It implements
+<code>KmsAeadEncryptionProvider</code> alone, so an envelope over it has no call that decrypts a DEK or
+a value, and no keyring opens over it;</li>
+<li><code>AsymmetricKekProvider</code> encrypts with the public key and decrypts through the KMS provider of the
+same KEK, for the keyring administration.</li>
+</ul>
+<p>The call that fetches the public key, and the rights of a reader and of the administration:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KMS</th><th>Public key</th><th>Reader</th><th>Administration, in addition</th></tr>
+</thead>
+<tbody>
+<tr><td>Google Cloud KMS</td><td><code>GcpKmsProvider::public_key(&amp;version)</code></td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td><code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. <code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry it</td></tr>
+<tr><td>AWS KMS</td><td><code>AwsKmsProvider::public_key()</code></td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:GetPublicKey</code> on the key</td></tr>
+<tr><td>Azure Key Vault</td><td><code>AzureKmsProvider::public_key(None)</code> for the latest version, or <code>Some(&amp;version)</code></td><td><code>keys/unwrap/action</code></td><td><code>keys/get</code>. “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no decrypt</td></tr>
+<tr><td>Vault Transit</td><td><code>HcVaultTransitProvider::public_key(None)</code> or <code>Some(&amp;version)</code></td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>read</code> on <code>transit/keys/&lt;key&gt;</code> or <code>transit/export/public-key/&lt;key&gt;</code></td></tr>
+<tr><td>Local KMS</td><td><code>LocalAsymmetricKmsProvider::public_key(None)</code> for its encrypting version</td><td>none</td><td>none</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>encrypts_with_public_key()</code> is <code>true</code> for <code>PublicKeyKekProvider</code>, <code>AsymmetricKekProvider</code> and
+<code>LocalAsymmetricKmsProvider</code>, so that a keyring refuses the BigQuery and Tink exports its KEK
+cannot serve.</p>
 <h2 id="kms-random-generators"><a class="header" href="#kms-random-generators">KMS random generators</a></h2>
 <p>By default a DEK comes from the CSPRNG of the crypto backend. The GCP and AWS providers can take
 it from the KMS instead, at the cost of one more KMS request per new DEK:</p>
@@ -227,18 +264,26 @@ it from the KMS instead, at the cost of one more KMS request per new DEK:</p>
 <p>Azure, Vault Transit and the local KMS always use the backend’s CSPRNG. Nonces always come from
 the backend’s CSPRNG.</p>
 <h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
-<p>An application can implement <code>KmsAeadEncryptionProvider</code> for a KMS of its own, or as a wrapper
-around another provider. The implementation:</p>
+<p>An application can implement the provider traits for a KMS of its own, or as a wrapper around
+another provider: <code>KmsAeadEncryptionProvider</code>, with <code>kek</code>, <code>encrypt_data_encryption_key</code> and the
+defaulted <code>generate_key_material</code> and <code>encrypts_with_public_key</code>, and <code>KmsAeadDecryptionProvider</code>,
+with <code>decrypt_data_encryption_key</code>. A provider that only encrypts implements the first alone, and
+the calls that decrypt do not compile over it. A wrapper implements each trait where the provider it
+wraps does, as the example in <a href="./migrating-from-0.30.html#your-own-provider">Migrating from 0.30</a>
+shows. The implementation:</p>
 <ul>
 <li>is <code>Send</code> and <code>Sync</code>, and writes <code>encrypt_data_encryption_key</code>, <code>decrypt_data_encryption_key</code>
-and <code>generate_key_material</code> as <code>async fn</code>, whose futures must be <code>Send</code>. The trait has no <code>dyn</code>
-form, so code that holds a provider is generic over it;</li>
-<li>returns from <code>kek()</code> a <code>KekRef</code> with <code>KekProvider::Other</code> and a key name that identifies the
+and <code>generate_key_material</code> as <code>async fn</code>, whose futures must be <code>Send</code>. The traits have no
+<code>dyn</code> form, so code that holds a provider is generic over it;</li>
+<li>returns from <code>kek()</code> a <code>KekRef</code> with <code>KmsProvider::Other</code> and a key name that identifies the
 key across every KMS instance it may address. A wrapper returns the inner provider’s <code>kek()</code>;</li>
 <li>names that KEK to the KMS on every decryption;</li>
 <li>adds to the encrypted DEK that <code>encrypt_data_encryption_key</code> returns, with <code>with_kek_version</code>,
 the KEK version the KMS’s response names, never the one it expects, and none when the response
 names none;</li>
+<li>returns <code>true</code> from <code>encrypts_with_public_key()</code> when it encrypts DEKs with the public half of a
+key pair, so that a keyring refuses the BigQuery and Tink exports its KEK cannot serve. The method
+has a default of <code>false</code>;</li>
 <li>keeps key material, plaintext or encrypted, out of its errors’ <code>Display</code> and <code>Debug</code>.</li>
 </ul>
 <p><code>generate_key_material</code> has a default implementation that returns <code>Ok(None)</code>, so the backend

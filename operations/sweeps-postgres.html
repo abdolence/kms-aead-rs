@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,23 +178,26 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="sweeps-on-postgresql"><a class="header" href="#sweeps-on-postgresql">Sweeps on PostgreSQL</a></h1>
-<p>A sweep of a PostgreSQL table: the seal marker as a column, the query for the rows behind, and the
-conditional write back. The mechanism is in <a href="./sweeps.html">Sweeps</a>, and the example has the five
-properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
-<p>The marker is a <code>BYTEA</code> column with a btree index. Its default, the bytes of
-<code>SealMarker::ENVELOPE</code>, gives the rows written before the column a marker too:</p>
-<pre><code class="language-sql">ALTER TABLE users ADD COLUMN seal BYTEA NOT NULL DEFAULT '\x0100000000';
-CREATE INDEX users_seal ON users (seal);
+<p>A sweep of a PostgreSQL table: the encryption marker as a column, the query for the rows behind,
+and the conditional write back. The mechanism is in <a href="./sweeps.html">Sweeps</a>, and the example has the
+five properties of <a href="./sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
+<p>The marker is a <code>BYTEA</code> column with a btree index:</p>
+<pre><code class="language-sql">CREATE TABLE users (
+    id BIGINT PRIMARY KEY,
+    email BYTEA NOT NULL,
+    encryption_marker BYTEA NOT NULL
+);
+CREATE INDEX users_encryption_marker ON users (encryption_marker);
 </code></pre>
-<p>The candidates are one query, <code>seal &lt; $1</code> with no <code>ORDER BY</code>, so the planner is free to read them
-from the index on <code>seal</code>, and <code>query_raw</code> streams its rows: memory holds the batches in flight only.
-The query holds its connection for as long as it streams, so the <code>UPDATE</code>s go through a second one.
-<code>sweep::run_batched</code> cuts the candidates into batches of 1000 rows, each re-sealed through one sealer
-and written back in one <code>UPDATE</code> over arrays of the ids, the new values and the values it read. The
-<code>UPDATE</code> is conditional on the bytes it read, which a write of any other process changes, since
-every randomised value has its own nonce. A process that has not seen the promotion yet still seals
-under the old version and stamps the old epoch, which the row holds already, so the marker alone
-does not detect its write:</p>
+<p>The candidates are one query, <code>encryption_marker &lt; $1</code> with no <code>ORDER BY</code>, so the planner is free to
+read them from the index on <code>encryption_marker</code>, and <code>query_raw</code> streams its rows: memory holds the
+batches in flight only. The query holds its connection for as long as it streams, so the <code>UPDATE</code>s
+go through a second one. <code>sweep::reencrypt_records_batched</code> cuts the candidates into batches of 1000 rows, each
+re-encrypted through one encryptor and written back in one <code>UPDATE</code> over arrays of the ids, the new
+values and the values it read. The <code>UPDATE</code> is conditional on the bytes it read, which a write of
+any other process changes, since every randomised value has its own nonce. A process that has not
+seen the promotion yet still encrypts under the old version and stamps the old epoch, which the row
+holds already, so the marker alone does not detect its write:</p>
 <pre><code class="language-rust no_run">use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
@@ -202,13 +205,12 @@ use std::num::NonZeroUsize;
 use futures_util::{future, StreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::GcpKmsProvider;
-use kms_aead::{AeadAlgorithm, KmsAeadResult};
-use kms_aead_keyring::formats::{Envelope, Randomized};
+use kms_aead::KmsAeadResult;
+use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::PostgresKeyringStore;
-use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ResealOutcome, SealMarker, SweepReport};
+use kms_aead_keyring::sweep::{self, BatchedSweepOptions, ReencryptOutcome, EncryptionMarker, SweepReport};
 use kms_aead_keyring::{
-    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring, KeyringError,
-    Plaintext, Resealed, Sealer,
+    Encrypted, EntityId, EntityKind, FieldName, FieldSpec, Keyring, KeyringError, Plaintext,
 };
 use secret_vault_value::SecretValue;
 use tokio_postgres::{Client, NoTls, Row};
@@ -217,7 +219,6 @@ use tokio_postgres::{Client, NoTls, Row};
 </span><span class="boring">use tokio_postgres::Config;
 </span>
 type UsersKeyring = Keyring&lt;PostgresKeyringStore&lt;NoTls&gt;, GcpKmsProvider, Ring&gt;;
-type UsersSealer&lt;'k&gt; = Sealer&lt;'k, PostgresKeyringStore&lt;NoTls&gt;, GcpKmsProvider, Ring&gt;;
 
 const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
@@ -225,8 +226,6 @@ const EMAIL: FieldSpec = FieldSpec::new(
 );
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(16).unwrap();
-/// The algorithm of the store-less envelope that wrote the values before the migration.
-const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 
 <span class="boring">#[derive(Clone)]
 </span><span class="boring">struct Email(String);
@@ -241,11 +240,10 @@ const ENVELOPE_ALGORITHM: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>/// A row the query returned, by its id. Its other columns are decoded in its batch, so a row that
-/// does not decode is one failed candidate.
+</span>/// A row the query returned.
 struct UserRow {
     id: i64,
-    row: Row,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
 /// The row id, and nothing of its columns.
@@ -287,7 +285,7 @@ impl Display for SweepError {
     }
 }
 
-/// Re-seals every user whose marker is below the current one, read through `reader` and written
+/// Re-encrypts every user whose marker is below the current one, read through `reader` and written
 /// back through `writer` in batches of [`BATCH_SIZE`] with [`CONCURRENCY`] in flight, and returns
 /// the sweep's report.
 async fn sweep_users(
@@ -295,125 +293,90 @@ async fn sweep_users(
     reader: &amp;Client,
     writer: &amp;Client,
 ) -&gt; Result&lt;SweepReport, tokio_postgres::Error&gt; {
-    let current: SealMarker = keyring.record().seal_marker();
-    // A row whose id does not read is a failed candidate. An error of the stream itself is one
-    // failed candidate and ends the stream: once its connection drops, the stream returns that
-    // error on every poll and never its end.
+    let current: EncryptionMarker = keyring.record().encryption_marker();
+    // A row that does not read is a failed candidate. An error of the stream itself is one too, and
+    // ends it: once its connection drops, the stream returns that error on every poll and never
+    // its end.
+    let mut failed = false;
     let candidates = reader
-        .query_raw("SELECT id, email, seal FROM users WHERE seal &lt; $1", [current])
+        .query_raw("SELECT id, email FROM users WHERE encryption_marker &lt; $1", [current])
         .await?
-        .scan(
-            false,
-            |ended: &amp;mut bool, row: Result&lt;Row, tokio_postgres::Error&gt;| {
-                if *ended {
-                    return future::ready(None);
-                }
-                *ended = row.is_err();
-                future::ready(Some(row))
-            },
-        )
+        .take_while(move |row: &amp;Result&lt;Row, tokio_postgres::Error&gt;| {
+            let more = !failed;
+            failed = row.is_err();
+            future::ready(more)
+        })
         .map(|row: Result&lt;Row, tokio_postgres::Error&gt;| {
             let row: Row = row?;
             Ok::&lt;UserRow, SweepError&gt;(UserRow {
                 id: row.try_get("id")?,
-                row,
+                email: row.try_get("email")?,
             })
         });
-    let report: SweepReport = sweep::run_batched(
+    let report: SweepReport = sweep::reencrypt_records_batched(
         keyring.id(),
         candidates,
         BatchedSweepOptions::new()
             .with_batch_size(BATCH_SIZE)
             .with_concurrency(CONCURRENCY),
-        |batch: Vec&lt;UserRow&gt;| reseal_batch(keyring, writer, batch),
+        |batch: Vec&lt;UserRow&gt;| reencrypt_batch(keyring, writer, batch),
     )
     .await;
     Ok(report)
 }
 
-/// The AAD the application gave its envelope values.
-fn envelope_aad(id: i64) -&gt; Vec&lt;u8&gt; {
-    format!("users:{id}:email").into_bytes()
-}
-
-/// The stored `email` of `user`, that value under the active version of `sealer`, and the outcome
-/// of its re-seal. A keyring value under that version comes back as it is, with
-/// `ResealOutcome::Skipped`.
-async fn reseal_row(
-    keyring: &amp;UsersKeyring,
-    sealer: &amp;UsersSealer&lt;'_&gt;,
-    user: &amp;UserRow,
-) -&gt; Result&lt;(Vec&lt;u8&gt;, Encrypted&lt;Email, Randomized&gt;, ResealOutcome), SweepError&gt; {
-    let read_email: Vec&lt;u8&gt; = user.row.try_get("email")?;
-    let seal: SealMarker = user.row.try_get("seal")?;
-    let aad = EMAIL.aad(&amp;EntityId::try_from(user.id.to_string())?);
-    if seal == SealMarker::ENVELOPE {
-        let value = Encrypted::&lt;Email, Envelope&gt;::try_from(read_email.clone()).map_err(KeyringError::from)?;
-        let opened: Email = keyring
-            .decrypt_envelope_for_migration(&amp;envelope_aad(user.id), &amp;value, ENVELOPE_ALGORITHM)
-            .await?;
-        // Envelope values name no key version, so the record carries no trust to decide on
-        let resealed = ResealOutcome::Resealed {
-            from_compromised: false,
-        };
-        return Ok((read_email, sealer.encrypt(&amp;aad, &amp;opened).await?, resealed));
-    }
-    let email = Encrypted::&lt;Email, Randomized&gt;::try_from(read_email.clone()).map_err(KeyringError::from)?;
-    let resealed: Option&lt;Resealed&lt;Email, Randomized&gt;&gt; = sealer.reseal(&amp;aad, &amp;email).await?;
-    Ok(match resealed {
-        Some(resealed) =&gt; {
-            let from_compromised = matches!(resealed.trust, KeyTrust::Compromised(_));
-            (read_email, resealed.value, ResealOutcome::Resealed { from_compromised })
-        }
-        // The value is current: the row gets the marker alone
-        None =&gt; (read_email, email, ResealOutcome::Skipped),
-    })
-}
-
-/// Re-seals a batch of rows through one sealer, and writes it back in one `UPDATE` that stamps
-/// the sealer's marker and is conditional, row by row, on the bytes the query read.
-async fn reseal_batch(
+/// Re-encrypts a batch of rows through one encryptor and writes it back in one `UPDATE` that stamps
+/// the encryptor's marker, row by row only where the row still holds the bytes the query read. A
+/// row changed since the query is not returned by the `UPDATE`, and the sweep counts it as skipped.
+async fn reencrypt_batch(
     keyring: &amp;UsersKeyring,
     client: &amp;Client,
     batch: Vec&lt;UserRow&gt;,
-) -&gt; Result&lt;Vec&lt;(UserRow, Result&lt;ResealOutcome, SweepError&gt;)&gt;, SweepError&gt; {
-    let sealer: UsersSealer&lt;'_&gt; = keyring.sealer().await;
-    let seal: SealMarker = sealer.record().seal_marker();
-    let mut done: Vec&lt;(UserRow, Result&lt;ResealOutcome, SweepError&gt;)&gt; =
+) -&gt; Result&lt;Vec&lt;(UserRow, Result&lt;ReencryptOutcome, SweepError&gt;)&gt;, SweepError&gt; {
+    let encryptor = keyring.encryptor().await;
+    let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
+    let mut done: Vec&lt;(UserRow, Result&lt;ReencryptOutcome, SweepError&gt;)&gt; =
         Vec::with_capacity(batch.len());
-    let mut queued: Vec&lt;(UserRow, ResealOutcome)&gt; = Vec::with_capacity(batch.len());
-    let mut ids: Vec&lt;i64&gt; = Vec::with_capacity(batch.len());
-    let mut read_emails: Vec&lt;Vec&lt;u8&gt;&gt; = Vec::with_capacity(batch.len());
+    let mut queued: Vec&lt;(UserRow, ReencryptOutcome)&gt; = Vec::with_capacity(batch.len());
     let mut emails: Vec&lt;Encrypted&lt;Email, Randomized&gt;&gt; = Vec::with_capacity(batch.len());
     for user in batch {
-        match reseal_row(keyring, &amp;sealer, &amp;user).await {
-            Ok((read_email, email, outcome)) =&gt; {
-                ids.push(user.id);
-                read_emails.push(read_email);
+        let reencrypt = async {
+            let aad = EMAIL.aad(&amp;EntityId::try_from(user.id.to_string())?);
+            let reencrypted = encryptor.reencrypt(&amp;aad, &amp;user.email).await?;
+            let outcome = ReencryptOutcome::from(&amp;reencrypted);
+            // A current value still gets the encryptor's marker, so that it leaves the query.
+            let email = reencrypted.map_or_else(|| user.email.clone(), |reencrypted| reencrypted.value);
+            Ok::&lt;_, SweepError&gt;((email, outcome))
+        };
+        match reencrypt.await {
+            Ok((email, outcome)) =&gt; {
                 emails.push(email);
                 queued.push((user, outcome));
             }
             Err(error) =&gt; done.push((user, Err(error))),
         }
     }
+    let ids: Vec&lt;i64&gt; = queued.iter().map(|(user, _)| user.id).collect();
+    let read_emails: Vec&lt;&amp;Encrypted&lt;Email, Randomized&gt;&gt; =
+        queued.iter().map(|(user, _)| &amp;user.email).collect();
     let written: HashSet&lt;i64&gt; = client
         .query(
-            "UPDATE users SET email = batch.email, seal = $4
+            "UPDATE users SET email = batch.email, encryption_marker = $4
              FROM unnest($1::BIGINT[], $2::BYTEA[], $3::BYTEA[]) AS batch(id, email, read_email)
              WHERE users.id = batch.id AND users.email = batch.read_email
              RETURNING users.id",
-            &amp;[&amp;ids, &amp;emails, &amp;read_emails, &amp;seal],
+            &amp;[&amp;ids, &amp;emails, &amp;read_emails, &amp;encryption_marker],
         )
         .await?
         .iter()
         .map(|row| row.try_get("id"))
         .collect::&lt;Result&lt;HashSet&lt;i64&gt;, tokio_postgres::Error&gt;&gt;()?;
     done.extend(queued.into_iter().map(|(user, outcome)| {
-        // A row the `UPDATE` did not return changed since the query: its writer re-sealed it
+        // Written since the query: the writer encrypted the row under its own record.
         let outcome = if written.contains(&amp;user.id) {
             outcome
         } else {
-            ResealOutcome::Skipped
+            ReencryptOutcome::Skipped
         };
         (user, Ok(outcome))
     }));
@@ -445,11 +408,13 @@ println!("{report:?}");
 <span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>SealMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code> feature,
-and through sqlx with the <code>sqlx</code> feature. The query holds one snapshot for as long as it streams,
-and while it is open <code>VACUUM</code> cannot reclaim the old versions of the rows the sweep updates; a
-scheduled job that ends and runs again keeps each snapshot short, since the query of the markers
-below the current one returns exactly the rows the last run did not write.</p>
+<p><code>CONCURRENCY</code> bounds the batches in flight, but one writing connection runs their <code>UPDATE</code>s one
+after another; a pool of connections runs them in parallel.</p>
+<p><code>EncryptionMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code>
+feature, and through sqlx with the <code>sqlx</code> feature. The query holds one snapshot for as long as it
+streams, and while it is open <code>VACUUM</code> cannot reclaim the old versions of the rows the sweep
+updates; a scheduled job that ends and runs again keeps each snapshot short, since the query of the
+markers below the current one returns exactly the rows the last run did not write.</p>
 <p>The marker takes 6 bytes of a row: its 5 bytes and a 1-byte length header. A btree on a column of a
 few distinct epochs stores each one once per page with the list of its rows: measured on
 PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.

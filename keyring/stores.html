@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,8 +178,8 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="keyring-stores"><a class="header" href="#keyring-stores">Keyring stores</a></h1>
-<p>A keyring store keeps one record per keyring id, with a compare-and-swap on each, and optionally
-signals changes to it. The library provides:</p>
+<p>A keyring store keeps one record per keyring id, with a compare-and-swap and a delete on each, and
+optionally signals changes to it. The library provides:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -200,14 +200,16 @@ push, the record TTL bounds it, see <a href="./record-cache.html">Record cache</
 <p>The rights of the application and the administration on each store are in
 <a href="./deployment.html#store-rights">Store rights</a>.</p>
 <p>Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
-in the record, see <a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.</p>
+in the record, see <a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.
+A backup is also a copy of the record that <code>KeyringAdmin::dangerously_shred()</code> does not reach, see
+<a href="#what-a-delete-removes">What a delete removes</a>.</p>
 <h2 id="memory"><a class="header" href="#memory">Memory</a></h2>
 <p><code>MemoryKeyringStore</code> loses its records when the process exits, and with them the encrypted DEK of
-every version: a value sealed under a keyring in it, and kept anywhere that outlives the process,
+every version: a value encrypted under a keyring in it, and kept anywhere that outlives the process,
 never decrypts again. Use it for tests, or for values that never outlive the process.</p>
 <p>It lives in <code>kms_aead_keyring::testing</code> for that reason, and is compiled in every build. <code>Clone</code>
 shares the same records. It keeps each record as its JSON document, as the other stores do, and
-signals a watch on every write.</p>
+signals a watch on every write. A delete removes the entry.</p>
 <h2 id="firestore"><a class="header" href="#firestore">Firestore</a></h2>
 <p>The record of a keyring is the document <code>kms_keyrings/&lt;keyring id&gt;</code>, whose fields are those of the
 record’s JSON. <code>with_collection</code> takes another collection than
@@ -239,7 +241,18 @@ let keyring: Keyring&lt;FirestoreKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
 </span><span class="boring">}</span></code></pre>
 <p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
 project, database and credentials it chooses. The version of the <code>firestore</code> crate is part of
-this crate’s API under the <code>firestore</code> feature.</p>
+this crate’s API under the Firestore features.</p>
+<p>The <code>firestore</code> feature is the store on firestore-rs without its default features, so it has no TLS
+root store and no crypto provider, and needs a firestore-rs or gcloud-sdk root store feature from
+the application, or one of:</p>
+<ul>
+<li><code>firestore-tls-roots</code>: the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings
+native-tls and so OpenSSL on Linux;</li>
+<li><code>firestore-tls-webpki</code>: rustls, with the bundled WebPKI roots for the gRPC connection to
+Firestore, and no native TLS;</li>
+</ul>
+<p>each with firestore-rs’s <code>auth-default-crypto</code>. A delete removes the document, with its update time
+as the precondition.</p>
 <p>Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore’s point-in-time recovery
 restores an earlier record. Be aware the <code>firestore</code> crate logs every listen event at <code>trace</code> level on its
 <code>firestore</code> target, documents included, so that level writes encrypted DEKs to the log. Keep it off
@@ -258,8 +271,12 @@ where the log leaves the administration’s reach.</p>
 <li>the rights of the application and the administration on the table are in
 <a href="./deployment.html#store-rights">Store rights</a>;</li>
 <li>the table name is unqualified, so the connection’s <code>search_path</code> selects the schema;</li>
+<li>the <code>revision</code> of a row is the server’s clock in microseconds when the row is created, and the
+larger of that and the previous revision plus one at each write. A row deleted and created again
+therefore never repeats a revision of the id, which a running process that missed the deletion
+would take for an unchanged record;</li>
 <li>every write sends <code>NOTIFY &lt;table&gt;, '&lt;keyring id&gt;'</code> when it commits, through <code>pg_notify</code> in the
-same statement;</li>
+same statement, and so does a delete, which removes the row at its revision;</li>
 <li>PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
 <code>reload_min_interval</code> however many signals arrive, so a stray <code>NOTIFY</code> costs one read.</li>
 </ul>
@@ -321,7 +338,10 @@ generation changed.</p>
 <li>Cloud Storage has no change notification the store listens to, so a process sees a change once
 its record is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
-version, to restore from.</li>
+version, to restore from;</li>
+<li>a delete removes every generation of the object, the noncurrent ones included, so versioning
+does not keep a shredded record. Soft delete keeps what a delete removes, see
+<a href="#what-a-delete-removes">What a delete removes</a>.</li>
 </ul>
 <pre><code class="language-rust no_run">use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
 use gcloud_sdk::GoogleApi;
@@ -355,7 +375,9 @@ the read).</p>
 <li>S3 has no change notification the store listens to, so a process sees a change once its record
 is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
-restore from.</li>
+restore from;</li>
+<li>a delete removes every version and delete marker of the object, so versioning does not keep a
+shredded record, see <a href="#what-a-delete-removes">What a delete removes</a>.</li>
 </ul>
 <pre><code class="language-rust no_run">use aws_config::BehaviorVersion;
 use kms_aead_keyring::store::{S3BucketName, S3KeyringStore};
@@ -409,12 +431,61 @@ let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_
 <span class="boring">let _ = store;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
+<h2 id="what-a-delete-removes"><a class="header" href="#what-a-delete-removes">What a delete removes</a></h2>
+<p><code>KeyringStore::delete</code> is the call <code>KeyringAdmin::dangerously_shred()</code> makes once every version of
+the record is destroyed, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a keyring</a>. It
+removes the record with the copies the store itself keeps. A copy the store keeps outside the reach
+of its API is the operator’s to delete:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Store</th><th>A delete removes</th><th>The operator’s</th></tr>
+</thead>
+<tbody>
+<tr><td>Memory</td><td>the entry</td><td>nothing</td></tr>
+<tr><td>Firestore</td><td>the document, with its update time as the precondition</td><td>the document served to reads at an earlier time for one hour, and for seven days with point-in-time recovery on; backups and exports</td></tr>
+<tr><td>PostgreSQL</td><td>the row at its revision, and sends the <code>NOTIFY</code> as a write does</td><td>the row’s earlier versions until a vacuum reclaims them; backups, WAL archives and replicas</td></tr>
+<tr><td>Cloud Storage</td><td>every generation of the object, noncurrent ones included: the noncurrent generations first, then the live object, conditional on the generation read, then that generation</td><td>the bucket’s soft delete keeps every deleted generation restorable for its retention, 7 days by default</td></tr>
+<tr><td>S3</td><td>every version and delete marker of the object: the noncurrent ones first, then the live object with <code>If-Match</code> on its ETag, then the live version, then the delete marker that left</td><td>replication and backups</td></tr>
+</tbody>
+</table>
+</div>
+<p>Point-in-time recovery is Firestore’s retention of every version of a document for up to seven days.
+Soft delete is Cloud Storage’s retention of a deleted object, which can be restored until the
+retention ends. A bucket of keyring records turns soft delete off, or counts the retention into the
+time a shred takes. The WAL is PostgreSQL’s write-ahead log of committed changes.</p>
+<p>A lifecycle rule of the bucket that deletes live objects, such as a Cloud Storage <code>Delete</code> rule on
+age or an S3 expiration of current versions, shreds the keyrings it removes: every running process
+that holds one takes the deletion at its next revalidation. A rule on noncurrent versions only
+leaves the live records alone. The condition of the S3 delete holds only on a server that honours
+<code>If-Match</code> on <code>DeleteObject</code>, as S3 does for general purpose buckets. Community MinIO releases
+ignore it; PGSTY’s Silo fork honours it from <code>RELEASE.2026-09-16</code>, within one server pool.</p>
+<p>A delete needs rights a write does not: the administration’s permissions per store are in
+<a href="./deployment.html#store-rights">Store rights</a>.</p>
 <h2 id="your-own-store"><a class="header" href="#your-own-store">Your own store</a></h2>
-<p><code>KeyringStore</code> is a trait with four methods, <code>load</code>, <code>revalidate</code>, <code>compare_and_swap</code> and <code>watch</code>,
-which returns <code>None</code> for a store without push, a <code>Revision</code> type and a <code>KIND</code>, such as
+<p><code>KeyringStore</code> is a trait with five methods, <code>load</code>, <code>revalidate</code>, <code>compare_and_swap</code>, <code>delete</code> and
+<code>watch</code>, which returns <code>None</code> for a store without push, a <code>Revision</code> type and a <code>KIND</code>, such as
 <code>StoreKind::Other("spanner")</code>, for spans and errors. When implementing it:</p>
 <ul>
 <li>write each method as an <code>async fn</code> whose future is <code>Send</code>;</li>
+<li>implement <code>delete(id, expected)</code>, which has no default:
+<ul>
+<li>it deletes the record when its stored revision is <code>expected</code>, with every earlier version of it
+the store keeps, and returns <code>Deletion::Deleted</code> once the store holds no record of the id, also
+when it held none, and <code>Deletion::Conflict</code> when the stored revision is another, leaving the
+record;</li>
+<li>it returns errors as <code>load</code> does, as <code>KeyringError::Store</code> with <code>StoreOperation::Delete</code>. A
+delete that fails may have removed part of the earlier versions already, and the caller
+repeats it with the same <code>expected</code>; one that conflicts may have removed them too. The keyring
+deletes a record only in a shred, once every version of it is destroyed, so those versions hold
+only keys the shred destroys. A store that cannot delete them in one step with the live record
+removes them first, since a record gone from the store reads as shredded and no shred deletes
+it again;</li>
+<li>it never gives an id the same revision twice, across a delete too: a revision that restarts at
+1 for a record created again lets a process that missed the deletion keep the deleted record;</li>
+<li>a store with push signals the deletion as a change;</li>
+</ul>
+</li>
 <li>read a stored document with <code>KeyringRecord::from_json</code> and write one with
 <code>KeyringRecord::to_json</code>, so the document is the one every store keeps and every read checks it;</li>
 <li>return the client’s errors as <code>KeyringError::Store</code>, with the client’s error as the root cause.

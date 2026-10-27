@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,9 +189,9 @@ PostgreSQL. The keyring id names the tenant, see
 <tr><th></th><th>A KEK per tenant</th><th>One shared KEK</th></tr>
 </thead>
 <tbody>
-<tr><td>A DEK copied into another tenant’s record</td><td>fails at the KMS, which decrypts with the tenant’s own KEK</td><td>decrypts, since the KMS opens it for any principal allowed to decrypt with the KEK</td></tr>
+<tr><td>A DEK copied into another tenant’s record</td><td>fails at the KMS, which decrypts with the tenant’s own KEK</td><td>decrypts, since the KMS decrypts it for any principal allowed to decrypt with the KEK</td></tr>
 <tr><td>KMS rights</td><td>per tenant, so a principal can be limited to some tenants</td><td>one grant covers every tenant</td></tr>
-<tr><td>Crypto-shredding a tenant</td><td>destroying its KEK, backups of the record and exported keysets included</td><td><code>dangerously_destroy_all_versions</code>, and then deleting the record’s backups and exported keysets, or a KEK rotation for every other keyring</td></tr>
+<tr><td>Crypto-shredding a tenant</td><td>destroying its KEK, backups of the record and exported keysets included</td><td><code>dangerously_shred()</code>, and then deleting the record’s backups, the store’s other copies and the exported keysets, or a KEK rotation for every other keyring</td></tr>
 <tr><td>KMS keys to manage</td><td>one per tenant</td><td>one</td></tr>
 </tbody>
 </table>
@@ -218,8 +218,9 @@ takes the provider by value: <code>GcpKmsProvider</code> and <code>HcVaultTransi
 other providers are built once per keyring;</li>
 <li>a <code>FieldSpec</code> constant per encrypted field, the same for every tenant, since each keyring
 has DEKs of its own, see <a href="../keyring/fields.html">Encrypted fields and AAD</a>;</li>
-<li>on every write, <code>keyring.sealer()</code> and its <code>encrypt</code>, and the seal marker it gives, see
-<a href="../operations/sweeps.html#the-seal-marker">The seal marker</a>; on every read, <code>keyring.decrypt</code>;</li>
+<li>on every write, <code>keyring.encryptor()</code> and its <code>encrypt</code>, and the encryption marker it gives,
+see <a href="../operations/sweeps.html#the-encryption-marker">The encryption marker</a>; on every read,
+<code>keyring.decrypt</code>;</li>
 <li><code>registry.shutdown(None)</code> before the process exits, see
 <a href="../keyring.html#the-registry-and-its-handles">The registry and its handles</a>.</li>
 </ol>

@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="encrypt-fields-with-a-kms"><a class="header" href="#encrypt-fields-with-a-kms">Encrypt fields with a KMS</a></h1>
-<p>A field or a secret in the application’s own table, sealed under a DEK that a cloud KMS encrypts,
+<p>A field or a secret in the application’s own table, encrypted under a DEK that a cloud KMS encrypts,
 with no keyring store. Every value carries its encrypted DEK, so nothing is stored apart from the
 values. For central rotation, deterministic fields across rotations or BigQuery reads across
 rotations, see <a href="../intro.html#choosing-a-mode">Choosing a mode</a> and the keyring.</p>
@@ -192,7 +192,7 @@ rotations, see <a href="../intro.html#choosing-a-mode">Choosing a mode</a> and t
 <tr><td>written rarely, such as secrets and configuration</td><td>per-call envelope: a new DEK for every value, one KMS call to encrypt it</td><td><a href="../envelope-encryption.html">Envelope encryption</a></td></tr>
 <tr><td>written at a high rate</td><td>store-less DEK reuse: one DEK for many values, renewed by age, count and bytes</td><td><a href="../dek-caching.html#store-less-dek-reuse">Store-less DEK reuse</a></td></tr>
 <tr><td>grouped, such as a file in chunks or a tenant’s rows, with one DEK the application keeps</td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, with the encrypted DEK stored apart</td><td><a href="../envelope-encryption.html#working-with-deks-yourself">Working with DEKs yourself</a></td></tr>
-<tr><td>sealed with a key the application holds, with no KMS</td><td><code>AeadCipher</code></td><td><a href="../crypto-backends.html#aead-without-a-kms">AEAD without a KMS</a></td></tr>
+<tr><td>encrypted with a key the application holds, with no KMS</td><td><code>AeadCipher</code></td><td><a href="../crypto-backends.html#aead-without-a-kms">AEAD without a KMS</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -206,7 +206,7 @@ reuse and a <code>DekCache</code> for repeated reads, see <a href="../dek-cachin
 <li>a newtype per field, such as <code>Email</code>, that implements <code>Plaintext</code>, and normalises the value if
 it is ever looked up, see <a href="../stored-values.html#plaintext"><code>Plaintext</code></a>;</li>
 <li>the AAD that ties the value to its place, <code>&lt;table&gt;/&lt;row id&gt;/&lt;column&gt;</code>, so a value copied into
-another row fails to open, see <a href="../envelope-encryption.html#aad">AAD</a>;</li>
+another row fails to decrypt, see <a href="../envelope-encryption.html#aad">AAD</a>;</li>
 <li><code>envelope.encrypt(aad, &amp;value)</code> into an <code>Encrypted&lt;Email, Envelope&gt;</code>, stored as a serde field, a
 <code>BYTEA</code> column through tokio-postgres or sqlx, or hex in a <code>TEXT</code> column, see
 <a href="../stored-values.html#storing">Storing</a>;</li>

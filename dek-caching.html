@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,7 +183,7 @@
 <ul>
 <li><code>DekCache</code>, a cache of decrypted DEKs, which serves repeated reads of values under the same
 DEK without the KMS;</li>
-<li>store-less DEK reuse, with a <code>DekReusePolicy</code>, where one DEK seals many values, so a write
+<li>store-less DEK reuse, with a <code>DekReusePolicy</code>, where one DEK encrypts many values, so a write
 calls the KMS only when the DEK is renewed.</li>
 </ul>
 <h2 id="dek-cache"><a class="header" href="#dek-cache">DEK cache</a></h2>
@@ -211,10 +211,13 @@ let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with
 <span class="boring">let _ = envelope;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>decrypt</code>, the <code>*_with_encrypted_dek</code> calls and a store-less <code>encrypt</code> decrypt through the
-envelope’s cache. <code>Clone</code> shares the same cache, so one cache may serve several envelopes and
-several KEKs: an entry serves only a lookup that names the same KEK, and a key decrypted under
-one KEK never reaches a caller with the provider of another.</p>
+<p><code>decrypt</code>, <code>beacon</code> and the <code>*_with_encrypted_dek</code> calls decrypt through the envelope’s cache, and
+a store-less <code>encrypt</code> keeps its DEK there. <code>Clone</code> shares the same cache, so one cache may serve
+several envelopes and several KEKs: an entry serves only a lookup that names the same KEK, and a
+key decrypted under one KEK never reaches a caller with the provider of another. A lookup, through
+<code>DekCache::with_dek</code> or an envelope call that decrypts, needs a <code>KmsAeadDecryptionProvider</code>, so the
+envelope of a producer over a <code>PublicKeyKekProvider</code> puts its DEK in a cache it shares and reads
+back only its own store-less DEK from it, to encrypt with it.</p>
 <p>The cache:</p>
 <ul>
 <li>serves an entry for its TTL after it was inserted, however often it is used, 15 minutes by
@@ -328,7 +331,8 @@ assert_eq!(decrypted_second, SecretValue::from("second"));
 zero and <code>max_uses</code> at most 2^32, the bound for random 96-bit nonces under one key, otherwise the
 envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
 <h3 id="volume-limit"><a class="header" href="#volume-limit">Volume limit</a></h3>
-<p><code>max_bytes</code> counts the plaintext bytes sealed under the DEK. Its default depends on the algorithm:</p>
+<p><code>max_bytes</code> counts the plaintext bytes encrypted under the DEK. Its default depends on the
+algorithm:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -346,9 +350,9 @@ allowed is the 2^48 blocks of RFC 8452. AES-GCM-SIV and ChaCha20-Poly1305 have n
 beyond <code>max_uses</code>. The citations are in <a href="./security.html#data-volume">Data volume</a>.</p>
 <p>A <code>max_bytes</code> set in the policy replaces the default, under any algorithm. Above the most
 allowed, the envelope fails to build with <code>INVALID_DEK_REUSE_POLICY</code>.</p>
-<p>A value that would take the count past <code>max_bytes</code> renews the DEK before it is sealed. A value
-longer than <code>max_bytes</code> alone is sealed under a new DEK of its own, as the per-call envelope does,
-and the current DEK stays in use for the next values.</p>
+<p>A value that would take the count past <code>max_bytes</code> renews the DEK before it is encrypted. A value
+longer than <code>max_bytes</code> alone is encrypted under a new DEK of its own, as the per-call envelope
+does, and the current DEK stays in use for the next values.</p>
 <p>The bounds count blocks of plaintext and AAD, and one more block per value, and <code>max_bytes</code> counts
 plaintext bytes only. At the default <code>max_uses</code> and an AAD of 16 bytes or less, the difference is
 at most 3 × 2^24 blocks beside the 2^34 blocks of the default.</p>
@@ -362,11 +366,17 @@ another, and <code>INVALID_DEK_REUSE_POLICY</code> beside <code>DekCache::disabl
 <li>when the cache evicts it for capacity;</li>
 <li>after <code>invalidate</code> with <code>envelope.provider().kek()</code>, or after <code>clear</code>.</li>
 </ul>
+<p>A store-less <code>encrypt</code> never decrypts a DEK. A writer that renewed the DEK and finds it gone from
+the cache before it encrypts, evicted by a concurrent call or past a short TTL, encrypts with the
+DEK its renewal generated and puts it back in the cache, so a store-less writer over a
+<code>PublicKeyKekProvider</code>, which has no decryption, works as any other. An <code>invalidate</code> or <code>clear</code> that
+lands while a writer renews stops that writer from caching the new DEK: it encrypts with the DEK it
+generated, and the next writer renews.</p>
 <p>In a cache shared with readers, size <code>max_entries</code> above the number of distinct DEKs read per
 TTL, or give the writer a cache of its own, otherwise reads evict the writer’s DEK and it renews
 more often than the policy says.</p>
 <p>A writer that falls quiet leaves its DEK in memory until the cache’s next call or
-<code>purge_expired</code>, see <a href="#key-lifetime">Key lifetime</a>. The values sealed while the cache holds the
+<code>purge_expired</code>, see <a href="#key-lifetime">Key lifetime</a>. The values encrypted while the cache holds the
 DEK are readable by whoever reads the process’s memory in that window.</p>
 
                     </main>

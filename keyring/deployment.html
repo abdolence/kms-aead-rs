@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,10 +181,10 @@
 <p>A keyring has two sides, each with its own handle and its own rights:</p>
 <ul>
 <li>the application decrypts and runs sweeps on a <code>Keyring</code>, which <code>KeyringRegistry::open</code> returns
-in every build, and encrypts, computes beacons and re-seals on the <code>Sealer</code> the <code>Keyring</code>
+in every build, and encrypts, computes beacons and re-encrypts on the <code>Encryptor</code> the <code>Keyring</code>
 hands out for each write;</li>
 <li>the administration creates keyrings, rotates, promotes, retires and destroys versions, flags
-compromised ones, re-encrypts DEKs and exports keysets, on a <code>KeyringAdmin</code>, which
+compromised ones, re-encrypts DEKs, exports keysets and shreds keyrings, on a <code>KeyringAdmin</code>, which
 <code>KeyringRegistry::create</code>, <code>open_or_create</code> and <code>admin</code> return with the <code>admin</code> feature.</li>
 </ul>
 <p>The application builds without the <code>admin</code> feature and runs under a principal with the rights of
@@ -195,14 +195,14 @@ its row only:</p>
 <tr><th>Side</th><th>Handle</th><th>KMS</th><th>Keyring store</th></tr>
 </thead>
 <tbody>
-<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt: GCP <code>roles/cloudkms.cryptoKeyDecrypter</code>, AWS <code>kms:Decrypt</code>, Azure Key Vault unwrap key, Vault Transit decrypt</td><td>read, and listen or watch: Firestore read, PostgreSQL <code>SELECT</code> and <code>LISTEN</code>, Cloud Storage object read, S3 <code>GetObject</code></td></tr>
-<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt</td><td>read and write: Firestore write, PostgreSQL <code>INSERT</code> and <code>UPDATE</code>, which also send the <code>NOTIFY</code>, Cloud Storage and S3 object write</td></tr>
+<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt: GCP <code>roles/cloudkms.cryptoKeyDecrypter</code>, AWS <code>kms:Decrypt</code>, Azure Key Vault <code>keys/unwrap/action</code>, Vault Transit decrypt</td><td>read, and listen or watch: Firestore read, PostgreSQL <code>SELECT</code> and <code>LISTEN</code>, Cloud Storage object read, S3 <code>GetObject</code></td></tr>
+<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key</td><td>read, write and delete: Firestore write, PostgreSQL <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code>, which also send the <code>NOTIFY</code>, Cloud Storage and S3 object write and delete</td></tr>
 </tbody>
 </table>
 </div>
-<p>Sweeps run on the application’s side: re-sealing a value encrypts it under a DEK the record
-already holds, and never asks the KMS to encrypt a DEK. Every call that encrypts a DEK or writes
-the record is a <code>KeyringAdmin</code> call. The exact roles per KMS are in
+<p>Sweeps run on the application’s side: re-encrypting a value encrypts it under a DEK the record
+already holds, and never asks the KMS to encrypt a DEK. Every call that encrypts a DEK, writes
+or deletes the record is a <code>KeyringAdmin</code> call. The exact roles per KMS are in
 <a href="#kms-rights">KMS rights</a>, and the permissions per store in
 <a href="#store-rights">Store rights</a>.</p>
 <p>The <code>admin</code> feature keeps the administrative calls out of the application’s build, and the rights
@@ -222,16 +222,17 @@ deliberately, and is then trusted as the administration is, see
 <p>An application’s own tests that create keyrings in <code>MemoryKeyringStore</code> enable <code>admin</code> for the
 tests only:</p>
 <pre><code class="language-toml">[dependencies]
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore"] }
+kms-aead-keyring = { version = "0.31", features = ["ring", "firestore-tls-roots"] }
 
 [dev-dependencies]
-kms-aead-keyring = { version = "0.30", features = ["ring", "firestore", "admin"] }
+kms-aead-keyring = { version = "0.31", features = ["ring", "firestore-tls-roots", "admin"] }
 </code></pre>
 <p>Be aware Cargo unifies the features of the packages one command builds: a <code>cargo build</code> of a
 workspace with both the application and an administrative job gives the application <code>admin</code>
 too. Build and deploy the application with <code>cargo build -p &lt;application&gt;</code>.</p>
 <h2 id="kms-rights"><a class="header" href="#kms-rights">KMS rights</a></h2>
-<p>Nothing signs a <a href="../keyring.html">keyring</a> record, see
+<p>A <a href="../keyring.html">keyring</a> record is signed only where the administration holds a record signer, see
+<a href="../signing.html#signing-the-keyring-record">Signing the keyring record</a> and
 <a href="../security.html#keyring-deployment">Keyring deployment</a>, so a deployment splits the two sides
 above into two principals:</p>
 <ul>
@@ -241,9 +242,11 @@ store. None of its calls asks the KMS to encrypt, so it needs nothing more;</li>
 <li><strong>Administration</strong>: builds with the <code>admin</code> feature, and calls the registry’s <code>create</code>,
 <code>open_or_create</code> and <code>admin</code>, and the <code>KeyringAdmin</code> they return: <code>rotate</code>, <code>promote</code>,
 <code>change_algorithm</code>, <code>mark_compromised</code>, <code>retire</code>, <code>reinstate</code>, <code>destroy</code>,
-<code>dangerously_destroy_all_versions</code>, <code>reencrypt_deks</code>, <code>export_bigquery_keyset</code> and
-<code>export_tink_keyset</code>. It needs KMS encrypt and decrypt on the KEK, and is the only principal
-with write access to the keyring store. It runs in a job or in infrastructure automation, never
+<code>dangerously_destroy_all_versions</code>, <code>shred</code>, <code>reencrypt_deks</code>, <code>export_bigquery_keyset</code> and
+<code>export_tink_keyset</code>. It needs KMS encrypt and decrypt on the KEK, or under an asymmetric KEK
+decrypt and the read of the public key and no encrypt right, and where it signs records the
+right to sign with the record signer’s key. It is the only principal with write access to the
+keyring store. It runs in a job or in infrastructure automation, never
 in a request handler.</li>
 </ul>
 <div class="table-wrapper">
@@ -259,26 +262,48 @@ in a request handler.</li>
 </tbody>
 </table>
 </div>
+<p>Under an asymmetric KEK the public key encrypts new DEKs in the administration’s own process, so no
+side has the KMS encrypt right: Cloud KMS <code>useToEncrypt</code>, AWS <code>kms:Encrypt</code>, Key Vault
+<code>keys/wrap/action</code> and Transit <code>transit/encrypt</code> leave the administration’s grant. The
+administration needs the read of the public key beside the applications’ decrypt:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KMS</th><th>Application</th><th>Administration</th></tr>
+</thead>
+<tbody>
+<tr><td>GCP</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td>decrypt, and <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. <code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry it</td></tr>
+<tr><td>AWS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:Decrypt</code> and <code>kms:GetPublicKey</code> on the key</td></tr>
+<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/unwrap/action</code> and <code>keys/get</code>. “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no decrypt</td></tr>
+<tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code>, and <code>read</code> on <code>transit/keys/&lt;key&gt;</code> or <code>transit/export/public-key/&lt;key&gt;</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The KMS audit log no longer shows who encrypted a DEK, since the encryption is local, and anyone
+holding the public key can encrypt one: a keyring under an asymmetric KEK runs with
+<code>RecordSignaturePolicy::Required</code> on every application, see
+<a href="../asymmetric-kek.html#keyrings-under-an-asymmetric-kek">Keyrings under an asymmetric KEK</a>. The
+<code>public_key</code> call of each provider is in <a href="../providers.html#asymmetric-keks">KMS providers</a>.</p>
 <p>The permissions of each store are below.</p>
 <h2 id="store-rights"><a class="header" href="#store-rights">Store rights</a></h2>
-<p>The store’s access control is what the record’s integrity rests on: only the administration
-writes the record, and the applications read it and listen to its changes, see above:</p>
+<p>The store’s access control is what the record’s integrity rests on, unless the record is signed:
+only the administration writes the record, and the applications read it and listen to its changes, see above:</p>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Store</th><th>Application</th><th>Administration</th></tr>
 </thead>
 <tbody>
-<tr><td>Firestore</td><td>read of the keyring documents, which the listener uses too, such as <code>roles/datastore.viewer</code></td><td>read and write of the keyring documents, such as <code>roles/datastore.user</code></td></tr>
-<tr><td>PostgreSQL</td><td><code>SELECT</code> on the table, and <code>LISTEN</code>, which needs no grant</td><td><code>SELECT</code>, <code>INSERT</code> and <code>UPDATE</code> on the table; each write also sends the <code>NOTIFY</code></td></tr>
-<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code>, and <code>storage.objects.delete</code>, since a write replaces the object</td></tr>
-<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code></td></tr>
+<tr><td>Firestore</td><td>read of the keyring documents, which the listener uses too, such as <code>roles/datastore.viewer</code></td><td>read, write and delete of the keyring documents, such as <code>roles/datastore.user</code></td></tr>
+<tr><td>PostgreSQL</td><td><code>SELECT</code> on the table, and <code>LISTEN</code>, which needs no grant</td><td><code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> on the table; each write and delete also sends the <code>NOTIFY</code></td></tr>
+<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code>, <code>storage.objects.delete</code>, since a write replaces the object, and <code>storage.objects.list</code>, which <code>dangerously_shred()</code> needs to find the object’s generations</td></tr>
+<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code>, and for <code>dangerously_shred()</code> also <code>s3:ListBucketVersions</code>, <code>s3:DeleteObject</code> and <code>s3:DeleteObjectVersion</code></td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="what-to-alert-on"><a class="header" href="#what-to-alert-on">What to alert on</a></h2>
 <p>Each side logs events an operator acts on, such as a refused record, a failed revalidation or a
-re-seal that failed, and records metrics with the <code>opentelemetry</code> feature. The list, with the
+re-encryption that failed, and records metrics with the <code>opentelemetry</code> feature. The list, with the
 next step for each, is in <a href="../use-cases/deployment.html#what-to-alert-on">What to alert on</a>.</p>
 
                     </main>

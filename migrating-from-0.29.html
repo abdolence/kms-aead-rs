@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-7da9b6c9.js"></script>
+        <script src="toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -245,7 +245,7 @@ backend</a>.</p>
 <tr><td><code>encrypted_dek.wrapped()</code>, <code>to_bytes()?</code>, <code>TryFrom&lt;&amp;[u8]&gt;</code></td><td><code>encrypted_dek.value()</code>, a <code>&amp;[u8]</code>, and <code>EncryptedDataEncryptionKey::from(bytes)</code></td></tr>
 <tr><td><code>encrypted_dek.to_hex_string()?</code></td><td><code>encrypted_dek.to_hex_string()</code>, infallible</td></tr>
 <tr><td><code>encrypted_dek.key_version()</code></td><td><code>encrypted_dek.kek_version()</code>, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and <code>None</code> on one read back from the bytes; the <code>kek_version</code> field of the KMS spans</td></tr>
-<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
+<tr><td><code>kms_aead::KmsKeyVersion</code></td><td><code>kms_aead::providers::KekVersion</code>, <code>KmsKeyVersion</code> from 0.31, the type of <code>AzureKmsKeyRef::kek_version</code></td></tr>
 <tr><td><code>AzureKmsKeyRef::with_key_version</code>, <code>opt_key_version</code>, <code>without_key_version</code>, <code>key_version</code>, <code>mopt_key_version</code>, <code>reset_key_version</code></td><td><code>AzureKmsKeyRef::with_kek_version</code>, <code>opt_kek_version</code>, <code>without_kek_version</code>, <code>kek_version</code>, <code>mopt_kek_version</code>, <code>reset_kek_version</code></td></tr>
 <tr><td><code>AzureKmsKeyRef.key_version</code></td><td><code>AzureKmsKeyRef.kek_version</code></td></tr>
 <tr><td><code>DataEncryptionKey(secret)</code>, <code>DataEncryptionKey::new(secret)</code>, <code>dek.0</code></td><td><code>DataEncryptionKey::from(secret)</code>, <code>dek.value()</code></td></tr>
@@ -302,8 +302,8 @@ has its own <code>value()</code> and <code>into_value()</code>, and so has <code
 <ul>
 <li>implements <code>KmsAeadEncryptionProvider</code> instead of <code>KmsAeadRingEncryptionProvider</code>, without
 <code>#[async_trait]</code>. Its methods stay <code>async fn</code>, and their futures must be <code>Send</code>;</li>
-<li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code> and a key name that identifies the
-key;</li>
+<li>adds <code>fn kek(&amp;self) -&gt; &amp;KekRef</code>, with <code>KekProvider::Other</code>, <code>KmsProvider::Other</code> from 0.31, and
+a key name that identifies the key;</li>
 <li>deletes <code>generate_encryption_key</code> when it returned the backend’s key. The replacement,
 <code>generate_key_material(&amp;self, len)</code>, has a default implementation that lets the backend generate
 the key, and is implemented only for a KMS generator;</li>
@@ -316,6 +316,8 @@ decrypt gets it from those bytes, as the Azure provider’s do.</li>
 <p>The trait has no <code>dyn</code> form, so a <code>Box&lt;dyn KmsAeadRingEncryptionProvider&gt;</code> becomes a type
 parameter <code>P: KmsAeadEncryptionProvider</code>, or an enum of the providers the application uses. The
 trait requires <code>Send</code> and <code>Sync</code>, so <code>P: KmsAeadEncryptionProvider</code> needs no <code>+ Send + Sync</code>.</p>
+<p>0.31 moves <code>decrypt_data_encryption_key</code> to a trait of its own, <code>KmsAeadDecryptionProvider</code>, see
+<a href="./migrating-from-0.30.html#your-own-provider">Migrating from 0.30</a>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p><code>KmsAeadError</code> is <code>#[non_exhaustive]</code>, so an exhaustive <code>match</code> on it needs a <code>_</code> arm. It has two
 new variants, <code>UnsupportedAlgorithm</code> and <code>LegacyFormat</code>. <code>code()</code> returns the code of any variant,
@@ -367,7 +369,7 @@ Configure the key ARN rather than an alias, see <a href="./providers/aws.html#ke
 <h2 id="default-algorithm"><a class="header" href="#default-algorithm">Default algorithm</a></h2>
 <p>The default algorithm of <code>KmsAeadEnvelope</code> is AES-256-GCM, which every Tink implementation reads
 in a KMS envelope. The default of 0.29 was ChaCha20-Poly1305.</p>
-<p>A value does not record its algorithm. Values sealed under the default of 0.29 open only with
+<p>A value does not record its algorithm. Values encrypted under the default of 0.29 decrypt only with
 ChaCha20-Poly1305 configured, and an envelope on the new default fails them with <code>DECRYPT</code>. A 0.29
 envelope that named no algorithm becomes:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
@@ -392,7 +394,7 @@ wrote envelope layout v1 and the encrypted DEK layout v1 <code>[0xFF][0x01]…</
 length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
 <code>legacy-formats</code> feature, and fails with <code>LEGACY_FORMAT</code> without it, see
 <a href="./formats.html#values-written-by-029-and-earlier">Formats</a>.</p>
-<p>The envelopes that read and upgrade those values keep the algorithm they were sealed with, see
+<p>The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
 <p>To move stored values to the new format:</p>
 <ol>
@@ -401,7 +403,7 @@ cannot read Tink’s format, so no process writes it before every reader has the
 <li>rewrite the stored values with <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> of
 <code>KmsAeadEnvelope</code>, one or two KMS calls per value, see
 <a href="./formats.html#upgrading-stored-values">Upgrading stored values</a>. <code>upgrade_legacy_value</code> takes
-the value’s AAD, and fails with <code>DECRYPT</code> on a value that does not open under the envelope’s
+the value’s AAD, and fails with <code>DECRYPT</code> on a value that does not decrypt under the envelope’s
 algorithm and that AAD;</li>
 <li>turn the feature off.</li>
 </ol>
@@ -416,7 +418,7 @@ code that separated stored 0.29 values runs after the sweep.</p>
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="stored-values.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="migrating-from-0.30.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -430,7 +432,7 @@ code that separated stored 0.29 values runs after the sweep.</p>
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="stored-values.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="migrating-from-0.30.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

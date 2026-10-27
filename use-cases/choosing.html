@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -217,7 +217,9 @@ public key encrypts a DEK of their own into a keyring record. Use an AES key fro
 with <code>algorithm</code> set to <code>AzureKmsAlgorithm::Aes256KeyWrap</code>, see
 <a href="../providers/azure.html#options">Azure Key Vault</a> and <a href="../security.html#keyring-limits">Keyring limits</a>;</li>
 <li>the local KMS has no IAM, no audit log and no HSM, see <a href="../providers/local.html#limits">Local KMS</a>;</li>
-<li>crypto-shredding per KMS is in <a href="./incidents.html#crypto-shredding">A leaked key or a shredded tenant</a>.</li>
+<li>crypto-shredding per KMS is in <a href="./incidents.html#crypto-shredding">A leaked key or a shredded
+tenant</a>; a keyring under a shared KEK is shredded with
+<code>dangerously_shred()</code>, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a keyring</a>.</li>
 </ul>
 <p>The TLS root store and the TLS crypto provider are a feature choice for Google Cloud KMS, Azure and
 Vault Transit, with the rules in <a href="../features.html#feature-rules">Feature rules</a>.</p>
@@ -229,6 +231,7 @@ Vault Transit, with the rules in <a href="../features.html#feature-rules">Featur
 </thead>
 <tbody>
 <tr><td>AES-256-GCM-SIV</td><td>no</td><td>yes</td><td>yes</td><td>yes</td></tr>
+<tr><td>RSA-OAEP encryption, for a producer under an asymmetric KEK</td><td>no</td><td>yes</td><td>yes</td><td>yes</td></tr>
 <tr><td>FIPS module</td><td>no</td><td>no</td><td>yes</td><td>no</td></tr>
 <tr><td>Needs a C toolchain</td><td>yes</td><td>yes</td><td>yes, with CMake and Go</td><td>no</td></tr>
 <tr><td>A second crypto library beside a cloud provider</td><td>yes</td><td>no</td><td>no</td><td>yes</td></tr>
@@ -236,10 +239,13 @@ Vault Transit, with the rules in <a href="../features.html#feature-rules">Featur
 </tbody>
 </table>
 </div>
-<p>Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the same bytes, and opens
-the values of any other, so a move from one backend to another needs no migration of the data, see
-<a href="../crypto-backends.html#cross-backend-compatibility">Cross-backend compatibility</a>.</p>
+<p>Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the same bytes, and
+decrypts the values of any other, so a move from one backend to another needs no migration of the
+data, see <a href="../crypto-backends.html#cross-backend-compatibility">Cross-backend compatibility</a>.</p>
 <ul>
+<li><strong>Producers under an asymmetric KEK</strong>: a producer that encrypts DEKs with a public key fails at
+construction with <code>UNSUPPORTED_ALGORITHM</code> on <code>ring</code>, which has no RSA encryption. Readers need
+nothing of RSA on any backend, see <a href="./write-only-producers.html">Writers that can never read</a>;</li>
 <li><strong>No second crypto library</strong>: the default features of the four cloud providers already build
 aws-lc-rs for TLS, so <code>aws-lc</code> adds nothing to a provider build;</li>
 <li><strong>FIPS</strong>: <code>aws-lc-fips</code> runs the backend on the AWS-LC FIPS module and moves every user of

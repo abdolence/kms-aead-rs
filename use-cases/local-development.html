@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -198,9 +198,9 @@ production, with no cloud account. What each one keeps, and for how long, decide
 <li><strong>Tests</strong>: <code>LocalKmsProvider::ephemeral</code> has one random KEK that lives as long as the provider.
 Every DEK it encrypts, and so every value, is unreadable once the process exits, see
 <a href="../providers/local.html#tests-and-development">Tests and development</a>;</li>
-<li><strong>a development environment</strong> whose data outlives a run keeps a KEK in a variable or a file,
-with <code>LocalKek::from_env</code> or <code>LocalKek::from_file</code>, see the same section. A value written with
-the local KMS never opens under a cloud KMS, so a development database starts again empty on the
+<li><strong>a development environment</strong> whose data outlives a run keeps a KEK in a variable or a file, with
+<code>LocalKek::from_env</code> or <code>LocalKek::from_file</code>, see the same section. A value written with the
+local KMS never decrypts under a cloud KMS, so a development database starts again empty on the
 move to one.</li>
 </ul>
 <p>The provider is in every build, with no feature, and logs its KEK id and where each version came
@@ -222,7 +222,7 @@ runs on it:</p>
   gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators \
   gcloud emulators firestore start --host-port=0.0.0.0:8687
 FIRESTORE_EMULATOR_HOST=127.0.0.1:8687 PROJECT_ID=kms-aead-emulator \
-  cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,serde,firestore
+  cargo run -p kms-aead-keyring --example sweep_firestore --features ring,admin,firestore-tls-roots
 </code></pre>
 </li>
 <li>
@@ -246,7 +246,8 @@ The same with kms-aead alone is in <a href="../getting-started.html#with-an-enve
 <ul>
 <li>The local KMS has no IAM and no audit log, and the KEK in a variable stays in the process
 environment, see <a href="../providers/local.html#limits">Local KMS</a>;</li>
-<li>values sealed under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS only.</li>
+<li>values encrypted under a local KEK are not exported to BigQuery, which decrypts with Cloud KMS
+only.</li>
 </ul>
 
                     </main>

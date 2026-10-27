@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -178,7 +178,7 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="find-rows-by-an-encrypted-value"><a class="header" href="#find-rows-by-an-encrypted-value">Find rows by an encrypted value</a></h1>
-<p>A randomised value is different every time it is sealed, so a data store cannot find a row by it.
+<p>A randomised value is different every time it is encrypted, so a data store cannot find a row by it.
 Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
 for equal plaintexts, and a beacon, a truncated HMAC stored beside a field that stays randomised.
 Both leak which rows hold the same value, see
@@ -192,7 +192,7 @@ values, such as a status or a country.</p>
 <tr><th></th><th>Beacon</th><th>Deterministic field</th></tr>
 </thead>
 <tbody>
-<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to open</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row opens there</td></tr>
+<tr><td>Stored value</td><td>Randomised, so its AAD can name the row, and a value copied into another row fails to decrypt</td><td>Equal for equal values, so its AAD names the field and never the row, and a value copied into another row decrypts there</td></tr>
 <tr><td>Match</td><td>The truncated HMAC, with deliberate collisions</td><td>Always the exact value</td></tr>
 <tr><td>Key</td><td>A beacon key, rotated separately from the data keys</td><td>The field’s own key</td></tr>
 <tr><td>Cost</td><td>An extra column, and a decryption and filter of the candidates on every lookup</td><td>Nothing beyond the field</td></tr>
@@ -220,11 +220,11 @@ keeps both keys and queries with a beacon under each until a re-index, see
 <p>Each purpose has its own key versions, rotated centrally, and a lookup matches every version that
 still decrypts:</p>
 <ul>
-<li>a deterministic field: a sealer’s <code>encrypt_deterministic</code> on every write, and
+<li>a deterministic field: an encryptor’s <code>encrypt_deterministic</code> on every write, and
 <code>Keyring::deterministic_probes</code> for a lookup, under the <code>deterministic</code> feature, see
 <a href="../keyring/deterministic.html">Deterministic fields</a>;</li>
-<li>a beacon: a sealer’s <code>encrypt</code> and <code>beacon</code> in the same write, and <code>Keyring::beacon_probes</code> for a
-lookup, see <a href="../keyring/beacons.html">Beacons</a>.</li>
+<li>a beacon: an encryptor’s <code>encrypt</code> and <code>beacon</code> in the same write, and <code>Keyring::beacon_probes</code>
+for a lookup, see <a href="../keyring/beacons.html">Beacons</a>.</li>
 </ul>
 <p>Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
 <a href="../operations/rotation.html#rotation-cadence">Rotation cadence</a>.</p>

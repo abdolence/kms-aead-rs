@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,7 +188,10 @@ the features of every package one command builds;</li>
 <li>runs as a principal with KMS decrypt on the KEK and read access to the keyring store, listen
 included, see <a href="../keyring/deployment.html#kms-rights">KMS rights</a> and
 <a href="../keyring/deployment.html#store-rights">Store rights</a>;</li>
-<li>calls <code>KeyringRegistry::open</code>, and on the <code>Keyring</code> it returns <code>sealer</code>, <code>decrypt</code> and the
+<li>where records are signed, opens its registry with <code>RecordSignaturePolicy::Required</code> and the public
+key of the record signer, from its configuration and never from the store, see
+<a href="./signed-records.html">Protect the keyring record</a>;</li>
+<li>calls <code>KeyringRegistry::open</code>, and on the <code>Keyring</code> it returns <code>encryptor</code>, <code>decrypt</code> and the
 probes, and runs the sweeps;</li>
 <li>awaits <code>registry.shutdown(None)</code> before it exits.</li>
 </ul>
@@ -197,6 +200,9 @@ probes, and runs the sweeps;</li>
 <li>Builds with the <code>admin</code> feature, and <code>bigquery-export</code> where it exports BigQuery keysets;</li>
 <li>runs in a job or in infrastructure automation, never in a request handler, as the only principal
 with KMS encrypt on the KEK and write access to the keyring store;</li>
+<li>holds the record signer where records are signed: a <code>Signer</code> on a KMS signing key, with the right
+to sign and no other principal holding it, passed to <code>create_signed</code>, <code>open_or_create_signed</code> or
+<code>with_record_signer</code>, see <a href="./signed-records.html">Protect the keyring record</a>;</li>
 <li>calls <code>create</code> or <code>open_or_create</code> for each new keyring, and on the <code>KeyringAdmin</code> the lifecycle
 calls, <code>reencrypt_deks</code> and the keyset exports, see
 <a href="../keyring/lifecycle.html">Key versions and lifecycle</a>;</li>
@@ -217,20 +223,21 @@ and <a href="../observability.html#events">Events</a>, and the metrics need the 
 </thead>
 <tbody>
 <tr><td><code>ERROR</code>: a refreshed record refused because it moves a version backwards</td><td>something other than the administrative job rewrote or restored the record</td><td><a href="../operations/runbook.html#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
+<tr><td><code>ERROR</code>: a refreshed record refused by record verification, with <code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or <code>RECORD_SIGNATURE_REMOVED</code></td><td>something other than the record signer wrote or restored the record; the process keeps the record it holds</td><td><a href="../operations/runbook.html#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a>, and the signer’s KMS audit log</td></tr>
 <tr><td><code>WARN</code>: “The keyring record could not be revalidated; the cached record stays in use”</td><td>the process misses every change, a promotion or a compromised flag included, until the store answers</td><td>fix the process’s access to the store before the next promotion</td></tr>
-<tr><td><code>WARN</code>: a record the store no longer holds</td><td>the record was deleted; new processes fail at <code>open</code> with <code>RecordMissing</code></td><td><a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
+<tr><td><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this process”</td><td>the record was deleted or shredded; this process destroyed every version in memory, its handles fail with <code>NoActiveVersion</code> and <code>KeyVersionDestroyed</code>, and new opens fail with <code>RecordMissing</code> until a record is created; a process that read the shred’s first write logs an <code>INFO</code> instead</td><td><a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
 <tr><td><code>WARN</code>: the store’s listener disconnected or did not start, or a keyring opened with no tokio runtime</td><td>changes reach the process within <code>record_ttl</code> instead of seconds</td><td>check the listener’s connection and the runtime</td></tr>
 <tr><td><code>WARN</code>: a compromised flag written without a rotation</td><td>the KMS could not encrypt a new DEK, so <code>encrypt</code> fails with <code>NoActiveVersion</code></td><td><code>rotate</code> and <code>promote_now</code> once the KMS answers, see <a href="../keyring/lifecycle.html#compromised-versions">Compromised versions</a></td></tr>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="../operations/runbook.html#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
 <tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown(None)</code> before the exit</td></tr>
-<tr><td><code>WARN</code>: a record a sweep could not re-seal, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a></td></tr>
+<tr><td><code>WARN</code>: a record a sweep could not re-encrypt, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="../errors.html">Error handling</a></td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="../errors.html#retries">Retries</a> for the codes of each KMS</td></tr>
 <tr><td><code>error.type</code> on <code>kms_aead.store.duration</code></td><td>keyring store reads that fail</td><td>the store’s own monitoring</td></tr>
 <tr><td>values and bytes per keyring version</td><td>a version near the limits of its algorithm</td><td><a href="../operations/rotation.html#alerting-on-volume">Alerting on volume</a></td></tr>
 <tr><td>an <code>Encrypt</code> in the KMS audit log by a principal other than the administration</td><td>an IAM over-grant, or a version the job did not create. Cloud KMS logs <code>Encrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="../operations/runbook.html#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
-<tr><td>a <code>Decrypt</code> in the KMS audit log by a principal other than the application, the administration and the keyset readers: every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a Tink reader through its own KMS client, see <a href="../keyring/bigquery.html#queries">Queries</a> and <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a></td><td>an IAM over-grant, or an encrypted DEK or a keyset opened outside the deployment. Cloud KMS logs <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="../operations/runbook.html#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+<tr><td>a <code>Decrypt</code> in the KMS audit log by a principal other than the application, the administration and the keyset readers: every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a Tink reader through its own KMS client, see <a href="../keyring/bigquery.html#queries">Queries</a> and <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a></td><td>an IAM over-grant, or an encrypted DEK or a keyset decrypted outside the deployment. Cloud KMS logs <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="../operations/runbook.html#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
 <tr><td><code>WARN</code>, inside the KMS span: a Cloud KMS or Vault Transit response without a key version</td><td>the KMS reported no version, so <code>kek_versions_in_use</code> lists a <code>None</code> and the check before a KEK disable never passes</td><td><a href="../operations/rotation.html#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></td></tr>
 <tr><td><code>WARN</code>, once per process: the first read of a layout of 0.29 or earlier</td><td>values not yet upgraded</td><td><a href="../formats.html#upgrading-stored-values">Upgrading stored values</a></td></tr>
 </tbody>

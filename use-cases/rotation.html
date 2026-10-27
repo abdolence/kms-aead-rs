@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,8 +180,8 @@
                         <h1 id="rotate-keys-and-re-encrypt-values"><a class="header" href="#rotate-keys-and-re-encrypt-values">Rotate keys and re-encrypt values</a></h1>
 <p>Two keys rotate, on their own schedules:</p>
 <ul>
-<li>a DEK seals values. A new DEK changes nothing already written, so the values under the old one
-are re-sealed by a sweep before the old DEK is retired;</li>
+<li>a DEK encrypts values. A new DEK changes nothing already written, so the values under the old one
+are re-encrypted by a sweep before the old DEK is retired;</li>
 <li>the KEK encrypts DEKs in the KMS. A new KEK version changes no value: the DEKs are encrypted
 again under it before the old version is disabled.</li>
 </ul>
@@ -190,7 +190,7 @@ retires or disables it, and a check runs before that step. This page walks throu
 and links to the procedure of each step. How often to rotate is in
 <a href="../operations/rotation.html#rotation-cadence">Rotation cadence</a>.</p>
 <h2 id="dek-rotation"><a class="header" href="#dek-rotation">DEK rotation</a></h2>
-<p>On a keyring, a DEK rotation is a new key version of a purpose, staged before it seals anything.
+<p>On a keyring, a DEK rotation is a new key version of a purpose, staged before it encrypts anything.
 The administrative job runs every call on its <code>KeyringAdmin</code>, and the application runs the sweep,
 see <a href="../keyring/deployment.html">Applications and administration</a>. In order:</p>
 <ol>
@@ -198,10 +198,10 @@ see <a href="../keyring/deployment.html">Applications and administration</a>. In
 process has the pending version, <code>promote</code>. The steps and the waits are in
 <a href="../operations/rotation.html#rotation-cadence">Rotation cadence</a>, and why the wait is needed in
 <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation</a>;</li>
-<li><strong>sweep</strong> the records whose seal marker is below the keyring’s current one. They are the records
-that can hold a value under an older version, and records with no value of the rotated purpose,
-whose re-seal writes the marker alone, see <a href="../operations/sweeps.html">Sweeps</a>. The query and the
-write per database:
+<li><strong>sweep</strong> the records whose encryption marker is below the keyring’s current one. They are the
+records that can hold a value under an older version, and records with no value of the rotated
+purpose, whose re-encryption writes the marker alone, see <a href="../operations/sweeps.html">Sweeps</a>. The
+query and the write per database:
 <ul>
 <li><a href="../operations/sweeps-firestore.html">Firestore</a>;</li>
 <li><a href="../operations/sweeps-postgres.html">PostgreSQL</a>;</li>
@@ -219,9 +219,9 @@ runs the whole cycle on the memory store and the local KMS:
 <code>cargo run -p kms-aead-keyring --example rotate --features ring,admin</code>.</p>
 <h3 id="why-nothing-stops"><a class="header" href="#why-nothing-stops">Why nothing stops</a></h3>
 <ul>
-<li>A pending version decrypts in every process that has seen it and seals nothing, so by the
+<li>A pending version decrypts in every process that has seen it and encrypts nothing, so by the
 promotion every process that reads a value under it already knows it;</li>
-<li>a process that has not taken the promotion yet seals under the previous version, which stays
+<li>a process that has not taken the promotion yet encrypts under the previous version, which stays
 <code>DecryptOnly</code>, so its values decrypt everywhere;</li>
 <li>the sweep reads a value under the old version and writes it under the new one, conditional on
 the record as it read it, so a write of the application in between is never overwritten;</li>
@@ -231,7 +231,7 @@ the record as it read it, so a write of the application in between is never over
 <ul>
 <li><strong>A process left behind</strong> by a promotion meets a value under the new version and reloads its
 record, see <a href="../keyring/lifecycle.html#staged-rotation">Staged rotation</a>;</li>
-<li><strong>a re-seal that fails</strong> is counted and logged, and some failures repeat in every run, see
+<li><strong>a re-encryption that fails</strong> is counted and logged, and some failures repeat in every run, see
 <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a>;</li>
 <li><strong>a retire too early</strong> refuses a value the sweep missed, see
 <a href="../operations/sweeps.html#retiring-the-old-version">Retiring the old version</a>;</li>
@@ -242,9 +242,9 @@ keyset exports keep, see <a href="../operations/runbook.html#crypto-shredding">C
 </ul>
 <h3 id="what-to-alert-on"><a class="header" href="#what-to-alert-on">What to alert on</a></h3>
 <ul>
-<li>“The keyring record could not be revalidated”, from the rotation until the old version is
-retired: a process that logs it is one a promotion can leave behind, and one that can still seal
-under the old version;</li>
+<li>“The keyring record could not be revalidated”, from the rotation until the old version is retired:
+a process that logs it is one a promotion can leave behind, and one that can still encrypt under
+the old version;</li>
 <li><code>error.type</code> <code>KEY_VERSION_UNKNOWN</code> on <code>kms_aead.operation.duration</code>, a read that met a version
 its process could not load, and <code>KEY_VERSION_RETIRED</code> once the old version is retired;</li>
 <li><code>SweepReport::failed</code> above zero, and the sweep’s <code>WARN</code> per record;</li>
@@ -321,12 +321,12 @@ a second key id, both kept for reads, and a re-index of the values or beacons un
 see <a href="../envelope-encryption.html#one-fixed-key">One fixed key</a> and
 <a href="../beacons.html#rotating-a-beacon-key">Rotating a beacon key</a>.</li>
 </ul>
-<p>A DEK that leaked keeps opening every value sealed under it, whatever the KEK. To retire it:</p>
+<p>A DEK that leaked keeps decrypting every value encrypted under it, whatever the KEK. To retire it:</p>
 <ol>
-<li>stop sealing under it: a store-less writer renews its DEK after <code>invalidate</code> of that DEK, or
+<li>stop encrypting under it: a store-less writer renews its DEK after <code>invalidate</code> of that DEK, or
 <code>clear</code>, on its envelope’s DEK cache, in every process, see
 <a href="../dek-caching.html#the-dek-lives-in-the-cache">The DEK lives in the cache</a>;</li>
-<li>read each value under it with <code>decrypt</code> and seal it again with <code>encrypt</code>, which takes a new
+<li>read each value under it with <code>decrypt</code> and encrypt it again with <code>encrypt</code>, which takes a new
 DEK, and write it back only where the stored bytes are still the ones read;</li>
 <li>treat backups and exports that hold the old values as exposed, see
 <a href="../security.html#what-rotation-does-not-protect">What rotation does not protect</a>.</li>
@@ -335,15 +335,16 @@ DEK, and write it back only where the stored bytes are still the ones read;</li>
 <p>The KEK rotates in the KMS, and before the old version is disabled, the DEKs stored in the values
 and apart from them are encrypted again under its new version with <code>reencrypt_encrypted_dek</code>, once
 per distinct encrypted DEK, and the application’s own encrypted keysets through the provider. No
-value is opened. The procedure, when the sweep starts, its pacing, the checks and a rollback are in
-<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
-and the alerts are those of the keyring’s KEK rotation above, on <code>kms_aead.kms.duration</code>.</p>
+value is decrypted. The procedure, when the sweep starts, its pacing, the checks and a rollback are
+in <a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK
+rotation</a>, and the alerts are
+those of the keyring’s KEK rotation above, on <code>kms_aead.kms.duration</code>.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../use-cases/bigquery-and-tink.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../use-cases/signed-records.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -357,7 +358,7 @@ and the alerts are those of the keyring’s KEK rotation above, on <code>kms_aea
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../use-cases/bigquery-and-tink.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../use-cases/signed-records.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

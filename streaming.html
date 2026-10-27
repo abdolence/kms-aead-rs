@@ -1,0 +1,635 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Streaming encryption - KMS envelope encryption for Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="favicon-8114d1fc.png">
+        <link rel="stylesheet" href="css/variables-8adf115d.css">
+        <link rel="stylesheet" href="css/general-e96d0476.css">
+        <link rel="stylesheet" href="css/chrome-d279d366.css">
+        <link rel="stylesheet" href="css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "searchindex-0a86deed.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="toc-5b436d00.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="streaming-encryption"><a class="header" href="#streaming-encryption">Streaming encryption</a></h1>
+<p>Feature <code>stream</code>.</p>
+<p>The library encrypts a value of any length as a streamed value: a header, then chunks of 16 KiB,
+each one authenticated on its own and bound to its position. A writer encrypts a value whose length
+it does not know in advance, holding one chunk in memory. A reader decrypts any byte range by
+fetching only the chunks that cover it.</p>
+<p>Streaming fits files, uploads, backups and other objects in a store that serves <code>Range</code> requests.
+Fields of a record are <code>Encrypted</code> values, see <a href="./stored-values.html">Stored values</a>.</p>
+<p>The value comes in three forms, which differ in the bytes in front of the Cobblestone message: the
+salt, the key commitment and the chunks that every form shares, see <a href="#format">Format</a>.</p>
+<ul>
+<li>the prefixed form starts with Tink’s output prefix, <code>0x01</code> and a key id, as every keyring value
+does. <code>AeadCipher::stream_encryptor</code> writes it, and it is the only form a keyring writes and
+reads;</li>
+<li>the envelope form starts with the encrypted DEK, as Tink’s KMS envelope does, so the value
+decrypts with nothing stored beside it. <code>KmsAeadEnvelope::stream_encryptor</code> writes it;</li>
+<li>the bare form is the Cobblestone message alone, for a caller that keeps the key id or the
+encrypted DEK itself. The <code>_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code> write it.</li>
+</ul>
+<p>Every form uses AES-256-GCM, so the DEK is 32 bytes. The derivation binds the AAD into the value, and
+the decryptor refuses a wrong key, a wrong AAD or a modified header with <code>STREAM_KEY_COMMITMENT</code>
+before it decrypts a chunk.</p>
+<h2 id="encrypting-and-decrypting"><a class="header" href="#encrypting-and-decrypting">Encrypting and decrypting</a></h2>
+<p>A value that arrives as a <code>Stream</code> of <code>Bytes</code>, such as a request body or an object-store download,
+goes through two types that need no bridge to tokio’s I/O traits, and comes back out as a <code>Stream</code>.
+Each holds one chunk in memory, whatever the length of the value:</p>
+<ul>
+<li><code>EncryptingStream</code> takes a <code>Stream</code> of plaintext and yields the value: the header first, then
+one item per chunk, the final chunk when its source ends;</li>
+<li><code>DecryptingStream</code> takes the stored bytes after the header and yields the plaintext, one item
+per chunk, and only once the chunk is authentic. It reads its source to the end, which is the
+end of the value.</li>
+</ul>
+<p>Both yield <code>KmsAeadResult&lt;Bytes&gt;</code>. A value that is cut, modified or extended ends in an error item,
+<code>STREAM_LENGTH</code> or <code>DECRYPT</code>, never in a clean end. The error is the last item. An error of the
+source is <code>STREAM_IO</code>. A source that is not <code>Unpin</code> goes through <code>Box::pin</code>.</p>
+<p>The encryptor and the decryptor come from the cipher: <code>AeadCipher::stream_encryptor</code> and
+<code>stream_decryptor</code> make the prefixed form, <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> the
+bare one. A decryptor is made from the header and the DEK.</p>
+<p>A value read from start to end needs no stored length. Every chunk but the last is 16,400 bytes as
+stored and the last one is shorter, so a chunk is decrypted as soon as 16,400 bytes of it have
+arrived, and the bytes left when the source ends are the final chunk. A value cut at a chunk
+boundary, or less than a tag (16 bytes) into a chunk, ends without that shorter chunk,
+<code>STREAM_LENGTH</code>. A value cut further into a chunk, or followed by more bytes, ends in a final chunk
+that is not authentic, <code>DECRYPT</code>. A ranged read does
+need the stored length: it fetches the chunks of a range without reading what comes before, so only
+the length tells it where the final chunk is and how long it is, see
+<a href="#reading-a-range">Reading a range</a>.</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher};
+</span>use std::sync::Arc;
+
+use bytes::Bytes;
+use futures::{stream, StreamExt, TryStreamExt};
+use kms_aead::stream::{DecryptingStream, EncryptingStream, StreamFormat};
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span>let body = stream::iter([Bytes::from_static(b"a request "), Bytes::from_static(b"body")])
+    .map(Ok::&lt;_, std::io::Error&gt;);
+let encryptor = cipher.stream_encryptor_bare(b"upload/7/file", &amp;dek)?;
+let stored: Vec&lt;Bytes&gt; = EncryptingStream::new(encryptor, body).try_collect().await?;
+let stored = stored.concat();
+
+let header_len = StreamFormat::Bare.header_len();
+let header = &amp;stored[..header_len];
+let decryptor = cipher.stream_decryptor_bare(b"upload/7/file", header, &amp;dek)?;
+let after_header = stream::iter([Bytes::copy_from_slice(&amp;stored[header_len..])]).map(Ok::&lt;_, std::io::Error&gt;);
+let response: Vec&lt;Bytes&gt; = DecryptingStream::new(Arc::new(decryptor), after_header).try_collect().await?;
+<span class="boring">assert_eq!(response.concat(), b"a request body");
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A caller that holds the whole stored value from its first byte, such as a download, does not split
+the header off: <code>KmsAeadEnvelope</code> and <code>Keyring</code> have <code>decrypting_stream</code> and <code>decrypting_reader</code>,
+which read the header from the front of the source, make the decryptor and return the stream or the
+reader positioned at the first chunk, see <a href="#with-an-envelope">With an envelope</a> and
+<a href="#with-a-keyring">With a keyring</a>.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/stream_body.rs">here</a>.</p>
+<h2 id="the-tokio-adapters"><a class="header" href="#the-tokio-adapters">The tokio adapters</a></h2>
+<p>Two wrapper types and two functions put the encryptor and the decryptor on tokio’s <code>AsyncWrite</code> and
+<code>AsyncRead</code>. Each holds one chunk in memory, whatever the length of the value:</p>
+<ul>
+<li><code>EncryptingWriter</code> encrypts what is written to it and writes the value to a sink. Call <code>shutdown</code>
+on it: only the shutdown writes the final chunk;</li>
+<li><code>DecryptingReader</code> reads a value from a source positioned after the header and yields its
+plaintext;</li>
+<li><code>encrypt_stream</code> and <code>decrypt_stream</code> run a whole source through a writer or a reader into a sink.</li>
+</ul>
+<p>A <code>std::io::Error</code> that a wrapper returns for a failure of the value, such as a chunk that is not
+authentic, carries the <code>KmsAeadError</code> as its inner error: <code>error.get_ref()</code> and
+<code>downcast_ref::&lt;KmsAeadError&gt;()</code> find it.</p>
+<h2 id="reading-a-range"><a class="header" href="#reading-a-range">Reading a range</a></h2>
+<p>A ranged read has three steps:</p>
+<ul>
+<li><code>plan_chunk_read</code> on the value’s <code>StreamFormat</code> takes the stored length of the value, as the
+store reports it, and a plaintext range, and returns a <code>ChunkReadPlan</code>: the chunks that cover the
+range and the stored bytes to fetch. <code>..</code> is the whole plaintext. It needs no key, so a stored
+length that the length rules refuse fails before any KMS call. <code>StreamFormat::Prefixed</code> and
+<code>StreamFormat::Bare</code> are the prefixed and bare forms, and <code>EnvelopeStreamHeader::form</code> is the
+form of an envelope value;</li>
+<li>the caller fetches <code>plan.ciphertext()</code> from the store, a byte range counted from the start of the
+value;</li>
+<li><code>decrypt_chunk_read</code> on a decryptor takes the plan and the fetched bytes, and returns the
+plaintext of exactly the range asked for, as a <code>Plaintext</code> type: <code>Vec&lt;u8&gt;</code> or <code>SecretValue</code>.</li>
+</ul>
+<p>One zip entry of 63 KB at offset 1,000,000 of a value of 5,000,000 bytes covers four chunks, and
+the read fetches 65,600 bytes. An entry that starts in the last byte of a chunk covers five chunks.</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::stream::StreamFormat;
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher};
+</span>use kms_aead::stream::encrypt_stream;
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span>let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+let dek = cipher.generate_dek()?;
+<span class="boring">let plaintext = vec![7_u8; 5_000_000];
+</span><span class="boring">let source = &amp;plaintext[..];
+</span>
+// Encrypting: the bare form, with a DEK the caller holds, from any `AsyncRead` such as a file
+let encryptor = cipher.stream_encryptor_bare(b"backups/2026-10", &amp;dek)?;
+let mut stored = Vec::new();
+encrypt_stream(encryptor, source, &amp;mut stored).await?;
+
+// Decrypting: the stored length goes into the plan, which needs no key, and the header comes from
+// the store
+let plan = StreamFormat::Bare.plan_chunk_read(stored.len() as u64, 1_000_000..1_064_512)?;
+assert_eq!(plan.chunks(), 61..65);
+assert_eq!(plan.ciphertext(), 1_000_456..1_066_056);
+
+let fetched = &amp;stored[plan.ciphertext().start as usize..plan.ciphertext().end as usize];
+let decryptor = cipher.stream_decryptor_bare(
+    b"backups/2026-10",
+    &amp;stored[..StreamFormat::Bare.header_len()],
+    &amp;dek,
+)?;
+let entry: Vec&lt;u8&gt; = decryptor.decrypt_chunk_read(&amp;plan, fetched)?;
+<span class="boring">assert_eq!(entry, plaintext[1_000_000..1_064_512]);
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Make one decryptor per request, in an <code>Arc</code>: its methods take <code>&amp;self</code>, and the ranges, threads and
+<code>DecryptingReader</code> of that request share it. The header is read once per request and no range
+fetches it again. Do not cache the decryptor across requests: it decrypts until it is dropped, see
+<a href="#limits">Limits</a>.</p>
+<h2 id="with-an-envelope"><a class="header" href="#with-an-envelope">With an envelope</a></h2>
+<p>Streamed values come in the same modes as other values, an envelope or a keyring, see
+<a href="./intro.html#choosing-a-mode">Choosing a mode</a>. An envelope chooses and encrypts the DEK as
+<code>encrypt</code> does, and writes one of two forms:</p>
+<ul>
+<li><code>stream_encryptor</code> writes the envelope form, one object that holds everything a reader needs. A
+reader learns the header’s length from its first 4 bytes, the length <code>w</code> of the encrypted DEK,
+and every chunk sits <code>4 + w</code> bytes after its place in the bare form. A KEK rotation rewrites
+every object;</li>
+<li><code>stream_encryptor_bare</code> writes the bare form and returns the encrypted DEK, which the application
+stores beside the object, such as in its metadata or its database row. The chunks sit at fixed
+offsets, and a KEK rotation re-encrypts the stored DEKs with <code>reencrypt_encrypted_dek</code> and leaves
+the objects as they are.</li>
+</ul>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::KmsAeadEnvelope;
+</span>use kms_aead::stream::{encrypt_stream, EnvelopeStreamHeader};
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("backups".to_string())?)?;
+</span><span class="boring">let plaintext = vec![7_u8; 5_000_000];
+</span><span class="boring">let source = &amp;plaintext[..];
+</span>let envelope = KmsAeadEnvelope::&lt;_, Ring&gt;::new(provider)?;
+
+// Encrypting: the envelope form, with the encrypted DEK inside the value, from any `AsyncRead`
+let encryptor = envelope.stream_encryptor(b"backups/2026-10").await?;
+let mut stored = Vec::new();
+encrypt_stream(encryptor, source, &amp;mut stored).await?;
+
+// Decrypting: the header's length from its first 4 bytes, then the header
+let header_len = EnvelopeStreamHeader::header_len(&amp;stored[..4])?;
+let header = EnvelopeStreamHeader::try_from(&amp;stored[..header_len])?;
+let plan = header.form().plan_chunk_read(stored.len() as u64, 1_000_000..1_064_512)?;
+let fetched = &amp;stored[plan.ciphertext().start as usize..plan.ciphertext().end as usize];
+let decryptor = envelope.stream_decryptor(b"backups/2026-10", &amp;header).await?;
+let entry: Vec&lt;u8&gt; = decryptor.decrypt_chunk_read(&amp;plan, fetched)?;
+<span class="boring">assert_eq!(entry, plaintext[1_000_000..1_064_512]);
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A caller that reads the value from its first byte fetches no header separately: <code>decrypting_stream</code>
+takes the stored value as a <code>Stream</code> of <code>Bytes</code>, and <code>decrypting_reader</code> as an <code>AsyncRead</code>. Each
+reads the first 4 bytes, <code>w</code>, and checks it before it reads on or calls the KMS, then reads the
+header and returns the adapter at the first chunk.</p>
+<pre><code class="language-rust"><span class="boring">use bytes::Bytes;
+</span><span class="boring">use futures::{stream, StreamExt, TryStreamExt};
+</span><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::stream::EncryptingStream;
+</span><span class="boring">use kms_aead::KmsAeadEnvelope;
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("backups".to_string())?)?;
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;_, Ring&gt;::new(provider)?;
+</span><span class="boring">let upload = stream::iter([Bytes::from_static(b"a request body")]).map(Ok::&lt;_, std::io::Error&gt;);
+</span><span class="boring">let encryptor = envelope.stream_encryptor(b"backups/2026-10").await?;
+</span><span class="boring">let stored: Vec&lt;Bytes&gt; = EncryptingStream::new(encryptor, upload).try_collect().await?;
+</span><span class="boring">let download = stream::iter(stored).map(Ok::&lt;_, std::io::Error&gt;);
+</span>// The download streams the object from its first byte to its last
+let response = envelope.decrypting_stream(b"backups/2026-10", download).await?;
+let plaintext: Vec&lt;Bytes&gt; = response.try_collect().await?;
+<span class="boring">assert_eq!(plaintext.concat(), b"a request body");
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p><code>stream_decryptor_bare</code> decrypts the bare form from its 56-byte header and the stored encrypted DEK,
+see <a href="./use-cases/large-files.html#the-dek-beside-the-object">Large files</a>. Full example of reading a
+range from both forms available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/stream_range_read.rs">here</a>.</p>
+<h2 id="with-a-keyring"><a class="header" href="#with-a-keyring">With a keyring</a></h2>
+<p>The <code>stream</code> feature of kms-aead-keyring adds <code>Encryptor::stream_encryptor</code>,
+<code>Keyring::stream_decryptor</code> and, for a value served whole, <code>Keyring::decrypting_stream</code> and
+<code>decrypting_reader</code>, which read the 61-byte header from the front of the source. The first two
+return the same <code>StreamEncryptor</code> and <code>StreamDecryptor</code>, in the prefixed form, under the active
+version for a write and under the version the header names for a read. The keyring applies its
+lifecycle states and its <code>compromised_reads</code> policy as <code>decrypt</code> does, and a <code>FieldAad</code> that carries
+an <code>Interop</code> is refused, since neither Tink nor BigQuery reads a streamed value.</p>
+<p>The lifecycle states and the policy apply when the decryptor is made. A decryptor holds the key
+derived for its value, never the DEK, and keeps decrypting after the version is retired, destroyed
+or flagged compromised, and after a shred of the keyring, until it is dropped. Make it per request,
+as above, so that a shred takes effect for the next request. A request that serves only the whole
+value, with no ranges, calls <code>decrypting_stream</code> or <code>decrypting_reader</code>, which make their own
+decryptor.</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead_keyring::testing::MemoryKeyringStore;
+</span><span class="boring">use kms_aead_keyring::{
+</span><span class="boring">    EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringId, KeyringRegistry,
+</span><span class="boring">    KeyringRegistryOptions,
+</span><span class="boring">};
+</span>use std::sync::Arc;
+
+use kms_aead_keyring::stream::{
+    ChunkReadPlan, DecryptingReader, EncryptingWriter, PrefixedStreamHeader, StreamDecryptor,
+    StreamEncryptor, StreamFormat,
+};
+use tokio::io::AsyncWriteExt;
+<span class="boring">/// An object of an object store that serves `Range` requests, held in memory.
+</span><span class="boring">struct Object(Vec&lt;u8&gt;);
+</span><span class="boring">impl Object {
+</span><span class="boring">    async fn read(&amp;self, range: std::ops::Range&lt;u64&gt;) -&gt; std::io::Result&lt;Vec&lt;u8&gt;&gt; {
+</span><span class="boring">        Ok(self.0[range.start as usize..range.end as usize].to_vec())
+</span><span class="boring">    }
+</span><span class="boring">    async fn read_from(&amp;self, offset: u64) -&gt; std::io::Result&lt;&amp;[u8]&gt; {
+</span><span class="boring">        Ok(&amp;self.0[offset as usize..])
+</span><span class="boring">    }
+</span><span class="boring">    fn size(&amp;self) -&gt; u64 {
+</span><span class="boring">        self.0.len() as u64
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+</span><span class="boring">    MemoryKeyringStore::new(),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("uploads".to_string())?)?;
+</span><span class="boring">let admin = registry
+</span><span class="boring">    .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+</span><span class="boring">    .await?;
+</span><span class="boring">let keyring = admin.keyring();
+</span><span class="boring">let upload_id = EntityId::try_from("upload-7")?;
+</span><span class="boring">let upload = vec![7_u8; 1_200_000];
+</span><span class="boring">let mut body = &amp;upload[..];
+</span><span class="boring">let mut object_writer = Vec::new();
+</span>
+const UPLOAD_FILE: FieldSpec = FieldSpec::new(
+    EntityKind::from_static("upload"),
+    FieldName::from_static("file"),
+);
+
+// Encrypting an upload: the length is not known in advance and nothing of the body is held whole
+let aad = UPLOAD_FILE.aad(&amp;upload_id);
+let encryptor: StreamEncryptor&lt;Ring&gt; = keyring.encryptor().await.stream_encryptor(&amp;aad).await?;
+let mut writer = EncryptingWriter::new(encryptor, &amp;mut object_writer);
+tokio::io::copy(&amp;mut body, &amp;mut writer).await?;
+writer.shutdown().await?;
+let stored_len: u64 = writer.stored_len_written();
+<span class="boring">let object = Object(object_writer);
+</span><span class="boring">assert_eq!(object.size(), stored_len);
+</span>
+// Serving one zip entry: the plans first, from the store's size, so that a size the length rules
+// refuse reaches neither the store nor the KMS
+let last: ChunkReadPlan = StreamFormat::Prefixed.plan_final_chunk_read(object.size())?;
+let plan: ChunkReadPlan = StreamFormat::Prefixed.plan_chunk_read(object.size(), 1_000_000..1_064_512)?;
+
+// Then the header once and one decryptor per request, which reads the final chunk, so that the
+// length is authentic before any range is served
+let head: Vec&lt;u8&gt; = object.read(0..StreamFormat::Prefixed.header_len() as u64).await?;
+let header = PrefixedStreamHeader::try_from(head.as_slice())?;
+let decryptor: Arc&lt;StreamDecryptor&lt;Ring&gt;&gt; = Arc::new(keyring.stream_decryptor(&amp;aad, &amp;header).await?);
+decryptor.decrypt_chunk_read::&lt;Vec&lt;u8&gt;&gt;(&amp;last, &amp;object.read(last.ciphertext()).await?)?;
+let bytes: Vec&lt;u8&gt; = object.read(plan.ciphertext()).await?;
+let entry: Vec&lt;u8&gt; = decryptor.decrypt_chunk_read(&amp;plan, &amp;bytes)?;
+
+// The whole value as a response body, over the same decryptor
+let body = DecryptingReader::new(
+    decryptor.clone(),
+    object.read_from(StreamFormat::Prefixed.header_len() as u64).await?,
+);
+<span class="boring">assert_eq!(entry, upload[1_000_000..1_064_512]);
+</span><span class="boring">drop(body);
+</span><span class="boring">registry.shutdown(None).await;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A write stores the encryption marker of the encryptor’s record beside the object’s own record, as
+it does for fields, so that a sweep finds the object by the marker, see
+<a href="./operations/sweeps.html#the-encryption-marker">Sweeps</a>.</p>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/stream.rs">here</a>.</p>
+<h2 id="driving-the-io-yourself"><a class="header" href="#driving-the-io-yourself">Driving the I/O yourself</a></h2>
+<p><code>StreamEncryptor</code> and <code>StreamDecryptor</code> take bytes and return bytes, and read and write nothing
+themselves, so they run under any runtime; the adapters above are built on them. An application that
+reads its source with another runtime, or in a loop of its own, calls them directly.</p>
+<p>An encryptor takes the plaintext in pieces of any size: the value is <code>header()</code>, the bytes every
+<code>push</code> returns, then the bytes <code>finish</code> returns. A decryptor decrypts the chunks of a plan from
+<code>plan_chunk_read</code>, as in <a href="#reading-a-range">Reading a range</a>, and <code>..</code> plans the whole value.</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::stream::StreamFormat;
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher};
+</span><span class="boring">fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span>let mut encryptor = cipher.stream_encryptor_bare(b"backups/2026-10", &amp;dek)?;
+let mut stored = encryptor.header().to_vec();
+for piece in [b"first piece, ".as_slice(), b"second piece".as_slice()] {
+    stored.extend(encryptor.push(piece)?);
+}
+stored.extend(encryptor.finish()?);
+
+let header = &amp;stored[..StreamFormat::Bare.header_len()];
+let decryptor = cipher.stream_decryptor_bare(b"backups/2026-10", header, &amp;dek)?;
+let plan = StreamFormat::Bare.plan_chunk_read(stored.len() as u64, ..)?;
+let plaintext: Vec&lt;u8&gt; = decryptor.decrypt_chunk_read(&amp;plan, &amp;stored[plan.ciphertext().start as usize..])?;
+<span class="boring">assert_eq!(plaintext, b"first piece, second piece");
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/stream_range_read.rs">here</a>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<p>Be aware of these when serving streamed values:</p>
+<ul>
+<li>the stored length a ranged read plans with is the store’s word until the final chunk has been
+decrypted. A store that cuts an object inside a chunk and reports the shorter size passes the
+length rules and every range that stays clear of the cut chunk. A range counted from the end of
+the value needs the final chunk first. Read the final chunk through <code>plan_final_chunk_read</code> once
+per object before the first range, or keep the length and a hash of the plaintext in a record
+you trust and compare the end of the final chunk’s <code>plaintext()</code> with it;</li>
+<li><code>DecryptingReader</code>, <code>DecryptingStream</code> and <code>decrypt_stream</code> yield the plaintext of a chunk as soon
+as the chunk is authentic, so a value cut or modified further on has already given its earlier
+bytes out when the error comes. Write to a place you can discard. A reader stopped before its clean end has
+authenticated the chunks it yielded and nothing of the length;</li>
+<li>the same three read their source to its end and decrypt the final chunk only then. Bytes after
+the value make its final chunk fail with <code>DECRYPT</code>, so a value inside a longer source goes
+through a source cut to its length, such as tokio’s <code>AsyncReadExt::take</code>, and a source that
+stays open after the value holds its final chunk back;</li>
+<li>an <code>EncryptingWriter</code> dropped before its shutdown leaves a value that no reader decrypts whole;</li>
+<li>a decryptor keeps the key derived for its value until it is dropped, and decrypts with it after
+a shred, a destroy or a compromised flag of its version. A decryptor cached across requests
+outlives them, so build one per request;</li>
+<li>an encryptor, and an <code>EncryptingWriter</code> or <code>EncryptingStream</code> over it, keeps the key derived for
+its value until it is dropped: a compromised flag or a destroy of its version does not stop an
+upload in progress;</li>
+<li><code>STREAM_IO</code> names a failure of the source or the sink of <code>encrypt_stream</code> or <code>decrypt_stream</code>,
+or of the source of an <code>EncryptingStream</code> or a <code>DecryptingStream</code>. The
+retry is the whole stream again from the start, with a new encryptor or a fresh read of the
+source;</li>
+<li>a streamed value is not an <code>Encrypted&lt;T, F&gt;</code>: it has no plaintext type and carries no signature
+or MAC. Origin or integrity that a party without the DEK can check is a detached <code>Signature&lt;T&gt;</code>
+or <code>Mac&lt;T&gt;</code> over a digest of the plaintext, see
+<a href="./signing.html">Signatures and MACs</a>;</li>
+<li>one DEK is an AES-256-GCM key for randomised values and the key of HMAC-SHA-512 for streamed
+values. A deployment that wants one key per primitive keeps a keyring for streamed values apart
+from the keyring of its fields;</li>
+<li>a sweep re-encrypts a streamed value whole: decrypt it under the version it names and encrypt it
+again under the active one. This release has no helper for that.</li>
+</ul>
+<p>The errors a streamed value adds are in <a href="./errors.html#codes">Error handling</a>.</p>
+<h2 id="format"><a class="header" href="#format">Format</a></h2>
+<p>A streamed value is one message of <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a>,
+Cobblestone-256: keys derived with HKDF-SHA-512 and chunks of AES-256-GCM. C2SP is the Community
+Cryptography Specification Project, a home for small specifications that come with test vectors.
+The prefixed form puts Tink’s output prefix, 5 bytes, in front and the envelope form <code>4 + w</code> bytes
+of the encrypted DEK, so an implementation of Cobblestone-256, such as the
+<a href="https://cryptography.io/en/latest/cobblestone/"><code>cryptography.cobblestone</code></a> module of
+pyca/cryptography, decrypts a prefixed value from offset 5 and an envelope-form value from offset
+<code>4 + w</code>, with the DEK. The Go package
+<a href="https://pkg.go.dev/filippo.io/cobblestone">filippo.io/cobblestone</a> implements Cobblestone-128
+only, on AES-128-GCM, and reads none of these values. The bytes, the length rules and the seeking
+rules are in <a href="./formats.html#streamed-values">Formats</a>.</p>
+<p>The library runs the 35 vectors of Project Wycheproof for the specification, in every form, on
+every backend, see
+<a href="https://github.com/C2SP/wycheproof/blob/b61843a9a5115bb758134b6a1f5d5e502d445342/testvectors_v1/c2sp_chunked_encryption_aes_256_gcm_test.json"><code>c2sp_chunked_encryption_aes_256_gcm_test.json</code></a>.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="beacons.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="signing.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="beacons.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="signing.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr-ef4e11c1.min.js"></script>
+        <script src="mark-09e88c2c.min.js"></script>
+        <script src="searcher-09f2665d.js"></script>
+
+        <script src="clipboard-1626706a.min.js"></script>
+        <script src="highlight-abc7f01d.js"></script>
+        <script src="book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

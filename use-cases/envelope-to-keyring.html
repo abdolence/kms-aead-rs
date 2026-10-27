@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,26 +181,56 @@
 <p>Values that kms-aead’s <code>KmsAeadEnvelope</code> wrote, per call or store-less, move to keyring values in
 five steps:</p>
 <ol>
-<li>the model gains <code>seal: SealMarker</code>, and every record without one reads as
-<code>SealMarker::ENVELOPE</code>: through <code>#[serde(default)]</code>, or a column default of its bytes,
+<li>the model gains <code>encryption_marker: EncryptionMarker</code>, and every record without one reads as
+<code>EncryptionMarker::ENVELOPE</code>: through <code>#[serde(default)]</code>, or a column default of its bytes,
 <code>'\x0100000000'</code>;</li>
 <li>the field keeps its stored bytes, whose layout the marker names: envelope values under
 <code>ENVELOPE</code>, epoch 0, and keyring values under any other marker, since the epochs of a keyring
 start at 1;</li>
-<li>reads go through the marker: <code>Keyring::decrypt_envelope_for_migration</code> opens an envelope value,
-with the AAD and the algorithm the application used for it, and <code>Keyring::decrypt</code> a keyring
-value;</li>
-<li>the sweep’s query, <code>seal &lt; $1</code> with the current marker, finds every envelope record too, and the
-re-seal seals it as keyring values through a sealer and writes the marker of the sealer’s
-record;</li>
+<li>reads go through the marker: <code>Keyring::decrypt_envelope_for_migration</code> decrypts an envelope
+value, with the AAD and the algorithm the application used for it, and <code>Keyring::decrypt</code> a
+keyring value;</li>
+<li>the sweep’s query, <code>encryption_marker &lt; $1</code> with the current marker, finds every envelope record
+too, and the re-encryption encrypts it as keyring values through an encryptor and writes the
+marker of the encryptor’s record;</li>
 <li>once no record holds <code>ENVELOPE</code>, the read path drops its envelope branch.</li>
 </ol>
 <p>A range query never matches a record whose marker is missing: Firestore skips a document without the
 field, and <code>&lt;</code> in SQL is never true on <code>NULL</code>. A PostgreSQL column added with a default holds it in
-every existing row. A BigQuery column holds <code>NULL</code> there until an <code>UPDATE</code> writes <code>ENVELOPE</code>, see
-<a href="../operations/sweeps-bigquery.html">BigQuery</a>. Firestore documents written before the marker get <code>ENVELOPE</code> written into
-them first, or the migration’s first sweep scans the whole collection and tests <code>doc.seal &lt; current</code>
-on each, since <code>#[serde(default)]</code> reads a missing marker as <code>ENVELOPE</code>.</p>
+every existing row:</p>
+<pre><code class="language-sql">ALTER TABLE users ADD COLUMN encryption_marker BYTEA NOT NULL DEFAULT '\x0100000000';
+CREATE INDEX users_encryption_marker ON users (encryption_marker);
+</code></pre>
+<p>A BigQuery column holds <code>NULL</code> in the rows already there until an <code>UPDATE</code> writes <code>ENVELOPE</code> into
+them:</p>
+<pre><code class="language-sql">ALTER TABLE users ADD COLUMN encryption_marker BYTES;
+ALTER TABLE users ALTER COLUMN encryption_marker SET DEFAULT b'\x01\x00\x00\x00\x00';
+UPDATE users SET encryption_marker = b'\x01\x00\x00\x00\x00' WHERE encryption_marker IS NULL;
+</code></pre>
+<p>The <code>UPDATE</code> in SQL of <a href="../operations/sweeps-bigquery.html">Sweeps on BigQuery</a> does not decrypt an
+envelope value, so its <code>WHERE</code> leaves the envelope rows out with
+<code>AND encryption_marker &gt; b'\x01\x00\x00\x00\x00'</code>, and they go through the Rust sweep.</p>
+<p>Firestore documents written before the marker get <code>ENVELOPE</code> written into them first, or the
+migration’s first sweep scans the whole collection and tests <code>doc.encryption_marker &lt; current</code> on
+each, since <code>#[serde(default)]</code> reads a missing marker as <code>ENVELOPE</code>.</p>
+<p>The sweep’s re-encryption branches on the marker. An envelope value is decrypted with the algorithm
+the application used for it and encrypted as a keyring value; a keyring value goes through
+<code>Encryptor::reencrypt</code>, and <code>ReencryptOutcome::from(&amp;reencrypted)</code> turns its <code>Option</code> into the
+outcome. An envelope value names no key version, so its outcome has <code>from_compromised: false</code>:</p>
+<pre><code class="language-rust ignore">let (email, outcome) = match StoredEmail::try_from(row)? {
+    StoredEmail::Envelope(value) =&gt; {
+        let email: Email = keyring
+            .decrypt_envelope_for_migration(&amp;envelope_aad(user), &amp;value, ENVELOPE_ALGORITHM)
+            .await?;
+        let outcome = ReencryptOutcome::Reencrypted { from_compromised: false };
+        (encryptor.encrypt(&amp;aad, &amp;email).await?, outcome)
+    }
+    StoredEmail::Keyring { value, .. } =&gt; {
+        let reencrypted = encryptor.reencrypt(&amp;aad, &amp;value).await?;
+        let outcome = ReencryptOutcome::from(&amp;reencrypted);
+        (reencrypted.map_or(value, |reencrypted| reencrypted.value), outcome)
+    }
+};</code></pre>
 <p>The keyring’s provider decrypts the envelope values, so they must have been encrypted by the
 keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout kms-aead 0.30 writes.
 Values written by kms-aead 0.29 or earlier are upgraded in place first, with
@@ -212,7 +242,7 @@ keyring’s KEK. It knows no key version, and so no compromised flag and no dest
 branch in the read path for the migration only.</p>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/migrate.rs">here</a>,
-run it with <code>cargo run -p kms-aead-keyring --example migrate --features ring,admin,serde</code>.</p>
+run it with <code>cargo run -p kms-aead-keyring --example migrate --features ring,admin</code>.</p>
 
                     </main>
 

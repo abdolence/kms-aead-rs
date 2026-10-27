@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -258,10 +258,84 @@ version. A check inside that window passes on DEKs that are still under the old 
 <a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>: an enabled
 version is available at once, so enabling the old version again after a failed check takes effect
 immediately.</p>
+<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<p>A CryptoKey with the purpose <code>ASYMMETRIC_DECRYPT</code> and an algorithm <code>RSA_DECRYPT_OAEP_2048_SHA256</code>,
+<code>RSA_DECRYPT_OAEP_3072_SHA256</code> or <code>RSA_DECRYPT_OAEP_4096_SHA256</code> is an asymmetric KEK, see
+<a href="../asymmetric-kek.html">Asymmetric KEKs</a>. 3072 bits is the size Cloud KMS marks as recommended.
+Asymmetric keys have no primary version and no automatic rotation, so a version is always named:</p>
+<ul>
+<li><code>GcpKmsProvider::public_key(&amp;version)</code> sends <code>GetPublicKey</code> for the CryptoKeyVersion and returns
+the public key with the version the response names as its KEK version, for the producers. It
+fails with <code>ASYMMETRIC_KEK_PUBLIC_KEY</code> for a version whose algorithm is not
+<code>RSA_DECRYPT_OAEP_2048_SHA256</code>, <code>RSA_DECRYPT_OAEP_3072_SHA256</code> or <code>RSA_DECRYPT_OAEP_4096_SHA256</code>;</li>
+<li>a decryption of a <code>0x02</code> encrypted DEK sends <code>AsymmetricDecrypt</code> on
+<code>&lt;key&gt;/cryptoKeyVersions/&lt;version&gt;</code>, with the RSA block as <code>ciphertext</code>. The encrypted DEK names
+the version, as a symmetric ciphertext does. The request carries no CRC32C checksum fields: a
+corrupted DEK fails the value’s AEAD;</li>
+<li>the principal of a reader needs <code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in
+<code>roles/cloudkms.cryptoKeyDecrypter</code>, and the administration also
+<code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. Nobody needs
+<code>useToEncrypt</code>.</li>
+</ul>
+<p>An asymmetric decryption costs more of the quota than a symmetric one, see
+<a href="../asymmetric-kek.html#keyrings-under-an-asymmetric-kek">Keyrings under an asymmetric KEK</a>.</p>
+<h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
+<p><code>GcpKmsSigningProvider</code> signs with one CryptoKeyVersion of a key with the purpose <code>ASYMMETRIC_SIGN</code>,
+see <a href="../signing.html">Signatures and MACs</a>. <code>GcpKmsSigningKeyRef</code> names the key as <code>GcpKmsKeyRef</code>
+does, and adds the version, the <code>N</code> of <code>cryptoKeyVersions/N</code>, and the algorithm: <code>Ed25519</code> for an
+<code>EC_SIGN_ED25519</code> version and <code>EcdsaP256Sha256</code> for <code>EC_SIGN_P256_SHA256</code>. Asymmetric keys have no
+primary version, so a signer always names one.</p>
+<pre><code class="language-rust no_run">use std::num::NonZeroU32;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::PublicKeyFormat;
+use kms_aead::providers::{GcpKmsSigningKeyRef, GcpKmsSigningProvider};
+use kms_aead::signing::{Signer, SigningAlgorithm};
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let key_ref = GcpKmsSigningKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-signing-key".to_string(),
+    NonZeroU32::MIN,
+    SigningAlgorithm::EcdsaP256Sha256,
+);
+
+let provider = GcpKmsSigningProvider::new(&amp;key_ref).await?;
+let signer = Signer::&lt;_, AwsLc&gt;::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+<span class="boring">let _ = jwk;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The provider authenticates as <code>GcpKmsProvider</code> does, and <code>GcpKmsSigningProvider::with_client</code> takes
+a client the application built itself. Creating the provider sends no request; <code>Signer::new</code> sends
+the first one. Cloud KMS lists <code>EC_SIGN_ED25519</code> under the software protection level only, so a key
+at the HSM protection level signs with P-256.</p>
+<ul>
+<li><code>sign</code> sends <code>AsymmetricSign</code> with the pre-image as <code>data</code> for Ed25519, and the SHA-256 of the
+pre-image as <code>digest.sha256</code> for P-256. Each carries its CRC32C checksum, <code>dataCrc32c</code> or
+<code>digestCrc32c</code>;</li>
+<li>a response fails with <code>SIGNATURE_ENCODING</code> when <code>verifiedDataCrc32c</code> or <code>verifiedDigestCrc32c</code> is
+false, when <code>signatureCrc32c</code> is missing or does not match the signature, or when the signature
+is not 64 bytes (Ed25519) or strict DER (P-256), which is converted to <code>r || s</code>. A <code>name</code> other
+than the configured version fails with <code>SIGNING_KEY_MISMATCH</code>;</li>
+<li><code>verifying_key</code> sends <code>GetPublicKey</code> and parses <code>pem</code>. A key of another <code>algorithm</code> than the
+configured one fails with <code>SIGNING_ALGORITHM_MISMATCH</code>, and a <code>pem</code> that does not parse with
+<code>INVALID_PUBLIC_KEY</code>;</li>
+<li>the principal needs <code>cloudkms.cryptoKeyVersions.useToSign</code> and
+<code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.signerVerifier</code>.
+<code>roles/cloudkms.signer</code> alone lacks <code>viewPublicKey</code>.</li>
+</ul>
+<p>A rotation is a new CryptoKeyVersion that a new signer names, see
+<a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>The code of a failed KMS call is the gRPC status code, such as <code>PermissionDenied</code> or <code>NotFound</code>.
 Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in
-<a href="../errors.html#retries">Retries</a>.</p>
+<a href="../errors.html#retries">Retries</a>. <code>GcpKmsSigningProvider</code> returns the same codes, with a
+<code>SignatureError</code> where the encryption provider returns an <code>EncryptionError</code>.</p>
 
                     </main>
 

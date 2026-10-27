@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-e60f6dae.js";
+            window.path_to_searchindex_js = "../searchindex-0a86deed.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-7da9b6c9.js"></script>
+        <script src="../toc-5b436d00.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -193,20 +193,20 @@ entry point, with the cases kms-aead alone adds.</p>
 <tr><td>A refused record moving backwards, logged at <code>ERROR</code>, or a version the job did not create</td><td><a href="../operations/runbook.html#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
 <tr><td>A keyring record was deleted or corrupted</td><td><a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
 <tr><td>The KMS is down</td><td><a href="../operations/runbook.html#a-kms-outage">A KMS outage</a></td></tr>
-<tr><td>A tenant’s values must become unreadable</td><td><a href="#crypto-shredding">Crypto-shredding</a></td></tr>
+<tr><td>A tenant’s values must become unreadable</td><td><a href="#crypto-shredding">Crypto-shredding</a>, and <a href="#shredding-a-tenant-with-dangerously_shred"><code>dangerously_shred()</code></a> under a shared KEK</td></tr>
 </tbody>
 </table>
 </div>
 <h2 id="a-leaked-dek-of-envelope-values"><a class="header" href="#a-leaked-dek-of-envelope-values">A leaked DEK of envelope values</a></h2>
-<p>A DEK that leaked opens every value sealed under it, and a KEK rotation does not change that. With
-a per-call envelope it is the DEK of one value, and with store-less DEK reuse of every value the
-writer sealed until it renewed the DEK. The values are re-sealed under new DEKs, as in
+<p>A DEK that leaked decrypts every value encrypted under it, and a KEK rotation does not change that.
+With a per-call envelope it is the DEK of one value, and with store-less DEK reuse of every value
+the writer encrypted until it renewed the DEK. The values are re-encrypted under new DEKs, as in
 <a href="./rotation.html#deks">With kms-aead alone</a>, and the DEK is invalidated in every DEK cache that holds
 it.</p>
 <p>A DEK the application keeps itself, such as the key of <a href="../envelope-encryption.html#one-fixed-key">One fixed key</a>
 or a beacon key, is replaced by a key under a new key id, and the values or beacons under the old
-one are sealed or computed again.</p>
-<p>Backups, point-in-time recovery and data exports still hold the values the leaked DEK opens:
+one are encrypted or computed again.</p>
+<p>Backups, point-in-time recovery and data exports still hold the values the leaked DEK decrypts:
 treat them as exposed.</p>
 <h2 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h2>
 <p>A scope’s values become unreadable once nothing can decrypt their DEKs. With kms-aead alone, the
@@ -229,11 +229,32 @@ the key, once its configuration sets <code>deletion_allowed</code>, deletes ever
 <a href="../providers/local.html#key-versions-and-rotation">Local KMS</a>.</li>
 </ul>
 <p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
-Vault needs a key per scope. With a keyring, a shared KEK has a second route,
-<code>dangerously_destroy_all_versions</code>, which leaves the keys in every backup of the record and in
-every keyset exported from it, see <a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>.
-A deployment that needs shredding guarantees uses a KEK per scope, see
-<a href="./keyring-per-tenant.html">A keyring per tenant</a>.</p>
+Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>:
+it destroys every version of the keyring and deletes its record from the store, with the earlier
+versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
+backup, and in every keyset exported from the keyring, see
+<a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>. A deployment that needs shredding
+guarantees uses a KEK per scope, see <a href="./keyring-per-tenant.html">A keyring per tenant</a>.</p>
+<h3 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h3>
+<p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
+destroys every version and deletes the record from the store. The call can be repeated after a
+failure, and returns <code>Ok</code> on a keyring that is gone already. The keyring id is free for a new
+keyring afterwards.</p>
+<ul>
+<li>Every process that holds the keyring takes the deletion at its next revalidation, within seconds
+with push. Its handles fail with <code>NoActiveVersion</code> for a write and <code>KeyVersionDestroyed</code> for a
+read, and the plaintext DEK leaves its memory with that revalidation;</li>
+<li>a copy of the record from before the shred is refused by a process that took the deletion, with
+<code>RecordRegressed</code> and an <code>ERROR</code>, because it revives versions the process holds destroyed. A
+store writer who restores an old record gains nothing against that process;</li>
+<li>after a deliberate restore, such as one that undoes an accidental deletion, restart every process
+that took the deletion. A process that starts after the restore takes the record;</li>
+<li><code>dangerously_shred()</code> leaves the store’s backups, its history and every exported keyset where
+they are, and the KMS untouched. They still decrypt while a KEK version that encrypted their DEKs
+exists, see <a href="../operations/runbook.html#what-survives-a-shred">What survives a shred</a>.</li>
+</ul>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/shred.rs">here</a>.</p>
 
                     </main>
 
