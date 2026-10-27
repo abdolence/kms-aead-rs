@@ -7,17 +7,21 @@ use std::str::FromStr;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use jiff::Timestamp;
-use kms_aead::providers::KekVersion;
-use kms_aead::{EncryptedDataEncryptionKey, KekProvider, KekRef};
+use kms_aead::providers::KmsKeyVersion;
+use kms_aead::signing::Signature;
+use kms_aead::{EncryptedDataEncryptionKey, KekRef, KmsProvider};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
+use super::canonical::{canonical_json, CanonicalError};
 use super::{
     Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, RetainedDek, VersionState,
 };
 use crate::errors::{KeyringError, KeyringResult, RecordInvalidReason};
-use crate::purpose::is_reserved;
-use crate::sweep::{SealMarker, SealRange};
+use crate::purpose::is_reserved_key_id;
+use crate::sweep::{EncryptionMarker, ReencryptRange};
 use crate::{KeyId, Purpose};
 
 /// The largest document a reader parses. A record the crate writes takes from about 360 bytes per
@@ -25,6 +29,9 @@ use crate::{KeyId, Purpose};
 /// a thousand versions or more.
 pub(crate) const MAX_RECORD_DOCUMENT_LEN: usize = 1 << 20;
 const RECORD_SCHEMA_VERSION: u32 = 1;
+/// The member of the record's document that holds its signature, the one member the canonical
+/// document leaves out.
+const SIGNATURE_MEMBER: &str = "signature";
 
 /// The JSON document of a record. Its fields are primitives, so that every rule of the record
 /// is checked once, in [`KeyringRecord::from_json`], with a reason naming the rule.
@@ -34,10 +41,16 @@ struct StoredRecord {
     id: String,
     kek: StoredKek,
     algorithms: StoredAlgorithms,
-    seal_epoch: u32,
+    /// Named `seal_epoch` in the stored document, the key 0.30 writes and reads.
+    #[serde(rename = "seal_epoch")]
+    reencrypt_epoch: u32,
     versions: Vec<StoredVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
+    /// The standard base64 of the detached signature's bytes; absent from an unsigned record,
+    /// which 0.30 writes and reads.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    signature: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +64,7 @@ struct StoredAlgorithms {
     randomized: String,
     deterministic: Option<String>,
     beacon: Option<String>,
+    mac: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -59,8 +73,10 @@ struct StoredVersion {
     algorithm: String,
     state: String,
     compromised: Option<StoredCompromise>,
-    /// The epochs of the version's seal range, `None` for a version that was never active.
-    seal_epochs: Option<StoredSealEpochs>,
+    /// The epochs of the version's re-encryption range, `None` for a version that was never active.
+    /// Named `seal_epochs` in the stored document, the key 0.30 writes and reads.
+    #[serde(rename = "seal_epochs")]
+    reencrypt_epochs: Option<StoredReencryptEpochs>,
     created_at: Timestamp,
     state_changed_at: Timestamp,
     /// The standard base64 of the encrypted DEK's bytes, as the provider returned them; `None`
@@ -78,7 +94,7 @@ struct StoredCompromise {
 }
 
 #[derive(Serialize, Deserialize)]
-struct StoredSealEpochs {
+struct StoredReencryptEpochs {
     start: u32,
     /// `None` while the range is open-ended.
     end: Option<u32>,
@@ -97,16 +113,18 @@ impl From<&KeyringRecord> for StoredRecord {
                     at: compromise.at,
                     note: compromise.note.clone(),
                 }),
-                seal_epochs: version.seal_range().map(|range| StoredSealEpochs {
-                    start: range.start().epoch(),
-                    end: range.end().map(SealMarker::epoch),
-                }),
+                reencrypt_epochs: version
+                    .reencrypt_range()
+                    .map(|range| StoredReencryptEpochs {
+                        start: range.start().epoch(),
+                        end: range.end().map(EncryptionMarker::epoch),
+                    }),
                 created_at: version.created_at,
                 state_changed_at: version.state_changed_at,
                 encrypted_dek: version
                     .encrypted_dek()
                     .map(|encrypted_dek| STANDARD.encode(encrypted_dek.value())),
-                kek_version: version.kek_version().map(KekVersion::to_string),
+                kek_version: version.kek_version().map(KmsKeyVersion::to_string),
             })
             .collect();
         Self {
@@ -126,17 +144,23 @@ impl From<&KeyringRecord> for StoredRecord {
                     .algorithms
                     .beacon
                     .map(|algorithm| algorithm.to_string()),
+                mac: record.algorithms.mac.map(|algorithm| algorithm.to_string()),
             },
-            seal_epoch: record.seal_marker.epoch(),
+            reencrypt_epoch: record.encryption_marker.epoch(),
             versions,
             created_at: record.created_at,
             updated_at: record.updated_at,
+            signature: record
+                .signature
+                .as_ref()
+                .map(|signature| STANDARD.encode(signature.value())),
         }
     }
 }
 
 impl KeyringRecord {
-    /// The record's JSON document, the stored form every store keeps.
+    /// The record's JSON document, the stored form every store keeps, with the record's signature
+    /// in its `signature` member when it carries one.
     ///
     /// # Errors
     ///
@@ -147,11 +171,14 @@ impl KeyringRecord {
     }
 
     /// Parses the JSON document a store holds for the keyring `id`, and checks it: at most
-    /// 1 MiB, the record of `id`, and every invariant of [`KeyringRecord`].
+    /// 1 MiB, the record of `id`, and every invariant of [`KeyringRecord`]. It verifies nothing:
+    /// it keeps the record's signature and the SHA-256 of its canonical document, which the
+    /// registry verifies before it uses the record. Every store calls it.
     ///
     /// # Errors
     ///
-    /// [`KeyringError::RecordInvalid`] with the first cap or invariant the document breaks.
+    /// [`KeyringError::RecordInvalid`] with the first cap or invariant the document breaks, a
+    /// `signature` member that is not the standard base64 of a detached signature among them.
     pub fn from_json(id: &KeyringId, document: &[u8]) -> KeyringResult<Self> {
         if document.len() > MAX_RECORD_DOCUMENT_LEN {
             return Err(KeyringError::record_invalid(
@@ -159,9 +186,27 @@ impl KeyringRecord {
                 RecordInvalidReason::TooLarge,
             ));
         }
-        let stored: StoredRecord = serde_json::from_slice(document)
+        let mut parsed: Value = serde_json::from_slice(document)
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         let invalid = |reason| KeyringError::record_invalid(id, reason);
+        let signature = match parsed
+            .as_object_mut()
+            .and_then(|members| members.remove(SIGNATURE_MEMBER))
+        {
+            None => None,
+            Some(Value::String(encoded)) => Some(
+                STANDARD
+                    .decode(encoded)
+                    .ok()
+                    .and_then(|bytes| Signature::try_from(bytes).ok())
+                    .ok_or(invalid(RecordInvalidReason::MalformedSignature))?,
+            ),
+            Some(_) => return Err(invalid(RecordInvalidReason::MalformedSignature)),
+        };
+        let canonical_digest =
+            canonical_digest(&parsed).map_err(|_| KeyringError::malformed(id, None))?;
+        let stored: StoredRecord = serde_json::from_value(parsed)
+            .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         if stored.schema != RECORD_SCHEMA_VERSION {
             return Err(invalid(RecordInvalidReason::UnsupportedSchema(
                 stored.schema,
@@ -185,6 +230,11 @@ impl KeyringRecord {
                 Some(Ok(KeyAlgorithm::Beacon(algorithm))) => Some(algorithm),
                 Some(_) => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
             },
+            mac: match stored.algorithms.mac.as_deref().map(str::parse) {
+                None => None,
+                Some(Ok(KeyAlgorithm::Mac(algorithm))) => Some(algorithm),
+                Some(_) => return Err(invalid(RecordInvalidReason::UnknownAlgorithm(None))),
+            },
         };
         let versions = stored
             .versions
@@ -192,47 +242,52 @@ impl KeyringRecord {
             .map(KeyVersion::try_from)
             .collect::<Result<Vec<_>, _>>()
             .map_err(invalid)?;
-        if stored.seal_epoch == 0 {
-            return Err(invalid(RecordInvalidReason::SealEpochOutOfRange));
+        if stored.reencrypt_epoch == 0 {
+            return Err(invalid(RecordInvalidReason::ReencryptEpochOutOfRange));
         }
-        let seal_marker = SealMarker::of_epoch(stored.seal_epoch);
+        let encryption_marker = EncryptionMarker::of_epoch(stored.reencrypt_epoch);
         if let Some(version) = versions.iter().find(|version| {
-            version.seal_range().is_some_and(|range| {
+            version.reencrypt_range().is_some_and(|range| {
                 let start = range.start();
-                start == SealMarker::ENVELOPE
-                    || start > seal_marker
+                start == EncryptionMarker::ENVELOPE
+                    || start > encryption_marker
                     || range
                         .end()
-                        .is_some_and(|end| end <= start || end > seal_marker)
+                        .is_some_and(|end| end <= start || end > encryption_marker)
             })
         }) {
-            return Err(invalid(RecordInvalidReason::SealRangeInvalid(
+            return Err(invalid(RecordInvalidReason::ReencryptRangeInvalid(
                 version.key_id,
             )));
         }
         let record = Self {
             id: id.clone(),
             kek: KekRef::new(
-                KekProvider::from_str(&stored.kek.provider).unwrap_or_else(|never| match never {}),
+                KmsProvider::from_str(&stored.kek.provider).unwrap_or_else(|never| match never {}),
                 stored.kek.key,
             ),
             algorithms,
-            seal_marker,
+            encryption_marker,
             versions,
             created_at: stored.created_at,
             updated_at: stored.updated_at,
+            signature,
+            canonical_digest,
         };
         record.check_versions().map_err(invalid)?;
         Ok(record)
     }
 
     /// The rules across versions: unique key ids, increasing within a purpose in creation
-    /// order, and at most one active and one pending version per purpose.
+    /// order, no encrypted DEK under two versions, and at most one active and one pending
+    /// version per purpose.
     fn check_versions(&self) -> Result<(), RecordInvalidReason> {
         let mut seen = HashSet::new();
+        let mut seen_deks = HashSet::new();
         let mut last_randomized = None;
         let mut last_deterministic = None;
         let mut last_beacon = None;
+        let mut last_mac = None;
         for version in &self.versions {
             let key_id = version.key_id;
             if !seen.insert(key_id) {
@@ -246,11 +301,17 @@ impl KeyringRecord {
                 Purpose::Randomized => &mut last_randomized,
                 Purpose::Deterministic => &mut last_deterministic,
                 Purpose::Beacon => &mut last_beacon,
+                Purpose::Mac => &mut last_mac,
             };
             if last.is_some_and(|last: KeyId| last.as_u32() > key_id.as_u32()) {
                 return Err(RecordInvalidReason::OrdinalOrder(key_id));
             }
             *last = Some(key_id);
+            if let Some(encrypted_dek) = version.encrypted_dek() {
+                if !seen_deks.insert(encrypted_dek.value()) {
+                    return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
+                }
+            }
         }
         for purpose in Purpose::ALL {
             let in_state = |state| {
@@ -272,13 +333,18 @@ impl KeyringRecord {
     }
 }
 
+/// The SHA-256 of RFC 8785's canonical form of `document`.
+fn canonical_digest(document: &Value) -> Result<[u8; 32], CanonicalError> {
+    canonical_json(document).map(|canonical| Sha256::digest(canonical).into())
+}
+
 impl TryFrom<StoredVersion> for KeyVersion {
     type Error = RecordInvalidReason;
 
     /// Checks one version on its own; the checks across versions are the record's.
     fn try_from(stored: StoredVersion) -> Result<Self, RecordInvalidReason> {
         let key_id = KeyId::new(stored.key_id);
-        if is_reserved(key_id) {
+        if is_reserved_key_id(key_id) {
             return Err(RecordInvalidReason::ReservedKeyId);
         }
         let algorithm: KeyAlgorithm = stored
@@ -299,7 +365,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
         let kek_version = stored
             .kek_version
             .map(|kek_version| {
-                KekVersion::try_from(kek_version)
+                KmsKeyVersion::try_from(kek_version)
                     .map_err(|_| RecordInvalidReason::MalformedKekVersion(key_id))
             })
             .transpose()?;
@@ -320,16 +386,16 @@ impl TryFrom<StoredVersion> for KeyVersion {
         let compromised = stored
             .compromised
             .map(|compromise| Compromise::new(compromise.at, compromise.note));
-        let seal_range = stored.seal_epochs.map(|epochs| {
-            SealRange::new(
-                SealMarker::of_epoch(epochs.start),
-                epochs.end.map(SealMarker::of_epoch),
+        let reencrypt_range = stored.reencrypt_epochs.map(|epochs| {
+            ReencryptRange::new(
+                EncryptionMarker::of_epoch(epochs.start),
+                epochs.end.map(EncryptionMarker::of_epoch),
             )
         });
         let state = match (kind, encrypted_dek) {
             (KeyVersionState::Destroyed, None) => VersionState::Destroyed {
                 compromised,
-                seal_range,
+                reencrypt_range,
             },
             (KeyVersionState::Destroyed, Some(_)) => {
                 return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
@@ -338,31 +404,33 @@ impl TryFrom<StoredVersion> for KeyVersion {
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedActive(key_id))
             }
-            (KeyVersionState::Active, Some(encrypted_dek)) => match seal_range {
+            (KeyVersionState::Active, Some(encrypted_dek)) => match reencrypt_range {
                 Some(range) if range.end().is_none() => VersionState::Active {
                     encrypted_dek,
-                    seal_start: range.start(),
+                    reencrypt_start: range.start(),
                 },
-                _ => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
+                _ => return Err(RecordInvalidReason::ReencryptRangeInvalid(key_id)),
             },
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
                 return Err(RecordInvalidReason::CompromisedPending(key_id))
             }
-            (KeyVersionState::Pending, Some(encrypted_dek)) => match seal_range {
+            (KeyVersionState::Pending, Some(encrypted_dek)) => match reencrypt_range {
                 None => VersionState::Pending(encrypted_dek),
-                Some(_) => return Err(RecordInvalidReason::SealRangeInvalid(key_id)),
+                Some(_) => return Err(RecordInvalidReason::ReencryptRangeInvalid(key_id)),
             },
             (KeyVersionState::DecryptOnly, Some(encrypted_dek)) => {
                 VersionState::DecryptOnly(RetainedDek {
                     encrypted_dek,
                     compromised,
-                    seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
+                    reencrypt_range: reencrypt_range
+                        .ok_or(RecordInvalidReason::ReencryptRangeInvalid(key_id))?,
                 })
             }
             (KeyVersionState::Retired, Some(encrypted_dek)) => VersionState::Retired(RetainedDek {
                 encrypted_dek,
                 compromised,
-                seal_range: seal_range.ok_or(RecordInvalidReason::SealRangeInvalid(key_id))?,
+                reencrypt_range: reencrypt_range
+                    .ok_or(RecordInvalidReason::ReencryptRangeInvalid(key_id))?,
             }),
         };
         Ok(Self {

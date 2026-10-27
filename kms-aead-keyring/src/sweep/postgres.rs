@@ -3,10 +3,10 @@ use std::error::Error;
 use bytes::BytesMut;
 use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
 
-use super::SealMarker;
+use super::EncryptionMarker;
 
 /// As `BYTEA`.
-impl ToSql for SealMarker {
+impl ToSql for EncryptionMarker {
     fn to_sql(
         &self,
         ty: &Type,
@@ -23,9 +23,9 @@ impl ToSql for SealMarker {
 }
 
 /// From `BYTEA`, checked as `TryFrom<Vec<u8>>` checks the bytes.
-impl<'a> FromSql<'a> for SealMarker {
+impl<'a> FromSql<'a> for EncryptionMarker {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
-        Ok(SealMarker::try_from(Vec::<u8>::from_sql(ty, raw)?)?)
+        Ok(EncryptionMarker::try_from(Vec::<u8>::from_sql(ty, raw)?)?)
     }
 
     fn accepts(ty: &Type) -> bool {
@@ -44,17 +44,17 @@ mod tests {
     #[test]
     fn bytea_holds_the_marker_bytes_and_is_read_through_the_marker_check(
     ) -> Result<(), Box<dyn Error + Sync + Send>> {
-        let marker = SealMarker::of_epoch(258);
+        let marker = EncryptionMarker::of_epoch(258);
         let mut written = BytesMut::new();
 
         marker.to_sql(&Type::BYTEA, &mut written)?;
 
         assert_eq!(written.as_ref(), [0x01, 0, 0, 1, 2]);
-        assert_eq!(SealMarker::from_sql(&Type::BYTEA, &written)?, marker);
-        let malformed = SealMarker::from_sql(&Type::BYTEA, &[0x02, 0, 0, 1, 2]);
+        assert_eq!(EncryptionMarker::from_sql(&Type::BYTEA, &written)?, marker);
+        let malformed = EncryptionMarker::from_sql(&Type::BYTEA, &[0x02, 0, 0, 1, 2]);
         assert!(malformed.is_err_and(|error| matches!(
             error.downcast_ref::<KeyringError>(),
-            Some(KeyringError::InvalidSealMarker)
+            Some(KeyringError::InvalidEncryptionMarker)
         )));
         Ok(())
     }
@@ -69,25 +69,28 @@ mod tests {
         client
             .batch_execute(
                 "CREATE TEMPORARY TABLE users (id TEXT PRIMARY KEY, \
-                 seal BYTEA NOT NULL DEFAULT '\\x0100000000')",
+                 encryption_marker BYTEA NOT NULL DEFAULT '\\x0100000000')",
             )
             .await?;
         for epoch in [65_536_u32, 3, 0, u32::MAX, 255, 256, 1] {
             client
                 .execute(
-                    "INSERT INTO users (id, seal) VALUES ($1, $2)",
-                    &[&format!("epoch-{epoch}"), &SealMarker::of_epoch(epoch)],
+                    "INSERT INTO users (id, encryption_marker) VALUES ($1, $2)",
+                    &[
+                        &format!("epoch-{epoch}"),
+                        &EncryptionMarker::of_epoch(epoch),
+                    ],
                 )
                 .await?;
         }
         client
-            .execute("INSERT INTO users (id) VALUES ('unsealed')", &[])
+            .execute("INSERT INTO users (id) VALUES ('unmarked')", &[])
             .await?;
 
         let behind: Vec<String> = client
             .query(
-                "SELECT id FROM users WHERE seal < $1 ORDER BY seal, id",
-                &[&SealMarker::of_epoch(256)],
+                "SELECT id FROM users WHERE encryption_marker < $1 ORDER BY encryption_marker, id",
+                &[&EncryptionMarker::of_epoch(256)],
             )
             .await?
             .iter()
@@ -95,13 +98,16 @@ mod tests {
             .collect::<Result<_, _>>()?;
         assert_eq!(
             behind,
-            ["epoch-0", "unsealed", "epoch-1", "epoch-3", "epoch-255"]
+            ["epoch-0", "unmarked", "epoch-1", "epoch-3", "epoch-255"]
         );
-        let unsealed: SealMarker = client
-            .query_one("SELECT seal FROM users WHERE id = 'unsealed'", &[])
+        let unmarked: EncryptionMarker = client
+            .query_one(
+                "SELECT encryption_marker FROM users WHERE id = 'unmarked'",
+                &[],
+            )
             .await?
             .try_get(0)?;
-        assert_eq!(unsealed, SealMarker::ENVELOPE);
+        assert_eq!(unmarked, EncryptionMarker::ENVELOPE);
         Ok(())
     }
 }

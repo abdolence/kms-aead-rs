@@ -10,7 +10,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use self::listener::Watches;
-use super::{KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap};
+use super::{
+    Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+};
 use crate::errors::{KeyringError, KeyringResult};
 use crate::{KeyringId, KeyringRecord};
 
@@ -20,13 +22,13 @@ mod listener;
 /// whose fields are those of the record's JSON document, and its revision is the document's
 /// update time. `Clone` shares the client and the listener.
 ///
-/// A create fails when the document exists, and an update carries the expected update time as
-/// its precondition, so that Firestore refuses a write over a record that changed since it was
-/// read. [`watch`](KeyringStore::watch) listens to the document through the store's listener,
-/// whose single listen stream to Firestore carries every keyring that the store and its clones
-/// watch. [`shutdown`](KeyringStore::shutdown) closes it, and so does dropping the store's last
-/// clone, which ends every watch. [`with_collection`](Self::with_collection) starts a listener of
-/// its own.
+/// A create fails when the document exists, and an update or a delete carries the expected
+/// update time as its precondition, so that Firestore refuses a write over a record that changed
+/// since it was read. [`watch`](KeyringStore::watch) listens to the document through the store's
+/// listener, whose single listen stream to Firestore carries every keyring that the store and its
+/// clones watch. [`shutdown`](KeyringStore::shutdown) closes it, and so does dropping the store's
+/// last clone, which ends every watch. [`with_collection`](Self::with_collection) starts a
+/// listener of its own.
 ///
 /// [`FirestoreDb`] and [`FirestoreTimestamp`] are firestore-rs's own types, a deliberate
 /// integration point: the application builds the client, with the project, the database and the
@@ -108,7 +110,7 @@ impl KeyringStore for FirestoreKeyringStore {
     async fn load(&self, id: &KeyringId) -> KeyringResult<Option<Stored<FirestoreTimestamp>>> {
         self.document(id, StoreOperation::Load)
             .await?
-            .map(|document| stored(id, &document, StoreOperation::Load))
+            .map(|document| stored_record_from_document(id, &document, StoreOperation::Load))
             .transpose()
     }
 
@@ -122,10 +124,12 @@ impl KeyringStore for FirestoreKeyringStore {
         let operation = StoreOperation::Revalidate;
         match self.document(id, operation).await? {
             None => Ok(Revalidation::Missing),
-            Some(document) if update_time(&document, operation)? == *known => {
+            Some(document) if revision_of_document(&document, operation)? == *known => {
                 Ok(Revalidation::Unchanged)
             }
-            Some(document) => stored(id, &document, operation).map(Revalidation::Changed),
+            Some(document) => {
+                stored_record_from_document(id, &document, operation).map(Revalidation::Changed)
+            }
         }
     }
 
@@ -162,7 +166,49 @@ impl KeyringStore for FirestoreKeyringStore {
         };
         match written {
             Ok(document) => Ok(Swap::Written(document.update_time)),
-            Err(error) => refused(error),
+            Err(error) if is_precondition_refusal(&error) => Ok(Swap::Conflict),
+            Err(error) => Err(KeyringError::store_caused_by(
+                FirestoreKeyringStore::KIND,
+                StoreOperation::CompareAndSwap,
+                Arc::new(error),
+            )),
+        }
+    }
+
+    /// Deletes the document, with the expected update time as the precondition. Firestore
+    /// refuses that precondition both for a document that changed and for one that is gone, so a
+    /// refused delete reads the document to tell the two apart.
+    ///
+    /// Firestore keeps no earlier version of a document, but serves a deleted one to reads at a
+    /// timestamp of the last hour, or of the point-in-time recovery window when the database has
+    /// it on, and its backups and exports hold whatever they copied: those are the operator's.
+    async fn delete(
+        &self,
+        id: &KeyringId,
+        expected: &FirestoreTimestamp,
+    ) -> KeyringResult<Deletion> {
+        let deleted = self
+            .db
+            .fluent()
+            .delete()
+            .from(self.collection.as_str())
+            .precondition(FirestoreWritePrecondition::UpdateTime((*expected).into()))
+            .document_id(id.as_str())
+            .execute()
+            .await;
+        match deleted {
+            Ok(()) => Ok(Deletion::Deleted),
+            Err(error) if is_precondition_refusal(&error) => {
+                match self.document(id, StoreOperation::Delete).await? {
+                    None => Ok(Deletion::Deleted),
+                    Some(_) => Ok(Deletion::Conflict),
+                }
+            }
+            Err(error) => Err(KeyringError::store_caused_by(
+                FirestoreKeyringStore::KIND,
+                StoreOperation::Delete,
+                Arc::new(error),
+            )),
         }
     }
 
@@ -200,7 +246,7 @@ impl KeyringStore for FirestoreKeyringStore {
     }
 }
 
-fn stored(
+fn stored_record_from_document(
     id: &KeyringId,
     document: &Document,
     operation: StoreOperation,
@@ -210,11 +256,11 @@ fn stored(
     let json = serde_json::to_vec(&fields).map_err(|_| KeyringError::malformed(id, None))?;
     Ok(Stored {
         record: KeyringRecord::from_json(id, &json)?,
-        revision: update_time(document, operation)?,
+        revision: revision_of_document(document, operation)?,
     })
 }
 
-fn update_time(
+fn revision_of_document(
     document: &Document,
     operation: StoreOperation,
 ) -> KeyringResult<FirestoreTimestamp> {
@@ -230,21 +276,13 @@ fn update_time(
     })
 }
 
-/// The outcome of a write Firestore refused: [`Swap::Conflict`] when the document exists on a
-/// create, or its update time is another or it is gone on an update.
-fn refused(error: FirestoreError) -> KeyringResult<Swap<FirestoreTimestamp>> {
-    match &error {
-        FirestoreError::DataConflictError(_) | FirestoreError::DataNotFoundError(_) => {
-            Ok(Swap::Conflict)
-        }
-        FirestoreError::DatabaseError(failed) if failed.public.code == "FailedPrecondition" => {
-            Ok(Swap::Conflict)
-        }
-        _ => Err(KeyringError::store_caused_by(
-            FirestoreKeyringStore::KIND,
-            StoreOperation::CompareAndSwap,
-            Arc::new(error),
-        )),
+/// Whether Firestore refused a write for its precondition: the document exists on a create, or
+/// its update time is another or it is gone on an update or a delete.
+fn is_precondition_refusal(error: &FirestoreError) -> bool {
+    match error {
+        FirestoreError::DataConflictError(_) | FirestoreError::DataNotFoundError(_) => true,
+        FirestoreError::DatabaseError(failed) => failed.public.code == "FailedPrecondition",
+        _ => false,
     }
 }
 
@@ -255,8 +293,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_failed_precondition_is_conflict() {
+    fn a_failed_precondition_is_refused() {
         let error = FirestoreError::from(Status::failed_precondition("the update time differs"));
-        assert!(matches!(refused(error), Ok(Swap::Conflict)));
+        assert!(is_precondition_refusal(&error));
     }
 }

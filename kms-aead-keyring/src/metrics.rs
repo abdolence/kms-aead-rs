@@ -12,17 +12,17 @@ use kms_aead::AeadAlgorithm;
 use crate::{KeyId, KeyVersion, Purpose};
 
 #[cfg(feature = "opentelemetry")]
-pub(crate) use recorded::{record_store_load, KeyringAttribute};
+pub(crate) use recorded::{record_refusal, record_store_load, KeyringAttribute};
 #[cfg(not(feature = "opentelemetry"))]
-pub(crate) use unrecorded::{record_store_load, KeyringAttribute};
+pub(crate) use unrecorded::{record_refusal, record_store_load, KeyringAttribute};
 
 /// The backend of every deterministic call: AES-SIV runs on RustCrypto whatever the keyring's
 /// backend.
 #[cfg(feature = "deterministic")]
 pub(crate) const DETERMINISTIC_BACKEND: &str = "rustcrypto";
 
-/// One keyring call: what its measurements carry. The call names the version it seals, opens or
-/// derives under with [`version`](Self::version) once it has found it.
+/// One keyring call: what its measurements carry. The call names the version it encrypts, decrypts
+/// or derives under with [`version`](Self::version) once it has found it.
 #[cfg_attr(
     not(feature = "opentelemetry"),
     expect(
@@ -58,7 +58,7 @@ impl<'k> KeyringCall<'k> {
         }
     }
 
-    /// The opening of an envelope value under `algorithm` for its migration into the keyring:
+    /// The decryption of an envelope value under `algorithm` for its migration into the keyring:
     /// a `decrypt` of no purpose and no version.
     pub(crate) fn envelope_migration(
         keyring: &'k KeyringAttribute,
@@ -118,32 +118,32 @@ mod recorded {
     }
 
     impl KeyringCall<'_> {
-        /// Runs `seal` and records the call, with the plaintext size of the value it seals.
-        pub(crate) async fn sealed<T, F: Format>(
+        /// Runs `encrypt` and records the call, with the plaintext size of the value it encrypts.
+        pub(crate) async fn encrypted<T, F: Format>(
             &self,
-            seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
+            encrypt: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
         ) -> KeyringResult<Encrypted<T, F>> {
             let started = Instant::now();
-            let sealed = seal.await;
-            self.record(started.elapsed(), &sealed, |sealed| {
-                Outcome::value(sealed, self.key_id.get().copied())
+            let encrypted = encrypt.await;
+            self.record(started.elapsed(), &encrypted, |encrypted| {
+                Outcome::value(encrypted, self.key_id.get().copied())
             });
-            sealed
+            encrypted
         }
 
-        /// Runs `open`, the opening of `value`, and records the call, with `value`'s plaintext
-        /// size.
-        pub(crate) async fn opened<T, F: Format, R>(
+        /// Runs `decrypt`, the decryption of `value`, and records the call, with `value`'s
+        /// plaintext size.
+        pub(crate) async fn decrypted<T, F: Format, R>(
             &self,
             value: &Encrypted<T, F>,
-            open: impl Future<Output = KeyringResult<R>>,
+            decrypt: impl Future<Output = KeyringResult<R>>,
         ) -> KeyringResult<R> {
             let started = Instant::now();
-            let opened = open.await;
-            self.record(started.elapsed(), &opened, |_| {
+            let decrypted = decrypt.await;
+            self.record(started.elapsed(), &decrypted, |_| {
                 Outcome::value(value, self.key_id.get().copied())
             });
-            opened
+            decrypted
         }
 
         /// Runs `operation` and records the call, which holds no value to count.
@@ -185,6 +185,12 @@ mod recorded {
                 outcome,
             );
         }
+    }
+
+    /// Counts one record of `keyring` refused because of its signature, with the refusal's
+    /// `code`.
+    pub(crate) fn record_refusal(keyring: &KeyringAttribute, code: &str) {
+        kms_aead::__instruments::record_refusal([keyring.0.clone()], code);
     }
 
     /// Records one read of `keyring`'s record from `store` for `reason` that took `elapsed`.
@@ -231,19 +237,19 @@ mod unrecorded {
     }
 
     impl KeyringCall<'_> {
-        pub(crate) async fn sealed<T, F: Format>(
+        pub(crate) async fn encrypted<T, F: Format>(
             &self,
-            seal: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
+            encrypt: impl Future<Output = KeyringResult<Encrypted<T, F>>>,
         ) -> KeyringResult<Encrypted<T, F>> {
-            seal.await
+            encrypt.await
         }
 
-        pub(crate) async fn opened<T, F: Format, R>(
+        pub(crate) async fn decrypted<T, F: Format, R>(
             &self,
             _: &Encrypted<T, F>,
-            open: impl Future<Output = KeyringResult<R>>,
+            decrypt: impl Future<Output = KeyringResult<R>>,
         ) -> KeyringResult<R> {
-            open.await
+            decrypt.await
         }
 
         pub(crate) async fn timed<R>(
@@ -262,4 +268,6 @@ mod unrecorded {
         _: &KeyringResult<T>,
     ) {
     }
+
+    pub(crate) fn record_refusal(_: &KeyringAttribute, _: &str) {}
 }

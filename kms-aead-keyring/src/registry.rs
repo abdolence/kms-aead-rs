@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use kms_aead::backends::AeadBackend;
 use kms_aead::cache::{DekCache, DekCacheOptions};
-use kms_aead::{KekRef, KmsAeadEncryptionProvider};
+#[cfg(feature = "admin")]
+use kms_aead::KmsAeadEncryptionProvider;
+use kms_aead::{KekRef, KmsAeadDecryptionProvider};
 use rsb_derive::Builder;
 use tokio::sync::{watch, OnceCell};
 use tokio::task::JoinSet;
@@ -17,8 +19,11 @@ use tokio::time::Instant;
 
 use crate::errors::{KekMismatchError, KeyringError, KeyringResult};
 use crate::record_cache::RecordCache;
+#[cfg(feature = "admin")]
+use crate::record_signing::{MaybeRecordSigner, NoRecordSigner, RecordSigner};
+use crate::record_signing::{RecordSignaturePolicy, RecordVerifier};
 use crate::spans;
-use crate::store::{join_until, KeyringStore, Stored};
+use crate::store::{join_tasks_until, KeyringStore, Stored};
 #[cfg(feature = "admin")]
 use crate::{store::Swap, KeyringAdmin, KeyringAlgorithms};
 use crate::{Keyring, KeyringId, KeyringOptions, KeyringRecord};
@@ -31,25 +36,29 @@ use crate::{Keyring, KeyringId, KeyringOptions, KeyringRecord};
 /// each keyring can have a KEK of its own, and `B` is the AEAD backend of every handle. With the
 /// `admin` feature, `create`, `open_or_create` and `admin` return a `KeyringAdmin` the same way.
 /// A second open of an open keyring, through any of them, reads nothing from the store and shares
-/// the first one's cached record and watch. A keyring stays open until the registry shuts down.
+/// the first one's cached record and watch. A keyring stays open until the registry shuts down,
+/// or until a read finds its record gone from the store: its handles then hold it with every
+/// version destroyed, and the next open reads the store again.
 ///
 /// Where the store has push, a task on the current tokio runtime follows the change signals of
 /// each open keyring. [`shutdown`](Self::shutdown) stops those tasks and the store's listener,
 /// and is awaited before the last clone is dropped: a registry dropped while it still runs them
 /// aborts them and logs a `WARN`.
 pub struct KeyringRegistry<S: KeyringStore, B> {
-    inner: Arc<RegistryInner<S>>,
+    inner: Arc<RegistryInner<S, B>>,
     backend: PhantomData<fn() -> B>,
 }
 
-struct RegistryInner<S: KeyringStore> {
+struct RegistryInner<S: KeyringStore, B> {
     store: Arc<S>,
+    /// The record verification of every keyring the registry opens, its keys parsed once.
+    verifier: Arc<RecordVerifier<B>>,
     dek_cache: DekCache,
     record_ttl: Duration,
     reload_min_interval: Duration,
     watch: bool,
     keyring_options: KeyringOptions,
-    keyrings: OpenKeyrings<S>,
+    keyrings: OpenKeyrings<S, B>,
     follow_tasks: FollowTasks,
     /// `true` once a shutdown has begun. The follow tasks stop on it, and no watch starts after
     /// it.
@@ -58,16 +67,35 @@ struct RegistryInner<S: KeyringStore> {
 
 /// The open keyrings by id. An empty cell is an open in progress, or one that failed and whose
 /// callers are about to remove it.
-struct OpenKeyrings<S: KeyringStore>(Mutex<HashMap<KeyringId, KeyringCell<S>>>);
+struct OpenKeyrings<S: KeyringStore, B>(Mutex<OpenState<S, B>>);
+
+/// What `OpenKeyrings` guards under one lock, so that a cell and the baseline of its id change
+/// together.
+struct OpenState<S: KeyringStore, B> {
+    cells: HashMap<KeyringId, KeyringCell<S, B>>,
+    /// The record of every keyring whose cache took the deletion and whose id no open has taken a
+    /// record for since: the baseline the next record of the id is checked against, see
+    /// `RecordCache::check_recreated`. It outlives a failed open, which removes the cell.
+    deleted: HashMap<KeyringId, Arc<KeyringRecord>>,
+}
 
 /// The record cache of one keyring, set by its first open that succeeds.
-type KeyringCell<S> = Arc<OnceCell<Arc<RecordCache<S>>>>;
+type KeyringCell<S, B> = Arc<OnceCell<Arc<RecordCache<S, B>>>>;
 
 /// Removes the cell of `id` from the map when it is dropped, if the cell is still empty and no
 /// other open holds it: failed and cancelled opens then leave no entry.
-struct ReleaseCell<'a, S: KeyringStore> {
-    keyrings: &'a OpenKeyrings<S>,
+struct ReleaseCell<'a, S: KeyringStore, B> {
+    keyrings: &'a OpenKeyrings<S, B>,
     id: &'a KeyringId,
+}
+
+impl<S: KeyringStore, B> Default for OpenState<S, B> {
+    fn default() -> Self {
+        Self {
+            cells: HashMap::new(),
+            deleted: HashMap::new(),
+        }
+    }
 }
 
 /// The follow tasks of the open keyrings, kept until they are joined.
@@ -109,6 +137,11 @@ pub struct KeyringRegistryOptions {
     /// [`Keyring::with_options`] replaces on one handle: [`KeyringOptions::new`] by default.
     #[default = "KeyringOptions::new()"]
     pub keyring: KeyringOptions,
+    /// How the registry treats the signatures of the records it reads:
+    /// [`RecordSignaturePolicy::VerifyIfSigned`] with no key by default, which reads an unsigned
+    /// record and refuses a signed one.
+    #[default = "RecordSignaturePolicy::default()"]
+    pub record_signatures: RecordSignaturePolicy,
 }
 
 impl KeyringRegistryOptions {
@@ -135,12 +168,14 @@ where
     B: AeadBackend,
 {
     /// The registry of the keyrings in `store`. It does no I/O: the first open of a keyring
-    /// reads the store.
+    /// reads the store. The verifying keys of `options.record_signatures` are parsed on `B`
+    /// here, once for every record the registry reads.
     ///
     /// # Errors
     ///
     /// [`KeyringError::KmsAead`] when `options.dek_cache` is `None` and kms-aead refuses the
-    /// DEK cache of its default options.
+    /// DEK cache of its default options, and with `INVALID_PUBLIC_KEY` when `B` refuses a
+    /// verifying key.
     pub fn new(store: S, options: KeyringRegistryOptions) -> KeyringResult<Self> {
         let dek_cache = match options.dek_cache {
             Some(dek_cache) => dek_cache,
@@ -149,12 +184,13 @@ where
         Ok(Self {
             inner: Arc::new(RegistryInner {
                 store: Arc::new(store),
+                verifier: Arc::new(RecordVerifier::new(options.record_signatures)?),
                 dek_cache,
                 record_ttl: options.record_ttl,
                 reload_min_interval: options.reload_min_interval,
                 watch: options.watch,
                 keyring_options: options.keyring,
-                keyrings: OpenKeyrings(Mutex::default()),
+                keyrings: OpenKeyrings(Mutex::new(OpenState::default())),
                 follow_tasks: FollowTasks::default(),
                 stop: watch::Sender::new(false),
             }),
@@ -173,13 +209,14 @@ where
     /// which leaves the keyring and its other handles as they were.
     pub async fn open<P>(&self, provider: P, id: KeyringId) -> KeyringResult<Keyring<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + 'static,
+        P: KmsAeadDecryptionProvider + 'static,
     {
         let store = &*self.inner.store;
+        let verifier = &*self.inner.verifier;
         let cache = self
             .inner
             .cache(&id, provider.kek(), async || {
-                RecordCache::read(store, &id)
+                RecordCache::read(store, verifier, &id)
                     .await?
                     .ok_or_else(|| KeyringError::RecordMissing(id.clone()))
             })
@@ -236,22 +273,27 @@ where
 {
     /// An administrative handle on the keyring `id` with `provider`, opened as
     /// [`open`](Self::open) opens it, and sharing its record cache and watch with the keyring's
-    /// [`Keyring`] handles.
+    /// [`Keyring`] handles. It signs nothing it writes until
+    /// [`KeyringAdmin::with_record_signer`] gives it a signer.
     ///
     /// # Errors
     ///
     /// As [`open`](Self::open).
     pub async fn admin<P>(&self, provider: P, id: KeyringId) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + 'static,
+        P: KmsAeadDecryptionProvider + 'static,
     {
-        Ok(KeyringAdmin::new(self.open(provider, id).await?))
+        Ok(KeyringAdmin::new(
+            self.open(provider, id).await?,
+            NoRecordSigner,
+        ))
     }
 
     /// Creates the record of the keyring `id`, with one active version of each purpose
     /// `algorithms` names an algorithm for, and returns an administrative handle on it. Encrypts
     /// one key per version and writes the record, so it needs the KMS's encrypt right and write
-    /// access to the store.
+    /// access to the store. The record is unsigned: [`create_signed`](Self::create_signed) signs
+    /// it from its first write.
     ///
     /// # Errors
     ///
@@ -267,31 +309,35 @@ where
         algorithms: KeyringAlgorithms,
     ) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + 'static,
+        P: KmsAeadDecryptionProvider + 'static,
     {
-        let store = &*self.inner.store;
-        let mut created = false;
-        let cache = self
-            .inner
-            .cache(&id, provider.kek(), async || {
-                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => {
-                        created = true;
-                        Ok(Stored { record, revision })
-                    }
-                    Swap::Conflict => Err(KeyringError::RecordExists(id.clone())),
-                }
-            })
-            .await?;
-        if !created {
-            return Err(KeyringError::RecordExists(id));
-        }
-        Ok(KeyringAdmin::new(Keyring::new(
-            cache,
-            provider,
-            self.inner.keyring_options.clone(),
-        )))
+        self.create_with(provider, NoRecordSigner, id, algorithms)
+            .await
+    }
+
+    /// [`create`](Self::create) with a record signer: the record is signed from its first write,
+    /// and the returned admin signs every record it writes with `signer`.
+    ///
+    /// # Errors
+    ///
+    /// As [`create`](Self::create), the signer's errors,
+    /// [`KeyringError::RecordSignatureInvalid`] when its signature does not verify under its own
+    /// key, before the record is written, and `SIGNING_KEY_UNKNOWN` when
+    /// `options.record_signatures` does not hold the signer's
+    /// [`verifying_key`](RecordSigner::verifying_key), before any call to the KMS or the store.
+    pub async fn create_signed<P, R>(
+        &self,
+        provider: P,
+        signer: R,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B, R>>
+    where
+        P: KmsAeadDecryptionProvider + 'static,
+        R: RecordSigner,
+    {
+        self.inner.verifier.ensure_trusts(signer.verifying_key())?;
+        self.create_with(provider, signer, id, algorithms).await
     }
 
     /// An administrative handle on the keyring `id` as [`admin`](Self::admin) returns, after
@@ -309,33 +355,132 @@ where
         algorithms: KeyringAlgorithms,
     ) -> KeyringResult<KeyringAdmin<S, P, B>>
     where
-        P: KmsAeadEncryptionProvider + 'static,
+        P: KmsAeadDecryptionProvider + 'static,
+    {
+        self.open_or_create_with(provider, NoRecordSigner, id, algorithms)
+            .await
+    }
+
+    /// [`open_or_create`](Self::open_or_create) with a record signer, which signs the record when
+    /// this call creates it, and every record the returned admin writes.
+    ///
+    /// # Errors
+    ///
+    /// As [`open_or_create`](Self::open_or_create) and [`create_signed`](Self::create_signed),
+    /// including the check of the signer's key.
+    pub async fn open_or_create_signed<P, R>(
+        &self,
+        provider: P,
+        signer: R,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B, R>>
+    where
+        P: KmsAeadDecryptionProvider + 'static,
+        R: RecordSigner,
+    {
+        self.inner.verifier.ensure_trusts(signer.verifying_key())?;
+        self.open_or_create_with(provider, signer, id, algorithms)
+            .await
+    }
+
+    /// `create`, signing the record with `signer` unless it is [`NoRecordSigner`].
+    async fn create_with<P, R>(
+        &self,
+        provider: P,
+        signer: R,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B, R>>
+    where
+        P: KmsAeadDecryptionProvider + 'static,
+        R: MaybeRecordSigner,
     {
         let store = &*self.inner.store;
+        let mut created = false;
         let cache = self
             .inner
             .cache(&id, provider.kek(), async || {
-                if let Some(stored) = RecordCache::read(store, &id).await? {
+                let record = self
+                    .new_record(&provider, &signer, &id, &algorithms)
+                    .await?;
+                match store.compare_and_swap(&record, None).await? {
+                    Swap::Written(revision) => {
+                        created = true;
+                        Ok(Stored { record, revision })
+                    }
+                    Swap::Conflict => Err(KeyringError::RecordExists(id.clone())),
+                }
+            })
+            .await?;
+        if !created {
+            return Err(KeyringError::RecordExists(id));
+        }
+        Ok(KeyringAdmin::new(
+            Keyring::new(cache, provider, self.inner.keyring_options.clone()),
+            signer,
+        ))
+    }
+
+    /// `open_or_create`, signing a record it creates with `signer` unless it is [`NoRecordSigner`].
+    async fn open_or_create_with<P, R>(
+        &self,
+        provider: P,
+        signer: R,
+        id: KeyringId,
+        algorithms: KeyringAlgorithms,
+    ) -> KeyringResult<KeyringAdmin<S, P, B, R>>
+    where
+        P: KmsAeadDecryptionProvider + 'static,
+        R: MaybeRecordSigner,
+    {
+        let store = &*self.inner.store;
+        let verifier = &*self.inner.verifier;
+        let cache = self
+            .inner
+            .cache(&id, provider.kek(), async || {
+                if let Some(stored) = RecordCache::read(store, verifier, &id).await? {
                     return Ok(stored);
                 }
-                let record = algorithms.new_record::<P, B>(id.clone(), &provider).await?;
+                let record = self
+                    .new_record(&provider, &signer, &id, &algorithms)
+                    .await?;
                 match store.compare_and_swap(&record, None).await? {
                     Swap::Written(revision) => Ok(Stored { record, revision }),
-                    Swap::Conflict => RecordCache::read(store, &id)
+                    Swap::Conflict => RecordCache::read(store, verifier, &id)
                         .await?
                         .ok_or_else(|| KeyringError::RecordMissing(id.clone())),
                 }
             })
             .await?;
-        Ok(KeyringAdmin::new(Keyring::new(
-            cache,
-            provider,
-            self.inner.keyring_options.clone(),
-        )))
+        Ok(KeyringAdmin::new(
+            Keyring::new(cache, provider, self.inner.keyring_options.clone()),
+            signer,
+        ))
+    }
+
+    /// The record of a new keyring, signed by `signer` unless it is [`NoRecordSigner`], the
+    /// signature verified under the signer's own key.
+    async fn new_record<P, R>(
+        &self,
+        provider: &P,
+        signer: &R,
+        id: &KeyringId,
+        algorithms: &KeyringAlgorithms,
+    ) -> KeyringResult<KeyringRecord>
+    where
+        P: KmsAeadEncryptionProvider,
+        R: MaybeRecordSigner,
+    {
+        algorithms
+            .new_record::<P, B>(id.clone(), provider)
+            .await?
+            .signed_by::<B, R>(signer)
+            .await
     }
 }
 
-impl<S: KeyringStore> RegistryInner<S> {
+impl<S: KeyringStore, B: AeadBackend> RegistryInner<S, B> {
     /// The record cache of `id`, which the first caller builds from the record `load` returns,
     /// checked against `kek`, and which the callers of the same id wait for and share. Every
     /// caller checks `kek` against the record, so a wrong KEK fails only its own call.
@@ -344,7 +489,7 @@ impl<S: KeyringStore> RegistryInner<S> {
         id: &KeyringId,
         kek: &KekRef,
         load: impl AsyncFnOnce() -> KeyringResult<Stored<S::Revision>>,
-    ) -> KeyringResult<Arc<RecordCache<S>>> {
+    ) -> KeyringResult<Arc<RecordCache<S, B>>> {
         // Declared before `cell`, so that it runs after `cell` is dropped, on a cancellation too:
         // it then counts only the opens still holding the cell.
         let _release = ReleaseCell {
@@ -355,15 +500,20 @@ impl<S: KeyringStore> RegistryInner<S> {
         let cache = cell
             .get_or_try_init(async || {
                 let stored = load().await?;
+                if let Some(deleted) = self.keyrings.deleted_record(id) {
+                    RecordCache::<S, B>::check_recreated(&self.verifier, &deleted, &stored.record)?;
+                }
                 stored.record.check_kek(kek)?;
                 let cache = Arc::new(RecordCache::new(
                     Arc::clone(&self.store),
+                    Arc::clone(&self.verifier),
                     kek.clone(),
                     self.dek_cache.clone(),
                     self.record_ttl,
                     self.reload_min_interval,
                     stored,
                 ));
+                self.keyrings.forget_deleted(id);
                 if self.watch {
                     self.follow(&cache).await;
                 }
@@ -378,7 +528,7 @@ impl<S: KeyringStore> RegistryInner<S> {
     /// shutdown has begun. Without push, without a tokio runtime, or when the listener does not
     /// start, with a `WARN` for the last two, the record TTL alone bounds how late a change is
     /// seen.
-    async fn follow(&self, cache: &Arc<RecordCache<S>>) {
+    async fn follow(&self, cache: &Arc<RecordCache<S, B>>) {
         if *self.stop.borrow() {
             return;
         }
@@ -433,7 +583,7 @@ impl<S: KeyringStore> RegistryInner<S> {
 
 /// Reports a registry dropped without its shutdown, which aborts the follow tasks. Nothing else
 /// is done here: no task is spawned and nothing blocks.
-impl<S: KeyringStore> Drop for RegistryInner<S> {
+impl<S: KeyringStore, B> Drop for RegistryInner<S, B> {
     fn drop(&mut self) {
         if self.follow_tasks.owns_background_work() {
             spans::registry_dropped_without_shutdown(self.keyrings.len());
@@ -441,41 +591,67 @@ impl<S: KeyringStore> Drop for RegistryInner<S> {
     }
 }
 
-impl<S: KeyringStore> OpenKeyrings<S> {
+impl<S: KeyringStore, B> OpenKeyrings<S, B> {
     /// The map stays consistent through a panic elsewhere: no code under the lock panics
     /// between two changes of it.
-    fn lock(&self) -> MutexGuard<'_, HashMap<KeyringId, KeyringCell<S>>> {
+    fn lock(&self) -> MutexGuard<'_, OpenState<S, B>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The cell of `id`, added empty when the map has none.
-    fn cell(&self, id: &KeyringId) -> KeyringCell<S> {
-        Arc::clone(self.lock().entry(id.clone()).or_default())
+    /// The cell of `id`, added empty when the map has none, or holds the cache of a keyring
+    /// whose record a read found deleted: the keyring is then opened anew, and its deleted
+    /// record becomes the baseline of the id.
+    fn cell(&self, id: &KeyringId) -> KeyringCell<S, B> {
+        let mut state = self.lock();
+        let cell = state.cells.entry(id.clone()).or_default();
+        let deleted = cell
+            .get()
+            .filter(|cache| cache.is_deleted())
+            .map(|cache| cache.record());
+        if let Some(deleted) = deleted {
+            *cell = KeyringCell::default();
+            let cell = Arc::clone(cell);
+            state.deleted.insert(id.clone(), deleted);
+            return cell;
+        }
+        Arc::clone(cell)
+    }
+
+    /// The deleted record `id` is checked against, if its last cache took a deletion.
+    fn deleted_record(&self, id: &KeyringId) -> Option<Arc<KeyringRecord>> {
+        self.lock().deleted.get(id).cloned()
+    }
+
+    /// Ends the baseline of `id`: an open took a record that passed it.
+    fn forget_deleted(&self, id: &KeyringId) {
+        self.lock().deleted.remove(id);
     }
 
     /// The record caches of the open keyrings.
-    fn caches(&self) -> Vec<Arc<RecordCache<S>>> {
+    fn caches(&self) -> Vec<Arc<RecordCache<S, B>>> {
         self.lock()
+            .cells
             .values()
             .filter_map(|cell| cell.get().cloned())
             .collect()
     }
 
     fn len(&self) -> usize {
-        self.lock().len()
+        self.lock().cells.len()
     }
 }
 
-impl<S: KeyringStore> Drop for ReleaseCell<'_, S> {
+impl<S: KeyringStore, B> Drop for ReleaseCell<'_, S, B> {
     fn drop(&mut self) {
-        let mut keyrings = self.keyrings.lock();
+        let mut state = self.keyrings.lock();
         // The map's own reference is the only one left once every open of the id has dropped
         // its clone, so the last open to fail removes the cell.
-        if keyrings
+        if state
+            .cells
             .get(self.id)
             .is_some_and(|cell| !cell.initialized() && Arc::strong_count(cell) == 1)
         {
-            keyrings.remove(self.id);
+            state.cells.remove(self.id);
         }
     }
 }
@@ -485,7 +661,7 @@ impl FollowTasks {
     /// has passed, with one `WARN` for the aborted ones.
     async fn join(&self, deadline: Option<Instant>) {
         let mut tasks = self.tasks.lock().await;
-        let aborted = join_until(&mut tasks, deadline).await;
+        let aborted = join_tasks_until(&mut tasks, deadline).await;
         if aborted > 0 {
             spans::shutdown_aborted(aborted);
         }
@@ -663,7 +839,7 @@ mod tests {
         let value = fixture
             .admin
             .keyring()
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;
@@ -871,13 +1047,13 @@ mod tests {
             .await?;
         let aad = email_of("42")?;
         let value = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;
         let other_value = other
             .keyring()
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;
@@ -913,7 +1089,7 @@ mod tests {
 
         tokio::time::advance(KeyringRegistryOptions::DEFAULT_RECORD_TTL).await;
         let value = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&email_of("42")?, &ALICE.to_string())
             .await?;
@@ -933,7 +1109,7 @@ mod tests {
             .await?;
         let aad = email_of("42")?;
         let before = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;
@@ -941,7 +1117,7 @@ mod tests {
         fixture.registry.shutdown(None).await;
 
         let after = keyring
-            .sealer()
+            .encryptor()
             .await
             .encrypt(&aad, &ALICE.to_string())
             .await?;

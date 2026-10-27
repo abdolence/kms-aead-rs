@@ -83,7 +83,10 @@ impl Display for ObjectPrefix {
 ///   and never log either: both carry encrypted data encryption keys.
 pub trait KeyringStore: Send + Sync + 'static {
     /// The store's change marker for one record, such as a counter or an update time. Equal
-    /// revisions mean an unchanged record. `Display` gives the `revision` span field.
+    /// revisions mean an unchanged record, so a store never gives one id the same revision twice,
+    /// also across a [delete](Self::delete) and a create: a counter that restarts at 1 for a
+    /// created record would let a process that missed the deletion keep the deleted record.
+    /// `Display` gives the `revision` span field.
     type Revision: Clone + Eq + Debug + Display + Send + Sync + 'static;
 
     /// The store, for the `store` span field and for errors.
@@ -127,6 +130,29 @@ pub trait KeyringStore: Send + Sync + 'static {
         expected: Option<&Self::Revision>,
     ) -> impl Future<Output = KeyringResult<Swap<Self::Revision>>> + Send;
 
+    /// Deletes the record of `id` when its stored revision is `expected`, with every earlier
+    /// version of it the store keeps, such as the noncurrent versions of a versioned bucket.
+    /// [`Deletion::Deleted`] once the store holds no record of `id`, also when it held none, and
+    /// [`Deletion::Conflict`] when the stored revision is another: the live record then stays,
+    /// though a store that checks the revision after the earlier versions may have removed them.
+    /// The keyring deletes a record only in a shred, once every version of it is destroyed, so the
+    /// earlier versions hold only keys the shred destroys. A store that cannot delete them in one
+    /// step with the live record removes them first: a record gone from the store reads as
+    /// shredded, and no shred deletes it again.
+    ///
+    /// A copy the store keeps outside the reach of its API, such as a backup or a soft-deleted
+    /// object, is the operator's to delete. A store with push signals the deletion as a change.
+    ///
+    /// # Errors
+    ///
+    /// As [`load`](Self::load). A delete that fails may have removed part of the earlier versions
+    /// already: the call is repeated with the same `expected`.
+    fn delete(
+        &self,
+        id: &KeyringId,
+        expected: &Self::Revision,
+    ) -> impl Future<Output = KeyringResult<Deletion>> + Send;
+
     /// Change signals for `id`, or `None` for a store that has no push, or one that was
     /// [shut down](Self::shutdown). A signal carries no record: the keyring revalidates when it
     /// receives one. The keyring calls it only on a tokio runtime, so an implementation may
@@ -158,7 +184,7 @@ pub trait KeyringStore: Send + Sync + 'static {
 /// running at `deadline` are aborted, at once when it has passed, and `None` waits for all of
 /// them. Returns how many it aborted. A cancelled call leaves the tasks it did not join in
 /// `tasks`.
-pub(crate) async fn join_until(tasks: &mut JoinSet<()>, deadline: Option<Instant>) -> usize {
+pub(crate) async fn join_tasks_until(tasks: &mut JoinSet<()>, deadline: Option<Instant>) -> usize {
     let finished = {
         let drained = async { while tasks.join_next().await.is_some() {} };
         match deadline {
@@ -196,6 +222,11 @@ pub struct Stored<R> {
 
 /// What [`KeyringStore::revalidate`] found.
 #[derive(Debug)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a revalidation moves one record once per TTL, and a box would change the type every \
+              store implementation returns"
+)]
 pub enum Revalidation<R> {
     /// The stored revision is the known one.
     Unchanged,
@@ -211,6 +242,15 @@ pub enum Swap<R> {
     /// The record was written at this revision.
     Written(R),
     /// The stored revision was not the expected one, and nothing was written.
+    Conflict,
+}
+
+/// What [`KeyringStore::delete`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deletion {
+    /// The store holds no record of the id: the delete removed it, or there was none.
+    Deleted,
+    /// The stored revision was not the expected one, and the record stays.
     Conflict,
 }
 
@@ -290,17 +330,20 @@ pub enum StoreOperation {
     Revalidate,
     /// [`KeyringStore::compare_and_swap`].
     CompareAndSwap,
+    /// [`KeyringStore::delete`].
+    Delete,
     /// [`KeyringStore::watch`].
     Watch,
 }
 
-/// `load`, `revalidate`, `compare and swap`, `watch`.
+/// `load`, `revalidate`, `compare and swap`, `delete`, `watch`.
 impl Display for StoreOperation {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             StoreOperation::Load => "load",
             StoreOperation::Revalidate => "revalidate",
             StoreOperation::CompareAndSwap => "compare and swap",
+            StoreOperation::Delete => "delete",
             StoreOperation::Watch => "watch",
         })
     }

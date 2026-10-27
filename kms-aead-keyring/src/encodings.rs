@@ -1,4 +1,4 @@
-//! The encodings of a keyset export. An encoding names the reader that takes the bytes of a
+//! The encodings of a keyset export. An encoding names the reader that takes the bytes of an
 //! [`EncryptedKeyset`](crate::EncryptedKeyset): [`BigQuery`], for the `first_level_keyset` of
 //! `KEYS.KEYSET_CHAIN`, or [`Tink`], for Tink's keyset readers. The export checks the keyring's
 //! versions and its KEK against the rules of that reader, and the type parameter of the keyset it
@@ -8,7 +8,7 @@
 
 use crate::Interop;
 
-/// The encoding of a [`EncryptedKeyset`](crate::EncryptedKeyset), which decides the reader of its
+/// The encoding of an [`EncryptedKeyset`](crate::EncryptedKeyset), which decides the reader of its
 /// bytes: [`BigQuery`] or [`Tink`].
 ///
 /// Sealed: only the encodings of this crate implement it. It has no methods, so code generic over

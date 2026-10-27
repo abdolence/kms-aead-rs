@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tokio::sync::mpsc;
 
 use crate::errors::KeyringResult;
-use crate::store::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap, WatchEvent};
+use crate::store::{
+    Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap, WatchEvent,
+};
 use crate::{KeyringId, KeyringRecord};
 
 /// A keyring store in the process's memory, for tests and for values that never outlive the
@@ -19,7 +21,8 @@ use crate::{KeyringId, KeyringRecord};
 /// never decrypts again.
 ///
 /// It keeps each record as its JSON document, as the other stores do, so every read checks the
-/// document, and it signals a watch on every write.
+/// document, and it signals a watch on every write and delete. A delete removes the record and
+/// keeps no copy of it.
 #[derive(Clone, Default)]
 pub struct MemoryKeyringStore {
     state: Arc<Mutex<MemoryState>>,
@@ -57,6 +60,21 @@ impl MemoryKeyringStore {
     /// The state, also from a poisoned lock: nothing that runs under the lock panics.
     fn lock(&self) -> MutexGuard<'_, MemoryState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl MemoryState {
+    /// Signals every live watch of `id` that its record changed, and forgets the dropped ones.
+    fn signal(&mut self, id: &KeyringId) {
+        if let Some(watchers) = self.watchers.get_mut(id) {
+            // A full channel already holds a signal, which covers this change too.
+            watchers.retain(|watcher| {
+                !matches!(
+                    watcher.try_send(WatchEvent::Changed),
+                    Err(mpsc::error::TrySendError::Closed(_))
+                )
+            });
+        }
     }
 }
 
@@ -111,16 +129,20 @@ impl KeyringStore for MemoryKeyringStore {
         state
             .documents
             .insert(id.clone(), MemoryDocument { json, revision });
-        if let Some(watchers) = state.watchers.get_mut(id) {
-            // A full channel already holds a signal, which covers this write too.
-            watchers.retain(|watcher| {
-                !matches!(
-                    watcher.try_send(WatchEvent::Changed),
-                    Err(mpsc::error::TrySendError::Closed(_))
-                )
-            });
-        }
+        state.signal(id);
         Ok(Swap::Written(revision))
+    }
+
+    async fn delete(&self, id: &KeyringId, expected: &MemoryRevision) -> KeyringResult<Deletion> {
+        let mut state = self.lock();
+        match state.documents.get(id) {
+            None => return Ok(Deletion::Deleted),
+            Some(document) if document.revision != *expected => return Ok(Deletion::Conflict),
+            Some(_) => {}
+        }
+        state.documents.remove(id);
+        state.signal(id);
+        Ok(Deletion::Deleted)
     }
 
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {

@@ -6,7 +6,7 @@
 //! `KMS decrypt DEK` under a `Keyring decrypt` on a DEK cache miss, a `KMS encrypt DEK` under a
 //! `Keyring rotate`. No field carries plaintext, key material in any form, AAD content, cipher
 //! text bytes, or the length of a value or of its AAD. The `record` and `error` fields of a
-//! failed sweep re-seal are the application's own text, which it keeps free of them.
+//! failed sweep re-encryption are the application's own text, which it keeps free of them.
 
 use std::fmt::Display;
 use std::future::Future;
@@ -42,8 +42,8 @@ const FIELD_FROM_KEY_ID: &str = "/kms_aead_keyring/from_key_id";
 const FIELD_TO_KEY_ID: &str = "/kms_aead_keyring/to_key_id";
 const FIELD_ERROR_CODE: &str = "/kms_aead_keyring/error_code";
 const FIELD_SCANNED: &str = "/kms_aead_keyring/scanned";
-const FIELD_RESEALED: &str = "/kms_aead_keyring/resealed";
-const FIELD_RESEALED_FROM_COMPROMISED: &str = "/kms_aead_keyring/resealed_from_compromised";
+const FIELD_REENCRYPTED: &str = "/kms_aead_keyring/reencrypted";
+const FIELD_REENCRYPTED_FROM_COMPROMISED: &str = "/kms_aead_keyring/reencrypted_from_compromised";
 const FIELD_SKIPPED: &str = "/kms_aead_keyring/skipped";
 const FIELD_FAILED: &str = "/kms_aead_keyring/failed";
 const FIELD_RECORD: &str = "/kms_aead_keyring/record";
@@ -80,6 +80,33 @@ pub(crate) fn beacon(keyring: &KeyringId) -> Span {
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_KEY_ID } = field::Empty,
         { FIELD_ALGORITHM } = field::Empty,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring mac`, for `mac` and `mac_attached`; the key id, algorithm and DEK cache outcome are
+/// those of the active MAC version.
+pub(crate) fn mac(keyring: &KeyringId) -> Span {
+    debug_span!(
+        "Keyring mac",
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_KEY_ID } = field::Empty,
+        { FIELD_ALGORITHM } = field::Empty,
+        { FIELD_DEK_CACHE } = field::Empty,
+        { FIELD_ERROR_CODE } = field::Empty,
+    )
+}
+
+/// `Keyring verify mac`, for the key id the MAC carries.
+pub(crate) fn verify_mac(keyring: &KeyringId, key_id: KeyId) -> Span {
+    debug_span!(
+        "Keyring verify mac",
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_PURPOSE } = %Purpose::Mac,
+        { FIELD_KEY_ID } = %key_id.as_u32(),
+        { FIELD_KEY_STATE } = field::Empty,
+        { FIELD_RELOAD } = field::Empty,
         { FIELD_DEK_CACHE } = field::Empty,
         { FIELD_ERROR_CODE } = field::Empty,
     )
@@ -127,14 +154,15 @@ pub(crate) async fn in_span<T>(
     result
 }
 
-/// Records on the current `Keyring encrypt` span the version that seals.
-pub(crate) fn record_sealing_version(version: &KeyVersion) {
+/// Records on the current `Keyring encrypt`, `Keyring beacon` or `Keyring mac` span the version
+/// that encrypts.
+pub(crate) fn record_encrypting_version(version: &KeyVersion) {
     let span = Span::current();
     span.record(FIELD_KEY_ID, field::display(version.id().as_u32()));
     span.record(FIELD_ALGORITHM, field::display(version.algorithm()));
 }
 
-/// Records on the current `Keyring decrypt` span the state of the version that opens.
+/// Records on the current `Keyring decrypt` span the state of the version that decrypts.
 pub(crate) fn record_key_state(version: &KeyVersion) {
     let span = Span::current();
     match version.compromised() {
@@ -165,8 +193,8 @@ pub(crate) fn record_dek_cache_bypassed() {
 }
 
 /// Records on the current `Keyring load` span what the read did and the revision it read:
-/// `changed` is `true` for a new record taken, `false`, or `regressed` for one refused because
-/// it moves backwards.
+/// `changed` is `true` for a new record taken, `false`, `regressed` for one refused because it
+/// moves backwards, or `refused` for one refused by record verification.
 pub(crate) fn record_load(changed: LoadChanged, revision: Option<&impl Display>) {
     let span = Span::current();
     span.record(FIELD_CHANGED, changed.as_str());
@@ -214,6 +242,17 @@ pub(crate) fn read_refused(keyring: &KeyringId, version: &KeyVersion) {
     );
 }
 
+/// A record taken under a record verification that does not require a signature, holding a DEK
+/// encrypted with a public key: whoever holds the public key can plant such a version, and only a
+/// required signature refuses it.
+pub(crate) fn public_key_encrypted_record_taken(keyring: &KeyringId) {
+    tracing::warn!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        "Took a keyring record that holds a DEK encrypted with a public key without requiring its \
+         signature; a holder of the public key can add a version, so require signed records"
+    );
+}
+
 /// A reload for a key id the cached record missed, refused inside the reload interval.
 pub(crate) fn reload_rate_limited(keyring: &KeyringId, key_id: KeyId, reason: LoadReason) {
     tracing::debug!(
@@ -233,12 +272,25 @@ pub(crate) fn revalidation_failed(keyring: &KeyringId, error: &KeyringError) {
     );
 }
 
-/// A record the store no longer holds: the cached record stays in use.
-pub(crate) fn record_missing_kept(keyring: &KeyringId) {
-    tracing::warn!(
-        { FIELD_KEYRING } = keyring.as_str(),
-        "The keyring store no longer holds the keyring record; the cached record stays in use"
-    );
+/// A record the store no longer holds: the process destroys every version of its cached
+/// record, and the registry opens the keyring anew. `after_shred_write` is whether the record the
+/// process held had every version destroyed already, which a shred leaves before it deletes
+/// the record: the deletion is then the shred's, and an `INFO`. Otherwise it may be an accidental
+/// one, and a `WARN`.
+pub(crate) fn record_deleted(keyring: &KeyringId, after_shred_write: bool) {
+    if after_shred_write {
+        tracing::info!(
+            { FIELD_KEYRING } = keyring.as_str(),
+            "The keyring store no longer holds the keyring record of a shredded keyring; every \
+             version is destroyed in this process"
+        );
+    } else {
+        tracing::warn!(
+            { FIELD_KEYRING } = keyring.as_str(),
+            "The keyring store no longer holds the keyring record; every version is destroyed in \
+             this process"
+        );
+    }
 }
 
 /// A record refused because it moves a version backwards: the detection of a rewritten or
@@ -249,6 +301,25 @@ pub(crate) fn record_regressed(keyring: &KeyringId, rule: RegressionRule) {
         rule = %rule,
         "Refused a keyring record that moves backwards from the record this process holds"
     );
+}
+
+/// A record refused by record verification, `error` being `RECORD_UNSIGNED`,
+/// `RECORD_SIGNATURE_INVALID` or `RECORD_SIGNATURE_REMOVED`: recorded on the current `Keyring
+/// load` span, logged and counted. Alert on it as on a record that moves backwards.
+pub(crate) fn record_refused(
+    keyring_attribute: &metrics::KeyringAttribute,
+    keyring: &KeyringId,
+    error: &KeyringError,
+) {
+    let span = Span::current();
+    span.record(FIELD_CHANGED, LoadChanged::Refused.as_str());
+    span.record(FIELD_ERROR_CODE, error.code());
+    tracing::error!(
+        { FIELD_KEYRING } = keyring.as_str(),
+        { FIELD_ERROR_CODE } = error.code(),
+        "Refused a keyring record by its signature; the record this process holds stays in use"
+    );
+    metrics::record_refusal(keyring_attribute, error.code());
 }
 
 /// The active version of a purpose changed in the cached record, by this process or another.
@@ -352,8 +423,8 @@ pub(crate) fn sweep(keyring: &KeyringId) -> Span {
         "Keyring sweep",
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_SCANNED } = field::Empty,
-        { FIELD_RESEALED } = field::Empty,
-        { FIELD_RESEALED_FROM_COMPROMISED } = field::Empty,
+        { FIELD_REENCRYPTED } = field::Empty,
+        { FIELD_REENCRYPTED_FROM_COMPROMISED } = field::Empty,
         { FIELD_SKIPPED } = field::Empty,
         { FIELD_FAILED } = field::Empty,
     )
@@ -362,23 +433,23 @@ pub(crate) fn sweep(keyring: &KeyringId) -> Span {
 /// Records the counts of a sweep on its span.
 pub(crate) fn record_sweep(span: &Span, report: &SweepReport) {
     span.record(FIELD_SCANNED, report.scanned);
-    span.record(FIELD_RESEALED, report.resealed);
+    span.record(FIELD_REENCRYPTED, report.reencrypted);
     span.record(
-        FIELD_RESEALED_FROM_COMPROMISED,
-        report.resealed_from_compromised,
+        FIELD_REENCRYPTED_FROM_COMPROMISED,
+        report.reencrypted_from_compromised,
     );
     span.record(FIELD_SKIPPED, report.skipped);
     span.record(FIELD_FAILED, report.failed);
 }
 
-/// A record the sweep could not re-seal, by the application's candidate for it, which is often
+/// A record the sweep could not re-encrypt, by the application's candidate for it, which is often
 /// an entity id, and the application's error: the sweep's log is read as an administrative log.
 pub(crate) fn sweep_failed(keyring: &KeyringId, candidate: &impl Display, error: &impl Display) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_RECORD } = %candidate,
         { FIELD_ERROR } = %error,
-        "The sweep could not re-seal a record"
+        "The sweep could not re-encrypt a record"
     );
 }
 
@@ -392,14 +463,14 @@ pub(crate) fn sweep_candidate_failed(keyring: &KeyringId, error: &impl Display) 
     );
 }
 
-/// A batch of a sweep whose re-seal failed as a whole, by its number of candidates and the
+/// A batch of a sweep whose re-encryption failed as a whole, by its number of candidates and the
 /// application's error: the sweep counts every candidate of it as failed.
 pub(crate) fn sweep_batch_failed(keyring: &KeyringId, candidates: u64, error: &impl Display) {
     tracing::warn!(
         { FIELD_KEYRING } = keyring.as_str(),
         { FIELD_CANDIDATES } = candidates,
         { FIELD_ERROR } = %error,
-        "The sweep could not re-seal a batch"
+        "The sweep could not re-encrypt a batch"
     );
 }
 
@@ -453,6 +524,10 @@ pub(crate) enum LoadChanged {
     Taken,
     Unchanged,
     Regressed,
+    /// Refused by record verification.
+    Refused,
+    /// Gone from the store, and taken as deleted.
+    Deleted,
 }
 
 impl LoadChanged {
@@ -461,6 +536,8 @@ impl LoadChanged {
             LoadChanged::Taken => "true",
             LoadChanged::Unchanged => "false",
             LoadChanged::Regressed => "regressed",
+            LoadChanged::Refused => "refused",
+            LoadChanged::Deleted => "deleted",
         }
     }
 }

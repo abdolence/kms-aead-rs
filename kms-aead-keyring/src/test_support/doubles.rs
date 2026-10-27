@@ -8,18 +8,21 @@ use std::time::Duration;
 
 use kms_aead::backends::AeadBackend;
 use kms_aead::errors::KmsAeadNetworkError;
+use kms_aead::formats::SymmetricKeyFormat;
 use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
 use kms_aead::{
-    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekProvider, KekRef,
-    KmsAeadEncryptionProvider, KmsAeadResult,
+    AeadAlgorithm, DataEncryptionKey, EncryptedDataEncryptionKey, KekRef,
+    KmsAeadDecryptionProvider, KmsAeadEncryptionProvider, KmsAeadResult, KmsProvider,
 };
 
-use crate::errors::KeyringResult;
-use crate::store::{KeyringStore, KeyringWatch, Revalidation, StoreKind, Stored, Swap};
+use crate::errors::{KeyringResult, KeyringStoreError};
+use crate::store::{
+    Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+};
 use crate::testing::{MemoryKeyringStore, MemoryRevision};
 use crate::{
-    EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringAdmin, KeyringId,
-    KeyringRecord, KeyringRegistry,
+    EntityId, EntityKind, FieldAad, FieldName, FieldSpec, Keyring, KeyringAdmin, KeyringError,
+    KeyringId, KeyringRecord, KeyringRegistry,
 };
 
 /// The backend of the build: the gate runs each backend feature on its own.
@@ -83,8 +86,8 @@ impl TestProvider {
         let rotated_material = TestBackend::generate_random_bytes(key_len)?;
         let encrypting_with = |version| -> KmsAeadResult<_> {
             let keks = vec![
-                LocalKek::from_secret(first, first_material.clone())?,
-                LocalKek::from_secret(rotated, rotated_material.clone())?,
+                LocalKek::from_secret(first, first_material.clone(), SymmetricKeyFormat::Raw)?,
+                LocalKek::from_secret(rotated, rotated_material.clone(), SymmetricKeyFormat::Raw)?,
             ];
             Ok(Arc::new(
                 LocalKmsProvider::new(id.clone(), keks)?.with_encrypting_version(version)?,
@@ -103,7 +106,7 @@ impl TestProvider {
     pub(crate) fn cloud_kms() -> KmsAeadResult<Self> {
         Ok(Self {
             kek: KekRef::new(
-                KekProvider::Gcp,
+                KmsProvider::Gcp,
                 "projects/p/locations/europe-north1/keyRings/r/cryptoKeys/tenant-42",
             ),
             ..Self::new("tenant-42-kek")?
@@ -134,7 +137,9 @@ impl KmsAeadEncryptionProvider for TestProvider {
             self.kms.encrypt_data_encryption_key(dek).await
         }
     }
+}
 
+impl KmsAeadDecryptionProvider for TestProvider {
     async fn decrypt_data_encryption_key(
         &self,
         encrypted_dek: &EncryptedDataEncryptionKey,
@@ -162,6 +167,8 @@ pub(crate) struct StoreCalls {
     pub(crate) watches: AtomicUsize,
     /// The writes still to refuse with a conflict.
     pub(crate) conflicts: AtomicU32,
+    /// Whether a delete fails, as one interrupted by a lost connection does.
+    pub(crate) fail_deletions: AtomicBool,
     /// Whether the record reads as missing.
     pub(crate) missing: AtomicBool,
     /// Whether a watch's listener stops at once, as a store's does when it shuts down under its
@@ -229,6 +236,21 @@ impl KeyringStore for TestStore {
         } else {
             self.memory.compare_and_swap(record, expected).await
         }
+    }
+
+    async fn delete(&self, id: &KeyringId, expected: &MemoryRevision) -> KeyringResult<Deletion> {
+        tokio::time::sleep(self.delay).await;
+        if self.calls.fail_deletions.load(Ordering::SeqCst) {
+            return Err(KeyringError::Store(KeyringStoreError::new(
+                StoreKind::Memory,
+                StoreOperation::Delete,
+                "The test store lost its connection".to_string(),
+            )));
+        }
+        if self.calls.missing.load(Ordering::SeqCst) {
+            return Ok(Deletion::Deleted);
+        }
+        self.memory.delete(id, expected).await
     }
 
     async fn watch(&self, id: &KeyringId) -> KeyringResult<Option<KeyringWatch>> {

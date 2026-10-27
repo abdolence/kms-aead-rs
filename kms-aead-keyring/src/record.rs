@@ -6,20 +6,25 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
 use jiff::Timestamp;
-use kms_aead::providers::KekVersion;
+use kms_aead::mac::MacAlgorithm;
+use kms_aead::providers::KmsKeyVersion;
+use kms_aead::signing::Signature;
 use kms_aead::{
     AeadAlgorithm, BeaconAlgorithm, DeterministicAlgorithm, EncryptedDataEncryptionKey, KekRef,
+    SignableType, SignedPayloadType,
 };
 use rsb_derive::Builder;
 
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult, RegressionRule};
-use crate::sweep::{SealMarker, SealRange};
+use crate::sweep::{EncryptionMarker, ReencryptRange};
 use crate::{KeyId, Purpose};
 
 #[cfg(feature = "admin")]
 mod edit;
 #[cfg(feature = "admin")]
 pub(crate) use edit::{NewVersion, RecordEdit};
+
+pub(crate) mod canonical;
 
 pub(crate) mod stored;
 
@@ -130,6 +135,8 @@ pub struct KeyringAlgorithms {
     pub deterministic: Option<DeterministicAlgorithm>,
     /// The algorithm of new beacon versions, or `None`, the default, for a keyring without them.
     pub beacon: Option<BeaconAlgorithm>,
+    /// The algorithm of new MAC versions, or `None`, the default, for a keyring without them.
+    pub mac: Option<MacAlgorithm>,
 }
 
 impl KeyringAlgorithms {
@@ -142,6 +149,7 @@ impl KeyringAlgorithms {
 /// in every build, so a process without the `deterministic` feature keeps deterministic
 /// versions intact when it writes the record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyAlgorithm {
     /// A randomised AEAD algorithm.
     Randomized(AeadAlgorithm),
@@ -149,6 +157,8 @@ pub enum KeyAlgorithm {
     Deterministic(DeterministicAlgorithm),
     /// A beacon algorithm.
     Beacon(BeaconAlgorithm),
+    /// A MAC algorithm.
+    Mac(MacAlgorithm),
 }
 
 impl KeyAlgorithm {
@@ -158,6 +168,7 @@ impl KeyAlgorithm {
             KeyAlgorithm::Randomized(_) => Purpose::Randomized,
             KeyAlgorithm::Deterministic(_) => Purpose::Deterministic,
             KeyAlgorithm::Beacon(_) => Purpose::Beacon,
+            KeyAlgorithm::Mac(_) => Purpose::Mac,
         }
     }
 
@@ -167,6 +178,7 @@ impl KeyAlgorithm {
             KeyAlgorithm::Randomized(algorithm) => algorithm.as_str(),
             KeyAlgorithm::Deterministic(algorithm) => algorithm.as_str(),
             KeyAlgorithm::Beacon(algorithm) => algorithm.as_str(),
+            KeyAlgorithm::Mac(algorithm) => algorithm.as_str(),
         }
     }
 }
@@ -193,6 +205,9 @@ impl FromStr for KeyAlgorithm {
         }
         if let Ok(algorithm) = name.parse() {
             return Ok(KeyAlgorithm::Deterministic(algorithm));
+        }
+        if let Ok(algorithm) = name.parse() {
+            return Ok(KeyAlgorithm::Mac(algorithm));
         }
         Ok(KeyAlgorithm::Beacon(name.parse()?))
     }
@@ -347,13 +362,14 @@ pub struct KeyVersion {
 impl KeyVersion {
     /// The key id every value and beacon under this version carries. The keyring numbers the
     /// versions of each purpose from its first id: randomised versions are `1, 2, 3, …`,
-    /// deterministic ones `2147483649, 2147483650, …` and beacon ones `1073741825, 1073741826, …`.
-    /// Ids are never reused: a destroyed version keeps its id.
+    /// deterministic ones `2147483649, 2147483650, …`, beacon ones `1073741825, 1073741826, …`
+    /// and MAC ones `3221225473, 3221225474, …`. Ids are never reused: a destroyed version keeps
+    /// its id.
     pub fn id(&self) -> KeyId {
         self.key_id
     }
 
-    /// The algorithm values under this version are sealed with.
+    /// The algorithm values under this version are encrypted with.
     pub fn algorithm(&self) -> KeyAlgorithm {
         self.algorithm
     }
@@ -379,19 +395,25 @@ impl KeyVersion {
     }
 
     /// The markers of the records that can hold values under this version, or `None` for a
-    /// version that was never active, which no value is sealed under. A record stamped with a
-    /// marker outside the range holds no value under the version, provided every write seals its
-    /// fields and takes its marker from one [`Sealer`](crate::Sealer).
+    /// version that was never active, which no value is encrypted under. A record stamped with a
+    /// marker outside the range holds no value under the version, provided every write encrypts its
+    /// fields and takes its marker from one [`Encryptor`](crate::Encryptor).
     ///
     /// The range of the active version is open-ended, and so is the range of a version flagged
     /// compromised while it was active and not replaced yet, until the next write that makes a
     /// version active.
-    pub fn seal_range(&self) -> Option<SealRange> {
+    pub fn reencrypt_range(&self) -> Option<ReencryptRange> {
         match &self.state {
             VersionState::Pending(_) => None,
-            VersionState::Active { seal_start, .. } => Some(SealRange::new(*seal_start, None)),
-            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => Some(kept.seal_range),
-            VersionState::Destroyed { seal_range, .. } => *seal_range,
+            VersionState::Active {
+                reencrypt_start, ..
+            } => Some(ReencryptRange::new(*reencrypt_start, None)),
+            VersionState::DecryptOnly(kept) | VersionState::Retired(kept) => {
+                Some(kept.reencrypt_range)
+            }
+            VersionState::Destroyed {
+                reencrypt_range, ..
+            } => *reencrypt_range,
         }
     }
 
@@ -404,7 +426,7 @@ impl KeyVersion {
     /// The version of the KEK that encrypted this version's DEK, as the KMS reported it when the
     /// DEK was last encrypted, at the creation or by `reencrypt_deks`. `None` for a destroyed
     /// version, and when the KMS reported no version, as under AWS KMS.
-    pub fn kek_version(&self) -> Option<&KekVersion> {
+    pub fn kek_version(&self) -> Option<&KmsKeyVersion> {
         self.encrypted_dek()?.kek_version()
     }
 
@@ -412,8 +434,8 @@ impl KeyVersion {
         self.state.dek()
     }
 
-    /// The encrypted DEK that opens values under this version, with its compromised flag, or
-    /// `None` for a retired or destroyed version, which opens nothing.
+    /// The encrypted DEK that decrypts values under this version, with its compromised flag, or
+    /// `None` for a retired or destroyed version, which decrypts nothing.
     pub(crate) fn readable_dek(
         &self,
     ) -> Option<(&EncryptedDataEncryptionKey, Option<&Compromise>)> {
@@ -437,30 +459,30 @@ impl Debug for KeyVersion {
             .field("state", &self.state())
             .field("kek_version", &self.kek_version())
             .field("compromised", &self.compromised())
-            .field("seal_range", &self.seal_range())
+            .field("reencrypt_range", &self.reencrypt_range())
             .field("created_at", &self.created_at)
             .field("state_changed_at", &self.state_changed_at)
             .finish()
     }
 }
 
-/// A state with what it holds, so that a destroyed version without its key, a pending or active
-/// one without a compromised flag, a pending one without a seal range and an active one with an
-/// open one are the only shapes there are.
+/// A state with what it holds, so that a destroyed version without its key, a pending or active one
+/// without a compromised flag, a pending one without a re-encryption range and an active one with
+/// an open one are the only shapes there are.
 #[derive(Clone)]
 enum VersionState {
     Pending(EncryptedDataEncryptionKey),
     Active {
         encrypted_dek: EncryptedDataEncryptionKey,
         /// The marker of the epoch the version became active at.
-        seal_start: SealMarker,
+        reencrypt_start: EncryptionMarker,
     },
     DecryptOnly(RetainedDek),
     Retired(RetainedDek),
     Destroyed {
         compromised: Option<Compromise>,
         /// `None` for a version destroyed while it was pending.
-        seal_range: Option<SealRange>,
+        reencrypt_range: Option<ReencryptRange>,
     },
 }
 
@@ -499,24 +521,29 @@ impl VersionState {
 }
 
 /// The encrypted DEK of a version past `Active`, which may be compromised, and the markers of the
-/// records sealed under it while it was active.
+/// records encrypted under it while it was active.
 #[derive(Clone)]
 struct RetainedDek {
     encrypted_dek: EncryptedDataEncryptionKey,
     compromised: Option<Compromise>,
-    seal_range: SealRange,
+    reencrypt_range: ReencryptRange,
 }
 
-/// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new
-/// versions, the seal epoch, and every version ever created, in creation order. It is stored as
-/// one JSON document, the same in every store; see [`to_json`](Self::to_json).
+/// The record of one keyring: the KEK its keys are encrypted under, the algorithms of new versions,
+/// the re-encryption epoch, and every version ever created, in creation order. It is stored as one
+/// JSON document, the same in every store; see [`to_json`](Self::to_json).
 ///
-/// Every record that exists holds its invariants: at most one active and one pending version
-/// per purpose, neither of them compromised, an encrypted DEK on every version but the destroyed
-/// ones, unique key ids of the purpose of their algorithm, increasing within a purpose in creation
-/// order, a seal epoch of 1 or more, a seal range on every version that was active, open-ended on
-/// the active one and within the epochs 1 to the seal epoch, and at most 1 MiB of JSON: from
-/// about 1,050 versions under an Azure RSA 4096-bit key to about 2,900 under the local KMS.
+/// Every record that exists holds its invariants: at most one active and one pending version per
+/// purpose, neither of them compromised, an encrypted DEK on every version but the destroyed ones,
+/// unique key ids of the purpose of their algorithm, increasing within a purpose in creation order,
+/// no encrypted DEK held by two versions, a re-encryption epoch of 1 or more, a re-encryption range
+/// on every version that was active, open-ended on the active one and within the epochs 1 to the
+/// re-encryption epoch, and at most 1 MiB of JSON: from about 1,050 versions under an Azure RSA
+/// 4096-bit key to about 2,900 under the local KMS.
+///
+/// A record may carry a signature over its canonical document, which the registry verifies under
+/// its [`RecordSignaturePolicy`](crate::RecordSignaturePolicy) before it uses any field: see
+/// [`signature`](Self::signature) and [`canonical_digest`](Self::canonical_digest).
 ///
 /// `Debug` shows identifiers, states and times, never an encrypted DEK.
 #[derive(Debug)]
@@ -524,10 +551,22 @@ pub struct KeyringRecord {
     id: KeyringId,
     kek: KekRef,
     algorithms: KeyringAlgorithms,
-    seal_marker: SealMarker,
+    encryption_marker: EncryptionMarker,
     versions: Vec<KeyVersion>,
     created_at: Timestamp,
     updated_at: Timestamp,
+    signature: Option<Signature<KeyringRecord>>,
+    /// The SHA-256 of the canonical document the record was parsed from, its `signature` member
+    /// left out. A record a write is changing keeps the digest of the document it was read from
+    /// until `RecordEdit::finish` parses the changed one.
+    canonical_digest: [u8; 32],
+}
+
+/// A record is signed and verified through its canonical digest, never through payload bytes it
+/// would have to re-serialise, so it has a payload type and is not `Signable`.
+impl SignableType for KeyringRecord {
+    const PAYLOAD_TYPE: SignedPayloadType =
+        SignedPayloadType::from_static("application/vnd.kms-aead.keyring-record+json");
 }
 
 impl KeyringRecord {
@@ -549,22 +588,23 @@ impl KeyringRecord {
         &self.algorithms
     }
 
-    /// The marker of the record's seal epoch, which every administrative write that makes a
-    /// version active moves on by one: the keyring's creation, at epoch 1, `promote`, and the
+    /// The marker of the record's re-encryption epoch, which every administrative write that makes
+    /// a version active moves on by one: the keyring's creation, at epoch 1, `promote`, and the
     /// replacement of a compromised active version by `mark_compromised`.
     ///
-    /// It names the active versions of this record. A write of an application record seals its
-    /// fields through one [`Sealer`](crate::Sealer) and stores the marker of the sealer's record
-    /// beside them, which then lies inside the [`seal_range`](KeyVersion::seal_range) of every
-    /// version the fields are under. The marker of any other record, such as
-    /// [`Keyring::record`](crate::Keyring::record) read before or after the sealing, names that
-    /// record's epoch instead: when the cached record refreshes in between, it is older or newer
-    /// than the versions the fields are under, and the record falls outside their ranges.
+    /// It names the active versions of this record. A write of an application record encrypts its
+    /// fields through one [`Encryptor`](crate::Encryptor) and stores the marker of the encryptor's
+    /// record beside them, which then lies inside the
+    /// [`reencrypt_range`](KeyVersion::reencrypt_range) of every version the fields are under. The
+    /// marker of any other record, such as [`Keyring::record`](crate::Keyring::record) read before
+    /// or after the write, names that record's epoch instead: when the cached record refreshes in
+    /// between, it is older or newer than the versions the fields are under, and the record falls
+    /// outside their ranges.
     ///
     /// The current record's marker is the bound of a sweep's query, which visits the records
     /// whose marker is below it, see [`sweep`](crate::sweep).
-    pub fn seal_marker(&self) -> SealMarker {
-        self.seal_marker
+    pub fn encryption_marker(&self) -> EncryptionMarker {
+        self.encryption_marker
     }
 
     /// Every version ever created, in creation order.
@@ -626,14 +666,14 @@ impl KeyringRecord {
     /// that is unknown.
     ///
     /// It makes no KMS call. A KEK version may be disabled only once this lists the new version
-    /// alone: it still lists an old version while `reencrypt_deks` has not run since the
-    /// rotation, or ran while a KMS that propagates a rotation, such as Cloud KMS, still encrypted
-    /// under it. A cached record can predate the last `reencrypt_deks`, so that check reads the
-    /// record [`Keyring::reload`](crate::Keyring::reload) returns. Under a provider that reports
-    /// no version, a `None` stays in the list and the check never passes: the steps for that case
-    /// are in
+    /// alone: it still lists an old version while `reencrypt_deks` has not run since the rotation,
+    /// or ran while a KMS that propagates a rotation, such as Cloud KMS, still encrypted under it.
+    /// A cached record can predate the last `reencrypt_deks`, so that check reads the record
+    /// [`Keyring::reload`](crate::Keyring::reload) returns. Under a provider that reports no
+    /// version, a `None` stays in the list and the check never passes: the steps for that case are
+    /// in
     /// [A KEK version the KMS did not report](https://kms-aead-rust.abdolence.dev/operations/rotation.html#a-kek-version-the-kms-did-not-report).
-    pub fn kek_versions_in_use(&self) -> Vec<Option<&KekVersion>> {
+    pub fn kek_versions_in_use(&self) -> Vec<Option<&KmsKeyVersion>> {
         let mut kek_versions = Vec::new();
         for encrypted_dek in self.versions.iter().filter_map(KeyVersion::encrypted_dek) {
             let kek_version = encrypted_dek.kek_version();
@@ -642,6 +682,86 @@ impl KeyringRecord {
             }
         }
         kek_versions
+    }
+
+    /// The signature the record carries, as stored. Whether it verified is the registry's to know,
+    /// see [`RecordSignaturePolicy`](crate::RecordSignaturePolicy): a record a store parses is
+    /// checked against its invariants and nothing else.
+    pub fn signature(&self) -> Option<&Signature<KeyringRecord>> {
+        self.signature.as_ref()
+    }
+
+    /// The SHA-256 of RFC 8785, the JSON Canonicalization Scheme, over the parsed document
+    /// without its `signature` member, every other member kept, members this release does not
+    /// know among them: what a `RecordSigner` signs and
+    /// [`Verifier::verify_digest`](kms_aead::signing::Verifier::verify_digest) checks.
+    pub fn canonical_digest(&self) -> &[u8; 32] {
+        &self.canonical_digest
+    }
+
+    /// The same record carrying `signature`, which [`to_json`](Self::to_json) then writes.
+    #[cfg(feature = "admin")]
+    pub(crate) fn with_signature(self, signature: Signature<KeyringRecord>) -> Self {
+        Self {
+            signature: Some(signature),
+            ..self
+        }
+    }
+
+    /// The same record without its signature.
+    #[cfg(feature = "admin")]
+    pub(crate) fn without_signature(self) -> Self {
+        Self {
+            signature: None,
+            ..self
+        }
+    }
+
+    /// The record as a process holds it once the store holds none: every version destroyed, as
+    /// `dangerously_destroy_all_versions` leaves them. It keeps the signature, so that it still
+    /// says that the keyring was signed, though the signature no longer covers the record, and
+    /// its canonical digest is that of the record as stored. It is never written or verified,
+    /// only the baseline for the record the id holds next: see `KeyringRecord::check_recreated`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`to_json`](Self::to_json) and [`from_json`](Self::from_json), which a
+    /// record that holds its invariants never meets.
+    pub(crate) fn deleted(&self, now: Timestamp) -> KeyringResult<Self> {
+        let mut deleted = Self::from_json(&self.id, &self.to_json()?)?;
+        deleted.destroy_all(now);
+        Ok(deleted)
+    }
+
+    /// Moves every version that is not destroyed yet to `Destroyed`, keeping its compromised flag
+    /// and its re-encryption range.
+    fn destroy_all(&mut self, now: Timestamp) {
+        for version in &mut self.versions {
+            if !matches!(version.state, VersionState::Destroyed { .. }) {
+                version.state = VersionState::Destroyed {
+                    compromised: version.compromised().cloned(),
+                    reencrypt_range: version.reencrypt_range(),
+                };
+                version.state_changed_at = now;
+            }
+        }
+        self.updated_at = now;
+    }
+
+    /// Whether every version is destroyed, so that the record holds no encrypted DEK.
+    pub(crate) fn all_destroyed(&self) -> bool {
+        self.versions
+            .iter()
+            .all(|version| matches!(version.state, VersionState::Destroyed { .. }))
+    }
+
+    /// Whether any version holds a DEK that a public key encrypted.
+    pub(crate) fn holds_public_key_encrypted_dek(&self) -> bool {
+        self.versions.iter().any(|version| {
+            version
+                .encrypted_dek()
+                .is_some_and(EncryptedDataEncryptionKey::is_encrypted_with_public_key)
+        })
     }
 
     /// The encrypted DEK of every version that holds one, by key id.
@@ -653,41 +773,94 @@ impl KeyringRecord {
     }
 }
 
-/// Whether `next`, a record read from the store, moves forward from `held`: every version of
-/// `held` is still there, with the same algorithm and creation time, its compromised flag kept
-/// with its time, its state moved along the lifecycle and its seal range kept, and the seal epoch
-/// is not below `held`'s. New versions are free.
-///
-/// A seal range is kept when its start, and its end once set, stay as they are, and a start or
-/// an end set since lies past `held`'s epoch: a process that holds `held` stamps that epoch on
-/// the records it seals, under every version active in `held`, so such a range still holds
-/// them.
-///
-/// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
-pub(crate) fn check_successor(
-    held_record: &KeyringRecord,
-    next: &KeyringRecord,
-) -> Result<(), RegressionRule> {
-    let held_marker = held_record.seal_marker;
-    for held in &held_record.versions {
-        let key_id = held.key_id;
-        let Some(version) = next.version(key_id) else {
-            return Err(RegressionRule::VersionMissing(key_id));
-        };
-        if version.algorithm != held.algorithm || version.created_at != held.created_at {
-            return Err(RegressionRule::VersionAltered(key_id));
+impl KeyringRecord {
+    /// Whether `next`, a record read from the store, moves forward from this record, the one a process
+    /// holds: every version of it is still there, with the same algorithm and creation time, its compromised flag kept with its
+    /// time, its state moved along the lifecycle and its re-encryption range kept, and the
+    /// re-encryption epoch is not below this record's. New versions are free.
+    ///
+    /// A re-encryption range is kept when its start, and its end once set, stay as they are, and a
+    /// start or an end set since lies past this record's epoch: a process that holds it stamps that
+    /// epoch on the records it encrypts, under every version active in it, so such a range still
+    /// holds them.
+    ///
+    /// The encrypted DEK is left out: a changed one under an unchanged id is a re-encryption.
+    pub(crate) fn check_successor(&self, next: &KeyringRecord) -> Result<(), RegressionRule> {
+        for held in &self.versions {
+            let key_id = held.key_id;
+            let Some(version) = next.version(key_id) else {
+                return Err(RegressionRule::VersionMissing(key_id));
+            };
+            if version.algorithm != held.algorithm || version.created_at != held.created_at {
+                return Err(RegressionRule::VersionAltered(key_id));
+            }
+            held.check_successor(version, self.encryption_marker)?;
         }
-        match (held.compromised(), version.compromised()) {
+        if next.encryption_marker < self.encryption_marker {
+            return Err(RegressionRule::ReencryptEpochReverted);
+        }
+        Ok(())
+    }
+
+    /// Whether `next`, the record read for an id after its record was deleted, leaves destroyed
+    /// what this record holds destroyed. This record is the one as the process took the deletion, see
+    /// `KeyringRecord::deleted`. The versions of `next` that it does not hold with the same
+    /// key id, algorithm and creation time are another keyring's, and are free: a keyring created
+    /// again under the id has no version in common with the deleted one, and one restored from before
+    /// the deletion has every version in common and revives none.
+    pub(crate) fn check_recreated(&self, next: &KeyringRecord) -> Result<(), RegressionRule> {
+        for held in &self.versions {
+            let same_version = next.version(held.key_id).filter(|version| {
+                version.algorithm == held.algorithm && version.created_at == held.created_at
+            });
+            if let Some(version) = same_version {
+                held.check_successor(version, self.encryption_marker)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The encrypted DEKs this record reads under that `next` takes out of use, with their key ids: their
+    /// version is gone, retired or destroyed, newly flagged compromised, or holds another encrypted
+    /// key, as after a re-encryption, which leaves the cached plaintext of the old bytes orphaned.
+    pub(crate) fn withdrawn_deks<'a>(
+        &'a self,
+        next: &'a KeyringRecord,
+    ) -> impl Iterator<Item = (KeyId, &'a EncryptedDataEncryptionKey)> + 'a {
+        self.versions.iter().filter_map(move |held| {
+            let (encrypted_dek, compromise) = held.readable_dek()?;
+            let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
+                None => true,
+                Some((next_encrypted_dek, next_compromise)) => {
+                    next_encrypted_dek != encrypted_dek
+                        || (next_compromise.is_some() && compromise.is_none())
+                }
+            };
+            withdrawn.then_some((held.key_id, encrypted_dek))
+        })
+    }
+}
+
+impl KeyVersion {
+    /// Whether `version` moves forward from this version, the same version of the record that
+    /// `held_marker` is the re-encryption epoch of: see `KeyringRecord::check_successor`.
+    fn check_successor(
+        &self,
+        version: &KeyVersion,
+        held_marker: EncryptionMarker,
+    ) -> Result<(), RegressionRule> {
+        let key_id = self.key_id;
+        match (self.compromised(), version.compromised()) {
             (Some(_), None) => return Err(RegressionRule::CompromiseCleared(key_id)),
             (Some(held), Some(compromise)) if held.at != compromise.at => {
                 return Err(RegressionRule::CompromiseAltered(key_id))
             }
             _ => {}
         }
-        if !held.state().reaches(version.state()) {
+        if !self.state().reaches(version.state()) {
             return Err(RegressionRule::StateReverted(key_id));
         }
-        let seal_range_kept = match (held.seal_range(), version.seal_range()) {
+        let reencrypt_range_kept = match (self.reencrypt_range(), version.reencrypt_range()) {
             (None, None) => true,
             (None, Some(range)) => range.start() > held_marker,
             (Some(_), None) => false,
@@ -699,34 +872,12 @@ pub(crate) fn check_successor(
                     }
             }
         };
-        if !seal_range_kept {
-            return Err(RegressionRule::SealRangeReverted(key_id));
+        if reencrypt_range_kept {
+            Ok(())
+        } else {
+            Err(RegressionRule::ReencryptRangeReverted(key_id))
         }
     }
-    if next.seal_marker < held_marker {
-        return Err(RegressionRule::SealEpochReverted);
-    }
-    Ok(())
-}
-
-/// The encrypted DEKs `held` reads under that `next` takes out of use, with their key ids: their
-/// version is gone, retired or destroyed, newly flagged compromised, or holds another encrypted
-/// key, as after a re-encryption, which leaves the cached plaintext of the old bytes orphaned.
-pub(crate) fn withdrawn_deks<'a>(
-    held: &'a KeyringRecord,
-    next: &'a KeyringRecord,
-) -> impl Iterator<Item = (KeyId, &'a EncryptedDataEncryptionKey)> + 'a {
-    held.versions.iter().filter_map(move |held| {
-        let (encrypted_dek, compromise) = held.readable_dek()?;
-        let withdrawn = match next.version(held.key_id).and_then(KeyVersion::readable_dek) {
-            None => true,
-            Some((next_encrypted_dek, next_compromise)) => {
-                next_encrypted_dek != encrypted_dek
-                    || (next_compromise.is_some() && compromise.is_none())
-            }
-        };
-        withdrawn.then_some((held.key_id, encrypted_dek))
-    })
 }
 
 #[cfg(test)]

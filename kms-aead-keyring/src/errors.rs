@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use kms_aead::errors::KmsAeadError;
-use kms_aead::{KekProvider, KekRef};
+use kms_aead::{KekRef, KmsProvider};
 use rsb_derive::Builder;
 
 use crate::store::{StoreKind, StoreOperation};
@@ -34,8 +34,9 @@ pub enum KeyringError {
     Store(KeyringStoreError),
     /// A keyring id, AAD part or store name that breaks the rule of its type.
     InvalidIdentifier(InvalidIdentifierError),
-    /// The store holds no record for the keyring, when a keyring is opened or a record is
-    /// read before an administrative write.
+    /// The store holds no record for the keyring, when a keyring is opened, reloaded or read
+    /// before an administrative write, or a read before found it gone: the process then holds
+    /// the keyring with every version destroyed.
     RecordMissing(KeyringId),
     /// `KeyringRegistry::create` found the keyring's record, in the store or already open.
     RecordExists(KeyringId),
@@ -65,22 +66,22 @@ pub enum KeyringError {
     /// The value's key version is compromised and the read policy is
     /// [`Block`](crate::CompromisedReadPolicy::Block).
     KeyVersionCompromised(KeyVersionCompromisedError),
-    /// A value or beacon under a key version that the [`Sealer`](crate::Sealer)'s record holds
-    /// as pending, or lacks, while the cached record, reloaded for it, has it: a process with a
-    /// newer record sealed it. A sealer never seals such a value again under its own versions,
-    /// which are older and may have been flagged compromised since.
+    /// A value or beacon under a key version that the [`Encryptor`](crate::Encryptor)'s record
+    /// holds as pending, or lacks, while the cached record, reloaded for it, has it: a process with
+    /// a newer record encrypted it. An encryptor never encrypts such a value again under its own
+    /// versions, which are older and may have been flagged compromised since.
     ///
-    /// The write is safe to retry: it takes a new sealer from
-    /// [`Keyring::sealer`](crate::Keyring::sealer) and runs again. The reload that returned this
-    /// error took the store's record, so the new sealer finds the value current or seals it
-    /// under the active version. Inside `reload_min_interval` of another such reload, which
-    /// bounds the store reads that values under unknown or pending key ids cause, the cached
-    /// record may still hold the version as pending, and the retry fails the same way until the
-    /// next reload, a watch signal or the record TTL. When the store's record itself holds the
-    /// version as pending, as for a value from another keyring whose key id is pending here or
-    /// after a restore from an older backup, every retry fails with `SEALER_OUTDATED`, at no
-    /// more than one store read per `reload_min_interval`. A sweep counts the record as failed.
-    SealerOutdated(KeyVersionError),
+    /// The write is safe to retry: it takes a new encryptor from
+    /// [`Keyring::encryptor`](crate::Keyring::encryptor) and runs again. The reload that returned
+    /// this error took the store's record, so the new encryptor finds the value current or encrypts
+    /// it under the active version. Inside `reload_min_interval` of another such reload, which
+    /// bounds the store reads that values under unknown or pending key ids cause, the cached record
+    /// may still hold the version as pending, and the retry fails the same way until the next
+    /// reload, a watch signal or the record TTL. When the store's record itself holds the version
+    /// as pending, as for a value from another keyring whose key id is pending here or after a
+    /// restore from an older backup, every retry fails with `ENCRYPTOR_OUTDATED`, at no more than
+    /// one store read per `reload_min_interval`. A sweep counts the record as failed.
+    EncryptorOutdated(KeyVersionError),
     /// A value or beacon whose key id belongs to another purpose.
     KeyPurposeMismatch(KeyPurposeMismatchError),
     /// A lifecycle operation that does not apply to the version's state.
@@ -91,13 +92,13 @@ pub enum KeyringError {
     /// [`remaining`](PromotionTooEarlyError::remaining) has passed, and
     /// `KeyringAdmin::promote_now` makes it without the wait.
     PromotionTooEarly(PromotionTooEarlyError),
-    /// A key id that a value or beacon carries, or that an operation names, is reserved: its
-    /// ordinal is zero, or it sets both purpose bits, so no version has it.
+    /// A key id that a value, beacon or MAC carries, or that an operation names, is reserved: its
+    /// ordinal is zero, so no version has it.
     ReservedKeyId(KeyId),
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
-    /// An [`Interop`] requirement that sealing a field or exporting a keyset would break,
-    /// checked before sealing and before any KMS call of an export.
+    /// An [`Interop`] requirement that encrypting a field or exporting a keyset would break,
+    /// checked before encrypting and before any KMS call of an export.
     Interop(InteropError),
     /// [`FieldSpec::custom_aad`](crate::FieldSpec::custom_aad) on a field whose reader rebuilds
     /// the AAD itself, which bytes of the application's own choosing would not match: a field
@@ -109,10 +110,27 @@ pub enum KeyringError {
     ExportAlgorithmUnsupported(KeyVersionError),
     /// A name that is not one a [`KeyVersionState`] displays as, which it holds.
     UnknownKeyVersionState(String),
-    /// Stored bytes that are not a [`SealMarker`](crate::sweep::SealMarker): not 5 bytes long,
-    /// or not starting with the marker version `0x01`. The bytes are left out: they come from a
-    /// column of the application's, which may hold a plaintext.
-    InvalidSealMarker,
+    /// Stored bytes that are not a [`EncryptionMarker`](crate::sweep::EncryptionMarker): not 5 bytes
+    /// long, or not starting with the marker version `0x01`. The bytes are left out: they come from
+    /// a column of the application's, which may hold a plaintext.
+    InvalidEncryptionMarker,
+    /// A record without a signature, read under
+    /// [`RecordSignaturePolicy::Required`](crate::RecordSignaturePolicy::Required); or one that a
+    /// signing `KeyringAdmin` read before a write other than `sign_record`, which never turns an
+    /// unsigned record into a signed one.
+    RecordUnsigned(KeyringId),
+    /// A record whose signature does not verify under the registry's verifying keys, or a new
+    /// signature that does not verify under its signer's own key before the write.
+    RecordSignatureInvalid(RecordSignatureInvalidError),
+    /// A write by a `KeyringAdmin` without a record signer over a signed record, `sign_record`
+    /// included, other than `dangerously_unsign_record`. Refused before any store write.
+    RecordSignerMissing(KeyringId),
+    /// An unsigned record read under
+    /// [`RecordSignaturePolicy::VerifyIfSigned`](crate::RecordSignaturePolicy::VerifyIfSigned) by a
+    /// process whose held record of the keyring is signed: at a revalidation, a reload, a read
+    /// for an administrative write or an export's load. A new process holds nothing, so `open`
+    /// never returns it.
+    RecordSignatureRemoved(KeyringId),
 }
 
 impl KeyringError {
@@ -137,7 +155,7 @@ impl KeyringError {
             KeyringError::KeyVersionDestroyed(_) => "KEY_VERSION_DESTROYED",
             KeyringError::KeyVersionPending(_) => "KEY_VERSION_PENDING",
             KeyringError::KeyVersionCompromised(_) => "KEY_VERSION_COMPROMISED",
-            KeyringError::SealerOutdated(_) => "SEALER_OUTDATED",
+            KeyringError::EncryptorOutdated(_) => "ENCRYPTOR_OUTDATED",
             KeyringError::KeyPurposeMismatch(_) => "KEY_PURPOSE_MISMATCH",
             KeyringError::InvalidTransition(_) => "INVALID_TRANSITION",
             KeyringError::PromotionTooEarly(_) => "PROMOTION_TOO_EARLY",
@@ -147,7 +165,11 @@ impl KeyringError {
             KeyringError::CustomAadUnsupported(_) => "CUSTOM_AAD_UNSUPPORTED",
             KeyringError::ExportAlgorithmUnsupported(_) => "EXPORT_ALGORITHM_UNSUPPORTED",
             KeyringError::UnknownKeyVersionState(_) => "UNKNOWN_KEY_VERSION_STATE",
-            KeyringError::InvalidSealMarker => "INVALID_SEAL_MARKER",
+            KeyringError::InvalidEncryptionMarker => "INVALID_ENCRYPTION_MARKER",
+            KeyringError::RecordUnsigned(_) => "RECORD_UNSIGNED",
+            KeyringError::RecordSignatureInvalid(_) => "RECORD_SIGNATURE_INVALID",
+            KeyringError::RecordSignerMissing(_) => "RECORD_SIGNER_MISSING",
+            KeyringError::RecordSignatureRemoved(_) => "RECORD_SIGNATURE_REMOVED",
         }
     }
 
@@ -177,8 +199,8 @@ impl KeyringError {
         })
     }
 
-    pub(crate) fn sealer_outdated(keyring: &KeyringId, key_id: KeyId) -> Self {
-        KeyringError::SealerOutdated(KeyVersionError {
+    pub(crate) fn encryptor_outdated(keyring: &KeyringId, key_id: KeyId) -> Self {
+        KeyringError::EncryptorOutdated(KeyVersionError {
             keyring: keyring.clone(),
             key_id,
         })
@@ -345,9 +367,9 @@ impl Display for KeyringError {
                 error.keyring,
                 error.compromise.at()
             ),
-            KeyringError::SealerOutdated(error) => write!(
+            KeyringError::EncryptorOutdated(error) => write!(
                 f,
-                "The key version {} of the keyring {} is newer than the sealer's record: take a new sealer",
+                "The key version {} of the keyring {} is newer than the encryptor's record: take a new encryptor",
                 error.key_id.as_u32(), error.keyring
             ),
             KeyringError::KeyPurposeMismatch(error) => write!(
@@ -391,8 +413,27 @@ impl Display for KeyringError {
                 "{name:?} is not the name of a key version state: the names are pending, active, \
                  decrypt_only, retired and destroyed"
             ),
-            KeyringError::InvalidSealMarker => f.write_str(
-                "Not a seal marker: a marker is the version byte 1 and a 4-byte seal epoch",
+            KeyringError::InvalidEncryptionMarker => f.write_str(
+                "Not an encryption marker: a marker is the version byte 1 and a 4-byte re-encryption epoch",
+            ),
+            KeyringError::RecordUnsigned(keyring) => {
+                write!(f, "The keyring record of {keyring} carries no signature")
+            }
+            KeyringError::RecordSignatureInvalid(error) => write!(
+                f,
+                "The signature of the keyring record of {} does not verify: {}",
+                error.keyring,
+                error.cause.code()
+            ),
+            KeyringError::RecordSignerMissing(keyring) => write!(
+                f,
+                "The keyring record of {keyring} is signed, and this administrative handle has no \
+                 record signer to sign what it writes"
+            ),
+            KeyringError::RecordSignatureRemoved(keyring) => write!(
+                f,
+                "The keyring record of {keyring} lost the signature of the record this process \
+                 holds"
             ),
         }
     }
@@ -402,6 +443,7 @@ impl Error for KeyringError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             KeyringError::KmsAead(error) => Some(error),
+            KeyringError::RecordSignatureInvalid(error) => Some(&error.cause),
             KeyringError::Store(error) => error
                 .root_cause
                 .as_ref()
@@ -529,7 +571,7 @@ pub enum RecordInvalidReason {
     UnknownAlgorithm(Option<KeyId>),
     /// A state name this release does not know, on the version with this key id.
     UnknownState(KeyId),
-    /// A key id whose ordinal is zero or that sets both purpose bits, which names no version.
+    /// A key id whose ordinal is zero, which names no version.
     ReservedKeyId,
     /// Two versions with one key id.
     DuplicateKeyId(KeyId),
@@ -555,14 +597,20 @@ pub enum RecordInvalidReason {
     MalformedKekVersion(KeyId),
     /// Every key id of the purpose is taken, so no version of it can be created.
     KeyIdsExhausted(Purpose),
-    /// The seal epoch is 0, the epoch of records sealed before the keyring, or a version would
-    /// become active past the last one, 2^32 - 1.
-    SealEpochOutOfRange,
-    /// The version's seal range does not fit its state: a pending version with one, an active
-    /// version without one or with an end, or a decrypt-only or retired version without one; or
-    /// it starts at epoch 0, ends where or before it starts, or lies past the record's seal
-    /// epoch.
-    SealRangeInvalid(KeyId),
+    /// The re-encryption epoch is 0, the epoch of records encrypted before the keyring, or a
+    /// version would become active past the last one, 2^32 - 1.
+    ReencryptEpochOutOfRange,
+    /// A `signature` member that is not the standard base64 of a detached signature,
+    /// `[0x01][key id: u32 BE][signature]`.
+    MalformedSignature,
+    /// The version's re-encryption range does not fit its state: a pending version with one, an
+    /// active version without one or with an end, or a decrypt-only or retired version without one;
+    /// or it starts at epoch 0, ends where or before it starts, or lies past the record's
+    /// re-encryption epoch.
+    ReencryptRangeInvalid(KeyId),
+    /// Two versions, the one named and an earlier one, hold the same encrypted DEK bytes: a key
+    /// filed under a second id, such as a MAC key copied into a beacon version.
+    DuplicateEncryptedDek(KeyId),
 }
 
 impl Display for RecordInvalidReason {
@@ -669,12 +717,20 @@ impl Display for RecordInvalidReason {
             RecordInvalidReason::KeyIdsExhausted(purpose) => {
                 write!(f, "every {purpose} key id is taken")
             }
-            RecordInvalidReason::SealEpochOutOfRange => {
-                f.write_str("the seal epoch is 0 or cannot count up any more")
+            RecordInvalidReason::ReencryptEpochOutOfRange => {
+                f.write_str("the re-encryption epoch is 0 or cannot count up any more")
             }
-            RecordInvalidReason::SealRangeInvalid(key_id) => write!(
+            RecordInvalidReason::MalformedSignature => {
+                f.write_str("the signature member is not the base64 of a detached signature")
+            }
+            RecordInvalidReason::ReencryptRangeInvalid(key_id) => write!(
                 f,
-                "the seal range of key version {key_id} does not fit its state or the seal epoch",
+                "the re-encryption range of key version {key_id} does not fit its state or the re-encryption epoch",
+                key_id = key_id.as_u32()
+            ),
+            RecordInvalidReason::DuplicateEncryptedDek(key_id) => write!(
+                f,
+                "key version {key_id} holds the encrypted DEK of an earlier version",
                 key_id = key_id.as_u32()
             ),
         }
@@ -690,6 +746,17 @@ pub struct MalformedRecord {
     pub line: Option<usize>,
     /// The column, from 1, or `None` when the parser reported none.
     pub column: Option<usize>,
+}
+
+/// See [`KeyringError::RecordSignatureInvalid`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct RecordSignatureInvalidError {
+    /// The keyring whose record was read or written.
+    pub keyring: KeyringId,
+    /// kms-aead's error: `SIGNATURE_INVALID`, or `SIGNING_KEY_UNKNOWN` for a signature under a
+    /// key the registry does not hold, any signature under a registry with no key included.
+    pub cause: KmsAeadError,
 }
 
 /// See [`KeyringError::RecordRegressed`].
@@ -722,13 +789,14 @@ pub enum RegressionRule {
     /// The version's state moved against the lifecycle, back to `Active` or out of
     /// `Destroyed`.
     StateReverted(KeyId),
-    /// The record's seal epoch is below the held one, so that records sealed under different
-    /// active versions would carry the same [`SealMarker`](crate::sweep::SealMarker).
-    SealEpochReverted,
-    /// The version's [`SealRange`](crate::sweep::SealRange) lost its start or its end, one of
-    /// them moved, or one was set at or below the held seal epoch, so that records the held
-    /// record sealed under the version could fall outside it.
-    SealRangeReverted(KeyId),
+    /// The record's re-encryption epoch is below the held one, so that records encrypted under
+    /// different active versions would carry the same
+    /// [`EncryptionMarker`](crate::sweep::EncryptionMarker).
+    ReencryptEpochReverted,
+    /// The version's [`ReencryptRange`](crate::sweep::ReencryptRange) lost its start or its end,
+    /// one of them moved, or one was set at or below the held re-encryption epoch, so that records
+    /// the held record encrypted under the version could fall outside it.
+    ReencryptRangeReverted(KeyId),
 }
 
 impl Display for RegressionRule {
@@ -763,10 +831,12 @@ impl Display for RegressionRule {
                     key_id = key_id.as_u32()
                 )
             }
-            RegressionRule::SealEpochReverted => f.write_str("the seal epoch moved back"),
-            RegressionRule::SealRangeReverted(key_id) => write!(
+            RegressionRule::ReencryptEpochReverted => {
+                f.write_str("the re-encryption epoch moved back")
+            }
+            RegressionRule::ReencryptRangeReverted(key_id) => write!(
                 f,
-                "the seal range of key version {key_id} moved back",
+                "the re-encryption range of key version {key_id} moved back",
                 key_id = key_id.as_u32()
             ),
         }
@@ -808,7 +878,7 @@ pub struct PurposeError {
 
 /// See [`KeyringError::KeyVersionUnknown`], [`KeyringError::KeyVersionRetired`],
 /// [`KeyringError::KeyVersionDestroyed`], [`KeyringError::KeyVersionPending`],
-/// [`KeyringError::SealerOutdated`] and [`KeyringError::ExportAlgorithmUnsupported`].
+/// [`KeyringError::EncryptorOutdated`] and [`KeyringError::ExportAlgorithmUnsupported`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct KeyVersionError {
@@ -874,11 +944,11 @@ pub struct InteropError {
     pub keyring: KeyringId,
     /// The reader whose requirement is broken: the field's, or the export's.
     pub interop: Interop,
-    /// The first part of it that sealing or the export would break.
+    /// The first part of it that encrypting or the export would break.
     pub requirement: InteropRequirement,
 }
 
-/// What an [`Interop`] reader needs and sealing or an export would not give it.
+/// What an [`Interop`] reader needs and encrypting or an export would not give it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum InteropRequirement {
@@ -886,7 +956,9 @@ pub enum InteropRequirement {
     Algorithm(KeyAlgorithm),
     /// The KEK is in a KMS the reader does not decrypt with, or has no key URI the reader
     /// addresses it by, such as an AWS key named without its ARN.
-    Kek(KekProvider),
+    Kek(KmsProvider),
+    /// The reader does not read streamed values.
+    Format,
 }
 
 impl Display for InteropRequirement {
@@ -898,6 +970,7 @@ impl Display for InteropRequirement {
             InteropRequirement::Kek(provider) => {
                 write!(f, "the reader does not decrypt keys with {provider}")
             }
+            InteropRequirement::Format => f.write_str("the reader does not read streamed values"),
         }
     }
 }

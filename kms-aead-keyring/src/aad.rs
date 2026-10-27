@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt::{Debug, Display, Formatter};
 
 use kms_aead::formats::TinkKeyType;
-use kms_aead::{AeadAlgorithm, BeaconBits, DeterministicAlgorithm, KekProvider, KekRef};
+use kms_aead::{AeadAlgorithm, BeaconBits, DeterministicAlgorithm, KekRef, KmsProvider};
 
 use crate::errors::{Identifier, IdentifierRule, KeyringError, KeyringResult};
 use crate::KeyAlgorithm;
@@ -170,18 +170,19 @@ impl Display for FieldName {
 }
 
 /// Which reader other than this crate decrypts a field's values, and so what
-/// [`Keyring`](crate::Keyring) checks before it seals one. A field without one takes any
-/// algorithm, any AAD and any KEK. A value that was written always decrypts: only sealing checks.
+/// [`Keyring`](crate::Keyring) checks before it encrypts one. A field without one takes any
+/// algorithm, any AAD and any KEK. A value that was written always decrypts: only encrypting
+/// checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Interop {
     /// BigQuery decrypts the field through `KEYS.KEYSET_CHAIN`, which implements AES-256-GCM
-    /// and AES-SIV only and decrypts with Cloud KMS only: sealing needs an AES-256-GCM version
+    /// and AES-SIV only and decrypts with Cloud KMS only: encrypting needs an AES-256-GCM version
     /// for a randomised value, an AES-SIV version for a deterministic one, and a Cloud KMS KEK.
     /// The AAD is the default one, which SQL rebuilds, so the field takes no
     /// [`custom_aad`](FieldSpec::custom_aad).
     BigQuery,
-    /// Tink decrypts the field with the keyset of `KeyringAdmin::export_tink_keyset`: sealing
+    /// Tink decrypts the field with the keyset of `KeyringAdmin::export_tink_keyset`: encrypting
     /// needs an AES-128-GCM, AES-256-GCM or AES-256-GCM-SIV version for a randomised value, an
     /// AES-SIV version for a deterministic one, and a KEK with a Tink key URI, in Cloud KMS, in AWS
     /// KMS by key ARN, or in Vault Transit. Tink for Python and C++ do not read ChaCha20-Poly1305
@@ -203,7 +204,8 @@ impl Interop {
             }
             KeyAlgorithm::Randomized(_)
             | KeyAlgorithm::Deterministic(_)
-            | KeyAlgorithm::Beacon(_) => None,
+            | KeyAlgorithm::Beacon(_)
+            | KeyAlgorithm::Mac(_) => None,
         }
     }
 
@@ -211,7 +213,7 @@ impl Interop {
     pub(crate) fn key_uri(self, kek: &KekRef) -> Option<String> {
         let key_uri = kek.tink_key_uri();
         match self {
-            Interop::BigQuery => key_uri.filter(|_| *kek.provider() == KekProvider::Gcp),
+            Interop::BigQuery => key_uri.filter(|_| *kek.provider() == KmsProvider::Gcp),
             Interop::Tink => key_uri,
         }
     }
@@ -286,7 +288,8 @@ impl FieldSpec {
 
     /// The AAD of the field's value as `bytes` of the application's own choosing, with no
     /// structure, in place of the default one. It binds a value to neither its field nor its row
-    /// unless `bytes` do. Sealing with it checks the field's [`Interop`] as with the default AAD.
+    /// unless `bytes` do. Encrypting with it checks the field's [`Interop`] as with the default
+    /// AAD.
     ///
     /// # Errors
     ///
@@ -313,8 +316,8 @@ impl FieldSpec {
 }
 
 /// The associated data of one randomised value, built by [`FieldSpec::aad`] or
-/// [`FieldSpec::custom_aad`] so that it carries the field's [`Interop`]. A value opens only with
-/// the AAD it was sealed with.
+/// [`FieldSpec::custom_aad`] so that it carries the field's [`Interop`]. A value decrypts only with
+/// the AAD it was encrypted with.
 ///
 /// `Debug` shows nothing of the bytes, not even their length: the default AAD holds an entity
 /// id.
@@ -324,8 +327,8 @@ pub struct FieldAad {
 }
 
 impl FieldAad {
-    /// Appends `/` and `context`, any bytes; a value sealed with a context opens only with the
-    /// same context. `context` may itself hold `/`, so two contexts can produce the same AAD
+    /// Appends `/` and `context`, any bytes; a value encrypted with a context decrypts only with
+    /// the same context. `context` may itself hold `/`, so two contexts can produce the same AAD
     /// from different splits: the caller owns both sides of its AAD and keeps them apart.
     pub fn with_context(mut self, context: &(impl AsRef<[u8]> + ?Sized)) -> Self {
         self.bytes.push(b'/');
@@ -349,7 +352,7 @@ impl Debug for FieldAad {
 /// associated-data item, as Tink and BigQuery compute it.
 ///
 /// There is no constructor from arbitrary bytes: a deterministic value exists to be queried,
-/// and the query rebuilds its AAD. A value with this AAD opens in any row of the same kind and
+/// and the query rebuilds its AAD. A value with this AAD decrypts in any row of the same kind and
 /// field, so a deterministic field never decides identity or authorisation on its own.
 ///
 /// `Debug` shows nothing of the bytes.
@@ -357,7 +360,7 @@ pub struct DeterministicAad {
     pub(crate) bytes: Vec<u8>,
     #[cfg_attr(
         not(feature = "deterministic"),
-        expect(dead_code, reason = "only the deterministic calls seal")
+        expect(dead_code, reason = "only the deterministic calls encrypt")
     )]
     pub(crate) interop: Option<Interop>,
 }
