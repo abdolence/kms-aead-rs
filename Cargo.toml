@@ -162,7 +162,7 @@ sqlx = { version = "0.9", default-features = false, features = ["postgres", "run
 opentelemetry_sdk = { workspace = true }
 # The zlib-compressed cipher texts and the SHA-512 message digests of the Wycheproof vectors of
 # streamed values.
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 # The `axum_encrypted_stream` example: an axum server that streams items with axum-streams and a
 # reqwest client that decodes them with reqwest-streams. No TLS stack, as the example talks to a
 # loopback port.
