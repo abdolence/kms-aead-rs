@@ -467,7 +467,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.14'
+          python-version: '3.15'
       - run: pip install cryptography==50.0.2
       - run: |
           cargo run --example cobblestone_interop --features stream,ring -- encrypt > kms-aead.jsonl
