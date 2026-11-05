@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0a86deed.js";
+            window.path_to_searchindex_js = "searchindex-7ef77d17.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5b436d00.js"></script>
@@ -4672,11 +4672,13 @@ use kms_aead::{KeyId, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 <span class="boring">fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">// redacter:allow-begin
 </span>let pem = "-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
 -----END PRIVATE KEY-----
 ";
-let key = LocalSigningKey::from_secret(
+<span class="boring">// redacter:allow-end
+</span>let key = LocalSigningKey::from_secret(
     LocalSigningKeyVersion::from(NonZeroU32::MIN),
     SecretValue::from(pem),
     PrivateKeyFormat::Pkcs8Pem,
