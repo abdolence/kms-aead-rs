@@ -481,7 +481,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       lowkey-vault:
-        image: nagyesta/lowkey-vault:7.3.145
+        image: nagyesta/lowkey-vault:7.4.0
         ports:
           - 8443:8443
     env:
