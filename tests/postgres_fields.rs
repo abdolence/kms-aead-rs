@@ -1,11 +1,13 @@
 //! `Encrypted` values stored as `BYTEA` through tokio-postgres and sqlx. They are ignored by
 //! default; to run them:
 //!
+//! <!-- redacter:allow-begin -->
 //! ```sh
 //! docker run --rm -d --name kms-aead-pg-fields -e POSTGRES_PASSWORD=postgres -p 55432:5432 postgres:16
 //! DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55432/postgres \
 //!   cargo test --features ring,postgres,sqlx --test postgres_fields -- --ignored
 //! ```
+//! <!-- redacter:allow-end -->
 
 use std::collections::BTreeSet;
 use std::error::Error;

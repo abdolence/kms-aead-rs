@@ -20,12 +20,14 @@ use crate::{
     KeyringRegistryOptions, Purpose,
 };
 
+// redacter:allow-begin
 /// The PKCS#8 of the RFC 8032 section 7.1 test 1 key, the Ed25519 key of the book's test vectors,
 /// as `openssl genpkey` writes it.
 const ED25519_PKCS8_PEM: &str = "-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
 -----END PRIVATE KEY-----
 ";
+// redacter:allow-end
 
 /// The SHA-256 of [`CANONICAL_DOCUMENT`], from the book.
 const CANONICAL_DIGEST: [u8; 32] = [

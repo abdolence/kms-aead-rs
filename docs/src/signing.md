@@ -191,10 +191,12 @@ use kms_aead::{KeyId, KmsAeadResult};
 use secret_vault_value::SecretValue;
 
 # fn main() -> KmsAeadResult<()> {
+# // redacter:allow-begin
 let pem = "-----BEGIN PRIVATE KEY-----
 MC4CAQAwBQYDK2VwBCIEIJ1hsZ3v/VpguoRK9JLsLMREScVpezJpGXA7rAMcrn9g
 -----END PRIVATE KEY-----
 ";
+# // redacter:allow-end
 let key = LocalSigningKey::from_secret(
     LocalSigningKeyVersion::from(NonZeroU32::MIN),
     SecretValue::from(pem),

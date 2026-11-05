@@ -263,7 +263,7 @@ jobs:
           --health-retries 15
     env:
       FEATURES: ring,admin,deterministic,postgres,sqlx
-      KMS_AEAD_KEYRING_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      KMS_AEAD_KEYRING_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres # redacter:allow
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -450,7 +450,7 @@ jobs:
           --health-timeout 5s
           --health-retries 30
     env:
-      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres # redacter:allow
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

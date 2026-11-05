@@ -409,19 +409,19 @@ mod aes_siv_cipher {
                 cipher_text: "f125274c598065cfc26b0e71575029088b035217e380cac8919ee800c126",
             },
             Vector {
-                key: "bc7635c1fd566aa8357fd103714bfaee1c9e5b3c578b3980401a981030254a54b1756a8c96e600b7252fd0aab12f39d115d256b3f3e7c2c41a7fece72ba7c3c4",
+                key: "bc7635c1fd566aa8357fd103714bfaee1c9e5b3c578b3980401a981030254a54b1756a8c96e600b7252fd0aab12f39d115d256b3f3e7c2c41a7fece72ba7c3c4", // redacter:allow
                 aad: "",
                 plain_text: "",
                 cipher_text: "44b1c6fe8a8c07dee5377b161f283c31",
             },
             Vector {
-                key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+                key: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f", // redacter:allow
                 aad: "",
                 plain_text: "8dbfee9580e7e2bc66100a674497f4e1",
                 cipher_text: "000000000000000000000000000000007ef8aa7e4dd49d9cfa09e9cb574fd90d",
             },
             Vector {
-                key: "e2c5662bb18fbb411d0304e4241db073fe60a4704fee290073513038a22b4cd542580b2b4edbc37e3de01c0cb61abcad46986cdc491ce9e5ae5af223ff58b953",
+                key: "e2c5662bb18fbb411d0304e4241db073fe60a4704fee290073513038a22b4cd542580b2b4edbc37e3de01c0cb61abcad46986cdc491ce9e5ae5af223ff58b953", // redacter:allow
                 aad: "fab912dec29a34aabfaef176",
                 plain_text: "0d",
                 cipher_text: "1c6969ecb15741a9959b7a8492250e391a",
