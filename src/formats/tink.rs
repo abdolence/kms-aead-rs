@@ -348,7 +348,7 @@ mod tests {
     const TINK_KEYS: &[SerializedKey] = &[
         SerializedKey {
             key_type: TinkKeyType::ChaCha20Poly1305,
-            key: "774e520c6ed404f30ed102d1d159ded4309878531d51b8c7b574ad1e491731f1",
+            key: "774e520c6ed404f30ed102d1d159ded4309878531d51b8c7b574ad1e491731f1", // redacter:allow
             serialized: "1220774e520c6ed404f30ed102d1d159ded4309878531d51b8c7b574ad1e491731f1",
         },
         SerializedKey {
@@ -358,17 +358,17 @@ mod tests {
         },
         SerializedKey {
             key_type: TinkKeyType::AesGcm,
-            key: "a637fbbc7a96def9ea67b785b1fb0b5cc6888250a27a9ff91a388b5fa92c5324",
+            key: "a637fbbc7a96def9ea67b785b1fb0b5cc6888250a27a9ff91a388b5fa92c5324", // redacter:allow
             serialized: "1a20a637fbbc7a96def9ea67b785b1fb0b5cc6888250a27a9ff91a388b5fa92c5324",
         },
         SerializedKey {
             key_type: TinkKeyType::AesGcmSiv,
-            key: "7e48e40802a763533bc9f483347cccb576921f0caf622bddceb055f8d1844fae",
+            key: "7e48e40802a763533bc9f483347cccb576921f0caf622bddceb055f8d1844fae", // redacter:allow
             serialized: "1a207e48e40802a763533bc9f483347cccb576921f0caf622bddceb055f8d1844fae",
         },
         SerializedKey {
             key_type: TinkKeyType::AesSiv,
-            key: "c6b98ad941a2ab1b053d5acea06573bb47315fdee8bddc890402308851dbf3baeb2235599a078bcda1e25c23b6c2c3829874757bad185f496db1f799eeb7d5e9",
+            key: "c6b98ad941a2ab1b053d5acea06573bb47315fdee8bddc890402308851dbf3baeb2235599a078bcda1e25c23b6c2c3829874757bad185f496db1f799eeb7d5e9", // redacter:allow
             serialized: "1240c6b98ad941a2ab1b053d5acea06573bb47315fdee8bddc890402308851dbf3baeb2235599a078bcda1e25c23b6c2c3829874757bad185f496db1f799eeb7d5e9",
         },
     ];

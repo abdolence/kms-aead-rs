@@ -584,7 +584,7 @@ mod tests {
         // The RFC 6979 key without the public point, which RFC 5915 makes optional.
         let p256_without_point = "3041020100301306072a8648ce3d020106082a8648ce3d03010704273025020101\
                                   0420c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721";
-        let encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBCQ\n-----END ENCRYPTED PRIVATE KEY-----\n";
+        let encrypted = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIH0MF8GCSqGSIb3DQEFDTBSMDEGCSqGSIb3DQEFDDAkBBCQ\n-----END ENCRYPTED PRIVATE KEY-----\n"; // redacter:allow
         for (key, format) in [
             (pkcs8_der_secret(x25519), PrivateKeyFormat::Pkcs8Der),
             (

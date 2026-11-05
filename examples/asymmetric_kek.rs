@@ -24,6 +24,7 @@ use secret_vault_value::SecretValue;
 const AAD: &[u8] = b"orders/1042";
 const KEK_ID: &str = "orders-kek";
 
+// redacter:allow-begin
 // A throwaway test key that stands in for the operator's key files. Never use it elsewhere.
 const PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----
 MIIG/QIBADANBgkqhkiG9w0BAQEFAASCBucwggbjAgEAAoIBgQDeda4P3hLiP8+H
@@ -66,6 +67,7 @@ jQMONAiaFbqS9Po2tPLquOd+C9MQlYPHlkEuJpnQ66G64tXcaVk/vhbBYip0F3Yn
 TZW7XdBWuU3/tnoMuY0Lg/g=
 -----END PRIVATE KEY-----
 ";
+// redacter:allow-end
 
 const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA3nWuD94S4j/Phw91/bVC

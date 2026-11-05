@@ -8,11 +8,13 @@
 //!
 //! The keyring is under an ephemeral local KEK, so no cloud KMS is needed.
 //!
+//! <!-- redacter:allow-begin -->
 //! ```sh
 //! docker run --rm -d --name kms-aead-postgres -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:18
 //! KMS_AEAD_KEYRING_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres \
 //!   cargo run -p kms-aead-keyring --example sweep_postgres --features ring,admin,postgres -- 1000
 //! ```
+//! <!-- redacter:allow-end -->
 //!
 //! The argument is the number of users, 100 by default.
 
