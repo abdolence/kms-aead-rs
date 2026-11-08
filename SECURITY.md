@@ -1,26 +1,25 @@
-# Security Policy
+# Security policy
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Please follow general guidelines defined here:
-https://cheatsheetseries.owasp.org/cheatsheets/Vulnerability_Disclosure_Cheat_Sheet.html
+Please follow the general guidelines of the [OWASP Vulnerability Disclosure Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Vulnerability_Disclosure_Cheat_Sheet.html).
 
 ## Security considerations and risks
 
 ### OSS
+
 Open source code is created through voluntary collaboration of software developers.
-The original authors license the code so that anyone can see it, modify it, and
-distribute new versions of it.
-You should manage all OSS using the same procedures and tools that you use for
-commercial products. As always, train your employees on
-cyber security best practices that can help them securely
-use and manage software products.
-You should not solely rely on individuals, especially on the projects like this
-reading sensitive information.
+The original authors license the code so that anyone can see it, modify it and distribute new versions of it.
+
+Manage all OSS with the same procedures and tools that you use for commercial products.
+Train your employees on cyber security best practices that help them use and manage software products securely.
+
+Do not rely solely on individuals who read sensitive information, especially in projects like this one.
 
 ### Versioning
-Please don't use broad version dependency management not to include
-a new version of dependency automatically without your auditing the changes.
+
+Do not use broad dependency version ranges. They pull in new versions of a dependency automatically, before you have audited the changes.
 
 ## Contacts
-E-mail: me@abdolence.dev
+
+Email: [me@abdolence.dev](mailto:me@abdolence.dev)
