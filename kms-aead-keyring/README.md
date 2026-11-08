@@ -34,8 +34,8 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.31", features = ["ring"] }
-kms-aead-keyring = { version = "0.31", features = ["ring", "admin"] }
+kms-aead = { version = "0.32", features = ["ring"] }
+kms-aead-keyring = { version = "0.32", features = ["ring", "admin"] }
 secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```

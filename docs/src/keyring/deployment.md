@@ -43,10 +43,10 @@ tests only:
 
 ```toml
 [dependencies]
-kms-aead-keyring = { version = "0.31", features = ["ring", "firestore-tls-roots"] }
+kms-aead-keyring = { version = "0.32", features = ["ring", "firestore-tls-roots"] }
 
 [dev-dependencies]
-kms-aead-keyring = { version = "0.31", features = ["ring", "firestore-tls-roots", "admin"] }
+kms-aead-keyring = { version = "0.32", features = ["ring", "firestore-tls-roots", "admin"] }
 ```
 
 Be aware Cargo unifies the features of the packages one command builds: a `cargo build` of a

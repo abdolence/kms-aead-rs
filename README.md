@@ -36,7 +36,7 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "aws-lc"] }
+kms-aead = { version = "0.32", features = ["gcp-kms-encryption", "aws-lc"] }
 ```
 
 Every build with a KMS provider needs a crypto backend feature: `ring`, `aws-lc`, `aws-lc-fips` or
