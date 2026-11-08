@@ -116,7 +116,7 @@ p256 = { version = "0.14", default-features = false, features = ["ecdsa"], optio
 ed25519-dalek = { version = "3", optional = true }
 # RSA-OAEP of the asymmetric KEKs on the RustCrypto backend. A release candidate, required in the
 # caret form so that 0.10.0 and the 0.10 releases after it resolve with no bump of kms-aead.
-rsa = { version = "^0.10.0-rc.19", default-features = false, features = ["encoding"], optional = true }
+rsa = { version = "^0.10.0-rc.22", default-features = false, features = ["encoding"], optional = true }
 # The checksums of Cloud KMS requests and responses.
 crc32c = { version = "0.6", optional = true }
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds

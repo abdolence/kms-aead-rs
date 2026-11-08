@@ -351,6 +351,7 @@ struct RsaPrivateJwk {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RsaOaepCase {
     pub(crate) tc_id: u32,
+    pub(crate) comment: String,
     pub(crate) msg: String,
     pub(crate) ct: String,
     pub(crate) label: String,
