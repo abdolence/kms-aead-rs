@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-7ef77d17.js";
+            window.path_to_searchindex_js = "searchindex-e48eeb0a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-5b436d00.js"></script>
@@ -180,7 +180,7 @@
                         <h1 id="getting-started"><a class="header" href="#getting-started">Getting started</a></h1>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
-kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "aws-lc"] }
+kms-aead = { version = "0.32", features = ["gcp-kms-encryption", "aws-lc"] }
 </code></pre>
 <p>The crate has no default features. A build makes three choices, and they do not constrain each
 other:</p>
@@ -228,8 +228,8 @@ the code stays the same.</p>
 <a href="./features.html#kms-aead-keyring">Cargo features</a>.</p>
 <p>Cargo.toml:</p>
 <pre><code class="language-toml">[dependencies]
-kms-aead = { version = "0.31", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.31", features = ["ring", "admin", "firestore-tls-roots"] }
+kms-aead = { version = "0.32", features = ["gcp-kms-encryption", "ring"] }
+kms-aead-keyring = { version = "0.32", features = ["ring", "admin", "firestore-tls-roots"] }
 secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 </code></pre>
