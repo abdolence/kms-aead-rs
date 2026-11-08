@@ -11,7 +11,7 @@ use p256::ecdsa::signature::Verifier as _;
 use rsa::oaep::Oaep;
 use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey};
 use rsa::traits::{PaddingScheme, PublicKeyParts};
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use rsa::{PrivateKey, PublicKey};
 use secret_vault_value::SecretValue;
 use sha2::{Digest, Sha256, Sha512};
 
@@ -44,8 +44,8 @@ impl AeadBackend for RustCrypto {
 impl Sealed for RustCrypto {}
 
 impl AeadBackendOps for RustCrypto {
-    type RsaPublicKey = RsaPublicKey;
-    type RsaPrivateKey = RsaPrivateKey;
+    type RsaPublicKey = PublicKey;
+    type RsaPrivateKey = PrivateKey;
 
     fn supports(algorithm: AeadAlgorithm) -> bool {
         match algorithm {
@@ -217,14 +217,14 @@ impl AeadBackendOps for RustCrypto {
     }
 
     fn rsa_public_key(spki_der: &[u8]) -> Result<Self::RsaPublicKey, Failure> {
-        RsaPublicKey::from_public_key_der(spki_der).map_err(|_| Failure::Key)
+        PublicKey::from_public_key_der(spki_der).map_err(|_| Failure::Key)
     }
 
     fn rsa_oaep_sha256_encrypt(
         public_key: &Self::RsaPublicKey,
         message: &[u8],
     ) -> Result<Vec<u8>, Failure> {
-        // Through the padding scheme rather than `RsaPublicKey::encrypt`, which takes a generator
+        // Through the padding scheme rather than `PublicKey::encrypt`, which takes a generator
         // that cannot fail: a failure of the system CSPRNG is an error here, not a panic.
         Oaep::<Sha256>::new()
             .encrypt(&mut getrandom::SysRng, public_key, message)
@@ -232,7 +232,7 @@ impl AeadBackendOps for RustCrypto {
     }
 
     fn rsa_private_key(pkcs8_der: &[u8]) -> Result<Self::RsaPrivateKey, Failure> {
-        RsaPrivateKey::from_pkcs8_der(pkcs8_der).map_err(|_| Failure::Key)
+        PrivateKey::from_pkcs8_der(pkcs8_der).map_err(|_| Failure::Key)
     }
 
     fn rsa_private_key_bits(private_key: &Self::RsaPrivateKey) -> usize {
@@ -259,7 +259,7 @@ impl AeadBackendOps for RustCrypto {
     }
 
     fn generate_rsa_private_key(bits: usize) -> Result<SecretValue, Failure> {
-        // `RsaPrivateKey::new` takes a generator that cannot fail, so the fallible system CSPRNG
+        // `PrivateKey::new` takes a generator that cannot fail, so the fallible system CSPRNG
         // only seeds one: a failure of the CSPRNG is an error of the generation, as on the other
         // backends.
         let mut seed = vec![0; 32];
@@ -267,8 +267,8 @@ impl AeadBackendOps for RustCrypto {
         let seed = SecretValue::new(seed);
         let seed = <[u8; 32]>::try_from(seed.ref_sensitive_value().as_slice())
             .map_err(|_| Failure::Operation)?;
-        let generated = RsaPrivateKey::new(&mut ChaCha20Rng::from_seed(seed), bits)
-            .map_err(|_| Failure::Key)?;
+        let generated =
+            PrivateKey::new(&mut ChaCha20Rng::from_seed(seed), bits).map_err(|_| Failure::Key)?;
         let pkcs8 = generated.to_pkcs8_der().map_err(|_| Failure::Key)?;
         Ok(SecretValue::new(pkcs8.as_bytes().to_vec()))
     }
