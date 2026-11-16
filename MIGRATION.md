@@ -1,5 +1,29 @@
 # Migration guide
 
+## 0.33
+
+v0.33.0 moves to jiff 1.0, firestore 0.66, gcloud-sdk 0.34 and bigquery 0.10. Nothing stored or
+exported changes: a keyring record keeps its timestamp format in every store and in the BigQuery
+export.
+
+In short:
+
+- `Timestamp` in the public API of kms-aead-keyring is the `jiff::Timestamp` of jiff 1.0, in
+  `KeyVersion::created_at`, `state_changed_at` and `staged_at`, `KeyringRecord::created_at` and
+  `updated_at`, and `Compromise::at`. An application that names the type, or passes one of these
+  to its own code, moves its `jiff` dependency to `"1"`; a `Timestamp` of jiff 0.2 is a different
+  type and does not compile in its place. jiff 1.0 renames `Zoned` to `ZonedDateTime` and
+  `to_zoned` to `to_zoned_datetime`, `Timestamp - Timestamp` returns a `SignedDuration`, and the
+  conversion from a `Timestamp` to a `SystemTime` is fallible. See the
+  [jiff changelog](https://github.com/BurntSushi/jiff/blob/master/CHANGELOG.md);
+- `FirestoreKeyringStore::new` takes the `FirestoreDb` of firestore 0.66, so an application moves
+  its `firestore` dependency to `"0.66"`. `From<FirestoreTimestamp> for SystemTime` is a
+  `TryFrom` there, see the firestore-rs
+  [migration guide](https://github.com/abdolence/firestore-rs/blob/master/MIGRATION.md);
+- gcloud-sdk 0.34 and bigquery 0.10 appear in no public signature of kms-aead or kms-aead-keyring.
+  An application that uses gcloud-sdk next to them moves its own dependency to `"0.34"` to keep
+  one copy in the tree.
+
 ## 0.31
 
 v0.31.0 adds streaming encryption, signatures and MACs, signed keyring records, asymmetric KEKs

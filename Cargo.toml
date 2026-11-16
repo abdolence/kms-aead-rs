@@ -27,7 +27,7 @@ async-trait = "0.1"
 bytes = "1"
 futures = "0.3"
 futures-core = "0.3"
-gcloud-sdk = { version = "0.33", default-features = false }
+gcloud-sdk = { version = "0.34", default-features = false }
 opentelemetry = { version = "0.33", default-features = false, features = ["metrics"] }
 opentelemetry_sdk = { version = "0.33", default-features = false, features = ["metrics", "spec_unstable_metrics_views", "testing"] }
 proptest = "1.4"

@@ -24,7 +24,7 @@ kms-aead = { version = "0.32", path = "..", default-features = false }
 base64 = "0.23"
 # `Stream` and the bounded concurrency of a sweep.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1", features = ["serde"] }
 rsb_derive = { workspace = true }
 secret-vault-value = { workspace = true }
 serde = { workspace = true }
@@ -36,7 +36,7 @@ subtle = { workspace = true }
 # `macros` lets it stop on a shutdown while it waits.
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
 tracing = { workspace = true }
-firestore = { version = "0.65", optional = true, default-features = false }
+firestore = { version = "0.66", optional = true, default-features = false }
 tokio-postgres = { version = "0.7", optional = true, default-features = false, features = ["runtime"] }
 gcloud-sdk = { workspace = true, optional = true }
 # The one-message request stream of a GCS `WriteObject`; tonic already depends on it.
@@ -51,7 +51,7 @@ sqlx-postgres = { workspace = true, optional = true }
 # The client of the BigQuery live test and the `sweep_bigquery` example, with the root store and
 # crypto provider of kms-aead's `gcp-kms-encryption`. An optional dependency rather than a
 # dev-dependency, so that the rows that build no BigQuery do not compile it.
-bigquery = { version = "0.9", optional = true }
+bigquery = { version = "0.10", optional = true }
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
