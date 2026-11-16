@@ -8,7 +8,7 @@
 
 use azure_core::http::{ClientOptions, RequestContent, RetryOptions, Transport};
 use azure_security_keyvault_keys::models::{
-    CreateKeyParameters, CurveName, EncryptionAlgorithm, KeyAttributes,
+    CreateKeyParameters, CurveName, EncryptionAlgorithm, Key, KeyAttributes,
     KeyClientUpdateKeyPropertiesOptions, KeyOperation, KeyOperationParameters, KeyType,
     UpdateKeyPropertiesParameters,
 };
@@ -99,23 +99,46 @@ impl Emulator {
 
     /// Creates a new EC P-256 version of `key_name` that signs, creating the key if it does not
     /// exist, and returns that version.
+    ///
+    /// RFC 7518 section 6.2.1 gives the `x` and `y` of an EC JSON Web Key as the full 32 octets
+    /// for P-256. Lowkey Vault encodes them with `BigInteger.toByteArray`, which drops a leading
+    /// zero byte, so about 1 key in 300 comes back with a 31-byte coordinate that no conforming
+    /// client accepts. Such versions are skipped and a new one is created.
     async fn create_ec_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
-        let parameters = CreateKeyParameters {
-            kty: Some(KeyType::Ec),
-            curve: Some(CurveName::P256),
-            key_ops: Some(vec![KeyOperation::Sign, KeyOperation::Verify]),
-            ..Default::default()
+        const P256_COORDINATE_LEN: usize = 32;
+        const MAX_ATTEMPTS: usize = 20;
+        let has_full_coordinates = |key: &Key| {
+            key.key.as_ref().is_some_and(|jwk| {
+                [&jwk.x, &jwk.y].into_iter().all(|coordinate| {
+                    coordinate.as_ref().map(Vec::len) == Some(P256_COORDINATE_LEN)
+                })
+            })
         };
-        let key = self
-            .client
-            .create_key(key_name, RequestContent::try_from(parameters)?, None)
-            .await?
-            .into_model()?;
-        let version = key
-            .resource_id()?
-            .version
-            .ok_or("Lowkey Vault returned a key id without a version")?;
-        Ok(KmsKeyVersion::try_from(version)?)
+        for _ in 0..MAX_ATTEMPTS {
+            let parameters = CreateKeyParameters {
+                kty: Some(KeyType::Ec),
+                curve: Some(CurveName::P256),
+                key_ops: Some(vec![KeyOperation::Sign, KeyOperation::Verify]),
+                ..Default::default()
+            };
+            let key = self
+                .client
+                .create_key(key_name, RequestContent::try_from(parameters)?, None)
+                .await?
+                .into_model()?;
+            if !has_full_coordinates(&key) {
+                continue;
+            }
+            let version = key
+                .resource_id()?
+                .version
+                .ok_or("Lowkey Vault returned a key id without a version")?;
+            return Ok(KmsKeyVersion::try_from(version)?);
+        }
+        Err(format!(
+            "Lowkey Vault returned no P-256 key with {P256_COORDINATE_LEN}-byte coordinates in {MAX_ATTEMPTS} attempts"
+        )
+        .into())
     }
 
     fn signing_provider(
