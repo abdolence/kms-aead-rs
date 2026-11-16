@@ -24,7 +24,7 @@ kms-aead = { version = "0.32", path = "..", default-features = false }
 base64 = "0.23"
 # `Stream` and the bounded concurrency of a sweep.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
-jiff = { version = "0.2", features = ["serde"] }
+jiff = { version = "1.0", features = ["serde"] }
 rsb_derive = { workspace = true }
 secret-vault-value = { workspace = true }
 serde = { workspace = true }
