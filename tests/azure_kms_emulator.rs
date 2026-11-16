@@ -23,6 +23,7 @@ use kms_aead::signing::{Signer, Verifier, VerifyingKeySet};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 mod common;
@@ -176,12 +177,17 @@ fn has_full_p256_coordinates(key: &Key) -> bool {
     })
 }
 
-/// Emulator state outlives a test run, so every run uses fresh key names.
+static NAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Emulator state outlives a test run, so the timestamp keeps names fresh across runs. Tests run
+/// in parallel and some clocks tick in microseconds only, so two tests can read the same
+/// timestamp; the sequence keeps their names apart.
 fn unique_name(prefix: &str) -> TestResult<String> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_nanos();
-    Ok(format!("{prefix}-{nanos}"))
+    let sequence = NAME_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    Ok(format!("{prefix}-{nanos}-{sequence}"))
 }
 
 #[tokio::test]
