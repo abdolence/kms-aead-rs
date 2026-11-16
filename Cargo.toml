@@ -114,9 +114,9 @@ base64ct = { version = "1", features = ["alloc"] }
 # The signatures of the RustCrypto backend, with their key types zeroised on drop.
 p256 = { version = "0.14", default-features = false, features = ["ecdsa"], optional = true }
 ed25519-dalek = { version = "3", optional = true }
-# RSA-OAEP of the asymmetric KEKs on the RustCrypto backend. A release candidate, required in the
-# caret form so that 0.10.0 and the 0.10 releases after it resolve with no bump of kms-aead.
-rsa = { version = "^0.10.0-rc.22", default-features = false, features = ["encoding"], optional = true }
+# RSA-OAEP of the asymmetric KEKs on the RustCrypto backend. 0.10.0 is the first release that needs
+# crypto-bigint 0.7.11, which has the `bit_width_vartime` used for the key size.
+rsa = { version = "0.10.0", default-features = false, features = ["encoding"], optional = true }
 # The checksums of Cloud KMS requests and responses.
 crc32c = { version = "0.6", optional = true }
 # `sync` shares one unwrap among the concurrent misses of the DEK cache on any executor, and holds

@@ -236,7 +236,7 @@ impl AeadBackendOps for RustCrypto {
     }
 
     fn rsa_private_key_bits(private_key: &Self::RsaPrivateKey) -> usize {
-        usize::try_from(private_key.n().bits_vartime()).unwrap_or(usize::MAX)
+        usize::try_from(private_key.n().bit_width_vartime()).unwrap_or(usize::MAX)
     }
 
     fn rsa_public_key_der(private_key: &Self::RsaPrivateKey) -> Result<Vec<u8>, Failure> {
