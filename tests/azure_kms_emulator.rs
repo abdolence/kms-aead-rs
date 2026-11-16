@@ -105,15 +105,7 @@ impl Emulator {
     /// zero byte, so about 1 key in 300 comes back with a 31-byte coordinate that no conforming
     /// client accepts. Such versions are skipped and a new one is created.
     async fn create_ec_key_version(&self, key_name: &str) -> TestResult<KmsKeyVersion> {
-        const P256_COORDINATE_LEN: usize = 32;
         const MAX_ATTEMPTS: usize = 20;
-        let has_full_coordinates = |key: &Key| {
-            key.key.as_ref().is_some_and(|jwk| {
-                [&jwk.x, &jwk.y].into_iter().all(|coordinate| {
-                    coordinate.as_ref().map(Vec::len) == Some(P256_COORDINATE_LEN)
-                })
-            })
-        };
         for _ in 0..MAX_ATTEMPTS {
             let parameters = CreateKeyParameters {
                 kty: Some(KeyType::Ec),
@@ -126,7 +118,7 @@ impl Emulator {
                 .create_key(key_name, RequestContent::try_from(parameters)?, None)
                 .await?
                 .into_model()?;
-            if !has_full_coordinates(&key) {
+            if !has_full_p256_coordinates(&key) {
                 continue;
             }
             let version = key
@@ -172,6 +164,16 @@ impl Emulator {
         let provider = self.provider(&key_ref)?;
         Ok(KmsAeadEnvelope::new(provider)?)
     }
+}
+
+const P256_COORDINATE_LEN: usize = 32;
+
+fn has_full_p256_coordinates(key: &Key) -> bool {
+    key.key.as_ref().is_some_and(|jwk| {
+        [&jwk.x, &jwk.y]
+            .into_iter()
+            .all(|coordinate| coordinate.as_ref().map(Vec::len) == Some(P256_COORDINATE_LEN))
+    })
 }
 
 /// Emulator state outlives a test run, so every run uses fresh key names.
