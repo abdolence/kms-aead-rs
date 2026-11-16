@@ -51,7 +51,7 @@ sqlx-postgres = { workspace = true, optional = true }
 # The client of the BigQuery live test and the `sweep_bigquery` example, with the root store and
 # crypto provider of kms-aead's `gcp-kms-encryption`. An optional dependency rather than a
 # dev-dependency, so that the rows that build no BigQuery do not compile it.
-bigquery = { version = "0.9", optional = true }
+bigquery = { version = "0.10", optional = true }
 opentelemetry = { workspace = true, optional = true }
 
 [dev-dependencies]
