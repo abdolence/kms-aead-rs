@@ -27,7 +27,7 @@ Notes on the table:
 - BigQuery's `KEYS.KEYSET_CHAIN` decrypts with Cloud KMS only, see
   [Read values in BigQuery or Tink](../use-cases/bigquery-and-tink.md);
 - the KEK version decides how a KEK rotation is checked before the old version is disabled, see
-  [Rotate keys and re-encrypt values](./rotation.md#kek-rotation). Each provider page has its
+  [Rotate keys and re-encrypt values](../production/rotation.md#kek-rotation). Each provider page has its
   rotation, under "Key versions and rotation": [Google Cloud KMS](../providers/gcp.md),
   [AWS KMS](../providers/aws.md), [Azure Key Vault](../providers/azure.md),
   [Vault Transit](../providers/hc-vault-transit.md) and [Local KMS](../providers/local.md);

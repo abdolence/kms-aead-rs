@@ -23,7 +23,7 @@ Every feature of both crates is in [Cargo features](./features.md).
 There is no default backend: each backend feature adds a type to `kms_aead::backends`, `Ring`,
 `AwsLc` or `RustCrypto`, and every type that encrypts takes one as its backend type
 parameter. Which one fits a build, FIPS and the C toolchain included, is in
-[Choose a provider and a backend](./production/choosing.md#crypto-backends).
+[Choose a provider and a backend](./getting-started/choosing.md#crypto-backends).
 
 ## With an envelope
 

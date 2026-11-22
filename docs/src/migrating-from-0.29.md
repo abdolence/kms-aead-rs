@@ -31,7 +31,7 @@ with the deprecated `legacy-formats` feature, which also rewrites them in the ne
 ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
 no second crypto library to a cloud provider build, see [Choose a provider and a
-backend](./production/choosing.md#crypto-backends).
+backend](./getting-started/choosing.md#crypto-backends).
 
 The crate declares `rust-version = "1.99"`.
 

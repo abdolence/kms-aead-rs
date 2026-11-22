@@ -129,8 +129,8 @@ Running in production:
 
 | To | Read |
 |---|---|
-| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./production/choosing.md) |
-| Develop and test without a cloud account | [Develop and test without a cloud](./production/local-development.md) |
+| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./getting-started/choosing.md) |
+| Develop and test without a cloud account | [Develop and test without a cloud](./getting-started/local-development.md) |
 | Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./production/deployment.md) |
 | Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./production/rotation.md) |
 | Respond to a leaked key | [Respond to a leaked key](./production/incidents.md) |

@@ -1,7 +1,10 @@
 # Summary
 
 [KMS envelope encryption for Rust](./intro.md)
-[Getting started](./getting-started.md)
+
+- [Getting started](./getting-started.md)
+  - [Choose a provider and a backend](./getting-started/choosing.md)
+  - [Develop and test without a cloud](./getting-started/local-development.md)
 
 # Use cases
 
@@ -25,8 +28,6 @@
 
 # Running in production
 
-- [Choose a provider and a backend](./production/choosing.md)
-- [Develop and test without a cloud](./production/local-development.md)
 - [Applications and administration apart](./production/deployment.md)
 - [Rotate keys and re-encrypt values](./production/rotation.md)
 - [Respond to a leaked key](./production/incidents.md)
