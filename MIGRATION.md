@@ -97,9 +97,10 @@ In short:
   its `firestore` dependency to `"0.66"`. `From<FirestoreTimestamp> for SystemTime` is a
   `TryFrom` there, see the firestore-rs
   [migration guide](https://github.com/abdolence/firestore-rs/blob/master/MIGRATION.md);
-- gcloud-sdk 0.34 and bigquery 0.10 appear in no public signature of kms-aead or kms-aead-keyring.
-  An application that uses gcloud-sdk next to them moves its own dependency to `"0.34"` to keep
-  one copy in the tree.
+- `GcpKmsProvider::with_client`, `GcpKmsSigningProvider::with_client` and `GcsKeyringStore::new`
+  take a client of gcloud-sdk 0.34, so an application that passes its own client moves its
+  `gcloud-sdk` dependency to `"0.34"`. Any other application that uses gcloud-sdk next to them
+  moves it too, to keep one copy in the tree. bigquery 0.10 appears in no public signature.
 
 ## 0.31
 
