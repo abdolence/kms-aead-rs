@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::future::poll_fn;
@@ -74,7 +75,7 @@ pub struct PostgresKeyringStore<T> {
 /// 1 to 63 characters of `a`-`z`, `0`-`9` and `_`, not starting with a digit. The name is
 /// unqualified, so the connection's `search_path` selects the schema.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PostgresTable(String);
+pub struct PostgresTable(Cow<'static, str>);
 
 /// The revision of a record in a [`PostgresKeyringStore`]: the row's `revision` column, the
 /// server's clock in microseconds since the Unix epoch when the record is created, and the larger
@@ -159,7 +160,7 @@ where
     /// `config` bounds each attempt to connect only with its `connect_timeout`, and callers
     /// wait for the attempt in progress.
     pub fn new(config: Config, tls: T) -> Self {
-        let table = PostgresTable(PostgresTable::DEFAULT_NAME.to_string());
+        let table = PostgresTable::DEFAULT_NAME;
         Self {
             connections: Arc::new(Connections {
                 config,
@@ -448,7 +449,7 @@ impl Statements {
 impl PostgresTable {
     /// The table of a store that [`with_table`](PostgresKeyringStore::with_table) names no
     /// other for.
-    pub const DEFAULT_NAME: &'static str = "kms_keyrings";
+    pub const DEFAULT_NAME: PostgresTable = PostgresTable(Cow::Borrowed("kms_keyrings"));
 }
 
 impl TryFrom<String> for PostgresTable {
@@ -466,7 +467,7 @@ impl TryFrom<String> for PostgresTable {
         if !name.chars().all(allowed) || name.starts_with(|c: char| c.is_ascii_digit()) {
             return Err(invalid(IdentifierRule::Character));
         }
-        Ok(Self(name))
+        Ok(Self(Cow::Owned(name)))
     }
 }
 
@@ -575,7 +576,7 @@ where
     ) -> KeyringResult<Swap<PostgresRevision>> {
         let document = record.to_json()?;
         let id = record.id().as_str();
-        let channel = self.table.0.as_str();
+        let channel: &str = &self.table.0;
         let (statement, parameters): (_, Vec<&(dyn ToSql + Sync)>) = match expected {
             None => (&self.statements.create, vec![&id, &document, &channel]),
             Some(expected) => (
@@ -603,10 +604,11 @@ where
     async fn delete(&self, id: &KeyringId, expected: &PostgresRevision) -> KeyringResult<Deletion> {
         let (deleted, stored): (i64, bool) = async {
             let client = self.connections.client().await?;
+            let channel: &str = &self.table.0;
             let row = client
                 .query_one(
                     &self.statements.delete,
-                    &[&id.as_str(), &self.table.0.as_str(), &expected.0],
+                    &[&id.as_str(), &channel, &expected.0],
                 )
                 .await?;
             Ok((row.try_get(0)?, row.try_get(1)?))
