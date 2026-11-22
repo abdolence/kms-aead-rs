@@ -6,8 +6,8 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.33", features = ["gcp-kms-encryption", "ring"] }
-kms-aead-keyring = { version = "0.33", features = ["ring", "admin", "firestore-tls-roots"] }
+kms-aead = { version = "0.34", features = ["gcp-kms-encryption", "ring"] }
+kms-aead-keyring = { version = "0.34", features = ["ring", "admin", "firestore-tls-roots"] }
 secret-vault-value = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```

@@ -8,7 +8,7 @@ Cargo.toml:
 
 ```toml
 [dependencies]
-kms-aead = { version = "0.33", features = ["gcp-kms-encryption", "aws-lc"] }
+kms-aead = { version = "0.34", features = ["gcp-kms-encryption", "aws-lc"] }
 ```
 
 The crate has no default features. A build makes three choices, and they do not constrain each

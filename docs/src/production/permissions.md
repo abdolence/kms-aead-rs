@@ -51,10 +51,10 @@ tests only:
 
 ```toml
 [dependencies]
-kms-aead-keyring = { version = "0.33", features = ["ring", "firestore-tls-roots"] }
+kms-aead-keyring = { version = "0.34", features = ["ring", "firestore-tls-roots"] }
 
 [dev-dependencies]
-kms-aead-keyring = { version = "0.33", features = ["ring", "firestore-tls-roots", "admin"] }
+kms-aead-keyring = { version = "0.34", features = ["ring", "firestore-tls-roots", "admin"] }
 ```
 
 ## The application
