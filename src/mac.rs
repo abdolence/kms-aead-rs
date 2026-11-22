@@ -247,7 +247,7 @@ impl<B: AeadBackend> Authenticator<B> {
             || {
                 let payload = with_mac.unverified_payload();
                 self.check(payload, T::PAYLOAD_TYPE, with_mac.tag(), key)?;
-                T::from_payload(payload.to_vec())
+                T::from_payload(payload)
             },
         )
     }

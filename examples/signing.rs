@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing_subscriber::fmt().without_time().init();
     let payload = invoice.to_payload()?;
     let cut = &payload[..payload.len() / 2];
-    match JsonEncoded::<Invoice>::from_payload(cut.to_vec()) {
+    match JsonEncoded::<Invoice>::from_payload(cut) {
         Ok(_) => return Err("a cut invoice decoded".into()),
         Err(error) => println!("cut invoice refused: {}", error.code()),
     }

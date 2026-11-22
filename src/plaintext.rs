@@ -422,7 +422,7 @@ mod tests {
         let events = EventCapture::install();
         let payload = br#"{"id":"not-a-number","customer":"Northwind Traders"}"#;
 
-        let result = <JsonEncoded<Order, OrderLog> as Signable>::from_payload(payload.to_vec());
+        let result = <JsonEncoded<Order, OrderLog> as Signable>::from_payload(payload);
 
         let error = result.map(drop).expect_err("the id is not a number");
         assert_eq!(error.code(), "INVALID_PAYLOAD");

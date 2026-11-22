@@ -143,10 +143,12 @@ impl Signable for Statement {
         Ok(self.0.clone().into_bytes())
     }
 
-    fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-        String::from_utf8(payload).map(Statement).map_err(|_| {
-            KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
-        })
+    fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+        std::str::from_utf8(payload)
+            .map(|text| Statement(text.to_string()))
+            .map_err(|_| {
+                KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
+            })
     }
 }
 ```

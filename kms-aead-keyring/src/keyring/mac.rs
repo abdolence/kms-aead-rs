@@ -253,8 +253,8 @@ mod tests {
             Ok(self.0.clone())
         }
 
-        fn from_payload(payload: Vec<u8>) -> KmsAeadResult<Self> {
-            Ok(Invoice(payload))
+        fn from_payload(payload: &[u8]) -> KmsAeadResult<Self> {
+            Ok(Invoice(payload.to_vec()))
         }
     }
 

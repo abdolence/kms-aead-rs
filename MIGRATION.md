@@ -28,6 +28,9 @@
 - `LocalSigningProvider::ephemeral` returns a CSPRNG failure, `RANDOM_GENERATOR`, as a
   `KmsAeadError::EncryptionError`, the variant of every other `RANDOM_GENERATOR` error. It was a
   `SystemError`.
+- `Signable::from_payload` takes the payload as `&[u8]`, borrowed from the attached value, so that
+  `verify_signed` and `verify_with_mac` do not copy it. An application's own `Signable` impl takes
+  `payload: &[u8]`, and copies the bytes where it keeps them, as in `Ok(Invoice(payload.to_vec()))`.
 
 ## 0.33
 

@@ -98,7 +98,7 @@ impl<B: AeadBackend> Verifier<B> {
                 signed.key_id(),
                 signed.raw_signature(),
             )?;
-            Ok((T::from_payload(payload.to_vec())?, key))
+            Ok((T::from_payload(payload)?, key))
         })
     }
 
@@ -219,7 +219,7 @@ mod tests {
             Ok(INVOICE_PAYLOAD.to_vec())
         }
 
-        fn from_payload(_: Vec<u8>) -> KmsAeadResult<Self> {
+        fn from_payload(_: &[u8]) -> KmsAeadResult<Self> {
             Ok(Receipt)
         }
     }
