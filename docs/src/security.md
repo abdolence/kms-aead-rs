@@ -19,7 +19,9 @@ It does not protect values from:
 - whoever can read the memory of a process while it holds plaintext DEKs, in the
   [DEK cache](./dek-caching.md#key-lifetime) or as a store-less writer's DEK;
 - a reader of the store learning which values are equal, for values encrypted with
-  [deterministic encryption](./deterministic.md#what-it-leaks).
+  [deterministic encryption](./deterministic.md#what-it-leaks);
+- a reader of the store learning the length of each plaintext, since a stored value is as long as
+  its plaintext plus a fixed overhead, see [`Plaintext`](./stored-values.md#plaintext).
 
 The AAD protects a value from being moved: a value copied into another row or column, with an AAD
 that names its place, fails to decrypt there. The AAD itself is not encrypted, and neither is the

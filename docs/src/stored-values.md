@@ -359,9 +359,13 @@ values, such as BigQuery's `AEAD.DECRYPT_STRING`, decode them:
 |---|---|
 | `String` | UTF-8 |
 | `Vec<u8>`, `SecretValue` | the bytes themselves |
-| `bool` | `true` or `false` |
 | `i32`, `i64`, `u32`, `u64` | decimal ASCII, which SQL reads with `CAST` |
 | `JsonEncoded<T>` | the compact JSON of any serde type |
+
+A stored value is as long as its encoding plus a fixed overhead, so whoever reads the store reads
+the length of the plaintext: the number of digits of an integer, the length of a string. There is
+no impl for `bool` for this reason, since `true` and `false` differ in length. A type whose length
+must not show pads its encoding to a fixed length in its own `Plaintext` impl.
 
 - `decrypt` fails with `INVALID_PLAINTEXT` when the plaintext is not an encoding of `T`, and the
   error never quotes the bytes;

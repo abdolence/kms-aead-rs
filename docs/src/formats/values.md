@@ -32,8 +32,8 @@ targets has Tink's framing, so it reads as an `Envelope` value in every build, a
 [Migrating from 0.29](../migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
-bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
-the integers, and compact JSON for `JsonEncoded<T>`. See
+bytes themselves for `Vec<u8>` and `SecretValue`, decimal ASCII for the integers, and compact JSON
+for `JsonEncoded<T>`. See
 [Stored values](../stored-values.md#plaintext).
 
 ## Tink's KMS envelope

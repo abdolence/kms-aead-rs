@@ -2065,8 +2065,6 @@ mod tests {
         assert_eq!(through_a_field(&envelope, &bytes).await?, bytes);
         let secret = SecretValue::from(PLAIN_TEXT);
         assert_eq!(through_a_field(&envelope, &secret).await?, secret);
-        assert!(through_a_field(&envelope, &true).await?);
-        assert!(!through_a_field(&envelope, &false).await?);
         assert_eq!(through_a_field(&envelope, &i32::MIN).await?, i32::MIN);
         assert_eq!(through_a_field(&envelope, &i64::MIN).await?, i64::MIN);
         assert_eq!(through_a_field(&envelope, &u32::MAX).await?, u32::MAX);

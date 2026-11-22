@@ -1,5 +1,12 @@
 # Migration guide
 
+## Unreleased
+
+- `Plaintext` has no impl for `bool`. `true` and `false` differ in length, and a stored value is as
+  long as its plaintext plus a fixed overhead, so the length of an encrypted `bool` revealed it. An
+  application that stores a flag defines a newtype with a `Plaintext` impl of its own. To read the
+  values written before, its `from_plaintext` accepts the bytes `true` and `false`.
+
 ## 0.33
 
 v0.33.0 moves to jiff 1.0, firestore 0.66, gcloud-sdk 0.34 and bigquery 0.10. Nothing stored or

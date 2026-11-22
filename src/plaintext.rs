@@ -11,9 +11,12 @@ use crate::{spans, KmsAeadResult, SignedPayloadType};
 ///
 /// The encodings of the types here are fixed, so that other readers of the same values decode
 /// them, such as BigQuery's `AEAD.DECRYPT_STRING` on a keyring value: UTF-8 for `String`, the
-/// bytes themselves for `Vec<u8>` and [`SecretValue`], `true` and `false` for `bool`, and decimal
-/// ASCII for the integers, which SQL reads with `CAST`. `JsonEncoded` stores any serde type as
-/// compact JSON.
+/// bytes themselves for `Vec<u8>` and [`SecretValue`], and decimal ASCII for the integers, which SQL
+/// reads with `CAST`. `JsonEncoded` stores any serde type as compact JSON.
+///
+/// An encrypted value is as long as this encoding plus a fixed overhead, so its length gives the
+/// encoding's length away. There is no impl for `bool` for that reason: `true` and `false` differ in
+/// length, so the length of the stored value would reveal it.
 ///
 /// An application type implements it by mapping to and from one of these, such as a newtype
 /// over `String` that is encrypted as the same UTF-8 bytes:
@@ -130,22 +133,6 @@ impl Plaintext for String {
             drop(SecretValue::new(error.into_bytes()));
             KmsAeadEncryptionError::invalid_plaintext::<Self>(reason)
         })
-    }
-}
-
-impl Plaintext for bool {
-    fn to_plaintext(&self) -> KmsAeadResult<SecretValue> {
-        Ok(SecretValue::from(if *self { "true" } else { "false" }))
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -> KmsAeadResult<Self> {
-        match plaintext.as_sensitive_bytes() {
-            b"true" => Ok(true),
-            b"false" => Ok(false),
-            _ => Err(KmsAeadEncryptionError::invalid_plaintext::<Self>(
-                "neither true nor false",
-            )),
-        }
     }
 }
 
@@ -345,19 +332,6 @@ mod tests {
             prop_assert_eq!(i32::from_plaintext(int.to_plaintext()?)?, int);
             prop_assert_eq!(u32::from_plaintext(unsigned_int.to_plaintext()?)?, unsigned_int);
         }
-    }
-
-    #[test]
-    fn booleans_are_true_and_false() -> KmsAeadResult<()> {
-        assert_eq!(true.to_plaintext()?.as_sensitive_str(), "true");
-        assert!(!bool::from_plaintext(false.to_plaintext()?)?);
-        let refused = bool::from_plaintext(SecretValue::from("yes"));
-        assert!(
-            matches!(&refused, Err(KmsAeadError::EncryptionError(error))
-                if error.public.code == "INVALID_PLAINTEXT"),
-            "{refused:?}"
-        );
-        Ok(())
     }
 
     #[test]
