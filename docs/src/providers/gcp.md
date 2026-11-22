@@ -1,10 +1,12 @@
 # Google Cloud KMS
 
-Feature `gcp-kms-encryption`, or `gcp-kms-encryption-webpki` for the bundled WebPKI roots.
+Feature `gcp-kms-encryption`, or `gcp-kms-encryption-webpki` for the bundled WebPKI roots, see
+[Cargo features](../features.md).
 
 `GcpKmsKeyRef` names a CryptoKey by its project, location, key ring and key. The provider encrypts
 under the primary version of the key, and each encrypted DEK records the version that encrypted it,
-so DEKs encrypted before a rotation still decrypt afterwards.
+so DEKs encrypted before a rotation still decrypt afterwards. How the KMS providers compare is in
+[Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
@@ -42,11 +44,12 @@ let cipher_text = envelope
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/gcp_kms.rs).
 
-## Authentication
+## Configuration, authentication and permissions
 
 `GcpKmsProvider::new` and `with_options` build a Cloud KMS client with the application default
-credentials. They look for credentials in the following places, preferring the first location
-found:
+credentials, and fail with a `SystemError` when the client cannot be built, such as when no
+credentials are found. They look for credentials in the following places, preferring the first
+location found:
 
 - A JSON file whose path is specified by the `GOOGLE_APPLICATION_CREDENTIALS` environment variable;
 - A JSON file in a location known to the gcloud command-line tool using
@@ -58,6 +61,11 @@ since the first one authorises only the `gcloud` tool to access the Cloud Platfo
 
 `GcpKmsProvider::with_client` takes a client the application built itself, for other
 credentials.
+
+`GcpKmsProviderOptions` has one option, `use_kms_random_gen`, `false` by default: `true` takes DEKs
+from Cloud KMS `GenerateRandomBytes` at the HSM protection level in place of the backend's CSPRNG,
+at the cost of one more KMS request per DEK, see
+[KMS random generators](../providers.md#kms-random-generators).
 
 The principal needs `cloudkms.cryptoKeyVersions.useToEncrypt` and `useToDecrypt` on the key, as
 in the `roles/cloudkms.cryptoKeyEncrypterDecrypter` role, and `cloudkms.locations.generateRandomBytes`
@@ -94,7 +102,14 @@ Enabling a version is strongly consistent, see
 version is available at once, so enabling the old version again after a failed check takes effect
 immediately.
 
-## Asymmetric keys
+### Rolling back a rotation
+
+Make the old version the primary version again, and keep the new version enabled: every swept value
+and every value written since the rotation is under the new version only, and disabling it makes
+them unreadable until it is enabled again. See
+[Rolling back a rotation](../production/reencrypt-deks.md#rolling-back-a-rotation).
+
+## Asymmetric KEKs
 
 A CryptoKey with the purpose `ASYMMETRIC_DECRYPT` and an algorithm `RSA_DECRYPT_OAEP_2048_SHA256`,
 `RSA_DECRYPT_OAEP_3072_SHA256` or `RSA_DECRYPT_OAEP_4096_SHA256` is an asymmetric KEK, see
@@ -174,6 +189,15 @@ at the HSM protection level signs with P-256.
 
 A rotation is a new CryptoKeyVersion that a new signer names, see
 [Key ids and rotation](../signing.md#key-ids-and-rotation).
+
+## Limits
+
+- Changing the primary version and disabling a version are eventually consistent, see
+  [Key versions and rotation](#key-versions-and-rotation);
+- an asymmetric KEK has no primary version and no automatic rotation, and an asymmetric decryption
+  costs more of the quota than a symmetric one, see [Asymmetric KEKs](#asymmetric-keks);
+- Cloud KMS lists `EC_SIGN_ED25519` under the software protection level only, so a key at the HSM
+  protection level signs with P-256, see [Signing](#signing).
 
 ## Errors
 

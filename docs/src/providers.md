@@ -5,12 +5,17 @@ a type in `kms_aead::providers`, enabled by its feature:
 
 | KMS | Type | Feature |
 |---|---|---|
-| Google Cloud KMS | `GcpKmsProvider` | `gcp-kms-encryption` |
-| AWS KMS | `AwsKmsProvider` | `aws-kms-encryption` |
-| Azure Key Vault and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
-| HashiCorp Vault Transit | `HcVaultTransitProvider` | `hashicorp-vault-transit-kms-encryption` |
-| A KEK the process holds | `LocalKmsProvider` | none, in every build |
-| An RSA KEK the process holds | `LocalAsymmetricKmsProvider` | none, in every build |
+| [Google Cloud KMS](./providers/gcp.md) | `GcpKmsProvider` | `gcp-kms-encryption` |
+| [AWS KMS](./providers/aws.md) | `AwsKmsProvider` | `aws-kms-encryption` |
+| [Azure Key Vault and Managed HSM](./providers/azure.md) | `AzureKmsProvider` | `azure-kms-encryption` |
+| [HashiCorp Vault Transit](./providers/hc-vault-transit.md) | `HcVaultTransitProvider` | `hashicorp-vault-transit-kms-encryption` |
+| [A KEK the process holds](./providers/local.md) | `LocalKmsProvider` | none, in every build |
+| [An RSA KEK the process holds](./providers/local.md#asymmetric-keks) | `LocalAsymmetricKmsProvider` | none, in every build |
+
+Every provider has a page with the same sections, in this order: configuration, authentication and
+permissions; key versions and rotation; asymmetric KEKs; signing; limits; and errors. A section
+that a provider does not support says so. How the providers compare is in
+[Choose a provider and a backend](./getting-started/choosing.md#kms-providers).
 
 Every KMS provider above implements the two provider traits, `KmsAeadEncryptionProvider`, which
 encrypts DEKs, and `KmsAeadDecryptionProvider`, which decrypts them, and `KmsAeadEnvelope` takes

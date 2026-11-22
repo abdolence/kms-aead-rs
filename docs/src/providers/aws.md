@@ -1,9 +1,10 @@
 # AWS KMS
 
-Feature `aws-kms-encryption`.
+Feature `aws-kms-encryption`, see [Cargo features](../features.md).
 
 `AwsKmsKeyRef` names the key by the AWS account and the key id, which is anything AWS KMS
-accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias ARN.
+accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias ARN. How the KMS
+providers compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
@@ -39,7 +40,7 @@ let cipher_text = envelope
 
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/aws_kms.rs).
 
-## Authentication and region
+## Configuration, authentication and permissions
 
 `AwsKmsProvider::new` loads the AWS configuration from the environment, as the AWS SDK does:
 environment variables, the shared config and credentials files, the instance or container
@@ -49,10 +50,14 @@ encryption or decryption.
 Without `aws_region` in the key reference, the provider takes the region of the AWS
 configuration it loads. Set one with `AwsKmsKeyRef::new(..).with_aws_region(region)`.
 
+`AwsKmsProviderOptions` has one option, `use_kms_random_gen`, `false` by default: `true` takes DEKs
+from AWS KMS `GenerateRandom` in place of the backend's CSPRNG, at the cost of one more KMS request
+per DEK, see [KMS random generators](../providers.md#kms-random-generators).
+
 The principal needs `kms:Encrypt` and `kms:Decrypt` on the key, and `kms:GenerateRandom` when
 the KMS generator is on.
 
-## Key ARN and aliases
+### Key ARN and aliases
 
 A decryption names the configured key to AWS KMS, so a DEK encrypted under another key fails with
 `IncorrectKeyException`, even when the principal may decrypt with that key.
@@ -92,7 +97,13 @@ DEK: each keyring's with `reencrypt_deks`, the application's own as in
 `PendingImport`: `ListKeyRotations` lists each material with its import state, and the one still
 missing is imported again.
 
-## Asymmetric keys
+### Rolling back a rotation
+
+A rotation needs no rollback: AWS KMS keeps every earlier key material decrypting, and key material
+that AWS KMS generated cannot be disabled. See
+[Rolling back a rotation](../production/reencrypt-deks.md#rolling-back-a-rotation).
+
+## Asymmetric KEKs
 
 A KMS key of the spec `RSA_2048`, `RSA_3072` or `RSA_4096` with the usage `ENCRYPT_DECRYPT` is an
 asymmetric KEK, see [Asymmetric KEKs](../asymmetric-kek.md):
@@ -163,6 +174,21 @@ the signature does not name. An alias name, `alias/…`, or an alias ARN fails a
 - `verifying_key` sends `GetPublicKey` and parses the DER `PublicKey`. A `KeySpec` other than the
   configured one fails with `SIGNING_ALGORITHM_MISMATCH`;
 - the principal needs `kms:Sign` and `kms:GetPublicKey` on the key.
+
+## Limits
+
+- The `kek_version()` of an encrypted DEK is `None`, so neither a keyring record nor a stored
+  `kek_version` shows which DEKs are under which key material, see
+  [Key versions and rotation](#key-versions-and-rotation);
+- key material that AWS KMS generated cannot be disabled or deleted on its own, and deleted or
+  expired imported key material puts the key in `PendingImport`, where AWS KMS refuses every
+  operation with it;
+- AWS KMS does not rotate an asymmetric key: a rotation is a new key, and so a new keyring, see
+  [Asymmetric KEKs](#asymmetric-keks);
+- a signing key is named by its key id or key ARN, and an alias fails at creation, see
+  [Signing](#signing);
+- BigQuery does not read AWS KMS values, and Tink reads a keyring's keysets only for a key named by
+  its ARN, see [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 ## Errors
 

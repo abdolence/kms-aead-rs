@@ -5,7 +5,9 @@ Feature `azure-kms-encryption`, or one of the TLS variants in
 
 `AzureKmsKeyRef` names the key by the vault URL and the key name. Without a key version, the
 latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the
-decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards.
+decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards. How the
+KMS providers compare is in
+[Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 The provider takes any Azure credential, for example one from `azure_identity`:
 
@@ -39,11 +41,13 @@ let cipher_text = envelope
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs).
 
+## Configuration, authentication and permissions
+
 The provider sends no request until the first encryption or decryption. The principal needs the
 `wrapKey` and `unwrapKey` key operations, Key Vault's names for encrypting and decrypting a DEK, as
 in the "Key Vault Crypto User" role.
 
-## Options
+### Options
 
 `AzureKmsProviderOptions` has:
 
@@ -84,16 +88,6 @@ let provider = AzureKmsProvider::with_options(
 # }
 ```
 
-## Encrypted DEKs
-
-Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
-it before Key Vault's encrypted DEK, in the library's own layout, see
-[Formats](../formats/values.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
-values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
-as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
-too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
-[Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
-
 ## Key versions and rotation
 
 A rotation adds a version to the key, by hand or by the key's rotation policy. Without a key version
@@ -108,7 +102,24 @@ disable the old version: Key Vault refuses to decrypt under it, and enabling it 
 Key Vault deletes a key with all its versions and never one version alone, so the old version stays
 disabled rather than destroyed.
 
-## Asymmetric keys
+### Encrypted DEKs
+
+Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
+it before Key Vault's encrypted DEK, in the library's own layout, see
+[Formats](../formats/values.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
+values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
+as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
+too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+[Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
+
+### Rolling back a rotation
+
+Pin the old version in `AzureKmsKeyRef`, and keep the new version enabled: every swept value and
+every value written since the rotation is under the new version only, and disabling it makes them
+unreadable until it is enabled again. See
+[Rolling back a rotation](../production/reencrypt-deks.md#rolling-back-a-rotation).
+
+## Asymmetric KEKs
 
 An RSA key of 2048, 3072 or 4096 bits, `RSA` or `RSA-HSM`, is an asymmetric KEK, see [Asymmetric
 KEKs](../asymmetric-kek.md). The provider has always encrypted with it through `wrapKey`; a `0x02`
@@ -181,6 +192,17 @@ request.
   "Key Vault Crypto User" grants.
 
 A rotation is a new key version that a new signer names, see [Key ids and rotation](../signing.md#key-ids-and-rotation).
+
+## Limits
+
+- Encrypted DEKs do not record the algorithm, so it stays fixed for the life of the key, see
+  [Options](#options);
+- Key Vault deletes a key with all its versions and never one version alone, so an old version is
+  disabled and not destroyed, see [Key versions and rotation](#key-versions-and-rotation);
+- no Tink client exists for Azure, so Tink does not read the values of this provider, see
+  [Encrypted DEKs](#encrypted-deks), and BigQuery does not read them either;
+- Key Vault signs no Ed25519, so the signing provider's algorithm is `EcdsaP256Sha256`, see
+  [Signing](#signing).
 
 ## Errors
 

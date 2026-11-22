@@ -4,7 +4,8 @@ Feature `hashicorp-vault-transit-kms-encryption`, or one root store and one cryp
 variant, see [Cargo features](../features.md).
 
 The provider encrypts DEKs with a key of the Vault Transit secrets engine. `HcVaultTransitKeyRef`
-names the key, and the mount is `transit` unless set with `with_mount`.
+names the key, and the mount is `transit` unless set with `with_mount`. How the KMS providers
+compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
@@ -31,7 +32,13 @@ let cipher_text = envelope
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/hc_vault_transit_kms.rs).
 
-## Options
+## Configuration, authentication and permissions
+
+The provider reads the address, the token and the namespace from the variables of the Vault CLI, or
+takes them as options. The token needs `update` on `<mount>/encrypt/<key>` and
+`<mount>/decrypt/<key>`.
+
+### Options
 
 `HcVaultTransitProvider::new` reads its options from the variables the Vault CLI reads, with
 `HcVaultTransitProviderOptions::from_env`: `VAULT_ADDR` (required), `VAULT_TOKEN`,
@@ -82,8 +89,6 @@ fail the first encryption or decryption. An `http` address to a host other than 
 loopback address logs a `WARN` event at creation, since the token and the DEKs then cross the
 network unencrypted.
 
-The token needs `update` on `<mount>/encrypt/<key>` and `<mount>/decrypt/<key>`.
-
 ## Key versions and rotation
 
 The encrypted DEK is the Transit ciphertext, such as `vault:v1:...`. It names the key version, so
@@ -102,7 +107,15 @@ it again restores them. Once
 nothing needs them, the backups included, `min_available_version` and a trim of the key delete the
 older versions for good.
 
-## Asymmetric keys
+### Rolling back a rotation
+
+Vault Transit encrypts under the latest version of the key, since the provider names no version in
+its request, and no older version becomes the latest again: a rotation is undone by rotating once
+more and sweeping to that third version. Keep the new version enabled until then, since every swept
+value and every value written since the rotation is under it only. See
+[Rolling back a rotation](../production/reencrypt-deks.md#rolling-back-a-rotation).
+
+## Asymmetric KEKs
 
 A Transit key of the type `rsa-2048`, `rsa-3072` or `rsa-4096` is an asymmetric KEK, see
 [Asymmetric KEKs](../asymmetric-kek.md):
@@ -170,6 +183,16 @@ sends the first one.
 
 A rotation is `<mount>/keys/<key>/rotate`, and a new signer names the new version, see
 [Key ids and rotation](../signing.md#key-ids-and-rotation).
+
+## Limits
+
+- The latest version of the key always encrypts, and no older version becomes the latest again, see
+  [Key versions and rotation](#key-versions-and-rotation);
+- `min_decryption_version` disables every version below it at once;
+- DEKs always come from the backend's CSPRNG: Vault Transit has no KMS random generator in the
+  provider, see [KMS random generators](../providers.md#kms-random-generators);
+- BigQuery does not read Vault Transit values, and Tink reads a keyring's keysets with Tink for Go
+  only, see [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
 
 ## Errors
 

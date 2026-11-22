@@ -1,16 +1,25 @@
 # Local KMS
 
+No Cargo feature: the local providers are in every build, see [Cargo features](../features.md).
+
 `LocalKmsProvider` encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
-the backend it is built with. It is in every build, with no feature, for:
+the backend it is built with. It is for:
 
 - development and tests without a cloud KMS;
 - single-host installs where the operator protects the KEK.
 
 kms-aead builds one only when the application calls one of its constructors; no provider falls
 back to it. Each constructor logs one `INFO` event naming the KEK id, its versions and where
-each version came from (`ephemeral`, `file`, `env` or `secret`), never the key.
+each version came from (`ephemeral`, `file`, `env` or `secret`), never the key. How the KMS
+providers compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers),
+and the first example is in [Tests and development](#tests-and-development).
 
-## KEK ids and versions
+## Configuration, authentication and permissions
+
+No credentials and no permissions apply: the process holds the KEK, and protecting it is the
+operator's job, see [Limits](#limits).
+
+### KEK ids and versions
 
 A `LocalKekId` names the KEK: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and `.`. Every
 encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
@@ -71,7 +80,7 @@ let kek = LocalKek::from_secret(
 [Migrating from 0.30](../migrating-from-0.30.md#loading-a-local-kek). Errors name the file or the
 variable, never its content.
 
-## Tests and development
+### Tests and development
 
 An ephemeral provider has one random version-1 KEK that lives as long as the provider, so the
 DEKs it encrypts cannot be decrypted once the process exits. It suits tests:
@@ -121,7 +130,7 @@ let provider = LocalKmsProvider::<Ring>::new(
 # }
 ```
 
-## A VM or a single host
+### A VM or a single host
 
 On a host, keep the KEK out of the environment. With systemd, encrypt it with `systemd-creds`,
 bound to the host's TPM where it has one, and let systemd pass it to the service as a credential:
@@ -210,7 +219,14 @@ version, so that a DEK the sweep missed fails the check and no read in the appli
 the old version from the list disables it, and listing it again restores it. Destroying it means
 destroying every copy of its material, backups included.
 
-## An asymmetric KEK
+### Rolling back a rotation
+
+Point `with_encrypting_version` at the old version, and keep the new version in the list: every
+swept value and every value written since the rotation is under the new version only, and dropping
+it makes them unreadable until it is listed again. See
+[Rolling back a rotation](../production/reencrypt-deks.md#rolling-back-a-rotation).
+
+## Asymmetric KEKs
 
 `LocalAsymmetricKmsProvider` is the local KMS with an RSA key pair per version, for the same uses as
 `LocalKmsProvider`, see [Asymmetric KEKs](../asymmetric-kek.md). A `LocalAsymmetricKek` is one
@@ -243,6 +259,56 @@ let public_key = provider.public_key(None)?;
   `UNSUPPORTED_ALGORITHM`. On RustCrypto the private half decrypts DEKs from trusted sources only, see
   [Asymmetric KEKs](../asymmetric-kek.md#what-each-backend-does).
 
+## Signing
+
+`LocalSigningProvider` signs with a private key the process holds, on the backend it is built with,
+as `LocalKmsProvider` does for KEKs, see [Signatures and MACs](../signing.md). `LocalSigningKeyName`
+names the key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and `.`. A `LocalSigningKey` is one
+version of it, numbered by a `LocalSigningKeyVersion`: a PKCS#8 private key, either an Ed25519 key or
+a P-256 key, and the PKCS#8 names the algorithm. The loaders are `from_secret`, `from_file` and
+`from_env`, each taking a `PrivateKeyFormat`, `Pkcs8Der` or `Pkcs8Pem`. A file is a regular file of at
+most 32 KiB, and `from_env` reads the PEM text for `Pkcs8Pem` and the standard base64 of the DER for
+`Pkcs8Der`, as for an asymmetric KEK above.
+
+```rust,no_run
+use std::num::NonZeroU32;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::{PrivateKeyFormat, PublicKeyFormat};
+use kms_aead::providers::{
+    LocalSigningKey, LocalSigningKeyName, LocalSigningKeyVersion, LocalSigningProvider,
+};
+use kms_aead::signing::Signer;
+
+# async fn example() -> kms_aead::KmsAeadResult<()> {
+let key = LocalSigningKey::from_env(
+    LocalSigningKeyVersion::from(NonZeroU32::MIN),
+    "APP_SIGNING_KEY",
+    PrivateKeyFormat::Pkcs8Pem,
+)?;
+let provider = LocalSigningProvider::<AwsLc>::new(
+    LocalSigningKeyName::try_from("invoices".to_string())?,
+    vec![key],
+)?;
+let signer = Signer::<_, AwsLc>::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+# let _ = jwk;
+# Ok(())
+# }
+```
+
+- the highest version signs, or the one `with_signing_version` names, and `verifying_keys` returns
+  the public keys of every version as a `VerifyingKeySet` for the published set. A rotation is two
+  deploys: list the new version while the current one signs and publish the new public key, then let
+  the new version sign. Dropping a version from the list stops its export, see
+  [Key ids and rotation](../signing.md#key-ids-and-rotation);
+- `sign` never fails with a network error, and `verifying_key` makes no call;
+- `LocalSigningProvider::ephemeral` has one random version-1 key of the algorithm it names, for
+  tests. Its signatures verify only against a set that holds its verifying key, so a test builds the
+  verifier from the provider.
+
 ## Limits
 
 - No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
@@ -253,7 +319,10 @@ let public_key = provider.public_key(None)?;
   reuse](../dek-caching.md) so that one encryption serves many values, and add a new KEK version
   before the budget is spent;
 - Crypto-shredding means destroying every copy of the KEK, backups included;
-- DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS.
+- DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS;
+- A `LocalSigningProvider` keeps its private key in process memory for its life: whoever reads that
+  memory, a core dump or a swap file included, signs as the application does. Removing the key from
+  every verifier's set revokes a compromised key.
 
 ## Errors
 
@@ -268,3 +337,10 @@ the versions are empty or list one version twice, and `LOCAL_KEK_SOURCE` or `LOC
 a KEK cannot be read or is not 32 bytes. An asymmetric provider fails with
 `ASYMMETRIC_KEK_PRIVATE_KEY` for private key bytes that are not in the named format or not an RSA
 key of 2048, 3072 or 4096 bits.
+
+A `LocalSigningProvider` fails at creation with `LOCAL_SIGNING_KEY_VERSIONS` when the versions are
+empty or list one twice, `LOCAL_SIGNING_KEY_FORMAT` when the backend refuses a key, and
+`DUPLICATE_KEY_ID` when two versions share a key id. A loader fails with `LOCAL_SIGNING_KEY_SOURCE`
+when a file or a variable cannot be read, and with `LOCAL_SIGNING_KEY_FORMAT` for bytes that are not
+the named format. A name that is not valid fails with `INVALID_LOCAL_SIGNING_KEY_NAME`, and `sign`
+fails with `SIGN`, a `SignatureError`, when the backend fails to sign.
