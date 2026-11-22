@@ -30,7 +30,7 @@ Tink for Go for Vault Transit keys too. A keyring exports it for its versions, s
 ## Keyring key ids
 
 kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
-under it. The two high bits of the id are the purpose, and the rest is the ordinal:
+under it. The two high bits of the id are the purpose, and bits 0 to 23 are the ordinal:
 
 | Bits | Meaning |
 |---|---|

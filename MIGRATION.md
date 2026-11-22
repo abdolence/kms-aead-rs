@@ -103,11 +103,15 @@
   It left them out of the document, as firestore-rs does with a JSON `null`, so from 0.31 on every
   signed record on Firestore read back with another canonical digest and failed with
   `RecordSignatureInvalid`, caused by `SIGNATURE_INVALID`. To repair a signed record written
-  before, remove the document's `signature` field and run `sign_record` from a signing admin whose
-  registry is `VerifyIfSigned`, which writes the `null` members and signs the record again.
-  Writing the document again with its `null` members repairs it too, and keeps its signature. An
-  admin of 0.31 to 0.33 leaves the `null` members out again on its next write, so upgrade the
-  administrative binaries first, as in
+  before, load it through the store and write it back at the revision it was loaded at, with
+  `KeyringStore::load` and then `compare_and_swap(&stored.record, Some(&stored.revision))`. `load`
+  reads the document without checking its signature, and the write puts the record back with its
+  `null` members and its signature, which verifies again when nothing but the `null` members had
+  changed. A `Swap::Conflict` means another writer changed the document first, so load it again.
+  For a record that still fails, remove the document's `signature` field and run `sign_record`
+  from a signing admin whose registry is `VerifyIfSigned`. That signs whatever the document holds,
+  so check the record against a backup first. An admin of 0.31 to 0.33 leaves the `null` members
+  out again on its next write, so upgrade the administrative binaries first, as in
   [Roll out](https://kms-aead-rust.abdolence.dev/production/signed-records.html#roll-out).
 
 ## 0.33

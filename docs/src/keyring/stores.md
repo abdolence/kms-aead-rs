@@ -412,6 +412,14 @@ A delete needs rights a write does not: the administration's permissions per sto
   - a store with push signals the deletion as a change;
 - read a stored document with `KeyringRecord::from_json` and write one with
   `KeyringRecord::to_json`, so the document is the one every store keeps and every read checks it;
+- keep every member of the document as written, `null` ones included. A record's signature covers
+  its canonical digest, and a store that maps the document into fields of its own can drop a
+  `null` member, as firestore-rs does with a JSON `null`, which makes every signed record it holds
+  fail with `RecordSignatureInvalid`. The conformance check
+  `a_loaded_record_keeps_the_written_digest` holds every store to it, on a create and on an
+  update;
+- build the `Stored` that `load` and `revalidate` return with `Stored::new(record, revision)`,
+  since the struct is `#[non_exhaustive]`;
 - return the client's errors as `KeyringError::Store`, with the client's error as the root cause.
   Never format the record or the request into an error and never log either, since both carry
   encrypted DEKs.
