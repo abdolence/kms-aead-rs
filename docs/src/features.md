@@ -69,7 +69,7 @@ The crate has no default features.
 | Feature | What it adds |
 |---|---|
 | `ring`, `aws-lc`, `aws-lc-fips`, `rustcrypto` | the crypto backends of kms-aead, see [Crypto backends](./crypto-backends.md). A keyring names its backend as a type parameter, such as `kms_aead::backends::Ring` |
-| `admin` | `KeyringAdmin`, the registry's `create`, `open_or_create` and `admin`, and the types of the administrative calls, `Rotation`, `EncryptedKeyset`, `KeysetSelection` and the `encodings` module, see [Applications and administration](./keyring/deployment.md) |
+| `admin` | `KeyringAdmin`, the registry's `create`, `open_or_create` and `admin`, and the types of the administrative calls, `Rotation`, `EncryptedKeyset`, `KeysetSelection` and the `encodings` module, see [Permissions: applications and administration](./production/permissions.md) |
 | `deterministic` | deterministic key versions and every call on them, `encrypt_deterministic` and `reencrypt_deterministic` on an `Encryptor`, and `decrypt_deterministic`, `decrypt_deterministic_with_trust` and `deterministic_probes` on a `Keyring`, see [Deterministic fields](./keyring/deterministic.md). The deterministic types exist in every build, so a process without the feature keeps a record's deterministic versions intact |
 | `firestore` | the Firestore keyring store, on firestore-rs without its default features: no TLS root store and no crypto provider. The application enables a firestore-rs or gcloud-sdk root store feature, or uses one of the two below, see [Keyring stores](./keyring/stores.md#firestore) |
 | `firestore-tls-roots` | `firestore` with the system's native roots, firestore-rs's `tls-roots`, which brings native-tls and so OpenSSL on Linux, and firestore-rs's `auth-default-crypto` |

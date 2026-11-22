@@ -185,7 +185,7 @@ administrative write's compare-and-swap, up to `cas_retries` times. What a calle
   error in `root_cause`;
 - `RecordConflict`: the administrative call, which reads the record again;
 - `EncryptorOutdated`: the write, with a new encryptor from `Keyring::encryptor`, see
-  [Re-encrypting a value](./operations/sweeps.md#re-encrypting-a-value);
+  [Re-encrypting a value](./production/sweeps.md#re-encrypting-a-value);
 - `PromotionTooEarly`: the promotion, once its `remaining` has passed.
 
 The other variants fail the same way until the record, the configuration or the call changes.
