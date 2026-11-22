@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -213,19 +213,9 @@ A handler that holds the body as a <code>Stream</code> of <code>Bytes</code> use
 </span><span class="boring">    EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringId, KeyringRegistry,
 </span><span class="boring">    KeyringRegistryOptions,
 </span><span class="boring">};
-</span>use kms_aead_keyring::stream::{ChunkReadPlan, EncryptingWriter, PrefixedStreamHeader, StreamFormat};
+</span>use kms_aead_keyring::stream::EncryptingWriter;
 use tokio::io::AsyncWriteExt;
-<span class="boring">/// An object store that serves `Range` requests, held in memory.
-</span><span class="boring">struct Store(Vec&lt;u8&gt;);
-</span><span class="boring">impl Store {
-</span><span class="boring">    fn get(&amp;self, range: std::ops::Range&lt;u64&gt;) -&gt; &amp;[u8] {
-</span><span class="boring">        &amp;self.0[range.start as usize..range.end as usize]
-</span><span class="boring">    }
-</span><span class="boring">    fn size(&amp;self) -&gt; u64 {
-</span><span class="boring">        self.0.len() as u64
-</span><span class="boring">    }
-</span><span class="boring">}
-</span><span class="boring">#[tokio::main]
+<span class="boring">#[tokio::main]
 </span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
 </span><span class="boring">let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
 </span><span class="boring">    MemoryKeyringStore::new(),
@@ -250,11 +240,64 @@ let mut writer = EncryptingWriter::new(encryptor, &amp;mut sink);
 tokio::io::copy(&amp;mut body, &amp;mut writer).await?;
 writer.shutdown().await?;
 <span class="boring">let stored_len = writer.stored_len_written();
+</span><span class="boring">assert_eq!(sink.len() as u64, stored_len);
+</span><span class="boring">registry.shutdown(None).await;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<h2 id="serve-byte-ranges"><a class="header" href="#serve-byte-ranges">Serve byte ranges</a></h2>
+<p>A reader plans each range from the size the object store reports, and fetches and decrypts only the
+chunks the plan names. This example uses <code>StreamFormat::Prefixed</code>, whose header starts with the key id
+of the version that encrypted the object, as every keyring object does. The envelope example below
+uses <code>StreamFormat::Bare</code>, which has no key reference, since the encrypted DEK is stored beside the
+object.</p>
+<pre><code class="language-rust"><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead_keyring::testing::MemoryKeyringStore;
+</span><span class="boring">use kms_aead_keyring::{
+</span><span class="boring">    EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringId, KeyringRegistry,
+</span><span class="boring">    KeyringRegistryOptions,
+</span><span class="boring">};
+</span><span class="boring">use kms_aead_keyring::stream::EncryptingWriter;
+</span>use kms_aead_keyring::stream::{ChunkReadPlan, PrefixedStreamHeader, StreamFormat};
+<span class="boring">use tokio::io::AsyncWriteExt;
+</span><span class="boring">/// An object store that serves `Range` requests, held in memory.
+</span><span class="boring">struct Store(Vec&lt;u8&gt;);
+</span><span class="boring">impl Store {
+</span><span class="boring">    fn get(&amp;self, range: std::ops::Range&lt;u64&gt;) -&gt; &amp;[u8] {
+</span><span class="boring">        &amp;self.0[range.start as usize..range.end as usize]
+</span><span class="boring">    }
+</span><span class="boring">    fn size(&amp;self) -&gt; u64 {
+</span><span class="boring">        self.0.len() as u64
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">#[tokio::main]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error&gt;&gt; {
+</span><span class="boring">let registry = KeyringRegistry::&lt;MemoryKeyringStore, Ring&gt;::new(
+</span><span class="boring">    MemoryKeyringStore::new(),
+</span><span class="boring">    KeyringRegistryOptions::new(),
+</span><span class="boring">)?;
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("uploads".to_string())?)?;
+</span><span class="boring">let admin = registry
+</span><span class="boring">    .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+</span><span class="boring">    .await?;
+</span><span class="boring">let keyring = admin.keyring();
+</span><span class="boring">let mut body = &amp;vec![7_u8; 1_200_000][..];
+</span><span class="boring">let mut sink = Vec::new();
+</span><span class="boring">const UPLOAD_FILE: FieldSpec = FieldSpec::new(
+</span><span class="boring">    EntityKind::from_static("upload"),
+</span><span class="boring">    FieldName::from_static("file"),
+</span><span class="boring">);
+</span><span class="boring">let aad = UPLOAD_FILE.aad(&amp;EntityId::try_from("upload-7")?);
+</span><span class="boring">let encryptor = keyring.encryptor().await.stream_encryptor(&amp;aad).await?;
+</span><span class="boring">let mut writer = EncryptingWriter::new(encryptor, &amp;mut sink);
+</span><span class="boring">tokio::io::copy(&amp;mut body, &amp;mut writer).await?;
+</span><span class="boring">writer.shutdown().await?;
+</span><span class="boring">let stored_len = writer.stored_len_written();
 </span><span class="boring">let store = Store(sink);
 </span><span class="boring">assert_eq!(store.size(), stored_len);
 </span>
-// Serving: plan from the size the store reports first, so that a length the rules refuse
-// reaches neither the store nor the KMS. One zip entry, or the range of a video request
+// Plan from the size the store reports first, so that a length the rules refuse reaches neither
+// the store nor the KMS. One zip entry, or the range of a video request
 let last: ChunkReadPlan = StreamFormat::Prefixed.plan_final_chunk_read(store.size())?;
 let plan = StreamFormat::Prefixed.plan_chunk_read(store.size(), 1_000_000..1_064_512)?;
 

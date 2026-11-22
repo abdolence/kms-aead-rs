@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,10 +179,12 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="google-cloud-kms"><a class="header" href="#google-cloud-kms">Google Cloud KMS</a></h1>
-<p>Feature <code>gcp-kms-encryption</code>, or <code>gcp-kms-encryption-webpki</code> for the bundled WebPKI roots.</p>
+<p>Feature <code>gcp-kms-encryption</code>, or <code>gcp-kms-encryption-webpki</code> for the bundled WebPKI roots, see
+<a href="../features.html">Cargo features</a>.</p>
 <p><code>GcpKmsKeyRef</code> names a CryptoKey by its project, location, key ring and key. The provider encrypts
 under the primary version of the key, and each encrypted DEK records the version that encrypted it,
-so DEKs encrypted before a rotation still decrypt afterwards.</p>
+so DEKs encrypted before a rotation still decrypt afterwards. How the KMS providers compare is in
+<a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider, GcpKmsProviderOptions};
 use kms_aead::KmsAeadEnvelope;
@@ -215,10 +217,11 @@ let cipher_text = envelope
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/gcp_kms.rs">here</a>.</p>
-<h2 id="authentication"><a class="header" href="#authentication">Authentication</a></h2>
+<h2 id="configuration-authentication-and-permissions"><a class="header" href="#configuration-authentication-and-permissions">Configuration, authentication and permissions</a></h2>
 <p><code>GcpKmsProvider::new</code> and <code>with_options</code> build a Cloud KMS client with the application default
-credentials. They look for credentials in the following places, preferring the first location
-found:</p>
+credentials, and fail with a <code>SystemError</code> when the client cannot be built, such as when no
+credentials are found. They look for credentials in the following places, preferring the first
+location found:</p>
 <ul>
 <li>A JSON file whose path is specified by the <code>GOOGLE_APPLICATION_CREDENTIALS</code> environment variable;</li>
 <li>A JSON file in a location known to the gcloud command-line tool using
@@ -229,6 +232,10 @@ found:</p>
 since the first one authorises only the <code>gcloud</code> tool to access the Cloud Platform.</p>
 <p><code>GcpKmsProvider::with_client</code> takes a client the application built itself, for other
 credentials.</p>
+<p><code>GcpKmsProviderOptions</code> has one option, <code>use_kms_random_gen</code>, <code>false</code> by default: <code>true</code> takes DEKs
+from Cloud KMS <code>GenerateRandomBytes</code> at the HSM protection level in place of the backend’s CSPRNG,
+at the cost of one more KMS request per DEK, see
+<a href="../providers.html#kms-random-generators">KMS random generators</a>.</p>
 <p>The principal needs <code>cloudkms.cryptoKeyVersions.useToEncrypt</code> and <code>useToDecrypt</code> on the key, as
 in the <code>roles/cloudkms.cryptoKeyEncrypterDecrypter</code> role, and <code>cloudkms.locations.generateRandomBytes</code>
 on the location when the KMS generator is on.</p>
@@ -259,7 +266,12 @@ version. A check inside that window passes on DEKs that are still under the old 
 <a href="https://docs.cloud.google.com/kms/docs/consistency">Cloud KMS resource consistency</a>: an enabled
 version is available at once, so enabling the old version again after a failed check takes effect
 immediately.</p>
-<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<h3 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h3>
+<p>Make the old version the primary version again, and keep the new version enabled: every swept value
+and every value written since the rotation is under the new version only, and disabling it makes
+them unreadable until it is enabled again. See
+<a href="../production/reencrypt-deks.html#rolling-back-a-rotation">Rolling back a rotation</a>.</p>
+<h2 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h2>
 <p>A CryptoKey with the purpose <code>ASYMMETRIC_DECRYPT</code> and an algorithm <code>RSA_DECRYPT_OAEP_2048_SHA256</code>,
 <code>RSA_DECRYPT_OAEP_3072_SHA256</code> or <code>RSA_DECRYPT_OAEP_4096_SHA256</code> is an asymmetric KEK, see
 <a href="../asymmetric-kek.html">Asymmetric KEKs</a>. 3072 bits is the size Cloud KMS marks as recommended.
@@ -332,6 +344,15 @@ configured one fails with <code>SIGNING_ALGORITHM_MISMATCH</code>, and a <code>p
 </ul>
 <p>A rotation is a new CryptoKeyVersion that a new signer names, see
 <a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>Changing the primary version and disabling a version are eventually consistent, see
+<a href="#key-versions-and-rotation">Key versions and rotation</a>;</li>
+<li>an asymmetric KEK has no primary version and no automatic rotation, and an asymmetric decryption
+costs more of the quota than a symmetric one, see <a href="#asymmetric-keks">Asymmetric KEKs</a>;</li>
+<li>Cloud KMS lists <code>EC_SIGN_ED25519</code> under the software protection level only, so a key at the HSM
+protection level signs with P-256, see <a href="#signing">Signing</a>.</li>
+</ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>The code of a failed KMS call is the gRPC status code, such as <code>PermissionDenied</code> or <code>NotFound</code>.
 Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</code> is in
@@ -391,6 +412,18 @@ Which codes are a <code>NetworkError</code> and which an <code>EncryptionError</
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#asymmetric-keys":"/providers/gcp.html#asymmetric-keks","#authentication":"/providers/gcp.html#configuration-authentication-and-permissions"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>

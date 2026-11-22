@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-eea81289.js";
+            window.path_to_searchindex_js = "searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -187,15 +187,19 @@ a type in <code>kms_aead::providers</code>, enabled by its feature:</p>
 <tr><th>KMS</th><th>Type</th><th>Feature</th></tr>
 </thead>
 <tbody>
-<tr><td>Google Cloud KMS</td><td><code>GcpKmsProvider</code></td><td><code>gcp-kms-encryption</code></td></tr>
-<tr><td>AWS KMS</td><td><code>AwsKmsProvider</code></td><td><code>aws-kms-encryption</code></td></tr>
-<tr><td>Azure Key Vault and Managed HSM</td><td><code>AzureKmsProvider</code></td><td><code>azure-kms-encryption</code></td></tr>
-<tr><td>HashiCorp Vault Transit</td><td><code>HcVaultTransitProvider</code></td><td><code>hashicorp-vault-transit-kms-encryption</code></td></tr>
-<tr><td>A KEK the process holds</td><td><code>LocalKmsProvider</code></td><td>none, in every build</td></tr>
-<tr><td>An RSA KEK the process holds</td><td><code>LocalAsymmetricKmsProvider</code></td><td>none, in every build</td></tr>
+<tr><td><a href="./providers/gcp.html">Google Cloud KMS</a></td><td><code>GcpKmsProvider</code></td><td><code>gcp-kms-encryption</code></td></tr>
+<tr><td><a href="./providers/aws.html">AWS KMS</a></td><td><code>AwsKmsProvider</code></td><td><code>aws-kms-encryption</code></td></tr>
+<tr><td><a href="./providers/azure.html">Azure Key Vault and Managed HSM</a></td><td><code>AzureKmsProvider</code></td><td><code>azure-kms-encryption</code></td></tr>
+<tr><td><a href="./providers/hc-vault-transit.html">HashiCorp Vault Transit</a></td><td><code>HcVaultTransitProvider</code></td><td><code>hashicorp-vault-transit-kms-encryption</code></td></tr>
+<tr><td><a href="./providers/local.html">A KEK the process holds</a></td><td><code>LocalKmsProvider</code></td><td>none, in every build</td></tr>
+<tr><td><a href="./providers/local.html#asymmetric-keks">An RSA KEK the process holds</a></td><td><code>LocalAsymmetricKmsProvider</code></td><td>none, in every build</td></tr>
 </tbody>
 </table>
 </div>
+<p>Every provider has a page with the same sections, in this order: configuration, authentication and
+permissions; key versions and rotation; asymmetric KEKs; signing; limits; and errors. A section
+that a provider does not support says so. How the providers compare is in
+<a href="./getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
 <p>Every KMS provider above implements the two provider traits, <code>KmsAeadEncryptionProvider</code>, which
 encrypts DEKs, and <code>KmsAeadDecryptionProvider</code>, which decrypts them, and <code>KmsAeadEnvelope</code> takes
 any of them:</p>

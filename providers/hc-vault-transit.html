@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -182,7 +182,8 @@
 <p>Feature <code>hashicorp-vault-transit-kms-encryption</code>, or one root store and one crypto provider
 variant, see <a href="../features.html">Cargo features</a>.</p>
 <p>The provider encrypts DEKs with a key of the Vault Transit secrets engine. <code>HcVaultTransitKeyRef</code>
-names the key, and the mount is <code>transit</code> unless set with <code>with_mount</code>.</p>
+names the key, and the mount is <code>transit</code> unless set with <code>with_mount</code>. How the KMS providers
+compare is in <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{HcVaultTransitKeyRef, HcVaultTransitProvider};
 use kms_aead::KmsAeadEnvelope;
@@ -204,7 +205,11 @@ let cipher_text = envelope
 </span><span class="boring">}</span></code></pre>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/hc_vault_transit_kms.rs">here</a>.</p>
-<h2 id="options"><a class="header" href="#options">Options</a></h2>
+<h2 id="configuration-authentication-and-permissions"><a class="header" href="#configuration-authentication-and-permissions">Configuration, authentication and permissions</a></h2>
+<p>The provider reads the address, the token and the namespace from the variables of the Vault CLI, or
+takes them as options. The token needs <code>update</code> on <code>&lt;mount&gt;/encrypt/&lt;key&gt;</code> and
+<code>&lt;mount&gt;/decrypt/&lt;key&gt;</code>.</p>
+<h3 id="options"><a class="header" href="#options">Options</a></h3>
 <p><code>HcVaultTransitProvider::new</code> reads its options from the variables the Vault CLI reads, with
 <code>HcVaultTransitProviderOptions::from_env</code>: <code>VAULT_ADDR</code> (required), <code>VAULT_TOKEN</code>,
 <code>VAULT_NAMESPACE</code>, <code>VAULT_CACERT</code> and <code>VAULT_CLIENT_TIMEOUT</code>. An empty variable counts as unset.
@@ -249,7 +254,6 @@ response, 60 seconds by default.</li>
 fail the first encryption or decryption. An <code>http</code> address to a host other than <code>localhost</code> or a
 loopback address logs a <code>WARN</code> event at creation, since the token and the DEKs then cross the
 network unencrypted.</p>
-<p>The token needs <code>update</code> on <code>&lt;mount&gt;/encrypt/&lt;key&gt;</code> and <code>&lt;mount&gt;/decrypt/&lt;key&gt;</code>.</p>
 <h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
 <p>The encrypted DEK is the Transit ciphertext, such as <code>vault:v1:...</code>. It names the key version, so
 it still decrypts after the key is rotated. The KMS spans record that version as <code>kek_version</code>, and
@@ -264,7 +268,13 @@ version: Vault then refuses to decrypt under older versions, with <code>VAULT_ST
 it again restores them. Once
 nothing needs them, the backups included, <code>min_available_version</code> and a trim of the key delete the
 older versions for good.</p>
-<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<h3 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h3>
+<p>Vault Transit encrypts under the latest version of the key, since the provider names no version in
+its request, and no older version becomes the latest again: a rotation is undone by rotating once
+more and sweeping to that third version. Keep the new version enabled until then, since every swept
+value and every value written since the rotation is under it only. See
+<a href="../production/reencrypt-deks.html#rolling-back-a-rotation">Rolling back a rotation</a>.</p>
+<h2 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h2>
 <p>A Transit key of the type <code>rsa-2048</code>, <code>rsa-3072</code> or <code>rsa-4096</code> is an asymmetric KEK, see
 <a href="../asymmetric-kek.html">Asymmetric KEKs</a>:</p>
 <ul>
@@ -326,6 +336,16 @@ base64 of the raw key for Ed25519, PEM for P-256. A key of another <code>type</c
 </ul>
 <p>A rotation is <code>&lt;mount&gt;/keys/&lt;key&gt;/rotate</code>, and a new signer names the new version, see
 <a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>The latest version of the key always encrypts, and no older version becomes the latest again, see
+<a href="#key-versions-and-rotation">Key versions and rotation</a>;</li>
+<li><code>min_decryption_version</code> disables every version below it at once;</li>
+<li>DEKs always come from the backend’s CSPRNG: Vault Transit has no KMS random generator in the
+provider, see <a href="../providers.html#kms-random-generators">KMS random generators</a>;</li>
+<li>BigQuery does not read Vault Transit values, and Tink reads a keyring’s keysets with Tink for Go
+only, see <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</li>
+</ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A response with an error status is <code>VAULT_STATUS_&lt;status&gt;</code>. <code>VAULT_HTTP</code> and <code>VAULT_TIMEOUT</code> are
 for a request that got no complete response, and <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code> and
@@ -390,6 +410,18 @@ before any request is sent.</p>
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#asymmetric-keys":"/providers/hc-vault-transit.html#asymmetric-keks"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>

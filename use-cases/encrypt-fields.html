@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -216,9 +216,11 @@ another row fails to decrypt, see <a href="../envelope-encryption.html#aad">AAD<
 <li><code>envelope.decrypt(aad, &amp;encrypted)</code> with the same AAD, rebuilt from the row.</li>
 </ol>
 <p>A first example, with the local KMS, is in <a href="../getting-started.html#with-an-envelope">With an envelope</a>.</p>
-<h2 id="lookups-readers-and-rotation"><a class="header" href="#lookups-readers-and-rotation">Lookups, readers and rotation</a></h2>
+<h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
 <ul>
-<li>Finding rows by an encrypted field needs a deterministic field or a beacon, see
+<li>The value does not record its algorithm, so the writer and the reader use the same one, see
+<a href="../envelope-encryption.html">Envelope encryption</a>;</li>
+<li>finding rows by an encrypted field needs a deterministic field or a beacon, see
 <a href="./equality-lookups.html">Find rows by an encrypted value</a>;</li>
 <li>Tink reads envelope values on Cloud KMS and AWS KMS keys, and BigQuery does not, see
 <a href="./bigquery-and-tink.html">Read values in BigQuery or Tink</a>;</li>
@@ -281,6 +283,18 @@ disabled, see <a href="../production/rotation.html#with-kms-aead-alone">Rotate k
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#lookups-readers-and-rotation":"/use-cases/encrypt-fields.html#what-to-watch-for"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>

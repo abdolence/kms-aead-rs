@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -179,16 +179,22 @@
                 <div id="mdbook-content" class="content">
                     <main>
                         <h1 id="local-kms"><a class="header" href="#local-kms">Local KMS</a></h1>
+<p>No Cargo feature: the local providers are in every build, see <a href="../features.html">Cargo features</a>.</p>
 <p><code>LocalKmsProvider</code> encrypts DEKs with a key encryption key the process holds, with AES-256-GCM on
-the backend it is built with. It is in every build, with no feature, for:</p>
+the backend it is built with. It is for:</p>
 <ul>
 <li>development and tests without a cloud KMS;</li>
 <li>single-host installs where the operator protects the KEK.</li>
 </ul>
 <p>kms-aead builds one only when the application calls one of its constructors; no provider falls
 back to it. Each constructor logs one <code>INFO</code> event naming the KEK id, its versions and where
-each version came from (<code>ephemeral</code>, <code>file</code>, <code>env</code> or <code>secret</code>), never the key.</p>
-<h2 id="kek-ids-and-versions"><a class="header" href="#kek-ids-and-versions">KEK ids and versions</a></h2>
+each version came from (<code>ephemeral</code>, <code>file</code>, <code>env</code> or <code>secret</code>), never the key. How the KMS
+providers compare is in <a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>,
+and the first example is in <a href="#tests-and-development">Tests and development</a>.</p>
+<h2 id="configuration-authentication-and-permissions"><a class="header" href="#configuration-authentication-and-permissions">Configuration, authentication and permissions</a></h2>
+<p>No credentials and no permissions apply: the process holds the KEK, and protecting it is the
+operator’s job, see <a href="#limits">Limits</a>.</p>
+<h3 id="kek-ids-and-versions"><a class="header" href="#kek-ids-and-versions">KEK ids and versions</a></h3>
 <p>A <code>LocalKekId</code> names the KEK: 1 to 255 bytes of ASCII alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>. Every
 encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
 the key of the <a href="../dek-caching.html">DEK cache</a>, so one id must name one set of KEK material: two
@@ -238,7 +244,7 @@ let kek = LocalKek::from_secret(
 <p>0.30 took the raw bytes in <code>from_secret</code> and base64 in <code>from_file</code> and <code>from_env</code>, see
 <a href="../migrating-from-0.30.html#loading-a-local-kek">Migrating from 0.30</a>. Errors name the file or the
 variable, never its content.</p>
-<h2 id="tests-and-development"><a class="header" href="#tests-and-development">Tests and development</a></h2>
+<h3 id="tests-and-development"><a class="header" href="#tests-and-development">Tests and development</a></h3>
 <p>An ephemeral provider has one random version-1 KEK that lives as long as the provider, so the
 DEKs it encrypts cannot be decrypted once the process exits. It suits tests:</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
@@ -277,7 +283,7 @@ let provider = LocalKmsProvider::&lt;Ring&gt;::new(
 <span class="boring">let _ = provider;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<h2 id="a-vm-or-a-single-host"><a class="header" href="#a-vm-or-a-single-host">A VM or a single host</a></h2>
+<h3 id="a-vm-or-a-single-host"><a class="header" href="#a-vm-or-a-single-host">A VM or a single host</a></h3>
 <p>On a host, keep the KEK out of the environment. With systemd, encrypt it with <code>systemd-creds</code>,
 bound to the host’s TPM where it has one, and let systemd pass it to the service as a credential:</p>
 <pre><code class="language-bash">openssl rand -base64 32 | systemd-creds encrypt --name=kek-v1 - /etc/credstore.encrypted/kek-v1
@@ -349,7 +355,12 @@ and check with a provider that lists the new version alone, before the deploy th
 version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
 the old version from the list disables it, and listing it again restores it. Destroying it means
 destroying every copy of its material, backups included.</p>
-<h2 id="an-asymmetric-kek"><a class="header" href="#an-asymmetric-kek">An asymmetric KEK</a></h2>
+<h3 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h3>
+<p>Point <code>with_encrypting_version</code> at the old version, and keep the new version in the list: every
+swept value and every value written since the rotation is under the new version only, and dropping
+it makes them unreadable until it is listed again. See
+<a href="../production/reencrypt-deks.html#rolling-back-a-rotation">Rolling back a rotation</a>.</p>
+<h2 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h2>
 <p><code>LocalAsymmetricKmsProvider</code> is the local KMS with an RSA key pair per version, for the same uses as
 <code>LocalKmsProvider</code>, see <a href="../asymmetric-kek.html">Asymmetric KEKs</a>. A <code>LocalAsymmetricKek</code> is one
 version: an RSA private key of 2048, 3072 or 4096 bits in PKCS#8, zeroised on drop. 2048 bits is
@@ -378,6 +389,52 @@ with <code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code>, <code>LOCAL_KEK_ID_MISMATCH</
 <code>UNSUPPORTED_ALGORITHM</code>. On RustCrypto the private half decrypts DEKs from trusted sources only, see
 <a href="../asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a>.</li>
 </ul>
+<h2 id="signing"><a class="header" href="#signing">Signing</a></h2>
+<p><code>LocalSigningProvider</code> signs with a private key the process holds, on the backend it is built with,
+as <code>LocalKmsProvider</code> does for KEKs, see <a href="../signing.html">Signatures and MACs</a>. <code>LocalSigningKeyName</code>
+names the key: 1 to 255 bytes of ASCII alphanumerics, <code>-</code>, <code>_</code> and <code>.</code>. A <code>LocalSigningKey</code> is one
+version of it, numbered by a <code>LocalSigningKeyVersion</code>: a PKCS#8 private key, either an Ed25519 key or
+a P-256 key, and the PKCS#8 names the algorithm. The loaders are <code>from_secret</code>, <code>from_file</code> and
+<code>from_env</code>, each taking a <code>PrivateKeyFormat</code>, <code>Pkcs8Der</code> or <code>Pkcs8Pem</code>. A file is a regular file of at
+most 32 KiB, and <code>from_env</code> reads the PEM text for <code>Pkcs8Pem</code> and the standard base64 of the DER for
+<code>Pkcs8Der</code>, as for an asymmetric KEK above.</p>
+<pre><code class="language-rust no_run">use std::num::NonZeroU32;
+
+use kms_aead::backends::AwsLc;
+use kms_aead::formats::{PrivateKeyFormat, PublicKeyFormat};
+use kms_aead::providers::{
+    LocalSigningKey, LocalSigningKeyName, LocalSigningKeyVersion, LocalSigningProvider,
+};
+use kms_aead::signing::Signer;
+
+<span class="boring">async fn example() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span>let key = LocalSigningKey::from_env(
+    LocalSigningKeyVersion::from(NonZeroU32::MIN),
+    "APP_SIGNING_KEY",
+    PrivateKeyFormat::Pkcs8Pem,
+)?;
+let provider = LocalSigningProvider::&lt;AwsLc&gt;::new(
+    LocalSigningKeyName::try_from("invoices".to_string())?,
+    vec![key],
+)?;
+let signer = Signer::&lt;_, AwsLc&gt;::new(provider).await?;
+
+// The public key to publish for the verifiers
+let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
+<span class="boring">let _ = jwk;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<ul>
+<li>the highest version signs, or the one <code>with_signing_version</code> names, and <code>verifying_keys</code> returns
+the public keys of every version as a <code>VerifyingKeySet</code> for the published set. A rotation is two
+deploys: list the new version while the current one signs and publish the new public key, then let
+the new version sign. Dropping a version from the list stops its export, see
+<a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>;</li>
+<li><code>sign</code> never fails with a network error, and <code>verifying_key</code> makes no call;</li>
+<li><code>LocalSigningProvider::ephemeral</code> has one random version-1 key of the algorithm it names, for
+tests. Its signatures verify only against a set that holds its verifying key, so a test builds the
+verifier from the provider.</li>
+</ul>
 <h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
 <ul>
 <li>No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
@@ -388,7 +445,10 @@ host encrypting 1,000 values per second spends 2^32 encryptions in 50 days. Use 
 reuse</a> so that one encryption serves many values, and add a new KEK version
 before the budget is spent;</li>
 <li>Crypto-shredding means destroying every copy of the KEK, backups included;</li>
-<li>DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS.</li>
+<li>DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS;</li>
+<li>A <code>LocalSigningProvider</code> keeps its private key in process memory for its life: whoever reads that
+memory, a core dump or a swap file included, signs as the application does. Removing the key from
+every verifier’s set revokes a compromised key.</li>
 </ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>An encryption fails with <code>RANDOM_GENERATOR</code> when the backend’s CSPRNG fails. A decryption fails with
@@ -401,6 +461,12 @@ the versions are empty or list one version twice, and <code>LOCAL_KEK_SOURCE</co
 a KEK cannot be read or is not 32 bytes. An asymmetric provider fails with
 <code>ASYMMETRIC_KEK_PRIVATE_KEY</code> for private key bytes that are not in the named format or not an RSA
 key of 2048, 3072 or 4096 bits.</p>
+<p>A <code>LocalSigningProvider</code> fails at creation with <code>LOCAL_SIGNING_KEY_VERSIONS</code> when the versions are
+empty or list one twice, <code>LOCAL_SIGNING_KEY_FORMAT</code> when the backend refuses a key, and
+<code>DUPLICATE_KEY_ID</code> when two versions share a key id. A loader fails with <code>LOCAL_SIGNING_KEY_SOURCE</code>
+when a file or a variable cannot be read, and with <code>LOCAL_SIGNING_KEY_FORMAT</code> for bytes that are not
+the named format. A name that is not valid fails with <code>INVALID_LOCAL_SIGNING_KEY_NAME</code>, and <code>sign</code>
+fails with <code>SIGN</code>, a <code>SignatureError</code>, when the backend fails to sign.</p>
 
                     </main>
 
@@ -455,6 +521,18 @@ key of 2048, 3072 or 4096 bits.</p>
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#an-asymmetric-kek":"/providers/local.html#asymmetric-keks"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>

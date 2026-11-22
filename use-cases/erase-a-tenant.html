@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -213,7 +213,7 @@ versions the store keeps. The keys stay in every copy the store keeps beyond its
 backup, and in every keyset exported from the keyring, see
 <a href="#what-survives-a-shred">What survives a shred</a>. A deployment that needs shredding guarantees uses
 a KEK per scope, see <a href="./keyring-per-tenant.html">A keyring per tenant</a>.</p>
-<h3 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h3>
+<h2 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h2>
 <p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
 destroys every version of the keyring in one write, as <code>dangerously_destroy_all_versions</code> does,
 then deletes the record from the store with every earlier version of it the store keeps. The
@@ -251,11 +251,15 @@ keeps it until the DEK cache drops it: its TTL, with <code>purge_expired</code> 
 made keeps the key derived for its value, and goes on decrypting or encrypting with it, until it is
 dropped. Build a decryptor per request and do not cache it across requests, so that a shred takes
 effect for new requests, see <a href="../streaming.html#limits">Streaming encryption</a>.</p>
-<p><code>dangerously_shred()</code> never calls the KMS and leaves every KMS key version as it was. Values
-encrypted under the keyring stay where they are and decrypt under nothing. The store’s backups, its
-history and every exported keyset stay where they are too, and still decrypt while a KEK version
-that encrypted their DEKs exists, see <a href="#what-survives-a-shred">What survives a shred</a>.</p>
-<h4 id="what-survives-a-shred"><a class="header" href="#what-survives-a-shred">What survives a shred</a></h4>
+<h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
+<ul>
+<li><code>dangerously_shred()</code> never calls the KMS and leaves every KMS key version as it was. Values
+encrypted under the keyring stay where they are and decrypt under nothing;</li>
+<li>the store’s backups, its history and every exported keyset stay where they are too, and still
+decrypt while a KEK version that encrypted their DEKs exists, see
+<a href="#what-survives-a-shred">What survives a shred</a>.</li>
+</ul>
+<h3 id="what-survives-a-shred"><a class="header" href="#what-survives-a-shred">What survives a shred</a></h3>
 <p>Every copy of the record outside the store’s API still holds the encrypted DEKs, which the KMS
 decrypts as long as a KEK version that encrypted them exists. The operator deletes them or ends the
 KEK versions:</p>

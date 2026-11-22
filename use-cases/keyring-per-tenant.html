@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -206,10 +206,8 @@ that needs either guarantee uses a KEK per tenant.</p>
 <p>An application opens only keyrings that exist, so each tenant’s keyring is created first:</p>
 <ul>
 <li>by the administrative job, as part of onboarding a tenant, with <code>create</code> or <code>open_or_create</code>;</li>
-<li>or by the application on the tenant’s first request, with <code>open_or_create</code>. Such an application
-builds with the <code>admin</code> feature and runs with the administrative rights, so it is trusted as the
-administration is, see <a href="../production/permissions.html">Permissions: applications and administration</a> and
-<a href="../security.html#keyring-limits">Keyring limits</a>.</li>
+<li>or by the application on the tenant’s first request, with <code>open_or_create</code>, see
+<a href="#what-to-watch-for">What to watch for</a>.</li>
 </ul>
 <h2 id="the-path-through-the-api"><a class="header" href="#the-path-through-the-api">The path through the API</a></h2>
 <ol>
@@ -229,7 +227,12 @@ see <a href="../production/sweeps.html#the-encryption-marker">The encryption mar
 </ol>
 <p>Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
 <a href="../production/rotation.html">Rotate keys and re-encrypt values</a>.</p>
-<h2 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h2>
+<h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
+<p>An application that creates a keyring on a tenant’s first request builds with the <code>admin</code> feature
+and runs with the administrative rights, so it is trusted as the administration is, see
+<a href="../production/permissions.html">Permissions: applications and administration</a> and
+<a href="../security.html#keyring-limits">Keyring limits</a>.</p>
+<h3 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h3>
 <p>A keyring stays open until the registry shuts down, so a process holds every keyring it opened:</p>
 <ul>
 <li><strong>store reads</strong>: one at the first <code>open</code>, and one revalidation per keyring per <code>record_ttl</code>, or

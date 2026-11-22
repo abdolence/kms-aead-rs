@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -183,7 +183,9 @@
 <a href="../features.html">Cargo features</a>.</p>
 <p><code>AzureKmsKeyRef</code> names the key by the vault URL and the key name. Without a key version, the
 latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the
-decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards.</p>
+decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards. How the
+KMS providers compare is in
+<a href="../getting-started/choosing.html#kms-providers">Choose a provider and a backend</a>.</p>
 <p>The provider takes any Azure credential, for example one from <code>azure_identity</code>:</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::AwsLc;
 use kms_aead::providers::{AzureKmsKeyRef, AzureKmsProvider};
@@ -211,10 +213,11 @@ let cipher_text = envelope
 </span><span class="boring">}</span></code></pre>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/azure_kms.rs">here</a>.</p>
+<h2 id="configuration-authentication-and-permissions"><a class="header" href="#configuration-authentication-and-permissions">Configuration, authentication and permissions</a></h2>
 <p>The provider sends no request until the first encryption or decryption. The principal needs the
 <code>wrapKey</code> and <code>unwrapKey</code> key operations, Key Vault’s names for encrypting and decrypting a DEK, as
 in the “Key Vault Crypto User” role.</p>
-<h2 id="options"><a class="header" href="#options">Options</a></h2>
+<h3 id="options"><a class="header" href="#options">Options</a></h3>
 <p><code>AzureKmsProviderOptions</code> has:</p>
 <ul>
 <li><code>algorithm</code>: an <code>AzureKmsAlgorithm</code>, Key Vault’s <code>alg</code> of the <code>wrapKey</code> and <code>unwrapKey</code>
@@ -250,14 +253,6 @@ let provider = AzureKmsProvider::with_options(
 <span class="boring">let _ = provider;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<h2 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h2>
-<p>Key Vault decrypts only with the key version that encrypted, so the provider’s encrypted DEK carries
-it before Key Vault’s encrypted DEK, in the library’s own layout, see
-<a href="../formats/values.html#encrypted-deks">Formats</a>. No Tink client exists for Azure, so Tink does not read the
-values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
-as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, <code>Aes256KeyWrap</code>
-too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
-<a href="../envelope-encryption.html#storing-encrypted-deks">Envelope encryption</a>.</p>
 <h2 id="key-versions-and-rotation"><a class="header" href="#key-versions-and-rotation">Key versions and rotation</a></h2>
 <p>A rotation adds a version to the key, by hand or by the key’s rotation policy. Without a key version
 in <code>AzureKmsKeyRef</code>, the latest version encrypts new DEKs; with one, that version does, so move it
@@ -269,7 +264,20 @@ version Key Vault encrypted with, read from the <code>kid</code> of its response
 disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
 Key Vault deletes a key with all its versions and never one version alone, so the old version stays
 disabled rather than destroyed.</p>
-<h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>
+<h3 id="encrypted-deks"><a class="header" href="#encrypted-deks">Encrypted DEKs</a></h3>
+<p>Key Vault decrypts only with the key version that encrypted, so the provider’s encrypted DEK carries
+it before Key Vault’s encrypted DEK, in the library’s own layout, see
+<a href="../formats/values.html#encrypted-deks">Formats</a>. No Tink client exists for Azure, so Tink does not read the
+values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
+as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, <code>Aes256KeyWrap</code>
+too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
+<a href="../envelope-encryption.html#storing-encrypted-deks">Envelope encryption</a>.</p>
+<h3 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h3>
+<p>Pin the old version in <code>AzureKmsKeyRef</code>, and keep the new version enabled: every swept value and
+every value written since the rotation is under the new version only, and disabling it makes them
+unreadable until it is enabled again. See
+<a href="../production/reencrypt-deks.html#rolling-back-a-rotation">Rolling back a rotation</a>.</p>
+<h2 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h2>
 <p>An RSA key of 2048, 3072 or 4096 bits, <code>RSA</code> or <code>RSA-HSM</code>, is an asymmetric KEK, see <a href="../asymmetric-kek.html">Asymmetric
 KEKs</a>. The provider has always encrypted with it through <code>wrapKey</code>; a <code>0x02</code>
 encrypted DEK moves the encryption into the producer, and the provider still decrypts through
@@ -335,6 +343,17 @@ Key. A key that is not <code>EC</code> or <code>EC-HSM</code> on <code>P-256</co
 “Key Vault Crypto User” grants.</li>
 </ul>
 <p>A rotation is a new key version that a new signer names, see <a href="../signing.html#key-ids-and-rotation">Key ids and rotation</a>.</p>
+<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<ul>
+<li>Encrypted DEKs do not record the algorithm, so it stays fixed for the life of the key, see
+<a href="#options">Options</a>;</li>
+<li>Key Vault deletes a key with all its versions and never one version alone, so an old version is
+disabled and not destroyed, see <a href="#key-versions-and-rotation">Key versions and rotation</a>;</li>
+<li>no Tink client exists for Azure, so Tink does not read the values of this provider, see
+<a href="#encrypted-deks">Encrypted DEKs</a>, and BigQuery does not read them either;</li>
+<li>Key Vault signs no Ed25519, so the signing provider’s algorithm is <code>EcdsaP256Sha256</code>, see
+<a href="#signing">Signing</a>.</li>
+</ul>
 <h2 id="errors"><a class="header" href="#errors">Errors</a></h2>
 <p>A failed request carries Key Vault’s error code, such as <code>Forbidden</code> or <code>KeyNotFound</code>, or
 <code>AZURE_STATUS_&lt;status&gt;</code> when the response has none. Which statuses are a <code>NetworkError</code> and which an
@@ -395,6 +414,18 @@ layout fails with <code>AZURE_ENCRYPTED_DEK_FORMAT</code>, before any request.</
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#asymmetric-keys":"/providers/azure.html#asymmetric-keks"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>

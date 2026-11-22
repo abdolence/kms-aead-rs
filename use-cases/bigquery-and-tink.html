@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -181,8 +181,8 @@
                         <h1 id="decrypt-columns-in-bigquery-sql-or-with-tink"><a class="header" href="#decrypt-columns-in-bigquery-sql-or-with-tink">Decrypt columns in BigQuery SQL or with Tink</a></h1>
 <p>An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
 or Python needs to read values a Rust service wrote. Values the library writes are in Tink’s
-formats, so Tink in another language and BigQuery’s SQL read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
-whether the key rotates:</p>
+formats, so Tink in another language and BigQuery’s SQL read them, given the keys. Three routes lead
+there, and they differ in what the reader needs and in whether the key rotates:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -241,10 +241,6 @@ version and misses the rows encrypted under it, with no error.</li>
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs">here</a>,
 and of a BigQuery sweep in SQL
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs">here</a>.</p>
-<p>An exported keyset holds the keys of the versions it selects, so treat it as a copy of the
-record’s readable versions, see <a href="../security.html#keyring-limits">Keyring limits</a>. BigQuery cannot
-calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
-<a href="../beacons.html#bigquery">BigQuery</a>.</p>
 <h2 id="query-keyring-values-in-bigquery"><a class="header" href="#query-keyring-values-in-bigquery">Query keyring values in BigQuery</a></h2>
 <p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
 keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for. The
@@ -288,6 +284,13 @@ email_aead = keyset_handle.primitive(aead.Aead)
 def decrypt_email(value: bytes, user_id: str) -&gt; str:
   return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
 </code></pre>
+<h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
+<ul>
+<li>An exported keyset holds the keys of the versions it selects, so treat it as a copy of the
+record’s readable versions, see <a href="../security.html#keyring-limits">Keyring limits</a>;</li>
+<li>BigQuery cannot calculate a beacon: a beacon lookup in BigQuery matches beacons the application
+calculated, see <a href="../beacons.html#bigquery">BigQuery</a>.</li>
+</ul>
 
                     </main>
 

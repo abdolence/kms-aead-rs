@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -213,24 +213,13 @@ fn reject(body: &amp;[u8]) {
 </code></pre>
 <p>The log shows the type of every value, <code>&lt;key&gt;</code> for every key, the nesting, and where serde_json
 stopped reading. <code>error.classify()</code> gives the category of the failure, <code>Eof</code>, <code>Syntax</code>, <code>Data</code> or
-<code>Io</code>. Log that, and not the message of <code>serde_json::Error</code>, which for a value of the wrong type can
-quote the input.</p>
+<code>Io</code>.</p>
 <h2 id="choose-what-the-outline-shows"><a class="header" href="#choose-what-the-outline-shows">Choose what the outline shows</a></h2>
 <p>A policy is a type of the application’s own that implements <code>JsonRedaction</code> and sets the constants
-it needs. Each constant is off by default:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Constant</th><th>Effect on the outline</th></tr>
-</thead>
-<tbody>
-<tr><td><code>FIELD_NAMES</code></td><td>shows the keys of objects, except the keys of <code>DATA_KEYED_MAPS</code>;</td></tr>
-<tr><td><code>DATA_KEYED_MAPS</code></td><td>lists the objects whose keys are data, such as a map from an email to a balance, so their keys stay hidden; <code>balances[]</code> names the values of the map <code>balances</code>;</td></tr>
-<tr><td><code>SIZES</code></td><td>shows the length of every hidden value and key, the length of the JSON and the line and column of the failure;</td></tr>
-<tr><td><code>REVEALED_FIELDS</code></td><td>shows the values of the listed fields, and the names of the fields on the way to each.</td></tr>
-</tbody>
-</table>
-</div>
+it needs, each of them off by default: <code>FIELD_NAMES</code> shows the keys, <code>SIZES</code> the lengths, and
+<code>REVEALED_FIELDS</code> the values of the fields it lists, such as <code>items[].sku</code> for the <code>sku</code> of every item
+of <code>items</code>. Every constant and the grammar of a path are in
+<a href="../stored-values.html#redaction-policies">Redaction policies</a>.</p>
 <pre><code class="language-rust">use kms_aead::redaction::{FieldPaths, JsonRedaction, RedactedJson};
 
 struct WebhookLog;
@@ -248,14 +237,6 @@ impl JsonRedaction for WebhookLog {
 <p>The outline of the same kind of body:</p>
 <pre><code class="language-text">{"event": "order.paid", "customer": {"email": &lt;string&gt;}, "items": [{"sku": "desk", "qty": &lt;number&gt;}, {"sku": "lamp", "qty": &lt;number&gt;}], "total_cents": &lt;number&gt;, &lt;error: EOF while parsing an object&gt;
 </code></pre>
-<p>A path is the names of the fields joined by <code>.</code>, with <code>[]</code> after a field for every item of the array
-it holds, such as <code>customer.plan</code> or <code>items[].sku</code>, and <code>[].id</code> for the items of an array at the top
-level. A path takes in the whole value at its end. A field whose name has a <code>.</code>, <code>[</code> or <code>]</code> cannot
-be named. A malformed path is a compile error in the build that uses the policy.</p>
-<p>Revealed values go to the log whenever the JSON fails to parse. Reveal codes and identifiers, never
-personal data.</p>
-<p><code>SIZES</code> has a cost: a length gives away a hidden boolean, since <code>true</code> and <code>false</code> differ in
-length, and it narrows a short string down. Leave it off for any payload where that matters.</p>
 <h2 id="input-that-is-not-json"><a class="header" href="#input-that-is-not-json">Input that is not JSON</a></h2>
 <p>Broken, truncated and non-JSON input is outlined as far as it goes, and the outline never panics.
 An HTML error page from a proxy and a base64 string print as their class only, and a syntax error in
@@ -264,15 +245,16 @@ the middle ends the outline there, with serde_json’s fixed message:</p>
 not JSON: base64-like text
 {"event": "order.paid", "a": &lt;error: expected value&gt;
 </code></pre>
-<p>The classes of bytes that do not start as JSON are <code>empty</code>, <code>whitespace only</code>, <code>hex digits</code>,
-<code>base64-like text</code>, <code>text</code> and <code>binary data</code>.</p>
-<h2 id="limits"><a class="header" href="#limits">Limits</a></h2>
+<h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
 <ul>
-<li>The outline is one line of printable ASCII, 4 KiB at most, whatever the input;</li>
-<li>a revealed string is escaped, with <code>"</code>, <code>\</code>, <code>&lt;</code>, <code>&gt;</code> and every character outside printable ASCII
-written as JSON escapes, and cut after 64 bytes;</li>
-<li>the items of an array with the shape of the item before them print as a count, such as <code>&lt;2 more of the same shape&gt;</code>, and an array prints 8 items of different shapes at most;</li>
-<li>serde_json reads 128 levels of nesting at most.</li>
+<li>Log the category from <code>error.classify()</code>, and not the message of <code>serde_json::Error</code>, which for a
+value of the wrong type can quote the input;</li>
+<li>revealed values go to the log whenever the JSON fails to parse. Reveal codes and identifiers, never
+personal data;</li>
+<li><code>SIZES</code> has a cost: a length gives away a hidden boolean, since <code>true</code> and <code>false</code> differ in
+length, and it narrows a short string down. Leave it off for any payload where that matters;</li>
+<li>an outline is bounded in length and depth, see the limits in
+<a href="../stored-values.html#redaction-policies">Redaction policies</a>.</li>
 </ul>
 <p><code>JsonEncoded&lt;T, P&gt;</code> applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see <a href="../stored-values.html#json-that-does-not-decode">JSON that does not decode</a>. The
@@ -331,6 +313,18 @@ event it logs is in <a href="../observability/spans-and-events.html#json-that-do
         <!-- Custom JS scripts -->
 
 
+        <script>
+            document.addEventListener('DOMContentLoaded', function() {
+                const fragmentMap =
+                    {"#limits":"/stored-values.html#redaction-policies"}
+                ;
+                const target = fragmentMap[window.location.hash];
+                if (target) {
+                    let url = new URL(target, window.location.href);
+                    window.location.replace(url.href);
+                }
+            });
+        </script>
 
     </div>
     </body>
