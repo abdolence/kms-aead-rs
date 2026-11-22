@@ -7,7 +7,7 @@ keyring writes, and the keyring reads theirs, given the same keys under the same
 
 Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id, followed
 by what the version's algorithm writes, see
-[Formats of `Encrypted`](../formats.md#formats-of-encrypted). These are the layouts of Tink's AEAD
+[Formats of `Encrypted`](../formats/values.md#formats-of-encrypted). These are the layouts of Tink's AEAD
 and deterministic AEAD primitives, and of BigQuery's `AEAD.ENCRYPT` and `DETERMINISTIC_ENCRYPT`. A
 randomised version with another algorithm, such as ChaCha20-Poly1305, writes the same prefix
 before its own body, which only kms-aead reads.
@@ -266,7 +266,7 @@ Go and Python decrypt with `KeysetHandle.read` and their own KMS client. It is a
 call, needs the `admin` feature only, and runs on a keyring with any provider whose KEK has a Tink
 key URI. The bytes are a `google.crypto.tink.EncryptedKeyset` around the KMS ciphertext of the
 serialised keyset, see
-[Tink keysets and the TINK prefix](../formats.md#tink-keysets-and-the-tink-prefix).
+[Tink keysets and the TINK prefix](../formats/keyring-records.md#tink-keysets-and-the-tink-prefix).
 
 `key_uri()` is the URI of Tink's KMS client:
 

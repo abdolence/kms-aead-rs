@@ -17,7 +17,7 @@ A keyring record holds:
   once it was active, its re-encryption range: the markers of the records encrypted under it, see
   [Records under a version](../production/sweeps.md#records-under-a-version).
 
-Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
+Every store keeps it as the same JSON document, see [Keyring records](../formats/keyring-records.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
 `RecordInvalid`, naming the rule and never the bytes.
 
@@ -35,7 +35,7 @@ reads it as `admin.keyring().record()`.
 Every value carries the key id of the version that encrypted it, and the id names the version's
 purpose: randomised, deterministic or beacon. So a value of one purpose never decrypts under a
 version of another, and the purpose of a value is known from its bytes, see
-[Keyring key ids](../formats.md#keyring-key-ids). The keyring numbers the versions of each purpose
+[Keyring key ids](../formats/keyring-records.md#keyring-key-ids). The keyring numbers the versions of each purpose
 from its first id: randomised versions are `1`, `2`, `3`, …, deterministic ones `2147483649`,
 `2147483650`, … and beacon ones `1073741825`, `1073741826`, …. Ids are never reused: a destroyed
 version keeps its id in the record.

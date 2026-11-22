@@ -59,7 +59,7 @@ async function keyIdOf(jwk) {
   return new DataView(digest).getUint32(0);
 }
 
-// The vectors of docs/src/formats.md, "Signature and MAC test vectors".
+// The vectors of docs/src/formats/signatures-and-macs.md, "Signature and MAC test vectors".
 
 const PAYLOAD_TYPE = "application/vnd.example.invoice+json";
 const PAYLOAD_TEXT =

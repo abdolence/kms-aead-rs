@@ -150,7 +150,7 @@ text may change in any release.
 | `InvalidIdentifier` | `INVALID_IDENTIFIER` | a keyring id, an AAD part or a store name that breaks the rule of its type |
 | `RecordMissing` | `RECORD_MISSING` | no record for the keyring: at `open` and `admin`, before an administrative write, and from `reload` once the process took the record as deleted, see [A record gone from the store](./keyring/record-cache.md#a-record-gone-from-the-store). A `dangerously_shred()` of a keyring already gone returns `Ok` |
 | `RecordExists` | `RECORD_EXISTS` | `create` found a record |
-| `RecordInvalid` | `RECORD_INVALID` | a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (`DuplicateEncryptedDek`) or a `signature` member that is not a detached signature (`MalformedSignature`), see [Keyring records](./formats.md#keyring-records) |
+| `RecordInvalid` | `RECORD_INVALID` | a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (`DuplicateEncryptedDek`) or a `signature` member that is not a detached signature (`MalformedSignature`), see [Keyring records](./formats/keyring-records.md#keyring-records) |
 | `RecordUnsigned` | `RECORD_UNSIGNED` | an unsigned record where record verification is `Required`, or where a signing admin writes over it, see [Signing the keyring record](./signing.md#signing-the-keyring-record) |
 | `RecordSignatureInvalid` | `RECORD_SIGNATURE_INVALID` | a record whose signature fails under the verifying keys, or that is signed where the registry has no key; the cause carries the signature error's code |
 | `RecordSignerMissing` | `RECORD_SIGNER_MISSING` | a write by an administration without a record signer over a signed record, before any store write |

@@ -26,7 +26,7 @@ The crate has no default features.
 | `rustcrypto` | the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds `p256` and `ed25519-dalek` for signatures, and `rsa` for RSA-OAEP, see [Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does) |
 | `deterministic` | deterministic encryption with AES-SIV, see [Deterministic encryption](./deterministic.md) |
 | `stream` | streaming encryption of values of any length: `StreamEncryptor`, `StreamDecryptor`, the tokio adapters `EncryptingWriter` and `DecryptingReader`, the `Stream` adapters `EncryptingStream` and `DecryptingStream`, the `stream_encryptor` and `stream_decryptor` calls of `AeadCipher` and `KmsAeadEnvelope`, with their bare forms, and `KmsAeadEnvelope::decrypting_stream` and `decrypting_reader`, which read the header from the whole stored value. Turns on tokio's `io-util` and brings in `bytes` and `futures-core` |
-| `legacy-formats` | reads the layouts written by 0.29 and earlier. Deprecated, see [Formats](./formats.md) |
+| `legacy-formats` | reads the layouts written by 0.29 and earlier. Deprecated, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier) |
 | `postgres` | `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for tokio-postgres |
 | `sqlx` | sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS stack |
 | `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value encrypted and decrypted, and the time each call, KMS request and keyring store read takes, see [Metrics](./observability.md#metrics) |

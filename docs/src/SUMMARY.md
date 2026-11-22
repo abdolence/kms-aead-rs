@@ -74,6 +74,10 @@
 
 - [Cargo features](./features.md)
 - [Formats](./formats.md)
+  - [Values and DEKs](./formats/values.md)
+  - [Streamed values](./formats/streamed-values.md)
+  - [Signature and MAC formats](./formats/signatures-and-macs.md)
+  - [Keyring records and keysets](./formats/keyring-records.md)
 - [Error handling](./errors.md)
 - [Observability](./observability.md)
 - [Security considerations](./security.md)

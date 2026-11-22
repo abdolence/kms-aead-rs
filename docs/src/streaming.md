@@ -441,7 +441,7 @@ pyca/cryptography, decrypts a prefixed value from offset 5 and an envelope-form 
 `4 + w`, with the DEK. The Go package
 [filippo.io/cobblestone](https://pkg.go.dev/filippo.io/cobblestone) implements Cobblestone-128
 only, on AES-128-GCM, and reads none of these values. The bytes, the length rules and the seeking
-rules are in [Formats](./formats.md#streamed-values).
+rules are in [Formats](./formats/streamed-values.md#streamed-values).
 
 The library runs the 35 vectors of Project Wycheproof for the specification, in every form, on
 every backend, see

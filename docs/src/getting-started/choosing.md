@@ -22,7 +22,7 @@ crypto-shredded:
 Notes on the table:
 
 - Tink reads envelope values with `KmsEnvelopeAead` and its own KMS client, see
-  [Tink's KMS envelope](../formats.md#tinks-kms-envelope), and keyring keysets with
+  [Tink's KMS envelope](../formats/values.md#tinks-kms-envelope), and keyring keysets with
   `KeysetHandle.read`, see [Exporting a keyset to Tink](../keyring/bigquery.md#exporting-a-keyset-to-tink);
 - BigQuery's `KEYS.KEYSET_CHAIN` decrypts with Cloud KMS only, see
   [Read values in BigQuery or Tink](../use-cases/bigquery-and-tink.md);

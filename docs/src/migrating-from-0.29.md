@@ -101,7 +101,7 @@ calls that make no KMS call are not `async`:
 | `use kms_aead::AeadEncryption;` `cipher.encrypt_value(&aad, &value, &key).await?` | `cipher.encrypt_bare(&aad, &value, &key)?` |
 | `cipher.decrypt_value(&aad, &cipher_text, &key).await?` | `cipher.decrypt_bare(&aad, &bare, &key)?` |
 
-Every cipher text is an `Encrypted<T, F>`, see [Formats](./formats.md#formats-of-encrypted). It
+Every cipher text is an `Encrypted<T, F>`, see [Formats](./formats/values.md#formats-of-encrypted). It
 has its own `value()` and `into_value()`, and so has `EncryptedDataEncryptionKey`.
 `DataEncryptionKey` no longer implements `ValueStruct`, and has its own `value()`.
 
@@ -121,7 +121,7 @@ An application's own implementation of the provider trait:
   decrypt gets it from those bytes, as the Azure provider's do.
 
 The plaintext the provider encrypts is the DEK serialised as a Tink key, see
-[Formats](./formats.md#serialised-deks). The library never inspects the provider's own bytes.
+[Formats](./formats/values.md#serialised-deks). The library never inspects the provider's own bytes.
 
 The trait has no `dyn` form, so a `Box<dyn KmsAeadRingEncryptionProvider>` becomes a type
 parameter `P: KmsAeadEncryptionProvider`, or an enum of the providers the application uses. The

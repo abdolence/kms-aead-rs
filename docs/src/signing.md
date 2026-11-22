@@ -112,7 +112,7 @@ then decodes and returns its payload. MACs have the same pair: a detached `Mac<T
 `verify_mac` on a keyring, and an attached `WithMac<T>`, which `mac_attached` computes and
 `verify_with_mac` checks before it returns the payload. The four types are stored as `Encrypted`
 is, with serde, `postgres` and `sqlx`, and none implements `PartialEq`. The bytes are in
-[Formats](./formats.md#signatures-and-macs).
+[Formats](./formats/signatures-and-macs.md).
 
 ## Another encoding
 
@@ -288,7 +288,7 @@ async function keyIdOf(jwk) {
 
 An attached value is split first: `w` is the big-endian `u16` at bytes 5 and 6, the signature the
 `w` bytes after it, and the payload the rest; verify before using the payload. The test vectors of
-[Formats](./formats.md#signature-and-mac-test-vectors) run against this code in CI.
+[Formats](./formats/signatures-and-macs.md#signature-and-mac-test-vectors) run against this code in CI.
 
 ## MACs in a keyring
 
@@ -430,7 +430,7 @@ assert!(admin.keyring().record().signature().is_some());
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs).
-The signed bytes are in [Formats](./formats.md#the-signed-keyring-record).
+The signed bytes are in [Formats](./formats/signatures-and-macs.md#the-signed-keyring-record).
 
 Move an existing deployment in this order:
 

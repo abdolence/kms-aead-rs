@@ -6,7 +6,7 @@ matches by equality. The keyring computes beacons under its beacon versions, of 
 `Purpose::Beacon`, which rotate like any other.
 
 kms-aead's [Beacons](../beacons.md) describes the primitive, `Beacon<T>`
-and `BeaconBits`, with keys the application keeps itself, and [Formats](../formats.md#beacons) its
+and `BeaconBits`, with keys the application keeps itself, and [Formats](../formats/values.md#beacons) its
 bytes.
 
 A [deterministic field](./deterministic.md) also finds rows by equality, by its encrypted value,

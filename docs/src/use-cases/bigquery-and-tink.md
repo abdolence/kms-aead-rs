@@ -13,7 +13,7 @@ whether the key rotates:
 | BigQuery reads with | nothing: SQL has no KMS envelope | `KEYS.KEYSET_CHAIN` over the keyset encrypted by a Cloud KMS key | `KEYS.KEYSET_CHAIN` over `export_bigquery_keyset`, on a Cloud KMS key |
 | Algorithms BigQuery reads | none | AES-256-GCM and AES-SIV | AES-256-GCM and AES-SIV |
 | Rotation | the KEK in the KMS | none: a second key needs a second key id and a keyset of both | central, with a new export after each rotation |
-| See | [Tink's KMS envelope](../formats.md#tinks-kms-envelope) | [One fixed key](../one-fixed-key.md) | [BigQuery and Tink interop](../keyring/bigquery.md) |
+| See | [Tink's KMS envelope](../formats/values.md#tinks-kms-envelope) | [One fixed key](../one-fixed-key.md) | [BigQuery and Tink interop](../keyring/bigquery.md) |
 
 ## The AAD
 

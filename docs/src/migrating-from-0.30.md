@@ -105,7 +105,7 @@ credentials chain takes the session of `aws login`, as the AWS CLI does.
 
 The encrypted DEK a public key encrypts is a layout of 0.31, which starts with `0x02`, and no
 earlier release reads it, see [DEKs encrypted with a public
-key](./formats.md#deks-encrypted-with-a-public-key). A deployment moves every reader, every
+key](./formats/values.md#deks-encrypted-with-a-public-key). A deployment moves every reader, every
 application and administrative job that decrypts, to 0.31 before the first producer encrypts with a
 public key, as every reader moved to 0.30 before the first value in Tink's envelope format, see
 [Upgrading stored values](./migrating-from-0.29.md#upgrading-stored-values). Nothing already stored changes: the

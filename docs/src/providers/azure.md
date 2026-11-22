@@ -88,7 +88,7 @@ let provider = AzureKmsProvider::with_options(
 
 Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
 it before Key Vault's encrypted DEK, in the library's own layout, see
-[Formats](../formats.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
+[Formats](../formats/values.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
 values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
 as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
 too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see

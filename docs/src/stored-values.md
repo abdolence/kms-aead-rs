@@ -17,7 +17,7 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
 
 | Format | Layout | Written by | Read by | `key_id()` | Equality |
 |---|---|---|---|---|---|
-| `Envelope` | [Tink's KMS envelope](./formats.md#tinks-kms-envelope), the encrypted DEK inside | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
+| `Envelope` | [Tink's KMS envelope](./formats/values.md#tinks-kms-envelope), the encrypted DEK inside | `KmsAeadEnvelope::encrypt` | `KmsAeadEnvelope::decrypt` | no | none |
 | `Bare` | `[nonce: 12][ciphertext][tag: 16]` | `KmsAeadEnvelope::encrypt_with_dek`, `AeadCipher::encrypt_bare` | `KmsAeadEnvelope::decrypt_with_dek`, `AeadCipher::decrypt_bare` | no | none |
 | `Randomized` | `[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]` | `AeadCipher::encrypt`, `Encryptor::encrypt` | `AeadCipher::decrypt`, `Keyring::decrypt` | yes | none |
 | `Deterministic` | `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]` | `DeterministicCipher::encrypt`, `Encryptor::encrypt_deterministic` | `DeterministicCipher::decrypt`, `Keyring::decrypt_deterministic` | yes | `==` and `Hash`, in constant time |
@@ -32,7 +32,7 @@ Every call that encrypts returns an `Encrypted<T, F>`. The format `F` comes from
   what a lookup by the encrypted value needs, see [Deterministic encryption](./deterministic.md);
 - `Debug` shows the length only.
 
-See [Formats of `Encrypted`](./formats.md#formats-of-encrypted) for the shortest value of each
+See [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted) for the shortest value of each
 layout and the layouts of 0.29 and earlier.
 
 ### Bytes in and out

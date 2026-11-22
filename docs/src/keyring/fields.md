@@ -5,7 +5,7 @@
 A keyring value is kms-aead's [`Encrypted<T, Randomized>`](../stored-values.md#encryptedt-f),
 re-exported by the keyring: the bytes to store, which decrypt to a `T`. `T` is any type that
 implements `Plaintext`, usually an application newtype such as `Email`, so a field names what it
-holds. Its layout is in [Formats of `Encrypted`](../formats.md#formats-of-encrypted). The keyring
+holds. Its layout is in [Formats of `Encrypted`](../formats/values.md#formats-of-encrypted). The keyring
 encrypts and decrypts it with kms-aead's `AeadCipher::encrypt` and `decrypt` under the key of the
 version, the calls an application with [one fixed key](../one-fixed-key.md)
 makes itself.

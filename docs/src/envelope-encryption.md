@@ -30,7 +30,7 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
 The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
 [Crypto backends](./crypto-backends.md). The default, AES-256-GCM, is read by every Tink
-implementation too, see [Formats](./formats.md#tinks-kms-envelope). Values that 0.29 and earlier
+implementation too, see [Formats](./formats/values.md#tinks-kms-envelope). Values that 0.29 and earlier
 encrypted under their default decrypt only with ChaCha20-Poly1305 configured, see
 [Migrating from 0.29](./migrating-from-0.29.md#default-algorithm).
 
@@ -77,7 +77,7 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 The bytes in and out of an `Encrypted` are in [Stored values](./stored-values.md#bytes-in-and-out).
 
 The value is in Tink's KMS envelope format for every provider, so Tink's `KmsEnvelopeAead` reads
-it with the same KMS key and algorithm, see [Formats](./formats.md#tinks-kms-envelope).
+it with the same KMS key and algorithm, see [Formats](./formats/values.md#tinks-kms-envelope).
 
 A new DEK comes from the backend's CSPRNG, or from the KMS generator when the provider is
 configured to use one, see [KMS random generators](./providers.md#kms-random-generators).
@@ -201,7 +201,7 @@ the same key, to the DEK cache and in a map, as the one the provider returned wi
 
 The encrypted DEK is the one Tink stores in its KMS envelope, so `Encrypted::join` of a bare value
 and its encrypted DEK is an `Encrypted<T, Envelope>` that Tink reads. See
-[Formats](./formats.md#encrypted-deks) for each provider's bytes.
+[Formats](./formats/values.md#encrypted-deks) for each provider's bytes.
 
 ## Re-encrypting DEKs
 

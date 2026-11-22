@@ -227,5 +227,5 @@ changes:
 - the producer's DEK cache holds plaintext DEKs, as every store-less writer's does;
 - the local KMS's private half is in process memory, with no IAM, no audit log and no HSM.
 
-The bytes of the encrypted DEK are in [Formats](./formats.md#deks-encrypted-with-a-public-key), and
+The bytes of the encrypted DEK are in [Formats](./formats/values.md#deks-encrypted-with-a-public-key), and
 the codes this chapter mentions are in [Error handling](./errors.md#codes).

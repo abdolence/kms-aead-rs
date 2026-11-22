@@ -81,7 +81,7 @@ assert_eq!(decrypted, email);
 
 `Beacon<T>` is stored as `Encrypted` is, with serde and the `postgres` and `sqlx` features, and
 read back through `TryFrom`, which checks its layout, see [Stored values](./stored-values.md#beacont).
-See [Formats](./formats.md#beacons) for its bytes.
+See [Formats](./formats/values.md#beacons) for its bytes.
 
 A message authentication code (MAC) over a value's bytes, which is not truncated and never serves
 a lookup, is in [Beacons and MACs](./signing.md#beacons-and-macs).

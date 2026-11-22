@@ -11,7 +11,7 @@ optionally signals changes to it. The library provides:
 | Cloud Storage | `store::GcsKeyringStore` | `gcs` | the object's generation | none |
 | S3 | `store::S3KeyringStore` | `s3` | the object's ETag | none |
 
-Every store keeps the record as the same [JSON document](../formats.md#keyring-records), and every
+Every store keeps the record as the same [JSON document](../formats/keyring-records.md#keyring-records), and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
 

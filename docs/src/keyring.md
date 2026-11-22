@@ -9,7 +9,7 @@ Compared to an envelope, a keyring value carries a 4-byte key id instead of its 
 - no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on write
   and read;
 - 33 bytes of overhead per value, 21 for deterministic values, see
-  [Formats of `Encrypted`](./formats.md#formats-of-encrypted);
+  [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted);
 - central staged rotation, retirement, destruction and a compromised flag, for every process
   that uses the keyring;
 - deterministic fields that a data store finds by equality, across rotations;

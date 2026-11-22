@@ -53,8 +53,8 @@ mod beacons {}
 #[doc = include_str!("../docs/src/asymmetric-kek.md")]
 mod asymmetric_kek {}
 
-#[doc = include_str!("../docs/src/formats.md")]
-mod formats {}
+#[doc = include_str!("../docs/src/formats/values.md")]
+mod formats_values {}
 
 #[doc = include_str!("../docs/src/errors.md")]
 mod errors {}
