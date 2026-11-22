@@ -12,6 +12,12 @@ SHA-256 and an empty label, `AsymmetricKekAlgorithm::RsaOaepSha256`, on RSA keys
 new key; 2048 and 4096 are accepted, and 2048 is deprecated. Cloud KMS, AWS KMS, Azure Key Vault,
 Vault Transit and the local KMS decrypt it.
 
+This page specifies the keys, the three sides of a deployment, the public key and what the
+compile-time guarantee covers. To build a deployment that accepts data from producers that cannot
+read it back, read [Accept data from partners and devices that cannot read it
+back](./use-cases/write-only-producers.md) first. A keyring under an asymmetric KEK needs signed
+records, see [Protect the keyring record](./production/signed-records.md).
+
 ## Which way the keys go
 
 With an asymmetric KEK the public key encrypts and the private key decrypts, as in every public-key
@@ -37,8 +43,8 @@ A deployment has three sides:
 | Application, or any reader | a KMS provider | asymmetric decrypt on the key | `KmsAeadEnvelope::decrypt`, or a `Keyring` |
 | Administration | the public key and a KMS provider, in an `AsymmetricKekProvider` | asymmetric decrypt, and read of the public key | the `KeyringAdmin` calls and the re-encryptions |
 
-The readers use the providers they use today. They read the new layout by its first byte, and a
-provider decrypts the DEKs the KMS encrypted beside the DEKs a public key encrypted. The producer is
+The readers keep the providers they have. A provider tells a DEK that a public key encrypted from
+one the KMS encrypted by its first byte, and decrypts both. The producer is
 an envelope writer and encrypts randomised values only: a beacon and a deterministic value both need
 a key's plaintext, which only a reader decrypts. A keyring never has a producer, since encrypting
 under a keyring version needs the version's plaintext DEK. What an asymmetric KEK changes in a
@@ -92,7 +98,7 @@ The KMS rights per provider:
 | Azure Key Vault | `keys/unwrap/action` | `keys/get` |
 | Vault Transit | `update` on `transit/decrypt/<key>` | `read` on `transit/keys/<key>` |
 
-No side needs a KMS encrypt right. Be aware the KMS audit log no longer shows who encrypted a DEK:
+No side needs a KMS encrypt right. Be aware the KMS audit log does not show who encrypted a DEK:
 the encryption is a local operation. The decrypt log stays.
 
 ## The public key
@@ -130,15 +136,10 @@ one test value and decrypt it with a reader before a new producer writes anythin
 | Decrypt through a cloud KMS | yes | yes | yes |
 | Local KMS private half | no | yes | yes |
 
-ring has no RSA encryption, so a producer or a local private half on `Ring` fails at construction
-with `KmsAeadError::UnsupportedAlgorithm`. A reader on `Ring` needs nothing of RSA.
-
-The `rustcrypto` feature adds the [`rsa`](https://crates.io/crates/rsa) crate for
-RSA-OAEP. Its private-key operation runs only in a `LocalAsymmetricKmsProvider` on RustCrypto.
-Encrypting with the public key is a public-key operation with no private key to leak, and a cloud
-reader runs no RSA. Every application that enables `rustcrypto` carries `rsa` in its lockfile. A
-local KMS on RustCrypto decrypts DEKs from trusted sources only, such as its own keyring record. A
-process that decrypts what others send runs its private half on `AwsLc`, or in a KMS.
+A producer or a local private half on `Ring` fails at construction with
+`KmsAeadError::UnsupportedAlgorithm`. A reader on `Ring` needs nothing of RSA. The `rsa` crate that
+the `rustcrypto` feature adds, and why a local KMS on RustCrypto decrypts DEKs from trusted sources
+only, are in [Crypto backends](./crypto-backends.md#rustcrypto).
 
 ## The compile-time guarantee
 
@@ -189,7 +190,8 @@ An envelope or a keyring on an Azure Key Vault RSA key or a Transit `rsa-*` key 
 asymmetric KEK already: Key Vault's `wrapKey` operation, which encrypts a DEK, is the RSA-OAEP
 encryption its public key would make. Nothing stored has to be re-encrypted:
 
-1. deploy 0.31 to every reader first. 0.30 reads no DEK encrypted with a public key;
+1. upgrade every reader first to a version that reads a DEK encrypted with a public key, see
+   [Readers before producers](./migrating-from-0.30.md#readers-before-producers);
 2. for a keyring, turn record signing on before any DEK is encrypted with a public key: give the
    administration a record signer, run `sign_record` on every keyring, then set
    `RecordSignaturePolicy::Required` on every application;
@@ -200,7 +202,7 @@ encryption its public key would make. Nothing stored has to be re-encrypted:
 4. hand the public key to the producers, which switch from a KMS provider to a
    `PublicKeyKekProvider` and drop their KMS rights;
 5. take `keys/wrap/action`, or `update` on `transit/encrypt/<key>`, out of the administration's
-   grant once no 0.30 administration remains.
+   grant once no administration that encrypts through the KMS remains.
 
 A keyring on a Cloud KMS or AWS symmetric key cannot move to an asymmetric key: a keyring stays
 under the KEK it was created with. A new asymmetric key is a new keyring, filled by a sweep.
@@ -222,8 +224,9 @@ changes:
   no value decrypt;
 - RSA is not quantum-safe. An encrypted DEK kept in a record, a value or a backup decrypts for
   whoever later runs a cryptographically relevant quantum computer against the public key. Data
-  whose confidentiality must outlast RSA stays under a symmetric KEK until a KMS decapsulates a
-  post-quantum KEM in general availability, which none does today;
+  whose confidentiality must outlast RSA stays under a symmetric KEK until a supported KMS
+  decapsulates a post-quantum KEM (key encapsulation mechanism, the public-key way to agree on a
+  key) in general availability;
 - the producer's DEK cache holds plaintext DEKs, as every store-less writer's does;
 - the local KMS's private half is in process memory, with no IAM, no audit log and no HSM.
 

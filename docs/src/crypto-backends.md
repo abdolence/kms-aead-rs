@@ -1,9 +1,13 @@
 # Crypto backends
 
+This page specifies the crypto backends: the libraries that run the AEAD algorithms, the algorithms
+each one has, and the calls that need no KMS. To pick one for a build, FIPS included, read
+[Choose a provider and a backend](./getting-started/choosing.md#crypto-backends) first.
+
 The AEAD algorithms run on a crypto library that a feature compiles in. Each backend feature adds
-a type to `kms_aead::backends`, and `AeadCipher`, `DeterministicCipher`, `KmsAeadEnvelope` and `LocalKmsProvider` take
-that type as their backend type parameter `B`. A build may enable any number of backends, and
-there is no default one.
+a type to `kms_aead::backends`, and `AeadCipher`, `DeterministicCipher`, `KmsAeadEnvelope` and
+`LocalKmsProvider` take that type as their backend type parameter `B`. A build may enable any
+number of backends, and there is no default one.
 
 | Feature | Type | Library |
 |---|---|---|
@@ -58,7 +62,8 @@ assert_eq!(orders.round_trip(&card).await?, card);
 ```
 
 `B::generate_random_bytes(len)` returns `len` bytes from the CSPRNG of the backend `B`, for
-secrets the application generates itself.
+secrets the application generates itself. A CSPRNG is a cryptographically secure random number
+generator, the kind of source that keys and nonces need.
 
 ## Algorithms
 
@@ -72,9 +77,9 @@ secrets the application generates itself.
 | local RSA private half | | no | yes | yes |
 
 Every AEAD algorithm writes `[nonce: 12][ciphertext][tag: 16]`, with a random nonce from the
-backend's CSPRNG. The two RSA rows are the RSA-OAEP (RSA encryption with OAEP padding) of
-[Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does): the encryption of a DEK with the
-public key, and the private half of a `LocalAsymmetricKmsProvider`. A backend that does not
+backend's CSPRNG, see [Values and DEKs](./formats/values.md#formats-of-encrypted). The two RSA rows
+are the RSA-OAEP (RSA encryption with OAEP padding) of [Asymmetric KEKs](./asymmetric-kek.md): the
+encryption of a DEK with the public key, and the private half of a `LocalAsymmetricKmsProvider`. A backend that does not
 implement the algorithm fails at construction, never later, with
 `KmsAeadError::UnsupportedAlgorithm` and the code `UNSUPPORTED_ALGORITHM`:
 
@@ -165,7 +170,8 @@ memory after each call.
 ## aws-lc-rs and FIPS
 
 `aws-lc` builds aws-lc-rs with every algorithm. It is the backend that adds no second crypto
-library to a build with a cloud provider, since the providers already build aws-lc-rs for TLS.
+library to a build with a cloud provider, since the default features of the providers already build
+aws-lc-rs for TLS.
 
 `aws-lc-fips` runs the same backend on the AWS-LC FIPS module, and builds only the FIPS module,
 so it does not need `aws-lc`. It needs CMake and Go to build. Be aware it moves every user of
@@ -184,7 +190,12 @@ them.
 
 Every algorithm, in pure Rust, with `getrandom` as the CSPRNG. It needs no C compiler. The
 feature turns on the crates' `zeroize` features, so their key objects, and the Poly1305 and
-POLYVAL keys each call derives, are zeroised when dropped.
+POLYVAL keys (the authentication keys of ChaCha20-Poly1305 and AES-256-GCM-SIV) each call
+derives, are zeroised when dropped.
 
-RSA-OAEP runs on the `rsa` crate. A `LocalAsymmetricKmsProvider` on RustCrypto decrypts DEKs from
-trusted sources only, see [Asymmetric KEKs](./asymmetric-kek.md#what-each-backend-does).
+The feature adds the [`rsa`](https://crates.io/crates/rsa) crate for RSA-OAEP. Its private-key
+operation runs only in a `LocalAsymmetricKmsProvider` on RustCrypto. Encrypting with the public key
+is a public-key operation with no private key to leak, and a cloud reader runs no RSA. Every
+application that enables `rustcrypto` carries `rsa` in its lockfile. A local KMS on RustCrypto
+decrypts DEKs from trusted sources only, such as its own keyring record. A process that decrypts
+what others send runs its private half on `AwsLc`, or in a KMS.
