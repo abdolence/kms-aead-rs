@@ -1,5 +1,9 @@
 # Getting started
 
+This page adds the crate, encrypts a value with an envelope and with a keyring, and links the
+choices a build makes. To decide which provider and backend fit, read [Choose a provider and a
+backend](./getting-started/choosing.md).
+
 Cargo.toml:
 
 ```toml

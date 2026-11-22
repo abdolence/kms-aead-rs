@@ -13,7 +13,14 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 A keyring on the memory store with a local KEK, for an application type `Email`. It needs no
-cloud credentials, and needs the `admin` feature for `create`, `rotate` and `promote`:
+cloud credentials, and needs the `admin` feature for `create`, `rotate` and `promote`.
+
+- `KeyringAdmin` creates and rotates the keyring, and `Keyring` is the application's handle that
+  encrypts and decrypts;
+- a rotation is staged: `rotate` adds a version, and a later promotion makes it the one that
+  encrypts, so every process can load the new version before it is used;
+- `FieldAad` is the AAD of one field of one record, built from the entity kind, the field name and
+  the entity id.
 
 ```rust
 use kms_aead::backends::Ring;

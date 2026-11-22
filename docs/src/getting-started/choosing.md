@@ -25,7 +25,7 @@ Notes on the table:
   [Tink's KMS envelope](../formats/values.md#tinks-kms-envelope), and keyring keysets with
   `KeysetHandle.read`, see [Exporting a keyset to Tink](../keyring/bigquery.md#exporting-a-keyset-to-tink);
 - BigQuery's `KEYS.KEYSET_CHAIN` decrypts with Cloud KMS only, see
-  [Read values in BigQuery or Tink](../use-cases/bigquery-and-tink.md);
+  [Decrypt columns in BigQuery SQL or with Tink](../use-cases/bigquery-and-tink.md);
 - the KEK version decides how a KEK rotation is checked before the old version is disabled, see
   [Rotate keys and re-encrypt values](../production/rotation.md#kek-rotation). Each provider page has its
   rotation, under "Key versions and rotation": [Google Cloud KMS](../providers/gcp.md),
@@ -58,17 +58,16 @@ Every backend has ChaCha20-Poly1305, AES-128-GCM and AES-256-GCM, writes the sam
 decrypts the values of any other, so a move from one backend to another needs no migration of the
 data, see [Cross-backend compatibility](../crypto-backends.md#cross-backend-compatibility).
 
-- **Producers under an asymmetric KEK**: a producer that encrypts DEKs with a public key fails at
-  construction with `UNSUPPORTED_ALGORITHM` on `ring`, which has no RSA encryption. Readers need
-  nothing of RSA on any backend, see [Writers that can never read](../use-cases/write-only-producers.md);
-- **No second crypto library**: the default features of the four cloud providers already build
-  aws-lc-rs for TLS, so `aws-lc` adds nothing to a provider build;
+- **Producers under an asymmetric KEK**: a producer needs a backend with RSA encryption, so it
+  cannot run on `ring`. Readers need nothing of RSA on any backend, see [Accept data from partners and devices that cannot read it back](../use-cases/write-only-producers.md);
+- **No second crypto library**: the default features of the cloud providers already build
+  aws-lc-rs for TLS, so `aws-lc` adds nothing to a provider build, see [aws-lc-rs and FIPS](../crypto-backends.md#aws-lc-rs-and-fips);
 - **FIPS**: `aws-lc-fips` runs the backend on the AWS-LC FIPS module and moves every user of
   aws-lc-rs in the build to it, the rustls provider included. AES-256-GCM is the algorithm for a
   FIPS deployment. AES-SIV, the deterministic algorithm, is not FIPS-approved and runs on RustCrypto
   whatever the backend, so deterministic fields stay outside the validated boundary, see
   [aws-lc-rs and FIPS](../crypto-backends.md#aws-lc-rs-and-fips);
-- **No C toolchain**: `rustcrypto` is pure Rust, with `getrandom` as the CSPRNG;
+- **No C toolchain**: `rustcrypto` is pure Rust;
 - **Zeroisation**: what each backend leaves in freed memory is in
   [Crypto backends](../crypto-backends.md#ring).
 

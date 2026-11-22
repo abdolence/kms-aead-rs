@@ -1,38 +1,26 @@
 # KMS envelope encryption for Rust
 
-Library provides envelope encryption with a key encryption key held by a KMS, and AEAD
-encryption without a KMS:
+The library provides envelope encryption with a key encryption key held by a KMS, and AEAD
+encryption without a KMS. It covers:
 
-- KMS providers for:
-    - Google Cloud KMS;
-    - AWS KMS;
-    - Azure Key Vault and Managed HSM;
-    - HashiCorp Vault Transit;
-    - A local KMS with a key the application holds, for development, tests and single-host
-      installs;
-- AEAD algorithms ChaCha20-Poly1305, AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV;
-- Tink's KMS envelope format for every provider, so Tink reads the values of GCP and AWS keys
-  and the library reads Tink's, see [Formats](./formats.md);
-- Crypto backends ring, aws-lc-rs (including its FIPS module) and the pure Rust RustCrypto
-  crates. A value encrypted by one backend decrypts with any other;
-- Per-call envelopes, store-less DEK reuse, and an in-process cache of decrypted data encryption
-  keys;
-- Deterministic encryption with AES-SIV, for values that are looked up by equality;
-- Typed fields, `Encrypted<T, F>`, stored with serde, tokio-postgres or sqlx;
-- Optional KMS-side random generators for GCP and AWS;
-- Field encryption with a keyring, in the `kms-aead-keyring` crate: key versions kept in
-  Firestore, PostgreSQL, Cloud Storage or S3, central staged rotation, beacons, and values in
-  Tink's wire format;
-- Streaming encryption for files of any length, with reads of any byte range that fetch only the
-  chunks that cover it;
-- Signatures with Ed25519 and ECDSA P-256 keys held by a KMS, verified without a KMS in Rust and in
-  a browser, and MACs under keyring key versions;
-- Signed keyring records, so that whoever can write the keyring store cannot change which keys are
-  used;
-- Asymmetric KEKs, for producers that encrypt with a public key and can never decrypt;
-- Tracing spans for every operation and every KMS call, with no plaintext, key material or AAD
-  in them;
-- No unsafe code.
+- envelope encryption with Google Cloud KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a
+  local KMS, see [Envelope encryption](./envelope-encryption.md) and
+  [KMS providers](./providers.md);
+- AEAD encryption on ring, aws-lc-rs or RustCrypto, see [Crypto backends](./crypto-backends.md);
+- typed encrypted fields for serde, tokio-postgres and sqlx, see [Stored values](./stored-values.md);
+- fewer KMS calls with a DEK cache and DEK reuse, see [DEK caching and reuse](./dek-caching.md);
+- deterministic encryption and beacons for lookups by equality, see
+  [Deterministic encryption](./deterministic.md) and [Beacons](./beacons.md);
+- keys versioned and rotated centrally, in the `kms-aead-keyring` crate, see
+  [Keyring and field encryption](./keyring.md);
+- streaming encryption of files of any length, see [Streaming encryption](./streaming.md);
+- signatures and MACs, see [Signatures and MACs](./signing.md);
+- asymmetric KEKs for producers that can encrypt and never decrypt, see
+  [Asymmetric KEKs](./asymmetric-kek.md);
+- values that BigQuery and Tink, Google's open-source cryptography library, read, see
+  [Formats](./formats.md);
+- tracing spans for every operation and every KMS call, see [Observability](./observability.md);
+- no unsafe code.
 
 To start using the library, see [Getting started](./getting-started.md).
 
@@ -55,28 +43,20 @@ and a row id, so that a value copied to another row fails to decrypt.
 ## Choosing a mode
 
 The ways to use a KMS differ in how many DEKs exist, how often the KMS is called and what a
-stored value holds:
+stored value holds. The table below sets the four modes side by side. Pick one by what the data
+needs:
 
-- **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, encrypted
-  with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
-  more KMS call, unless the envelope has a DEK cache, which serves repeated reads without the KMS,
-  see [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md). Use it when
-  values are written rarely, such as secrets and configuration, or when one DEK per value is a
-  requirement. See [Envelope encryption](./envelope-encryption.md);
-- **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK encrypts many
-  values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
-  still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
-  the DEK cache. Use it for high write rates where a KMS call per value costs too much. See
-  [DEK caching and reuse](./dek-caching.md);
-- **One fixed key**, `encrypt` of `AeadCipher` or `DeterministicCipher` with one key that
-  the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink's wire
-  format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
-  it for a column that BigQuery reads, with no key rotation. See
-  [One fixed key](./one-fixed-key.md);
-- **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the encrypted DEK
-  versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
-  record is the place for central rotation and retirement of keys, and for values that BigQuery
-  and Tink read across rotations. See [Keyring and field encryption](./keyring.md).
+- **Per-call envelope**, the default of `KmsAeadEnvelope`. Use it when values are written rarely,
+  such as secrets and configuration, or when one DEK per value is a requirement. See
+  [Envelope encryption](./envelope-encryption.md);
+- **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`. Use it for high write
+  rates where a KMS call per value costs too much. See [DEK caching and reuse](./dek-caching.md)
+  and [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md);
+- **One fixed key**, `encrypt` of `AeadCipher` or `DeterministicCipher`. Use it for a column that
+  BigQuery reads, with no key rotation. See [One fixed key](./one-fixed-key.md);
+- **Keyring**, the `kms-aead-keyring` crate. Use it when keys need central rotation and
+  retirement, or when BigQuery and Tink read values across rotations. See
+  [Keyring and field encryption](./keyring.md).
 
 | | Per-call envelope | Store-less DEK reuse | One fixed key | Keyring |
 |---|---|---|---|---|
@@ -133,8 +113,9 @@ Running in production, one page per task:
 | Stop a writer of the keyring store from changing which keys are used | [Protect the keyring record](./production/signed-records.md) |
 | Move envelope values to a keyring | [Move envelope values to a keyring](./production/envelope-to-keyring.md) |
 
-Moving to a newer version is in the Upgrading section at the end of the book, starting with
-[Migrating from 0.30](./migrating-from-0.30.md).
+Moving to a newer version is covered by the guides in the Upgrading section at the end of the
+book: [Migrating from 0.30](./migrating-from-0.30.md) and [Migrating from 0.29](./migrating-from-0.29.md).
+Apply them in order, newest first.
 
 ## Licence
 
