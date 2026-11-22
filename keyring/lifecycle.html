@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -257,12 +257,15 @@ at once.</p>
 <tr><td><code>retire(key_id)</code></td><td><code>DecryptOnly</code> to <code>Retired</code>, once a sweep found no value left under it</td></tr>
 <tr><td><code>reinstate(key_id)</code></td><td><code>Retired</code> back to <code>DecryptOnly</code>, for a value that turned up after all; a compromised flag stays</td></tr>
 <tr><td><code>destroy(key_id)</code></td><td><code>Retired</code> or <code>Pending</code> to <code>Destroyed</code></td></tr>
-<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a>, and the record stays in the store</td></tr>
+<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write; the record stays in the store, see below the table</td></tr>
 <tr><td><code>dangerously_shred()</code></td><td>destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see <a href="#shredding-a-keyring">Shredding a keyring</a></td></tr>
 <tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes. Returns a <code>DekReencryption</code> per version, with the KEK version its DEK moved from and to</td></tr>
 </tbody>
 </table>
 </div>
+<p>After <code>dangerously_destroy_all_versions()</code> the keyring encrypts and decrypts nothing, except through a
+stream encryptor or decryptor already made, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with
+<code>dangerously_shred()</code></a>.</p>
 <p>A call that does not apply to the version’s state fails with <code>InvalidTransition</code>, which names the
 version, its state and the <code>Transition</code>:</p>
 <ul>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -214,8 +214,8 @@ values, below the marker of every keyring.</p>
 <p>Each record of the application keeps the marker in one field beside its encrypted fields. A write
 that touches any encrypted field of a record takes one <code>Encryptor</code> from <code>keyring.encryptor()</code>,
 encrypts all of the record’s encrypted fields again through it, computes its beacons again, and
-stores <code>encryptor.record().encryption_marker()</code> in the same write, as <code>write_user</code> does in <a href="#running-a-sweep">Running a
-sweep</a>. The encryptor keeps the record it took from the cache, so the marker names
+stores <code>encryptor.record().encryption_marker()</code> in the same write, as the <code>reencrypt</code> function of
+<a href="#running-a-sweep">Running a sweep</a> does. The encryptor keeps the record it took from the cache, so the marker names
 the epoch whose active versions the fields are under, also when the cache refreshes during the
 write.</p>
 <p>A marker read from <code>keyring.record()</code> names whichever record the cache held when it was read. Read
@@ -277,65 +277,13 @@ an unknown key id: <code>record.version(key_id)</code> is <code>None</code>. The
 <tr><th>Store</th><th>Query</th></tr>
 </thead>
 <tbody>
-<tr><td>Firestore</td><td>two range filters on <code>encryption_marker</code>, as below</td></tr>
+<tr><td>Firestore</td><td>two range filters on <code>encryption_marker</code>, see <a href="./sweeps/firestore.html#querying-behind-and-by-version">Sweeps on Firestore</a></td></tr>
 <tr><td>PostgreSQL</td><td><code>WHERE encryption_marker &gt;= $1 AND ($2::BYTEA IS NULL OR encryption_marker &lt; $2)</code> with <code>&amp;range.start()</code> and <code>&amp;range.end()</code></td></tr>
 <tr><td>BigQuery</td><td><code>WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>, with <code>@end</code> a <code>NULL</code> of type <code>BYTES</code> for an open range</td></tr>
 <tr><td>Rust</td><td><code>range.contains(row.encryption_marker)</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>Firestore takes both bounds on the one field and serves them from its ascending index on
-<code>encryption_marker</code>, and an open range is one filter:</p>
-<pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
-use futures_util::stream::{self, BoxStream, StreamExt};
-use kms_aead::backends::Ring;
-use kms_aead::providers::GcpKmsProvider;
-use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
-use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-struct UserDoc {
-    #[serde(rename = "_firestore_id", skip_serializing)]
-    id: String,
-    #[serde(default)]
-    encryption_marker: EncryptionMarker,
-}
-
-/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
-async fn users_under&lt;'a&gt;(
-    db: &amp;'a FirestoreDb,
-    keyring: &amp;Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;,
-    key_id: KeyId,
-) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
-    // The store's record: a compromise or promotion in another process is in it
-    let range: Option&lt;ReencryptRange&gt; = keyring
-        .reload()
-        .await?
-        .version(key_id)
-        .and_then(KeyVersion::reencrypt_range);
-    let Some(range) = range else {
-        // Never active: no record holds a value under it
-        return Ok(stream::empty().boxed());
-    };
-    let users: BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt; = db
-        .fluent()
-        .select()
-        .from("users")
-        .filter(|q| {
-            q.for_all([
-                q.field("encryption_marker").greater_than_or_equal(range.start()),
-                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
-            ])
-        })
-        .obj()
-        .stream_query_with_errors()
-        .await?;
-    Ok(users)
-}
-<span class="boring">
-</span><span class="boring">fn main() {}</span></code></pre>
 <p>The range serves two decisions:</p>
 <ul>
 <li>after <code>mark_compromised</code>, the range of the compromised version returns every record to re-encrypt

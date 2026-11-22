@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -201,8 +201,8 @@ its row only:</p>
 <tr><th>Side</th><th>Handle</th><th>KMS</th><th>Keyring store</th></tr>
 </thead>
 <tbody>
-<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt: GCP <code>roles/cloudkms.cryptoKeyDecrypter</code>, AWS <code>kms:Decrypt</code>, Azure Key Vault <code>keys/unwrap/action</code>, Vault Transit decrypt</td><td>read, and listen or watch: Firestore read, PostgreSQL <code>SELECT</code> and <code>LISTEN</code>, Cloud Storage object read, S3 <code>GetObject</code></td></tr>
-<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key</td><td>read, write and delete: Firestore write, PostgreSQL <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code>, which also send the <code>NOTIFY</code>, Cloud Storage and S3 object write and delete</td></tr>
+<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt</td><td>read, and listen or watch</td></tr>
+<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key</td><td>read, write and delete</td></tr>
 </tbody>
 </table>
 </div>
@@ -320,13 +320,19 @@ administration needs the read of the public key beside the applications’ decry
 <tr><th>KMS</th><th>Application</th><th>Administration</th></tr>
 </thead>
 <tbody>
-<tr><td>GCP</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td>decrypt, and <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. <code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry it</td></tr>
+<tr><td>GCP</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td>decrypt, and <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code></td></tr>
 <tr><td>AWS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:Decrypt</code> and <code>kms:GetPublicKey</code> on the key</td></tr>
-<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/unwrap/action</code> and <code>keys/get</code>. “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no decrypt</td></tr>
+<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/unwrap/action</code> and <code>keys/get</code></td></tr>
 <tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code>, and <code>read</code> on <code>transit/keys/&lt;key&gt;</code> or <code>transit/export/public-key/&lt;key&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>Two built-in roles fall short of what the administration needs:</p>
+<ul>
+<li><code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry <code>viewPublicKey</code>;</li>
+<li>Azure’s “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no
+decrypt.</li>
+</ul>
 <p>The KMS audit log no longer shows who encrypted a DEK, since the encryption is local, and anyone
 holding the public key can encrypt one: a keyring under an asymmetric KEK runs with
 <code>RecordSignaturePolicy::Required</code> on every application, see
@@ -344,8 +350,20 @@ only the administration writes the record, and the applications read it and list
 <tbody>
 <tr><td>Firestore</td><td>read of the keyring documents, which the listener uses too, such as <code>roles/datastore.viewer</code></td><td>read, write and delete of the keyring documents, such as <code>roles/datastore.user</code></td></tr>
 <tr><td>PostgreSQL</td><td><code>SELECT</code> on the table, and <code>LISTEN</code>, which needs no grant</td><td><code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> on the table; each write and delete also sends the <code>NOTIFY</code></td></tr>
-<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code>, <code>storage.objects.delete</code>, since a write replaces the object, and <code>storage.objects.list</code>, which <code>dangerously_shred()</code> needs to find the object’s generations</td></tr>
-<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code>, and for <code>dangerously_shred()</code> also <code>s3:ListBucketVersions</code>, <code>s3:DeleteObject</code> and <code>s3:DeleteObjectVersion</code></td></tr>
+<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code> and <code>storage.objects.delete</code>, since a write replaces the object</td></tr>
+<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>dangerously_shred()</code> needs more of the administration on the object stores:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Store</th><th>Also needed</th></tr>
+</thead>
+<tbody>
+<tr><td>Cloud Storage</td><td><code>storage.objects.list</code>, to find the object’s generations</td></tr>
+<tr><td>S3</td><td><code>s3:ListBucketVersions</code>, <code>s3:DeleteObject</code> and <code>s3:DeleteObjectVersion</code></td></tr>
 </tbody>
 </table>
 </div>

@@ -36,7 +36,7 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-add654e4.js"></script>
@@ -182,7 +182,10 @@
 <p>A sweep of a PostgreSQL table: the encryption marker as a column, the query for the rows behind,
 and the conditional write back. The mechanism is in <a href="../sweeps.html">Sweeps</a>, and the example has the
 five properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
-<p>The marker is a <code>BYTEA</code> column with a btree index:</p>
+<h2 id="schema-and-indexing"><a class="header" href="#schema-and-indexing">Schema and indexing</a></h2>
+<p>The marker is a <code>BYTEA</code> column with a btree index. <code>EncryptionMarker</code> is a <code>BYTEA</code> parameter and
+column through tokio-postgres with the <code>postgres</code> feature, and through sqlx with the <code>sqlx</code>
+feature:</p>
 <pre><code class="language-sql">CREATE TABLE users (
     id BIGINT PRIMARY KEY,
     email BYTEA NOT NULL,
@@ -190,15 +193,22 @@ five properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>.
 );
 CREATE INDEX users_encryption_marker ON users (encryption_marker);
 </code></pre>
+<h2 id="querying-behind-and-by-version"><a class="header" href="#querying-behind-and-by-version">Querying behind and by version</a></h2>
 <p>The candidates are one query, <code>encryption_marker &lt; $1</code> with no <code>ORDER BY</code>, so the planner is free to
-read them from the index on <code>encryption_marker</code>, and <code>query_raw</code> streams its rows: memory holds the
-batches in flight only. The query holds its connection for as long as it streams, so the <code>UPDATE</code>s
-go through a second one. <code>sweep::reencrypt_records_batched</code> cuts the candidates into batches of 1000 rows, each
-re-encrypted through one encryptor and written back in one <code>UPDATE</code> over arrays of the ids, the new
-values and the values it read. The <code>UPDATE</code> is conditional on the bytes it read, which a write of
-any other process changes, since every randomised value has its own nonce. A process that has not
-seen the promotion yet still encrypts under the old version and stamps the old epoch, which the row
-holds already, so the marker alone does not detect its write:</p>
+read them from the index on <code>encryption_marker</code>. The query for the rows that can hold a value under
+a version is in <a href="../sweeps.html#records-under-a-version">Records under a version</a>.</p>
+<h2 id="re-encrypting-in-batches"><a class="header" href="#re-encrypting-in-batches">Re-encrypting in batches</a></h2>
+<ul>
+<li><code>query_raw</code> streams the rows, and the query holds its connection for as long as it streams, so
+the <code>UPDATE</code>s go through a second one;</li>
+<li><code>sweep::reencrypt_records_batched</code> cuts the candidates into batches of 1000 rows, each
+re-encrypted through one encryptor and written back in one <code>UPDATE</code> over arrays of the ids, the
+new values and the values it read;</li>
+<li>the <code>UPDATE</code> is conditional on the bytes it read, which a write of any other process changes,
+since every randomised value has its own nonce. A process that has not seen the promotion yet
+still encrypts under the old version and stamps the old epoch, which the row holds already, so
+the marker alone does not detect its write.</li>
+</ul>
 <pre><code class="language-rust no_run">use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
@@ -409,17 +419,22 @@ println!("{report:?}");
 <span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>CONCURRENCY</code> bounds the batches in flight, but one writing connection runs their <code>UPDATE</code>s one
-after another; a pool of connections runs them in parallel.</p>
-<p><code>EncryptionMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code>
-feature, and through sqlx with the <code>sqlx</code> feature. The query holds one snapshot for as long as it
-streams, and while it is open <code>VACUUM</code> cannot reclaim the old versions of the rows the sweep
-updates; a scheduled job that ends and runs again keeps each snapshot short, since the query of the
-markers below the current one returns exactly the rows the last run did not write.</p>
+<h2 id="operational-limits"><a class="header" href="#operational-limits">Operational limits</a></h2>
+<ul>
+<li><code>CONCURRENCY</code> bounds the batches in flight, but one writing connection runs their <code>UPDATE</code>s one
+after another; a pool of connections runs them in parallel;</li>
+<li>a row that does not read is a failed candidate. An error of the stream itself is one too, and
+ends it: once the connection drops, the stream returns that error on every poll and never its
+end, so the example stops it at the first error with <code>take_while</code>;</li>
+<li>the query holds one snapshot for as long as it streams, and while it is open <code>VACUUM</code> cannot
+reclaim the old versions of the rows the sweep updates; a scheduled job that ends and runs again
+keeps each snapshot short.</li>
+</ul>
+<h2 id="storage-overhead"><a class="header" href="#storage-overhead">Storage overhead</a></h2>
 <p>The marker takes 6 bytes of a row: its 5 bytes and a 1-byte length header. A btree on a column of a
-few distinct epochs stores each one once per page with the list of its rows: measured on
-PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.
-10 million rows hold about 130 MB of markers and index.</p>
+few distinct epochs stores each one once per page with the list of its rows, which takes about 7
+bytes per row of index. 10 million rows hold about 130 MB of markers and index.</p>
+<h2 id="runnable-example"><a class="header" href="#runnable-example">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs"><code>sweep_postgres</code> example</a>
 runs this sweep end to end, from the writes to the report, on a local PostgreSQL.</p>
 

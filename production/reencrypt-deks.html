@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -495,19 +495,17 @@ disabled. Wait before the sweep and again before trusting the check, see the pag
 <h2 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h2>
 <p>A swept value’s DEK is under the new version only, so a rollback keeps the new version enabled:
 disabling it makes every swept value and every value written since the rotation unreadable, until
-it is enabled again. Three providers make the old version encrypt again:</p>
+it is enabled again. Where the provider makes the old version encrypt again, rolling back to it
+needs no new sweep. To retire the new version afterwards, run the procedure above with the old
+version as the current one.</p>
+<p>The rule per provider:</p>
 <ul>
-<li>Cloud KMS: make the old version the primary version again;</li>
-<li>Azure Key Vault: pin the old version in <code>AzureKmsKeyRef</code>;</li>
-<li>the local KMS: point <code>with_encrypting_version</code> at the old version.</li>
+<li><a href="../providers/gcp.html#rolling-back-a-rotation">Google Cloud KMS</a>;</li>
+<li><a href="../providers/aws.html#rolling-back-a-rotation">AWS KMS</a>;</li>
+<li><a href="../providers/azure.html#rolling-back-a-rotation">Azure Key Vault</a>;</li>
+<li><a href="../providers/hc-vault-transit.html#rolling-back-a-rotation">HashiCorp Vault Transit</a>;</li>
+<li><a href="../providers/local.html#rolling-back-a-rotation">the local KMS</a>.</li>
 </ul>
-<p>Rolling back to the old version needs no new sweep. To retire the new version afterwards, run the
-procedure above with the old version as the current one.</p>
-<p>The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
-of the key, since the provider names no version in its request, and no older version becomes the
-latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS
-keeps every earlier key material decrypting and none can be disabled, so a rotation needs no
-rollback there.</p>
 
                     </main>
 

@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -222,7 +222,8 @@ let too_short = Encrypted::&lt;SecretValue, Bare&gt;::try_from(vec![0; 8]);
 assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"));
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The library’s codes:</p>
+<p>The library’s codes, by area:</p>
+<h3 id="values-keys-and-formats"><a class="header" href="#values-keys-and-formats">Values, keys and formats</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -231,30 +232,110 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tbody>
 <tr><td><code>ENCRYPT</code>, <code>DECRYPT</code></td><td>encryption</td><td>encrypting failed, or a value, or a chunk of a streamed value, is not authentic under the key and the AAD, among them a final chunk that a sequential read finds cut or followed by more bytes</td></tr>
 <tr><td><code>ENCRYPT_KEY</code>, <code>DECRYPT_KEY</code></td><td>encryption</td><td>the backend refused a key, or a KMS request could not be built</td></tr>
-<tr><td><code>SIGN_KEY</code>, <code>GET_PUBLIC_KEY</code></td><td>signature</td><td>a Cloud KMS signing request, or its public key request, whose routing header could not be built</td></tr>
 <tr><td><code>RANDOM_GENERATOR</code></td><td>encryption</td><td>the CSPRNG failed, for a nonce or a key</td></tr>
 <tr><td><code>INVALID_KEY_LENGTH</code></td><td>encryption</td><td>a key that does not fit the algorithm, such as a MAC key of another length than 32 or 64 bytes, a KMS generator that returned another length, or a DEK longer than the OAEP limit of the public key it is encrypted with</td></tr>
 <tr><td><code>UNSUPPORTED_ALGORITHM</code></td><td>unsupported algorithm</td><td>the backend does not implement the algorithm, an AEAD algorithm or an asymmetric KEK algorithm such as RSA-OAEP on ring. <code>algorithm</code> is a <code>BackendAlgorithm</code></td></tr>
 <tr><td><code>UNKNOWN_ALGORITHM</code></td><td>encryption</td><td><code>FromStr</code> of an algorithm name it does not know, a signing or MAC algorithm included</td></tr>
-<tr><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td>encryption</td><td>a value too short, a length past its end, a <code>Randomized</code> or <code>Deterministic</code> value without Tink’s output prefix, a stream header that is not 61 bytes (56 bare) or does not start with <code>0x01</code>, or an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not <code>60 + w</code> bytes</td></tr>
+<tr><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td>encryption</td><td>a stored value whose layout does not parse, see the cases below the table</td></tr>
 <tr><td><code>UNKNOWN_CIPHER_TEXT_LAYOUT</code></td><td>encryption</td><td>an empty envelope value, or a first byte that starts no layout</td></tr>
 <tr><td><code>INVALID_PLAINTEXT</code></td><td>encryption</td><td>a decrypted value that is not an encoding of its type, or a <code>JsonEncoded</code> value that does not serialise</td></tr>
 <tr><td><code>INVALID_KEY_FORMAT</code></td><td>encryption</td><td>a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset</td></tr>
 <tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the encrypted DEK layout v1 of 0.29 that cannot be read, with <code>legacy-formats</code></td></tr>
 <tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29</td></tr>
 <tr><td><code>INVALID_HEX</code></td><td>encryption</td><td><code>try_from_hex_string</code> of text that is not hex</td></tr>
+<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
+<tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
+<tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>INVALID_CIPHER_TEXT_FORMAT</code> is returned for:</p>
+<ul>
+<li>a value too short, or a length past its end;</li>
+<li>a <code>Randomized</code> or <code>Deterministic</code> value without Tink’s output prefix;</li>
+<li>a stream header that is not 61 bytes (56 bare) or does not start with <code>0x01</code>;</li>
+<li>an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not <code>60 + w</code>
+bytes.</li>
+</ul>
+<h3 id="beacons-macs-and-digests"><a class="header" href="#beacons-macs-and-digests">Beacons, MACs and digests</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>INVALID_BEACON_FORMAT</code></td><td>encryption</td><td>stored bytes that are not <code>[0x01][key id: u32 BE]</code> and 1 to 32 bytes of HMAC, at <code>Beacon::try_from</code></td></tr>
 <tr><td><code>INVALID_BEACON_CONTEXT</code></td><td>encryption</td><td>a beacon context longer than 2^32 - 1 bytes</td></tr>
 <tr><td><code>BEACON</code></td><td>encryption</td><td>the backend failed to calculate a beacon’s HMAC</td></tr>
+<tr><td><code>INVALID_PAYLOAD</code></td><td>encryption</td><td><code>to_payload</code> or <code>from_payload</code> failed, from a signing or a MAC call, such as a payload that is not the JSON of a <code>JsonEncoded</code> type</td></tr>
+<tr><td><code>MAC_INVALID</code></td><td>encryption</td><td>the tag does not match, or is not the length of the key’s algorithm</td></tr>
+<tr><td><code>INVALID_MAC_FORMAT</code></td><td>encryption</td><td>bytes that are not a <code>Mac</code> or <code>WithMac</code> layout</td></tr>
+<tr><td><code>MAC</code></td><td>encryption</td><td>the backend failed to compute an HMAC</td></tr>
+<tr><td><code>DIGEST</code></td><td>encryption</td><td>the backend failed to compute a SHA-256, of a payload or a pre-image</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="streams"><a class="header" href="#streams">Streams</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>STREAM_ALGORITHM</code></td><td>encryption</td><td>a cipher or key version whose algorithm is not AES-256-GCM asked to encrypt or decrypt a streamed value</td></tr>
-<tr><td><code>STREAM_LENGTH</code></td><td>encryption</td><td>a stored length that the length rules refuse, given to <code>StreamFormat::plan_chunk_read</code> or <code>plan_final_chunk_read</code>; bytes given to <code>decrypt_chunk_read</code> of another length than the plan’s <code>ciphertext()</code>; a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk, where no value ends, or holds more chunks than a value can; a source that ends inside the header that <code>decrypting_stream</code> or <code>decrypting_reader</code> read</td></tr>
+<tr><td><code>STREAM_LENGTH</code></td><td>encryption</td><td>a length or a source that the length rules of the stream format refuse, see the cases below the table</td></tr>
 <tr><td><code>STREAM_KEY_COMMITMENT</code></td><td>encryption</td><td>the header’s commitment is not the one the DEK, the salt and the AAD derive: a wrong key, a wrong AAD, or a modified salt or commitment</td></tr>
 <tr><td><code>STREAM_RANGE</code></td><td>encryption</td><td>a plaintext range past the value’s length or with <code>start &gt; end</code>, or a chunk read plan of a value in another form</td></tr>
-<tr><td><code>STREAM_IO</code></td><td>system</td><td>the source or the sink of <code>encrypt_stream</code> or <code>decrypt_stream</code>, or the source of an <code>EncryptingStream</code> or a <code>DecryptingStream</code>, or the source of <code>decrypting_stream</code> or <code>decrypting_reader</code> while they read the header, failed; the source’s or sink’s error is the root cause. The retry is the whole stream again</td></tr>
+<tr><td><code>STREAM_IO</code></td><td>system</td><td>the source or the sink of a stream call failed, see the cases below the table. The source’s or sink’s error is the root cause. The retry is the whole stream again</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>STREAM_LENGTH</code> is returned for:</p>
+<ul>
+<li>a stored length that the length rules refuse, given to <code>StreamFormat::plan_chunk_read</code> or
+<code>plan_final_chunk_read</code>;</li>
+<li>bytes given to <code>decrypt_chunk_read</code> of another length than the plan’s <code>ciphertext()</code>;</li>
+<li>a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk,
+where no value ends, or holds more chunks than a value can;</li>
+<li>a source that ends inside the header that <code>decrypting_stream</code> or <code>decrypting_reader</code> read.</li>
+</ul>
+<p><code>STREAM_IO</code> is returned when:</p>
+<ul>
+<li>the source or the sink of <code>encrypt_stream</code> or <code>decrypt_stream</code> failed;</li>
+<li>the source of an <code>EncryptingStream</code> or a <code>DecryptingStream</code> failed;</li>
+<li>the source of <code>decrypting_stream</code> or <code>decrypting_reader</code> failed while they read the header.</li>
+</ul>
+<h3 id="asymmetric-keks"><a class="header" href="#asymmetric-keks">Asymmetric KEKs</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code></td><td>encryption</td><td>a <code>0x02</code> encrypted DEK with an unknown algorithm byte, a header past the end, an <code>i</code> or <code>k</code> of another shape than the reading provider’s, or a block of another length than its key’s, before any KMS call</td></tr>
-<tr><td><code>ASYMMETRIC_KEK_PUBLIC_KEY</code></td><td>system</td><td>public key bytes that are not in the named <code>PublicKeyFormat</code>, or not an RSA key of 2048, 3072 or 4096 bits, a key the backend refuses, a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal version for a local KEK, or a KMS key the fetch describes as another kind</td></tr>
+<tr><td><code>ASYMMETRIC_KEK_PUBLIC_KEY</code></td><td>system</td><td>a public key or a KEK version that cannot be used, see the cases below the table</td></tr>
 <tr><td><code>ASYMMETRIC_KEK_PRIVATE_KEY</code></td><td>system</td><td>local private key bytes that are not in the named <code>PrivateKeyFormat</code>, or not an RSA key of 2048, 3072 or 4096 bits</td></tr>
 <tr><td><code>ASYMMETRIC_KEK_MISMATCH</code></td><td>system</td><td>an <code>AsymmetricKekProvider</code> whose public key names another KEK than its KMS provider, or a <code>pinned</code> producer whose key has another fingerprint</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>ASYMMETRIC_KEK_PUBLIC_KEY</code> is returned for:</p>
+<ul>
+<li>public key bytes that are not in the named <code>PublicKeyFormat</code>;</li>
+<li>a key that is not an RSA key of 2048, 3072 or 4096 bits;</li>
+<li>a key the backend refuses;</li>
+<li>a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal
+version for a local KEK;</li>
+<li>a KMS key the fetch describes as another kind.</li>
+</ul>
+<h3 id="signatures"><a class="header" href="#signatures">Signatures</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SIGN_KEY</code>, <code>GET_PUBLIC_KEY</code></td><td>signature</td><td>a Cloud KMS signing request, or its public key request, whose routing header could not be built</td></tr>
 <tr><td><code>SIGNATURE_INVALID</code></td><td>signature</td><td>no key with the signature’s key id verifies it</td></tr>
 <tr><td><code>SIGNING_KEY_UNKNOWN</code></td><td>signature</td><td>no key in the set has the signature’s key id: the set is stale, or the signer is not trusted; also <code>with_record_signer</code>, <code>create_signed</code> and <code>open_or_create_signed</code> with a signer the registry’s record verification does not hold</td></tr>
 <tr><td><code>INVALID_SIGNATURE_FORMAT</code></td><td>signature</td><td>bytes that are not a <code>Signature</code> or <code>Signed</code> layout, at <code>TryFrom</code></td></tr>
@@ -264,20 +345,25 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>INVALID_PUBLIC_KEY</code></td><td>signature</td><td>a public key, JWK or JWK Set that does not parse, is of another algorithm, is not on the curve, or is an Ed25519 point of order 8 or less</td></tr>
 <tr><td><code>EMPTY_KEY_SET</code></td><td>signature</td><td><code>Verifier::new</code> with no key, and <code>KeyringRegistry::new</code> with <code>RecordSignaturePolicy::Required</code> and no key</td></tr>
 <tr><td><code>DUPLICATE_KEY_ID</code></td><td>signature</td><td>two different keys under one key id, at <code>VerifyingKeySet::new</code>, <code>insert</code> or <code>from_jwks</code>, or two local versions sharing one</td></tr>
-<tr><td><code>INVALID_PAYLOAD</code></td><td>encryption</td><td><code>to_payload</code> or <code>from_payload</code> failed, from a signing or a MAC call, such as a payload that is not the JSON of a <code>JsonEncoded</code> type</td></tr>
-<tr><td><code>MAC_INVALID</code></td><td>encryption</td><td>the tag does not match, or is not the length of the key’s algorithm</td></tr>
-<tr><td><code>INVALID_MAC_FORMAT</code></td><td>encryption</td><td>bytes that are not a <code>Mac</code> or <code>WithMac</code> layout</td></tr>
-<tr><td><code>MAC</code></td><td>encryption</td><td>the backend failed to compute an HMAC</td></tr>
-<tr><td><code>DIGEST</code></td><td>encryption</td><td>the backend failed to compute a SHA-256, of a payload or a pre-image</td></tr>
 <tr><td><code>SIGN</code></td><td>signature</td><td>the backend failed to sign with a local signing key</td></tr>
-<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
-<tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
-<tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+<tr><td><code>INVALID_LOCAL_SIGNING_KEY_NAME</code></td><td>system</td><td>a local signing key name that is empty, longer than 255 bytes or holds another character than the name allows</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_SOURCE</code></td><td>system</td><td>a key file that cannot be read, is not a regular file or is too large, or an environment variable that is unset, too large or not base64 where base64 is expected</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_FORMAT</code></td><td>system</td><td>key bytes that are not the format, another algorithm, an encrypted PKCS#8 or a P-256 key without its public point, or a key the backend refuses</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_VERSIONS</code></td><td>system</td><td>a local signing provider with no keys, or with a version listed twice</td></tr>
+<tr><td><code>AWS_SIGNING_KEY_ALIAS</code></td><td>system</td><td>an AWS signing key named by an alias, which a rotation could point at another key</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="providers"><a class="header" href="#providers">Providers</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>AWS_ERROR</code></td><td>encryption</td><td>an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see <a href="./providers/aws.html#errors">AWS KMS</a></td></tr>
 <tr><td><code>INVALID_LOCAL_KEK_ID</code>, <code>LOCAL_*</code></td><td>system, encryption</td><td>the <a href="./providers/local.html#errors">local KMS</a></td></tr>
 <tr><td><code>AZURE_*</code></td><td>system, encryption</td><td>the <a href="./providers/azure.html#errors">Azure provider</a></td></tr>
-<tr><td><code>INVALID_LOCAL_SIGNING_KEY_NAME</code>, <code>LOCAL_SIGNING_KEY_SOURCE</code>, <code>LOCAL_SIGNING_KEY_FORMAT</code>, <code>LOCAL_SIGNING_KEY_VERSIONS</code></td><td>system</td><td>the local signing provider’s configuration</td></tr>
-<tr><td><code>AWS_SIGNING_KEY_ALIAS</code></td><td>system</td><td>an AWS signing key named by an alias, which a rotation could point at another key</td></tr>
 <tr><td><code>VAULT_*</code></td><td>system, network, encryption</td><td>the <a href="./providers/hc-vault-transit.html#errors">Vault Transit provider</a></td></tr>
 </tbody>
 </table>
@@ -291,21 +377,36 @@ KMS code a <code>SignatureError</code> that keeps the KMS’s code.</p>
 the Azure provider takes in <code>client_options</code>.</p>
 <p>A <code>NetworkError</code> may be retried, with a backoff. An <code>EncryptionError</code> or a <code>SignatureError</code> should
 not be: a revoked permission, a missing key or an encrypted DEK of another key fails the same way on
-every retry.
-The variant per provider:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Provider</th><th><code>NetworkError</code></th><th><code>EncryptionError</code></th></tr>
-</thead>
-<tbody>
-<tr><td>Google Cloud KMS</td><td>gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code></td><td>any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>, <code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code></td></tr>
-<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code></td></tr>
-<tr><td>Azure Key Vault</td><td>a 5xx or 429 status, a connection or I/O failure</td><td>any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that does not parse</td></tr>
-<tr><td>Vault Transit</td><td><code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code></td><td>any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code></td></tr>
-</tbody>
-</table>
-</div>
+every retry.</p>
+<p>The variant per provider:</p>
+<p><strong>Google Cloud KMS</strong></p>
+<ul>
+<li><code>NetworkError</code>: gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>,
+<code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code>;</li>
+<li><code>EncryptionError</code>: any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>,
+<code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code>.</li>
+</ul>
+<p><strong>AWS KMS</strong></p>
+<ul>
+<li><code>NetworkError</code>: <code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>,
+<code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the
+SDK could not read;</li>
+<li><code>EncryptionError</code>: any other AWS error code, such as <code>AccessDeniedException</code>,
+<code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>,
+<code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code>.</li>
+</ul>
+<p><strong>Azure Key Vault</strong></p>
+<ul>
+<li><code>NetworkError</code>: a 5xx or 429 status, a connection or I/O failure;</li>
+<li><code>EncryptionError</code>: any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that
+does not parse.</li>
+</ul>
+<p><strong>Vault Transit</strong></p>
+<ul>
+<li><code>NetworkError</code>: <code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code>;</li>
+<li><code>EncryptionError</code>: any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>,
+<code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code>.</li>
+</ul>
 <p>Google’s client libraries retry the Cloud KMS <code>Encrypt</code> and <code>Decrypt</code> calls on <code>Unavailable</code> and
 <code>DeadlineExceeded</code> only. Keep a retry on the other Google Cloud KMS network codes to a few
 attempts.</p>
@@ -319,6 +420,7 @@ error, and it says whether a retry can help. The retry is the whole stream again
 <code>KEY_VERSION_COMPROMISED</code>. It is the <code>error_code</code> field of the keyring’s spans and the
 <code>error.type</code> of its metrics. Match on the variant and its fields, or on the code: the <code>Display</code>
 text may change in any release.</p>
+<h3 id="records-and-the-store"><a class="header" href="#records-and-the-store">Records and the store</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -338,6 +440,16 @@ text may change in any release.</p>
 <tr><td><code>RecordRegressed</code></td><td><code>RECORD_REGRESSED</code></td><td>a record that moves a version backwards from the one this process holds, from <code>reload</code> and before an administrative write</td></tr>
 <tr><td><code>RecordConflict</code></td><td><code>RECORD_CONFLICT</code></td><td>an administrative write lost every compare-and-swap, <code>attempts</code> of them</td></tr>
 <tr><td><code>KekMismatch</code></td><td><code>KEK_MISMATCH</code></td><td>the provider’s KEK is not the one the record names</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="key-versions"><a class="header" href="#key-versions">Key versions</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>NoActiveVersion</code></td><td><code>NO_ACTIVE_VERSION</code></td><td>no active version of the purpose, so nothing new is encrypted under it</td></tr>
 <tr><td><code>NoAlgorithm</code></td><td><code>NO_ALGORITHM</code></td><td>the record names no algorithm for the purpose, so no version of it is created: <code>change_algorithm</code> sets one</td></tr>
 <tr><td><code>KeyVersionUnknown</code></td><td><code>KEY_VERSION_UNKNOWN</code></td><td>no version with the value’s key id, also after a reload</td></tr>
@@ -350,15 +462,26 @@ text may change in any release.</p>
 <tr><td><code>InvalidTransition</code></td><td><code>INVALID_TRANSITION</code></td><td>a lifecycle call that does not apply to the version’s state, see <a href="./keyring/lifecycle.html#states">States</a></td></tr>
 <tr><td><code>PromotionTooEarly</code></td><td><code>PROMOTION_TOO_EARLY</code></td><td>a promotion before <code>record_ttl</code> has passed since the version was staged</td></tr>
 <tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero</td></tr>
+<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="other-calls"><a class="header" href="#other-calls">Other calls</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>DeterministicDisabled</code></td><td><code>DETERMINISTIC_DISABLED</code></td><td>a deterministic version created without the <code>deterministic</code> feature</td></tr>
 <tr><td><code>Interop</code></td><td><code>INTEROP</code></td><td>an encryption or a keyset export that a field’s <code>Interop</code> reader would not read</td></tr>
 <tr><td><code>CustomAadUnsupported</code></td><td><code>CUSTOM_AAD_UNSUPPORTED</code></td><td><code>custom_aad</code> on a field BigQuery decrypts</td></tr>
 <tr><td><code>ExportAlgorithmUnsupported</code></td><td><code>EXPORT_ALGORITHM_UNSUPPORTED</code></td><td>a version in an export whose algorithm the keyset’s reader does not read</td></tr>
-<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
 <tr><td><code>InvalidEncryptionMarker</code></td><td><code>INVALID_ENCRYPTION_MARKER</code></td><td>stored bytes that are not an <code>EncryptionMarker</code></td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="what-a-caller-may-run-again"><a class="header" href="#what-a-caller-may-run-again">What a caller may run again</a></h3>
 <p>Besides the retry policies of the store clients, such as aws-sdk-s3’s, the keyring retries only an
 administrative write’s compare-and-swap, up to <code>cas_retries</code> times. What a caller may run again:</p>
 <ul>

@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -876,7 +876,7 @@ process serves times the versions each uses, see <a href="#sizing">Sizing</a>;</
 in each <code>reencrypt_deks</code>. A KEK rotation re-encrypts every keyring under the KEK, see
 <a href="#the-kms-decrypt-burst">The KMS decrypt burst</a>;</li>
 <li><strong>metrics</strong>: the plaintext size histogram has a series per keyring and version, see
-<a href="#metrics">Metrics</a> for its cardinality limit.</li>
+<a href="#metrics-1">Metrics</a> for its cardinality limit.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="find-a-user-by-an-encrypted-email"><a class="header" href="#find-a-user-by-an-encrypted-email">Find a user by an encrypted email</a></h1>
@@ -2026,8 +2026,8 @@ its row only:</p>
 <tr><th>Side</th><th>Handle</th><th>KMS</th><th>Keyring store</th></tr>
 </thead>
 <tbody>
-<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt: GCP <code>roles/cloudkms.cryptoKeyDecrypter</code>, AWS <code>kms:Decrypt</code>, Azure Key Vault <code>keys/unwrap/action</code>, Vault Transit decrypt</td><td>read, and listen or watch: Firestore read, PostgreSQL <code>SELECT</code> and <code>LISTEN</code>, Cloud Storage object read, S3 <code>GetObject</code></td></tr>
-<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key</td><td>read, write and delete: Firestore write, PostgreSQL <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code>, which also send the <code>NOTIFY</code>, Cloud Storage and S3 object write and delete</td></tr>
+<tr><td>Application</td><td><code>Keyring</code></td><td>decrypt</td><td>read, and listen or watch</td></tr>
+<tr><td>Administration</td><td><code>KeyringAdmin</code></td><td>encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key</td><td>read, write and delete</td></tr>
 </tbody>
 </table>
 </div>
@@ -2145,13 +2145,19 @@ administration needs the read of the public key beside the applications’ decry
 <tr><th>KMS</th><th>Application</th><th>Administration</th></tr>
 </thead>
 <tbody>
-<tr><td>GCP</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td>decrypt, and <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code>. <code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry it</td></tr>
+<tr><td>GCP</td><td><code>cloudkms.cryptoKeyVersions.useToDecrypt</code>, as in <code>roles/cloudkms.cryptoKeyDecrypter</code></td><td>decrypt, and <code>cloudkms.cryptoKeyVersions.viewPublicKey</code>, as in <code>roles/cloudkms.publicKeyViewer</code></td></tr>
 <tr><td>AWS</td><td><code>kms:Decrypt</code> on the key</td><td><code>kms:Decrypt</code> and <code>kms:GetPublicKey</code> on the key</td></tr>
-<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/unwrap/action</code> and <code>keys/get</code>. “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no decrypt</td></tr>
+<tr><td>Azure Key Vault</td><td><code>keys/unwrap/action</code></td><td><code>keys/unwrap/action</code> and <code>keys/get</code></td></tr>
 <tr><td>Vault Transit</td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code></td><td><code>update</code> on <code>transit/decrypt/&lt;key&gt;</code>, and <code>read</code> on <code>transit/keys/&lt;key&gt;</code> or <code>transit/export/public-key/&lt;key&gt;</code></td></tr>
 </tbody>
 </table>
 </div>
+<p>Two built-in roles fall short of what the administration needs:</p>
+<ul>
+<li><code>roles/cloudkms.cryptoKeyDecrypter</code> does not carry <code>viewPublicKey</code>;</li>
+<li>Azure’s “Key Vault Crypto Service Encryption User” carries read, <code>wrap</code> and <code>unwrap</code> and no
+decrypt.</li>
+</ul>
 <p>The KMS audit log no longer shows who encrypted a DEK, since the encryption is local, and anyone
 holding the public key can encrypt one: a keyring under an asymmetric KEK runs with
 <code>RecordSignaturePolicy::Required</code> on every application, see
@@ -2169,8 +2175,20 @@ only the administration writes the record, and the applications read it and list
 <tbody>
 <tr><td>Firestore</td><td>read of the keyring documents, which the listener uses too, such as <code>roles/datastore.viewer</code></td><td>read, write and delete of the keyring documents, such as <code>roles/datastore.user</code></td></tr>
 <tr><td>PostgreSQL</td><td><code>SELECT</code> on the table, and <code>LISTEN</code>, which needs no grant</td><td><code>SELECT</code>, <code>INSERT</code>, <code>UPDATE</code> and <code>DELETE</code> on the table; each write and delete also sends the <code>NOTIFY</code></td></tr>
-<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code>, <code>storage.objects.delete</code>, since a write replaces the object, and <code>storage.objects.list</code>, which <code>dangerously_shred()</code> needs to find the object’s generations</td></tr>
-<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code>, and for <code>dangerously_shred()</code> also <code>s3:ListBucketVersions</code>, <code>s3:DeleteObject</code> and <code>s3:DeleteObjectVersion</code></td></tr>
+<tr><td>Cloud Storage</td><td><code>storage.objects.get</code></td><td><code>storage.objects.get</code>, <code>storage.objects.create</code> and <code>storage.objects.delete</code>, since a write replaces the object</td></tr>
+<tr><td>S3</td><td><code>s3:GetObject</code></td><td><code>s3:GetObject</code> and <code>s3:PutObject</code></td></tr>
+</tbody>
+</table>
+</div>
+<p><code>dangerously_shred()</code> needs more of the administration on the object stores:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Store</th><th>Also needed</th></tr>
+</thead>
+<tbody>
+<tr><td>Cloud Storage</td><td><code>storage.objects.list</code>, to find the object’s generations</td></tr>
+<tr><td>S3</td><td><code>s3:ListBucketVersions</code>, <code>s3:DeleteObject</code> and <code>s3:DeleteObjectVersion</code></td></tr>
 </tbody>
 </table>
 </div>
@@ -2185,7 +2203,8 @@ key version and for the two rotations.</p>
 <h2 id="what-to-alert-on-1"><a class="header" href="#what-to-alert-on-1">What to alert on</a></h2>
 <p>The events are logged through tracing, see <a href="#keyring-events">Keyring events</a>
 and <a href="#events">Events</a>, and the metrics need the <code>opentelemetry</code> feature, see
-<a href="#metrics">Metrics</a>.</p>
+<a href="#metrics-1">Metrics</a>.</p>
+<h3 id="the-keyring-record"><a class="header" href="#the-keyring-record">The keyring record</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -2195,29 +2214,78 @@ and <a href="#events">Events</a>, and the metrics need the <code>opentelemetry</
 <tr><td><code>ERROR</code>: a refreshed record refused because it moves a version backwards</td><td>something other than the administrative job rewrote or restored the record</td><td><a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a></td></tr>
 <tr><td><code>ERROR</code>: a refreshed record refused by record verification, with <code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or <code>RECORD_SIGNATURE_REMOVED</code></td><td>something other than the record signer wrote or restored the record; the process keeps the record it holds</td><td><a href="#a-version-the-administrative-job-did-not-create">A version the administrative job did not create</a>, and the signer’s KMS audit log</td></tr>
 <tr><td><code>WARN</code>: “The keyring record could not be revalidated; the cached record stays in use”</td><td>the process misses every change, a promotion or a compromised flag included, until the store answers</td><td>fix the process’s access to the store before the next promotion</td></tr>
-<tr><td><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this process”</td><td>the record was deleted or shredded; this process destroyed every version in memory, its handles fail with <code>NoActiveVersion</code> and <code>KeyVersionDestroyed</code>, and new opens fail with <code>RecordMissing</code> until a record is created; a process that read the shred’s first write logs an <code>INFO</code> instead</td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
+<tr><td><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this process”</td><td>the record was deleted or shredded, and this process destroyed every version in memory</td><td><a href="#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a></td></tr>
 <tr><td><code>WARN</code>: the store’s listener disconnected or did not start, or a keyring opened with no tokio runtime</td><td>changes reach the process within <code>record_ttl</code> instead of seconds</td><td>check the listener’s connection and the runtime</td></tr>
+</tbody>
+</table>
+</div>
+<p>After the <code>WARN</code> about a deleted record, the process’s handles fail with <code>NoActiveVersion</code> and
+<code>KeyVersionDestroyed</code>, and new opens fail with <code>RecordMissing</code> until a record is created. A process
+that read the shred’s first write logs an <code>INFO</code> instead.</p>
+<h3 id="versions-and-sweeps"><a class="header" href="#versions-and-sweeps">Versions and sweeps</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>What it means</th><th>Next step</th></tr>
+</thead>
+<tbody>
 <tr><td><code>WARN</code>: a compromised flag written without a rotation</td><td>the KMS could not encrypt a new DEK, so <code>encrypt</code> fails with <code>NoActiveVersion</code></td><td><code>rotate</code> and <code>promote_now</code> once the KMS answers, see <a href="#compromised-versions">Compromised versions</a></td></tr>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
-<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown(None)</code> before the exit</td></tr>
 <tr><td><code>WARN</code>: a record a sweep could not re-encrypt, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="#running-a-sweep">Running a sweep</a></td></tr>
-<tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="#error-handling">Error handling</a></td></tr>
-<tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="#retries">Retries</a> for the codes of each KMS</td></tr>
-<tr><td><code>error.type</code> on <code>kms_aead.store.duration</code></td><td>keyring store reads that fail</td><td>the store’s own monitoring</td></tr>
-<tr><td>values and bytes per keyring version</td><td>a version near the limits of its algorithm</td><td><a href="#alerting-on-volume">Alerting on volume</a></td></tr>
-<tr><td>an <code>Encrypt</code> in the KMS audit log by a principal other than the administration</td><td>an IAM over-grant, or a version the job did not create. Cloud KMS logs <code>Encrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
-<tr><td>a <code>Decrypt</code> in the KMS audit log by a principal other than the application, the administration and the keyset readers: every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a Tink reader through its own KMS client, see <a href="#queries">Queries</a> and <a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a></td><td>an IAM over-grant, or an encrypted DEK or a keyset decrypted outside the deployment. Cloud KMS logs <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
-<tr><td><code>WARN</code>, inside the KMS span: a Cloud KMS or Vault Transit response without a key version</td><td>the KMS reported no version, so <code>kek_versions_in_use</code> lists a <code>None</code> and the check before a KEK disable never passes</td><td><a href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></td></tr>
 <tr><td><code>WARN</code>, once per process: the first read of a layout of 0.29 or earlier</td><td>values not yet upgraded</td><td><a href="#upgrading-stored-values">Upgrading stored values</a></td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="the-process-and-the-kms"><a class="header" href="#the-process-and-the-kms">The process and the KMS</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>What it means</th><th>Next step</th></tr>
+</thead>
+<tbody>
+<tr><td><code>WARN</code>: a <code>KeyringRegistry</code> dropped with its tasks running, or a <code>shutdown</code> that aborted them</td><td>the process exits without <code>shutdown</code></td><td>await <code>registry.shutdown(None)</code> before the exit</td></tr>
+<tr><td><code>WARN</code>, inside the KMS span: a Cloud KMS or Vault Transit response without a key version</td><td>the KMS reported no version, so <code>kek_versions_in_use</code> lists a <code>None</code> and the check before a KEK disable never passes</td><td><a href="#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="metrics"><a class="header" href="#metrics">Metrics</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>What it means</th><th>Next step</th></tr>
+</thead>
+<tbody>
+<tr><td><code>error.type</code> on <code>kms_aead.operation.duration</code></td><td>calls that fail, by code, such as <code>DECRYPT</code> for a value that is not authentic under its key and AAD, or <code>KEY_VERSION_UNKNOWN</code></td><td>the code, see <a href="#error-handling">Error handling</a></td></tr>
+<tr><td><code>error.type</code> on <code>kms_aead.kms.duration</code></td><td>KMS requests that fail: a denied permission, a disabled key version, a quota</td><td><a href="#retries">Retries</a> for the codes of each KMS</td></tr>
+<tr><td><code>error.type</code> on <code>kms_aead.store.duration</code></td><td>keyring store reads that fail</td><td>the store’s own monitoring</td></tr>
+<tr><td>values and bytes per keyring version</td><td>a version near the limits of its algorithm</td><td><a href="#alerting-on-volume">Alerting on volume</a></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="the-kms-audit-log"><a class="header" href="#the-kms-audit-log">The KMS audit log</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Signal</th><th>What it means</th><th>Next step</th></tr>
+</thead>
+<tbody>
+<tr><td>an <code>Encrypt</code> by a principal other than the administration</td><td>an IAM over-grant, or a version the job did not create</td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+<tr><td>a <code>Decrypt</code> by a principal other than the application, the administration and the keyset readers</td><td>an IAM over-grant, or an encrypted DEK or a keyset decrypted outside the deployment</td><td><a href="#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
+</tbody>
+</table>
+</div>
+<p>Cloud KMS logs <code>Encrypt</code> and <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off
+by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a>
+and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a>.
+Every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a
+Tink reader through its own KMS client, see <a href="#queries">Queries</a> and
+<a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>.</p>
 <p>Without a keyring, the rows of kms-aead apply: <code>error.type</code> on <code>kms_aead.operation.duration</code> and
 <code>kms_aead.kms.duration</code>, the KMS audit log, and the <code>WARN</code> of old layouts.</p>
 <h2 id="alerting-on-volume"><a class="header" href="#alerting-on-volume">Alerting on volume</a></h2>
 <p>With the <code>opentelemetry</code> feature, the keyring records the plaintext size of each value it encrypts
-under each version, see <a href="#metrics">Metrics</a>: the histogram’s count is the
+under each version, see <a href="#metrics-1">Metrics</a>: the histogram’s count is the
 values, and its sum their bytes. Each process records its own, and the alert sums them across the
 fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
 export, with the range covering the version’s life:</p>
@@ -2250,7 +2318,7 @@ its process could not load, and <code>KEY_VERSION_RETIRED</code> once the old ve
 <li>the values and bytes per version, which say when the next rotation is due, see
 <a href="#alerting-on-volume">Alerting on volume</a>.</li>
 </ul>
-<p>The metrics need the <code>opentelemetry</code> feature, see <a href="#metrics">Metrics</a>.</p>
+<p>The metrics need the <code>opentelemetry</code> feature, see <a href="#metrics-1">Metrics</a>.</p>
 <h2 id="during-a-kek-rotation"><a class="header" href="#during-a-kek-rotation">During a KEK rotation</a></h2>
 <ul>
 <li>“The keyring record could not be revalidated”, from the re-encryption until the disable: a
@@ -2844,19 +2912,17 @@ disabled. Wait before the sweep and again before trusting the check, see the pag
 <h2 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h2>
 <p>A swept value’s DEK is under the new version only, so a rollback keeps the new version enabled:
 disabling it makes every swept value and every value written since the rotation unreadable, until
-it is enabled again. Three providers make the old version encrypt again:</p>
+it is enabled again. Where the provider makes the old version encrypt again, rolling back to it
+needs no new sweep. To retire the new version afterwards, run the procedure above with the old
+version as the current one.</p>
+<p>The rule per provider:</p>
 <ul>
-<li>Cloud KMS: make the old version the primary version again;</li>
-<li>Azure Key Vault: pin the old version in <code>AzureKmsKeyRef</code>;</li>
-<li>the local KMS: point <code>with_encrypting_version</code> at the old version.</li>
+<li><a href="#rolling-back-a-rotation-1">Google Cloud KMS</a>;</li>
+<li><a href="#rolling-back-a-rotation-2">AWS KMS</a>;</li>
+<li><a href="#rolling-back-a-rotation-3">Azure Key Vault</a>;</li>
+<li><a href="#rolling-back-a-rotation-4">HashiCorp Vault Transit</a>;</li>
+<li><a href="#rolling-back-a-rotation-5">the local KMS</a>.</li>
 </ul>
-<p>Rolling back to the old version needs no new sweep. To retire the new version afterwards, run the
-procedure above with the old version as the current one.</p>
-<p>The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
-of the key, since the provider names no version in its request, and no older version becomes the
-latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS
-keeps every earlier key material decrypting and none can be disabled, so a rotation needs no
-rollback there.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps"><a class="header" href="#sweeps">Sweeps</a></h1>
 <p>A sweep re-encrypts stored values under the active versions: after a rotation, to retire the old
@@ -2894,8 +2960,8 @@ values, below the marker of every keyring.</p>
 <p>Each record of the application keeps the marker in one field beside its encrypted fields. A write
 that touches any encrypted field of a record takes one <code>Encryptor</code> from <code>keyring.encryptor()</code>,
 encrypts all of the record’s encrypted fields again through it, computes its beacons again, and
-stores <code>encryptor.record().encryption_marker()</code> in the same write, as <code>write_user</code> does in <a href="#running-a-sweep">Running a
-sweep</a>. The encryptor keeps the record it took from the cache, so the marker names
+stores <code>encryptor.record().encryption_marker()</code> in the same write, as the <code>reencrypt</code> function of
+<a href="#running-a-sweep">Running a sweep</a> does. The encryptor keeps the record it took from the cache, so the marker names
 the epoch whose active versions the fields are under, also when the cache refreshes during the
 write.</p>
 <p>A marker read from <code>keyring.record()</code> names whichever record the cache held when it was read. Read
@@ -2957,65 +3023,13 @@ an unknown key id: <code>record.version(key_id)</code> is <code>None</code>. The
 <tr><th>Store</th><th>Query</th></tr>
 </thead>
 <tbody>
-<tr><td>Firestore</td><td>two range filters on <code>encryption_marker</code>, as below</td></tr>
+<tr><td>Firestore</td><td>two range filters on <code>encryption_marker</code>, see <a href="#querying-behind-and-by-version">Sweeps on Firestore</a></td></tr>
 <tr><td>PostgreSQL</td><td><code>WHERE encryption_marker &gt;= $1 AND ($2::BYTEA IS NULL OR encryption_marker &lt; $2)</code> with <code>&amp;range.start()</code> and <code>&amp;range.end()</code></td></tr>
 <tr><td>BigQuery</td><td><code>WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>, with <code>@end</code> a <code>NULL</code> of type <code>BYTES</code> for an open range</td></tr>
 <tr><td>Rust</td><td><code>range.contains(row.encryption_marker)</code></td></tr>
 </tbody>
 </table>
 </div>
-<p>Firestore takes both bounds on the one field and serves them from its ascending index on
-<code>encryption_marker</code>, and an open range is one filter:</p>
-<pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
-use futures_util::stream::{self, BoxStream, StreamExt};
-use kms_aead::backends::Ring;
-use kms_aead::providers::GcpKmsProvider;
-use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
-use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-struct UserDoc {
-    #[serde(rename = "_firestore_id", skip_serializing)]
-    id: String,
-    #[serde(default)]
-    encryption_marker: EncryptionMarker,
-}
-
-/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
-async fn users_under&lt;'a&gt;(
-    db: &amp;'a FirestoreDb,
-    keyring: &amp;Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;,
-    key_id: KeyId,
-) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
-    // The store's record: a compromise or promotion in another process is in it
-    let range: Option&lt;ReencryptRange&gt; = keyring
-        .reload()
-        .await?
-        .version(key_id)
-        .and_then(KeyVersion::reencrypt_range);
-    let Some(range) = range else {
-        // Never active: no record holds a value under it
-        return Ok(stream::empty().boxed());
-    };
-    let users: BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt; = db
-        .fluent()
-        .select()
-        .from("users")
-        .filter(|q| {
-            q.for_all([
-                q.field("encryption_marker").greater_than_or_equal(range.start()),
-                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
-            ])
-        })
-        .obj()
-        .stream_query_with_errors()
-        .await?;
-    Ok(users)
-}
-<span class="boring">
-</span><span class="boring">fn main() {}</span></code></pre>
 <p>The range serves two decisions:</p>
 <ul>
 <li>after <code>mark_compromised</code>, the range of the compromised version returns every record to re-encrypt
@@ -3304,6 +3318,7 @@ fewer on the <a href="#sweeps-on-bigquery">BigQuery <code>MERGE</code> path</a>,
 <p>A sweep of a Firestore collection: the encryption marker as a field, the query for the documents
 behind, and the conditional write back. The mechanism is in <a href="#sweeps">Sweeps</a>, and the example
 has the five properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
+<h2 id="schema-and-indexing"><a class="header" href="#schema-and-indexing">Schema and indexing</a></h2>
 <p>The marker is a <code>bytes</code> field, <code>encryption_marker</code>, and the query is one range filter on it.
 Firestore indexes a field ascending and descending by default, and the query needs the ascending
 index only, so a field override keeps just that one. firestore-rs declares it with its index
@@ -3327,6 +3342,63 @@ firestore-rs covers <code>.plan()</code>, <code>.sync()</code> and running them 
 <p>A project that manages its indexes outside Rust sets the same override with <code>gcloud</code>:</p>
 <pre><code class="language-sh">gcloud firestore indexes fields update encryption_marker --collection-group=users --index=order=ASCENDING
 </code></pre>
+<h2 id="querying-behind-and-by-version"><a class="header" href="#querying-behind-and-by-version">Querying behind and by version</a></h2>
+<p>The documents behind are one filter, <code>encryption_marker &lt; current</code>, as in the sweep below. The
+documents that can hold a value under a version, which the administrative job checks before <code>retire</code> and
+<code>destroy</code>, are the range of that version, see <a href="#records-under-a-version">Records under a
+version</a>. Firestore takes both bounds on the one field and serves them from its ascending index on
+<code>encryption_marker</code>, and an open range is one filter:</p>
+<pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
+use futures_util::stream::{self, BoxStream, StreamExt};
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
+use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(default)]
+    encryption_marker: EncryptionMarker,
+}
+
+/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
+async fn users_under&lt;'a&gt;(
+    db: &amp;'a FirestoreDb,
+    keyring: &amp;Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;,
+    key_id: KeyId,
+) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    // The store's record: a compromise or promotion in another process is in it
+    let range: Option&lt;ReencryptRange&gt; = keyring
+        .reload()
+        .await?
+        .version(key_id)
+        .and_then(KeyVersion::reencrypt_range);
+    let Some(range) = range else {
+        // Never active: no record holds a value under it
+        return Ok(stream::empty().boxed());
+    };
+    let users: BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt; = db
+        .fluent()
+        .select()
+        .from("users")
+        .filter(|q| {
+            q.for_all([
+                q.field("encryption_marker").greater_than_or_equal(range.start()),
+                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
+            ])
+        })
+        .obj()
+        .stream_query_with_errors()
+        .await?;
+    Ok(users)
+}
+<span class="boring">
+</span><span class="boring">fn main() {}</span></code></pre>
+<h2 id="re-encrypting-in-batches"><a class="header" href="#re-encrypting-in-batches">Re-encrypting in batches</a></h2>
 <p>The query streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a
 failed candidate, and the sweep never ends early on it. <code>sweep::reencrypt_records_batched</code> cuts the documents into
 batches of 500, each re-encrypted through one encryptor and written back in one <code>BatchWrite</code>. Each
@@ -3571,32 +3643,39 @@ println!("{report:?}");
 <span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
-candidate query included.</p>
-<p><code>CONCURRENCY</code> batches of 500 writes in flight are a high write rate for a collection that has seen
-little traffic. Firestore advises starting a new collection at 500 writes a second and raising the
-rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step on one.</p>
-<p>A range filter never matches a document without the field, so a document written before the marker
-needs the marker written first, see <a href="#move-envelope-values-to-a-keyring">Move envelope values to a
-keyring</a>.</p>
-<p>A partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers would
-read every document, the current ones included.</p>
-<p>The marker takes 10 bytes of a document: the field name as a 5-byte string and the 5 bytes of the
-value. Its entry in the ascending index takes the size of the document’s name, of its parent’s
-name, of the field name and of the value, plus 32 bytes, by Firestore’s storage size rules: about
-70 bytes for a short document id in a top-level collection. 10 million documents hold about 0.1 GB
-of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.</p>
+<h2 id="operational-limits"><a class="header" href="#operational-limits">Operational limits</a></h2>
+<ul>
+<li>the retry limit ends the batch writer’s retries, and the request timeout ends a request that
+never gets an answer, the candidate query included, so a sweep against a Firestore that refuses,
+fails or stops answering its requests ends with an error;</li>
+<li><code>CONCURRENCY</code> batches of 500 writes in flight are a high write rate for a collection that has
+seen little traffic. Firestore advises starting a new collection at 500 writes a second and
+raising the rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step
+on one;</li>
+<li>a range filter never matches a document without the field, so a document written before the
+marker needs the marker written first, see <a href="#move-envelope-values-to-a-keyring">Move envelope values to a
+keyring</a>;</li>
+<li>a partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers
+would read every document, the current ones included.</li>
+</ul>
+<h2 id="storage-overhead"><a class="header" href="#storage-overhead">Storage overhead</a></h2>
+<p>The marker takes 23 bytes of a document: the field name, <code>encryption_marker</code>, as an 18-byte string
+(17 bytes of UTF-8 and 1 more, by Firestore’s storage size rules), and the 5 bytes of the value.
+Its entry in the ascending index takes the size of the document’s name, of its parent’s name and 23
+bytes for the field name and the value, plus 32 bytes. 10 million documents hold 0.23 GB of
+markers, and the index adds the names’ size to every entry.</p>
+<h2 id="runnable-example"><a class="header" href="#runnable-example">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs"><code>sweep_firestore</code> example</a>
-runs this sweep end to end, from the writes to the report, on the Firestore emulator. Its memory
-holds the batches in flight only, so it runs the same over millions of documents. A stream that
-ends early, on a deadline or an error, leaves the documents it did not reach below the current
-marker, and the next run of the sweep finds them.</p>
+runs this sweep end to end, from the writes to the report, on the Firestore emulator.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-on-postgresql"><a class="header" href="#sweeps-on-postgresql">Sweeps on PostgreSQL</a></h1>
 <p>A sweep of a PostgreSQL table: the encryption marker as a column, the query for the rows behind,
 and the conditional write back. The mechanism is in <a href="#sweeps">Sweeps</a>, and the example has the
 five properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
-<p>The marker is a <code>BYTEA</code> column with a btree index:</p>
+<h2 id="schema-and-indexing-1"><a class="header" href="#schema-and-indexing-1">Schema and indexing</a></h2>
+<p>The marker is a <code>BYTEA</code> column with a btree index. <code>EncryptionMarker</code> is a <code>BYTEA</code> parameter and
+column through tokio-postgres with the <code>postgres</code> feature, and through sqlx with the <code>sqlx</code>
+feature:</p>
 <pre><code class="language-sql">CREATE TABLE users (
     id BIGINT PRIMARY KEY,
     email BYTEA NOT NULL,
@@ -3604,15 +3683,22 @@ five properties of <a href="#sweeps-by-store">Sweeps by store</a>.</p>
 );
 CREATE INDEX users_encryption_marker ON users (encryption_marker);
 </code></pre>
+<h2 id="querying-behind-and-by-version-1"><a class="header" href="#querying-behind-and-by-version-1">Querying behind and by version</a></h2>
 <p>The candidates are one query, <code>encryption_marker &lt; $1</code> with no <code>ORDER BY</code>, so the planner is free to
-read them from the index on <code>encryption_marker</code>, and <code>query_raw</code> streams its rows: memory holds the
-batches in flight only. The query holds its connection for as long as it streams, so the <code>UPDATE</code>s
-go through a second one. <code>sweep::reencrypt_records_batched</code> cuts the candidates into batches of 1000 rows, each
-re-encrypted through one encryptor and written back in one <code>UPDATE</code> over arrays of the ids, the new
-values and the values it read. The <code>UPDATE</code> is conditional on the bytes it read, which a write of
-any other process changes, since every randomised value has its own nonce. A process that has not
-seen the promotion yet still encrypts under the old version and stamps the old epoch, which the row
-holds already, so the marker alone does not detect its write:</p>
+read them from the index on <code>encryption_marker</code>. The query for the rows that can hold a value under
+a version is in <a href="#records-under-a-version">Records under a version</a>.</p>
+<h2 id="re-encrypting-in-batches-1"><a class="header" href="#re-encrypting-in-batches-1">Re-encrypting in batches</a></h2>
+<ul>
+<li><code>query_raw</code> streams the rows, and the query holds its connection for as long as it streams, so
+the <code>UPDATE</code>s go through a second one;</li>
+<li><code>sweep::reencrypt_records_batched</code> cuts the candidates into batches of 1000 rows, each
+re-encrypted through one encryptor and written back in one <code>UPDATE</code> over arrays of the ids, the
+new values and the values it read;</li>
+<li>the <code>UPDATE</code> is conditional on the bytes it read, which a write of any other process changes,
+since every randomised value has its own nonce. A process that has not seen the promotion yet
+still encrypts under the old version and stamps the old epoch, which the row holds already, so
+the marker alone does not detect its write.</li>
+</ul>
 <pre><code class="language-rust no_run">use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
@@ -3823,31 +3909,48 @@ println!("{report:?}");
 <span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>CONCURRENCY</code> bounds the batches in flight, but one writing connection runs their <code>UPDATE</code>s one
-after another; a pool of connections runs them in parallel.</p>
-<p><code>EncryptionMarker</code> is a <code>BYTEA</code> parameter and column through tokio-postgres with the <code>postgres</code>
-feature, and through sqlx with the <code>sqlx</code> feature. The query holds one snapshot for as long as it
-streams, and while it is open <code>VACUUM</code> cannot reclaim the old versions of the rows the sweep
-updates; a scheduled job that ends and runs again keeps each snapshot short, since the query of the
-markers below the current one returns exactly the rows the last run did not write.</p>
+<h2 id="operational-limits-1"><a class="header" href="#operational-limits-1">Operational limits</a></h2>
+<ul>
+<li><code>CONCURRENCY</code> bounds the batches in flight, but one writing connection runs their <code>UPDATE</code>s one
+after another; a pool of connections runs them in parallel;</li>
+<li>a row that does not read is a failed candidate. An error of the stream itself is one too, and
+ends it: once the connection drops, the stream returns that error on every poll and never its
+end, so the example stops it at the first error with <code>take_while</code>;</li>
+<li>the query holds one snapshot for as long as it streams, and while it is open <code>VACUUM</code> cannot
+reclaim the old versions of the rows the sweep updates; a scheduled job that ends and runs again
+keeps each snapshot short.</li>
+</ul>
+<h2 id="storage-overhead-1"><a class="header" href="#storage-overhead-1">Storage overhead</a></h2>
 <p>The marker takes 6 bytes of a row: its 5 bytes and a 1-byte length header. A btree on a column of a
-few distinct epochs stores each one once per page with the list of its rows: measured on
-PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.
-10 million rows hold about 130 MB of markers and index.</p>
+few distinct epochs stores each one once per page with the list of its rows, which takes about 7
+bytes per row of index. 10 million rows hold about 130 MB of markers and index.</p>
+<h2 id="runnable-example-1"><a class="header" href="#runnable-example-1">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs"><code>sweep_postgres</code> example</a>
 runs this sweep end to end, from the writes to the report, on a local PostgreSQL.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="sweeps-on-bigquery"><a class="header" href="#sweeps-on-bigquery">Sweeps on BigQuery</a></h1>
 <p>A sweep of a BigQuery table, in two paths: one <code>UPDATE</code> in SQL for the fields BigQuery reads, and a
 Rust path for the rest. The mechanism is in <a href="#sweeps">Sweeps</a>. The Rust path has the five
-properties of <a href="#sweeps-by-store">Sweeps by store</a>, and the SQL path states its own below.</p>
-<p>The marker is a <code>BYTES</code> column that every write of the encrypted fields sets:</p>
+properties of <a href="#sweeps-by-store">Sweeps by store</a>, and the SQL path states which of them
+it holds.</p>
+<h2 id="schema-and-indexing-2"><a class="header" href="#schema-and-indexing-2">Schema and indexing</a></h2>
+<p>The marker is a <code>BYTES</code> column that every write of the encrypted fields sets. BigQuery has no index
+to declare, and the query reads the whole column, see <a href="#storage-overhead-2">Storage overhead</a>:</p>
 <pre><code class="language-sql">CREATE TABLE users (
   id STRING NOT NULL,
-  phone BYTES NOT NULL,
+  email BYTES NOT NULL,
   encryption_marker BYTES NOT NULL
 );
 </code></pre>
+<h2 id="querying-behind-and-by-version-2"><a class="header" href="#querying-behind-and-by-version-2">Querying behind and by version</a></h2>
+<p>The rows behind are those with <code>encryption_marker &lt; @current</code>, the current marker bound as a
+parameter and read from the record’s <code>encryption_marker()</code>, see
+<a href="#finding-records-behind">Finding records behind</a>. The administrative job retires the
+old version once its range query returns 0:</p>
+<pre><code class="language-sql">SELECT COUNT(*) FROM users
+WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end);
+</code></pre>
+<h2 id="re-encrypting-in-sql"><a class="header" href="#re-encrypting-in-sql">Re-encrypting in SQL</a></h2>
 <p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-encrypted by one <code>UPDATE</code> in SQL,
 with no Rust loop and no value leaving BigQuery. Its parameters come from a
 <code>Readable(Purpose::Randomized)</code> export, see <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to
@@ -3876,33 +3979,33 @@ keyset after the promotion. The export is a <code>KeyringAdmin</code> call of th
 them. Fields of several purposes are encrypted under one <code>Readable</code> keyset each, and the statement
 stamps the marker only when their <code>encryption_marker()</code> is the same; otherwise it exports them again.
 A row with a beacon, which SQL does not compute, goes through the Rust path below.</p>
-<p>This sweep:</p>
+<p>Of the five properties of <a href="#sweeps-by-store">Sweeps by store</a>, the SQL path holds
+these:</p>
 <ul>
-<li>resumes without a checkpoint: the statement is atomic, a failed one changed nothing, and the
-next run’s <code>WHERE</code> finds every row it did not write;</li>
-<li>loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
+<li>it resumes without a checkpoint because the statement is atomic: a failed one changed nothing,
+and the next run’s <code>WHERE</code> finds every row it did not write;</li>
+<li>it loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
 statements on the same rows one fails and runs again, and its <code>WHERE</code> then sees the other’s
 marker;</li>
-<li>makes no KMS call per record: BigQuery decrypts the keyset through Cloud KMS for the statement;</li>
-<li>runs on a schedule until it re-encrypts no row. The administrative job retires the old version
-once its range query,
-<code>SELECT COUNT(*) FROM users WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>,
-returns 0.</li>
+<li>it makes no KMS call per record: BigQuery decrypts the keyset through Cloud KMS for the
+statement;</li>
+<li>it runs on a schedule until it re-encrypts no row.</li>
 </ul>
 <p>A <code>Readable</code> keyset leaves a compromised version out, so the values under it fail
 <code>AEAD.DECRYPT_BYTES</code> and the whole statement with them. After a compromise those rows go through
 the Rust path below, where the encryptor’s <code>reencrypt</code> reports their trust.</p>
-<p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-encrypted in
-Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one <code>MERGE</code>
-per batch of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
+<h2 id="re-encrypting-in-rust"><a class="header" href="#re-encrypting-in-rust">Re-encrypting in Rust</a></h2>
+<p>Values the statement cannot re-encrypt, such as ChaCha20-Poly1305 values or values under a custom
+AAD, are re-encrypted in Rust, in the same column. BigQuery runs only a few DML statements on one
+table at a time, so the write is one <code>MERGE</code> per batch of rows rather than one <code>UPDATE</code> per row,
+conditional on the bytes each row held:</p>
 <pre><code class="language-sql">MERGE users u
 USING UNNEST(@rows) p
-ON u.id = p.id AND u.phone = p.old_phone
-WHEN MATCHED THEN UPDATE SET phone = p.phone, encryption_marker = @encryption_marker;
+ON u.id = p.id AND u.email = p.old_email
+WHEN MATCHED THEN UPDATE SET email = p.email, encryption_marker = @encryption_marker;
 </code></pre>
 <p>The rows stream from the application’s BigQuery client, one query of
-<code>SELECT id, phone, encryption_marker FROM users WHERE encryption_marker &lt; @current</code> with the current
-marker, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
+<code>SELECT id, email, encryption_marker FROM users WHERE encryption_marker &lt; @current</code>, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
 encryptor, and the client runs the <code>MERGE</code> with <code>@encryption_marker</code> bound to the marker of the
 encryptor’s record. Every row of a batch goes into <code>@rows</code>, the current ones with their bytes as
 they are, so that each gets the marker:</p>
@@ -3926,31 +4029,31 @@ use secret_vault_value::SecretValue;
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 type UsersEncryptor&lt;'k&gt; = Encryptor&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 
-const PHONE: FieldSpec = FieldSpec::new(
+const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
-    FieldName::from_static("phone"),
+    FieldName::from_static("email"),
 );
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 /// BigQuery runs 2 mutating DML statements on a table at once and queues the rest.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 <span class="boring">#[derive(Clone)]
-</span><span class="boring">struct Phone(String);
+</span><span class="boring">struct Email(String);
 </span><span class="boring">
-</span><span class="boring">impl Plaintext for Phone {
+</span><span class="boring">impl Plaintext for Email {
 </span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
 </span><span class="boring">        self.0.to_plaintext()
 </span><span class="boring">    }
 </span><span class="boring">
 </span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-</span><span class="boring">        String::from_plaintext(plaintext).map(Phone)
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>/// A row of `SELECT id, phone FROM users WHERE encryption_marker &lt; @current`.
+</span>/// A row of `SELECT id, email FROM users WHERE encryption_marker &lt; @current`.
 struct UserRow {
     id: String,
-    phone: Encrypted&lt;Phone, Randomized&gt;,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
 /// The row id, and nothing of its columns.
@@ -3961,25 +4064,25 @@ impl Display for UserRow {
 }
 
 /// One element of `@rows`: a row with the bytes it held and the bytes to write.
-struct PhoneUpdate {
+struct EmailUpdate {
     id: String,
-    old_phone: Vec&lt;u8&gt;,
-    phone: Encrypted&lt;Phone, Randomized&gt;,
+    old_email: Vec&lt;u8&gt;,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
-/// `phone` of user `id` under the active version of `encryptor`, and the outcome of its
+/// `email` of user `id` under the active version of `encryptor`, and the outcome of its
 /// re-encryption. A value under that version comes back as it is, with `ReencryptOutcome::Skipped`.
-async fn reencrypt_phone(
+async fn reencrypt_email(
     encryptor: &amp;UsersEncryptor&lt;'_&gt;,
     id: &amp;str,
-    phone: &amp;Encrypted&lt;Phone, Randomized&gt;,
-) -&gt; KeyringResult&lt;(Encrypted&lt;Phone, Randomized&gt;, ReencryptOutcome)&gt; {
-    let aad = PHONE.aad(&amp;EntityId::try_from(id)?);
-    let reencrypted = encryptor.reencrypt(&amp;aad, phone).await?;
+    email: &amp;Encrypted&lt;Email, Randomized&gt;,
+) -&gt; KeyringResult&lt;(Encrypted&lt;Email, Randomized&gt;, ReencryptOutcome)&gt; {
+    let aad = EMAIL.aad(&amp;EntityId::try_from(id)?);
+    let reencrypted = encryptor.reencrypt(&amp;aad, email).await?;
     let outcome = ReencryptOutcome::from(&amp;reencrypted);
     // A current value still gets the encryptor's marker, so that it leaves the query.
-    let phone = reencrypted.map_or_else(|| phone.clone(), |reencrypted| reencrypted.value);
-    Ok((phone, outcome))
+    let email = reencrypted.map_or_else(|| email.clone(), |reencrypted| reencrypted.value);
+    Ok((email, outcome))
 }
 
 /// Re-encrypts the `rows` of the query in batches, one encryptor per batch, and writes each batch
@@ -3987,14 +4090,14 @@ async fn reencrypt_phone(
 /// marker of the batch's encryptor, and returns its number of affected rows. `ClientError` is the
 /// error of the application's BigQuery client, which a row that did not read returns and a
 /// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failure.
-async fn sweep_phones&lt;Rows, Merge, Merged, ClientError&gt;(
+async fn sweep_emails&lt;Rows, Merge, Merged, ClientError&gt;(
     keyring: &amp;UsersKeyring,
     rows: Rows,
     merge: Merge,
 ) -&gt; SweepReport
 where
     Rows: Stream&lt;Item = Result&lt;UserRow, ClientError&gt;&gt;,
-    Merge: Fn(Vec&lt;PhoneUpdate&gt;, EncryptionMarker) -&gt; Merged,
+    Merge: Fn(Vec&lt;EmailUpdate&gt;, EncryptionMarker) -&gt; Merged,
     Merged: Future&lt;Output = Result&lt;u64, ClientError&gt;&gt;,
     ClientError: From&lt;KeyringError&gt; + Display,
 {
@@ -4008,14 +4111,14 @@ where
             let mut done: Vec&lt;(UserRow, Result&lt;ReencryptOutcome, ClientError&gt;)&gt; =
                 Vec::with_capacity(batch.len());
             let mut queued: Vec&lt;(UserRow, ReencryptOutcome)&gt; = Vec::with_capacity(batch.len());
-            let mut updates: Vec&lt;PhoneUpdate&gt; = Vec::with_capacity(batch.len());
+            let mut updates: Vec&lt;EmailUpdate&gt; = Vec::with_capacity(batch.len());
             for row in batch {
-                match reencrypt_phone(&amp;encryptor, &amp;row.id, &amp;row.phone).await {
-                    Ok((phone, outcome)) =&gt; {
-                        updates.push(PhoneUpdate {
+                match reencrypt_email(&amp;encryptor, &amp;row.id, &amp;row.email).await {
+                    Ok((email, outcome)) =&gt; {
+                        updates.push(EmailUpdate {
                             id: row.id.clone(),
-                            old_phone: row.phone.value().to_vec(),
-                            phone,
+                            old_email: row.email.value().to_vec(),
+                            email,
                         });
                         queued.push((row, outcome));
                     }
@@ -4036,19 +4139,23 @@ where
 }
 <span class="boring">
 </span><span class="boring">fn main() {}</span></code></pre>
-<p>A batch is re-encrypted sequentially inside its call, and <code>concurrency</code> bounds the batches in
+<h2 id="operational-limits-2"><a class="header" href="#operational-limits-2">Operational limits</a></h2>
+<ul>
+<li>a batch is re-encrypted sequentially inside its call, and <code>concurrency</code> bounds the batches in
 flight, which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per
 batch: a row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for
-the next run.</p>
-<p>A <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its rows
-as <code>Skipped</code>, the ones it wrote included. Its re-encryptions from a compromised version then drop
-out of <code>SweepReport::reencrypted_from_compromised</code>, although they went through the trust decision
-below, so on this path that count is a lower bound.</p>
+the next run;</li>
+<li>a <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its
+rows as <code>Skipped</code>, the ones it wrote included. Its re-encryptions from a compromised version then
+drop out of <code>SweepReport::reencrypted_from_compromised</code>, although they went through the trust
+decision in <a href="#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a>, so
+on this path that count is a lower bound.</li>
+</ul>
+<h2 id="storage-overhead-2"><a class="header" href="#storage-overhead-2">Storage overhead</a></h2>
 <p>The marker takes 7 bytes of a row: its 5 bytes and the 2 BigQuery counts for every <code>BYTES</code> value.
-Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep’s query processed 700,000
-bytes, the <code>encryption_marker</code> column alone. BigQuery does not cluster a <code>BYTES</code> column, so the query
-reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB on
-demand, and its storage about $0.0013 a month at $0.02 per GiB.</p>
+BigQuery does not cluster a <code>BYTES</code> column, so the sweep’s query reads the whole <code>encryption_marker</code>
+column and nothing else: 7 bytes a row, about 70 MB at 10 million rows.</p>
+<h2 id="runnable-example-2"><a class="header" href="#runnable-example-2">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs"><code>sweep_bigquery</code>
 example</a>
 runs the <code>UPDATE</code> above end to end, from the writes to the count of re-encrypted rows, against Cloud
@@ -8054,12 +8161,15 @@ at once.</p>
 <tr><td><code>retire(key_id)</code></td><td><code>DecryptOnly</code> to <code>Retired</code>, once a sweep found no value left under it</td></tr>
 <tr><td><code>reinstate(key_id)</code></td><td><code>Retired</code> back to <code>DecryptOnly</code>, for a value that turned up after all; a compromised flag stays</td></tr>
 <tr><td><code>destroy(key_id)</code></td><td><code>Retired</code> or <code>Pending</code> to <code>Destroyed</code></td></tr>
-<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see <a href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a>, and the record stays in the store</td></tr>
+<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write; the record stays in the store, see below the table</td></tr>
 <tr><td><code>dangerously_shred()</code></td><td>destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see <a href="#shredding-a-keyring">Shredding a keyring</a></td></tr>
 <tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes. Returns a <code>DekReencryption</code> per version, with the KEK version its DEK moved from and to</td></tr>
 </tbody>
 </table>
 </div>
+<p>After <code>dangerously_destroy_all_versions()</code> the keyring encrypts and decrypts nothing, except through a
+stream encryptor or decryptor already made, see <a href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with
+<code>dangerously_shred()</code></a>.</p>
 <p>A call that does not apply to the version’s state fails with <code>InvalidTransition</code>, which names the
 version, its state and the <code>Transition</code>:</p>
 <ul>
@@ -8243,6 +8353,9 @@ optionally signals changes to it. The library provides:</p>
 </tbody>
 </table>
 </div>
+<p>Each production store below has the same sections: its feature and client, its storage layout, its
+setup, how a change reaches the other processes, its rights, backups and deletion, and its caveats
+where it has any.</p>
 <p>Every store keeps the record as the same <a href="#keyring-records">JSON document</a>, and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see <a href="#record-cache">Record cache</a>.</p>
@@ -8260,10 +8373,26 @@ never decrypts again. Use it for tests, or for values that never outlive the pro
 shares the same records. It keeps each record as its JSON document, as the other stores do, and
 signals a watch on every write. A delete removes the entry.</p>
 <h2 id="firestore"><a class="header" href="#firestore">Firestore</a></h2>
+<h3 id="feature-and-client"><a class="header" href="#feature-and-client">Feature and client</a></h3>
+<p>The <code>firestore</code> feature is the store on firestore-rs without its default features, so it has no TLS
+root store and no crypto provider, and needs a firestore-rs or gcloud-sdk root store feature from
+the application, or one of:</p>
+<ul>
+<li><code>firestore-tls-roots</code>: the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings
+native-tls and so OpenSSL on Linux;</li>
+<li><code>firestore-tls-webpki</code>: rustls, with the bundled WebPKI roots for the gRPC connection to
+Firestore, and no native TLS;</li>
+</ul>
+<p>each with firestore-rs’s <code>auth-default-crypto</code>.</p>
+<p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
+project, database and credentials it chooses. The version of the <code>firestore</code> crate is part of
+this crate’s API under the Firestore features.</p>
+<h3 id="storage-layout"><a class="header" href="#storage-layout">Storage layout</a></h3>
 <p>The record of a keyring is the document <code>kms_keyrings/&lt;keyring id&gt;</code>, whose fields are those of the
 record’s JSON. <code>with_collection</code> takes another collection than
 <code>FirestoreKeyringStore::DEFAULT_COLLECTION</code>, as firestore-rs’s <code>FirestoreCollectionId</code>. A create fails when the document exists, and an
 update carries the update time it read as its precondition.</p>
+<h3 id="setup"><a class="header" href="#setup">Setup</a></h3>
 <pre><code class="language-rust no_run">use firestore::FirestoreDb;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -8288,25 +8417,24 @@ let keyring: Keyring&lt;FirestoreKeyringStore, LocalKmsProvider&lt;Ring&gt;, Rin
 </span>registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>FirestoreDb</code> is the <code>firestore</code> crate’s own client: the application builds it with the
-project, database and credentials it chooses. The version of the <code>firestore</code> crate is part of
-this crate’s API under the Firestore features.</p>
-<p>The <code>firestore</code> feature is the store on firestore-rs without its default features, so it has no TLS
-root store and no crypto provider, and needs a firestore-rs or gcloud-sdk root store feature from
-the application, or one of:</p>
-<ul>
-<li><code>firestore-tls-roots</code>: the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings
-native-tls and so OpenSSL on Linux;</li>
-<li><code>firestore-tls-webpki</code>: rustls, with the bundled WebPKI roots for the gRPC connection to
-Firestore, and no native TLS;</li>
-</ul>
-<p>each with firestore-rs’s <code>auth-default-crypto</code>. A delete removes the document, with its update time
-as the precondition.</p>
-<p>Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore’s point-in-time recovery
-restores an earlier record. Be aware the <code>firestore</code> crate logs every listen event at <code>trace</code> level on its
+<h3 id="change-propagation"><a class="header" href="#change-propagation">Change propagation</a></h3>
+<p>Each store holds one listen stream, with a target on the document of each keyring it watches.</p>
+<h3 id="rights-backups-and-deletion"><a class="header" href="#rights-backups-and-deletion">Rights, backups and deletion</a></h3>
+<p>The rights of the application and the administration on the keyring documents are in
+<a href="#store-rights">Store rights</a>. Firestore’s point-in-time recovery
+restores an earlier record, and what a delete leaves behind is in
+<a href="#what-a-delete-removes">What a delete removes</a>.</p>
+<h3 id="caveats"><a class="header" href="#caveats">Caveats</a></h3>
+<p>Be aware the <code>firestore</code> crate logs every listen event at <code>trace</code> level on its
 <code>firestore</code> target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administration’s reach.</p>
 <h2 id="postgresql"><a class="header" href="#postgresql">PostgreSQL</a></h2>
+<h3 id="feature-and-client-1"><a class="header" href="#feature-and-client-1">Feature and client</a></h3>
+<p>The <code>postgres</code> feature connects through tokio-postgres, with a <code>tokio_postgres::Config</code> and a TLS
+connector the application chooses. It also enables kms-aead’s <code>postgres</code> feature, which gives
+<code>Encrypted</code> tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</code>, see
+<a href="#postgresql-1">Encrypted fields</a>.</p>
+<h3 id="storage-layout-1"><a class="header" href="#storage-layout-1">Storage layout</a></h3>
 <p>One row per keyring, in a table the operator creates. The library runs no migrations. The table,
 <code>kms_keyrings</code> unless <code>with_table</code> names another:</p>
 <pre><code class="language-sql">CREATE TABLE kms_keyrings (
@@ -8317,20 +8445,14 @@ where the log leaves the administration’s reach.</p>
 );
 </code></pre>
 <ul>
-<li>the rights of the application and the administration on the table are in
-<a href="#store-rights">Store rights</a>;</li>
 <li>the table name is unqualified, so the connection’s <code>search_path</code> selects the schema;</li>
 <li>the <code>revision</code> of a row is the server’s clock in microseconds when the row is created, and the
 larger of that and the previous revision plus one at each write. A row deleted and created again
 therefore never repeats a revision of the id, which a running process that missed the deletion
-would take for an unchanged record;</li>
-<li>every write sends <code>NOTIFY &lt;table&gt;, '&lt;keyring id&gt;'</code> when it commits, through <code>pg_notify</code> in the
-same statement, and so does a delete, which removes the row at its revision;</li>
-<li>PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
-<code>reload_min_interval</code> however many signals arrive, so a stray <code>NOTIFY</code> costs one read.</li>
+would take for an unchanged record.</li>
 </ul>
-<p>The store connects through tokio-postgres, with a <code>tokio_postgres::Config</code> and a TLS connector the
-application chooses. <code>NoTls</code> for a local database:</p>
+<h3 id="setup-1"><a class="header" href="#setup-1">Setup</a></h3>
+<p><code>NoTls</code> for a local database:</p>
 <pre><code class="language-rust no_run">use kms_aead_keyring::store::{PostgresKeyringStore, PostgresTable};
 use tokio_postgres::{Config, NoTls};
 
@@ -8362,6 +8484,9 @@ let store: PostgresKeyringStore&lt;MakeRustlsConnect&gt; = PostgresKeyringStore:
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
 <p><code>postgres-native-tls</code>’s <code>MakeTlsConnector</code> works the same way for the platform TLS library.</p>
+<h3 id="change-propagation-1"><a class="header" href="#change-propagation-1">Change propagation</a></h3>
+<p>Every write sends <code>NOTIFY &lt;table&gt;, '&lt;keyring id&gt;'</code> when it commits, through <code>pg_notify</code> in the
+same statement, and so does a delete, which removes the row at its revision.</p>
 <p>The store opens at most two connections, whatever the number of keyrings on it:</p>
 <ul>
 <li>the query connection, on the first read or write. When it is lost, the call that finds it lost
@@ -8372,26 +8497,29 @@ after a delay that doubles from 0.5 to 30 seconds, and the keyrings revalidate.<
 </ul>
 <p>Clones of the store share both connections. Set <code>connect_timeout</code> on the <code>Config</code> to bound each
 attempt: calls wait for the attempt in progress.</p>
-<p>The <code>postgres</code> feature also enables kms-aead’s <code>postgres</code> feature, which gives <code>Encrypted</code>
-tokio-postgres’s <code>ToSql</code> and <code>FromSql</code> as <code>BYTEA</code>, see
-<a href="#postgresql-1">Encrypted fields</a>.</p>
+<h3 id="rights-backups-and-deletion-1"><a class="header" href="#rights-backups-and-deletion-1">Rights, backups and deletion</a></h3>
+<p>The rights of the application and the administration on the table are in
+<a href="#store-rights">Store rights</a>, and what a delete leaves behind is in
+<a href="#what-a-delete-removes">What a delete removes</a>.</p>
+<h3 id="caveats-1"><a class="header" href="#caveats-1">Caveats</a></h3>
+<p>PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
+<code>reload_min_interval</code> however many signals arrive, so a stray <code>NOTIFY</code> costs one read.</p>
 <h2 id="cloud-storage"><a class="header" href="#cloud-storage">Cloud Storage</a></h2>
+<h3 id="feature-and-client-2"><a class="header" href="#feature-and-client-2">Feature and client</a></h3>
+<p>The client is gcloud-sdk’s, built with the credentials, endpoint and TLS stack the application
+chooses. The <code>gcs</code> feature has no TLS root store, so it needs one of gcloud-sdk’s root store
+features from the application, or one of:</p>
+<ul>
+<li><code>gcs-tls-roots</code>: the system’s native roots;</li>
+<li><code>gcs-tls-webpki</code>: the bundled WebPKI roots.</li>
+</ul>
+<h3 id="storage-layout-2"><a class="header" href="#storage-layout-2">Storage layout</a></h3>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket, through the
 <code>google.storage.v2</code> gRPC API. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
 <code>GcsKeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A write is
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.</p>
-<ul>
-<li>the rights of the application and the administration on the bucket are in
-<a href="#store-rights">Store rights</a>;</li>
-<li>Cloud Storage has no change notification the store listens to, so a process sees a change once
-its record is older than <code>record_ttl</code>, 5 minutes by default;</li>
-<li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
-version, to restore from;</li>
-<li>a delete removes every generation of the object, the noncurrent ones included, so versioning
-does not keep a shredded record. Soft delete keeps what a delete removes, see
-<a href="#what-a-delete-removes">What a delete removes</a>.</li>
-</ul>
+<h3 id="setup-2"><a class="header" href="#setup-2">Setup</a></h3>
 <pre><code class="language-rust no_run">use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
 use gcloud_sdk::GoogleApi;
 use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore};
@@ -8404,30 +8532,32 @@ let store = GcsKeyringStore::new(client, GcsBucketName::try_from("my-keyrings".t
 <span class="boring">let _ = store;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The client is gcloud-sdk’s, built with the credentials, endpoint and TLS stack the application
-chooses. The <code>gcs</code> feature has no TLS root store, so it needs one of gcloud-sdk’s root store
-features from the application, or one of:</p>
+<h3 id="change-propagation-2"><a class="header" href="#change-propagation-2">Change propagation</a></h3>
+<p>Cloud Storage has no change notification the store listens to, so a process sees a change once its
+record is older than <code>record_ttl</code>, see <a href="#how-late-a-change-is-seen">Record cache</a>.</p>
+<h3 id="rights-backups-and-deletion-2"><a class="header" href="#rights-backups-and-deletion-2">Rights, backups and deletion</a></h3>
 <ul>
-<li><code>gcs-tls-roots</code>: the system’s native roots;</li>
-<li><code>gcs-tls-webpki</code>: the bundled WebPKI roots.</li>
+<li>the rights of the application and the administration on the bucket are in
+<a href="#store-rights">Store rights</a>;</li>
+<li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
+version, to restore from;</li>
+<li>a delete removes every generation of the object, the noncurrent ones included, so versioning
+does not keep a shredded record. Soft delete keeps what a delete removes, see
+<a href="#what-a-delete-removes">What a delete removes</a>.</li>
 </ul>
 <h2 id="s3"><a class="header" href="#s3">S3</a></h2>
+<h3 id="feature-and-client-3"><a class="header" href="#feature-and-client-3">Feature and client</a></h3>
+<p>The client is aws-sdk-s3’s, built with the credentials, region, endpoint and HTTP client the
+application chooses. The <code>s3</code> feature enables the SDK’s default HTTPS client, rustls on
+aws-lc-rs, as kms-aead’s AWS KMS provider does.</p>
+<h3 id="storage-layout-3"><a class="header" href="#storage-layout-3">Storage layout</a></h3>
 <p>Each record is the object <code>kms-keyrings/&lt;keyring id&gt;.json</code> in a bucket of Amazon S3 or of an
 S3-compatible server. <code>with_prefix</code> sets another <code>ObjectPrefix</code> than
 <code>S3KeyringStore::DEFAULT_PREFIX</code>; one that should read as a folder ends with <code>/</code>. A create is
 conditional on no object existing (<code>If-None-Match: *</code>), an update on the ETag the writer read
 (<code>If-Match</code>), and a revalidation reads the object only when its ETag changed (<code>If-None-Match</code> on
 the read).</p>
-<ul>
-<li>the rights of the application and the administration on the objects are in
-<a href="#store-rights">Store rights</a>;</li>
-<li>S3 has no change notification the store listens to, so a process sees a change once its record
-is older than <code>record_ttl</code>, 5 minutes by default;</li>
-<li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
-restore from;</li>
-<li>a delete removes every version and delete marker of the object, so versioning does not keep a
-shredded record, see <a href="#what-a-delete-removes">What a delete removes</a>.</li>
-</ul>
+<h3 id="setup-3"><a class="header" href="#setup-3">Setup</a></h3>
 <pre><code class="language-rust no_run">use aws_config::BehaviorVersion;
 use kms_aead_keyring::store::{S3BucketName, S3KeyringStore};
 
@@ -8441,10 +8571,20 @@ let store = S3KeyringStore::new(
 <span class="boring">let _ = store;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The client is aws-sdk-s3’s, built with the credentials, region, endpoint and HTTP client the
-application chooses. The <code>s3</code> feature enables the SDK’s default HTTPS client, rustls on
-aws-lc-rs, as kms-aead’s AWS KMS provider does.</p>
-<h3 id="s3-compatible-servers"><a class="header" href="#s3-compatible-servers">S3-compatible servers</a></h3>
+<h3 id="change-propagation-3"><a class="header" href="#change-propagation-3">Change propagation</a></h3>
+<p>S3 has no change notification the store listens to, so a process sees a change once its record is
+older than <code>record_ttl</code>, see <a href="#how-late-a-change-is-seen">Record cache</a>.</p>
+<h3 id="rights-backups-and-deletion-3"><a class="header" href="#rights-backups-and-deletion-3">Rights, backups and deletion</a></h3>
+<ul>
+<li>the rights of the application and the administration on the objects are in
+<a href="#store-rights">Store rights</a>;</li>
+<li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
+restore from;</li>
+<li>a delete removes every version and delete marker of the object, so versioning does not keep a
+shredded record, see <a href="#what-a-delete-removes">What a delete removes</a>.</li>
+</ul>
+<h3 id="caveats-2"><a class="header" href="#caveats-2">Caveats</a></h3>
+<h4 id="s3-compatible-servers"><a class="header" href="#s3-compatible-servers">S3-compatible servers</a></h4>
 <p>A server is S3-compatible for this store when it passes the store conformance suite,
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/tests/store_conformance.rs"><code>kms-aead-keyring/tests/store_conformance.rs</code></a>.
 Its checks include the ones a compare-and-swap needs from the server: it refuses a create over an
@@ -9702,13 +9842,13 @@ decrypts a value encrypted before the rotation with it, through
 <tr><th>Feature</th><th>What it adds</th></tr>
 </thead>
 <tbody>
-<tr><td><code>gcp-kms-encryption</code></td><td>Google Cloud KMS, with the native TLS roots of the system, and the <code>crc32c</code> crate for the checksums of its requests. Be aware it also turns on native-tls in reqwest, so in the same build the Azure provider uses native-tls whatever its TLS feature</td></tr>
+<tr><td><code>gcp-kms-encryption</code></td><td>Google Cloud KMS, with the native TLS roots of the system, and the <code>crc32c</code> crate for the checksums of its requests, see the notes below</td></tr>
 <tr><td><code>gcp-kms-encryption-webpki</code></td><td>Google Cloud KMS with the bundled WebPKI roots, and the <code>crc32c</code> crate</td></tr>
-<tr><td><code>gcp-kms-encryption-base</code></td><td>Google Cloud KMS without a TLS root store or crypto provider, and the <code>crc32c</code> crate. The application enables them with its own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or <code>tls-webpki-roots</code>, and the crate does not build without one</td></tr>
+<tr><td><code>gcp-kms-encryption-base</code></td><td>Google Cloud KMS without a TLS root store or crypto provider, and the <code>crc32c</code> crate, see the notes below</td></tr>
 <tr><td><code>aws-kms-encryption</code></td><td>AWS KMS, with the credentials of an <code>aws login</code> session. The <code>aws</code> features read <code>aws login</code> sessions, see <a href="#the-aws-features-read-aws-login-sessions">Migrating from 0.30</a></td></tr>
 <tr><td><code>azure-kms-encryption</code></td><td>Azure Key Vault and Managed HSM, with rustls and the aws-lc-rs crypto provider</td></tr>
 <tr><td><code>azure-kms-encryption-tls-aws-lc-rs</code></td><td>the same as <code>azure-kms-encryption</code></td></tr>
-<tr><td><code>azure-kms-encryption-tls-no-provider</code></td><td>Azure with rustls and the crypto provider the application installs. The application must install a process-default rustls <code>CryptoProvider</code> before creating the provider, otherwise rustls panics</td></tr>
+<tr><td><code>azure-kms-encryption-tls-no-provider</code></td><td>Azure with rustls and the crypto provider the application installs, see the notes below</td></tr>
 <tr><td><code>azure-kms-encryption-native-tls</code></td><td>Azure with the platform TLS library</td></tr>
 <tr><td><code>hashicorp-vault-transit-kms-encryption</code></td><td>HashiCorp Vault Transit, with the system root certificates and the aws-lc-rs crypto provider</td></tr>
 <tr><td><code>hashicorp-vault-transit-kms-encryption-base</code></td><td>Vault Transit without a root store or crypto provider, to combine with one of each below</td></tr>
@@ -9721,14 +9861,31 @@ decrypts a value encrypted before the rotation with it, through
 <tr><td><code>aws-lc-fips</code></td><td>the aws-lc-rs backend on the AWS-LC FIPS module. Needs CMake and Go to build</td></tr>
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds <code>p256</code> and <code>ed25519-dalek</code> for signatures, and <code>rsa</code> for RSA-OAEP, see <a href="#what-each-backend-does">Asymmetric KEKs</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="#deterministic-encryption">Deterministic encryption</a></td></tr>
-<tr><td><code>stream</code></td><td>streaming encryption of values of any length: <code>StreamEncryptor</code>, <code>StreamDecryptor</code>, the tokio adapters <code>EncryptingWriter</code> and <code>DecryptingReader</code>, the <code>Stream</code> adapters <code>EncryptingStream</code> and <code>DecryptingStream</code>, the <code>stream_encryptor</code> and <code>stream_decryptor</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code>, with their bare forms, and <code>KmsAeadEnvelope::decrypting_stream</code> and <code>decrypting_reader</code>, which read the header from the whole stored value. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
+<tr><td><code>stream</code></td><td>streaming encryption of values of any length, see the notes below. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
 <tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
-<tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value encrypted and decrypted, and the time each call, KMS request and keyring store read takes, see <a href="#metrics">Metrics</a></td></tr>
+<tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK), see the notes below and <a href="#metrics-1">Metrics</a></td></tr>
 </tbody>
 </table>
 </div>
+<p>Notes on the rows:</p>
+<ul>
+<li><code>gcp-kms-encryption</code> also turns on native-tls in reqwest, so in the same build the Azure provider
+uses native-tls whatever its TLS feature;</li>
+<li><code>gcp-kms-encryption-base</code>: the application enables a root store and a crypto provider with its
+own <code>gcloud-sdk</code> features, such as <code>tls-roots</code> or <code>tls-webpki-roots</code>, and the crate does not build
+without one;</li>
+<li><code>azure-kms-encryption-tls-no-provider</code>: the application must install a process-default rustls
+<code>CryptoProvider</code> before creating the provider, otherwise rustls panics;</li>
+<li><code>stream</code> adds <code>StreamEncryptor</code> and <code>StreamDecryptor</code>, the tokio adapters <code>EncryptingWriter</code> and
+<code>DecryptingReader</code>, the <code>Stream</code> adapters <code>EncryptingStream</code> and <code>DecryptingStream</code>, the
+<code>stream_encryptor</code> and <code>stream_decryptor</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code>, with their
+bare forms, and <code>KmsAeadEnvelope::decrypting_stream</code> and <code>decrypting_reader</code>, which read the
+header from the whole stored value;</li>
+<li><code>opentelemetry</code> records the plaintext size of each value encrypted and decrypted, and the time
+each call, KMS request and keyring store read takes.</li>
+</ul>
 <p>The local KMS provider, <code>LocalKmsProvider</code>, is in every build and needs no feature.</p>
 <p>Every build adds <code>serde</code>, <code>serde_bytes</code>, <code>serde_json</code>, secret-vault-value’s <code>serde</code> feature, <code>sha2</code>,
 <code>base64ct</code> and the RustCrypto crates <code>der</code>, <code>spki</code>, <code>pkcs8</code>, <code>sec1</code> and <code>pem-rfc7468</code>. <code>sha2</code>
@@ -9764,23 +9921,32 @@ encrypts can be constructed, since no type implements <code>AeadBackend</code>.<
 </thead>
 <tbody>
 <tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="#crypto-backends-1">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
-<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="#permissions-applications-and-administration">Permissions: applications and administration</a></td></tr>
-<tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, <code>encrypt_deterministic</code> and <code>reencrypt_deterministic</code> on an <code>Encryptor</code>, and <code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see <a href="#deterministic-fields">Deterministic fields</a>. The deterministic types exist in every build, so a process without the feature keeps a record’s deterministic versions intact</td></tr>
-<tr><td><code>firestore</code></td><td>the Firestore keyring store, on firestore-rs without its default features: no TLS root store and no crypto provider. The application enables a firestore-rs or gcloud-sdk root store feature, or uses one of the two below, see <a href="#firestore">Keyring stores</a></td></tr>
+<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, see <a href="#permissions-applications-and-administration">Permissions: applications and administration</a></td></tr>
+<tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, see the notes below and <a href="#deterministic-fields">Deterministic fields</a></td></tr>
+<tr><td><code>firestore</code></td><td>the Firestore keyring store, on firestore-rs without its default features: no TLS root store and no crypto provider. Enable one of the two below, or a root store feature of firestore-rs or gcloud-sdk, see <a href="#firestore">Keyring stores</a></td></tr>
 <tr><td><code>firestore-tls-roots</code></td><td><code>firestore</code> with the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings native-tls and so OpenSSL on Linux, and firestore-rs’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>firestore-tls-webpki</code></td><td><code>firestore</code> on rustls, with the bundled WebPKI roots for the gRPC connection to Firestore and no native TLS, and firestore-rs’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>postgres</code></td><td>the PostgreSQL keyring store, and <code>Encrypted</code> and <code>EncryptionMarker</code> in tokio-postgres, as <code>BYTEA</code></td></tr>
-<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, on gcloud-sdk without a TLS root store or crypto provider. The application enables a gcloud-sdk root store feature, or uses one of the two below, see <a href="#cloud-storage">Keyring stores</a></td></tr>
+<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, on gcloud-sdk without a TLS root store or crypto provider. Enable one of the two below, or a root store feature of gcloud-sdk, see <a href="#cloud-storage">Keyring stores</a></td></tr>
 <tr><td><code>gcs-tls-roots</code></td><td><code>gcs</code> with the system’s native roots, gcloud-sdk’s <code>tls-roots</code>, which brings native-tls and so OpenSSL on Linux, and gcloud-sdk’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>gcs-tls-webpki</code></td><td><code>gcs</code> on rustls, with the bundled WebPKI roots for the gRPC connection to Cloud Storage and no native TLS, and gcloud-sdk’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>s3</code></td><td>the S3 keyring store</td></tr>
 <tr><td><code>sqlx</code></td><td><code>Encrypted</code> and <code>EncryptionMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code></td></tr>
 <tr><td><code>stream</code></td><td>kms-aead’s <code>stream</code>, <code>Encryptor::stream_encryptor</code>, <code>Keyring::stream_decryptor</code>, <code>decrypting_stream</code> and <code>decrypting_reader</code>, and the <code>stream</code> module re-exported. Needs a backend feature, see <a href="#streaming-encryption">Streaming encryption</a></td></tr>
 <tr><td><code>bigquery-export</code></td><td><code>admin</code>, and <code>export_bigquery_keyset</code>, see <a href="#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a></td></tr>
-<tr><td><code>opentelemetry</code></td><td>kms-aead’s <code>opentelemetry</code>, with the keyring’s calls recorded per keyring and key version, see <a href="#metrics">Metrics</a></td></tr>
+<tr><td><code>opentelemetry</code></td><td>kms-aead’s <code>opentelemetry</code>, with the keyring’s calls recorded per keyring and key version, see <a href="#metrics-1">Metrics</a></td></tr>
 </tbody>
 </table>
 </div>
+<p>Notes on the rows:</p>
+<ul>
+<li><code>admin</code> also adds the types <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code>
+module;</li>
+<li><code>deterministic</code> adds <code>encrypt_deterministic</code> and <code>reencrypt_deterministic</code> on an <code>Encryptor</code>, and
+<code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a
+<code>Keyring</code>. The deterministic types exist in every build, so a process without the feature keeps a
+record’s deterministic versions intact.</li>
+</ul>
 <p>Beacons need no feature, and <code>export_tink_keyset</code> needs <code>admin</code> only. The KMS providers come from
 kms-aead and its provider features, and secret-vault-value’s <code>SecretValue</code> is what an application
 type’s <code>Plaintext</code> encodes to.</p>
@@ -10614,7 +10780,8 @@ let too_short = Encrypted::&lt;SecretValue, Bare&gt;::try_from(vec![0; 8]);
 assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT"));
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The library’s codes:</p>
+<p>The library’s codes, by area:</p>
+<h3 id="values-keys-and-formats"><a class="header" href="#values-keys-and-formats">Values, keys and formats</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -10623,30 +10790,110 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tbody>
 <tr><td><code>ENCRYPT</code>, <code>DECRYPT</code></td><td>encryption</td><td>encrypting failed, or a value, or a chunk of a streamed value, is not authentic under the key and the AAD, among them a final chunk that a sequential read finds cut or followed by more bytes</td></tr>
 <tr><td><code>ENCRYPT_KEY</code>, <code>DECRYPT_KEY</code></td><td>encryption</td><td>the backend refused a key, or a KMS request could not be built</td></tr>
-<tr><td><code>SIGN_KEY</code>, <code>GET_PUBLIC_KEY</code></td><td>signature</td><td>a Cloud KMS signing request, or its public key request, whose routing header could not be built</td></tr>
 <tr><td><code>RANDOM_GENERATOR</code></td><td>encryption</td><td>the CSPRNG failed, for a nonce or a key</td></tr>
 <tr><td><code>INVALID_KEY_LENGTH</code></td><td>encryption</td><td>a key that does not fit the algorithm, such as a MAC key of another length than 32 or 64 bytes, a KMS generator that returned another length, or a DEK longer than the OAEP limit of the public key it is encrypted with</td></tr>
 <tr><td><code>UNSUPPORTED_ALGORITHM</code></td><td>unsupported algorithm</td><td>the backend does not implement the algorithm, an AEAD algorithm or an asymmetric KEK algorithm such as RSA-OAEP on ring. <code>algorithm</code> is a <code>BackendAlgorithm</code></td></tr>
 <tr><td><code>UNKNOWN_ALGORITHM</code></td><td>encryption</td><td><code>FromStr</code> of an algorithm name it does not know, a signing or MAC algorithm included</td></tr>
-<tr><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td>encryption</td><td>a value too short, a length past its end, a <code>Randomized</code> or <code>Deterministic</code> value without Tink’s output prefix, a stream header that is not 61 bytes (56 bare) or does not start with <code>0x01</code>, or an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not <code>60 + w</code> bytes</td></tr>
+<tr><td><code>INVALID_CIPHER_TEXT_FORMAT</code></td><td>encryption</td><td>a stored value whose layout does not parse, see the cases below the table</td></tr>
 <tr><td><code>UNKNOWN_CIPHER_TEXT_LAYOUT</code></td><td>encryption</td><td>an empty envelope value, or a first byte that starts no layout</td></tr>
 <tr><td><code>INVALID_PLAINTEXT</code></td><td>encryption</td><td>a decrypted value that is not an encoding of its type, or a <code>JsonEncoded</code> value that does not serialise</td></tr>
 <tr><td><code>INVALID_KEY_FORMAT</code></td><td>encryption</td><td>a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset</td></tr>
 <tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the encrypted DEK layout v1 of 0.29 that cannot be read, with <code>legacy-formats</code></td></tr>
 <tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29</td></tr>
 <tr><td><code>INVALID_HEX</code></td><td>encryption</td><td><code>try_from_hex_string</code> of text that is not hex</td></tr>
+<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
+<tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
+<tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>INVALID_CIPHER_TEXT_FORMAT</code> is returned for:</p>
+<ul>
+<li>a value too short, or a length past its end;</li>
+<li>a <code>Randomized</code> or <code>Deterministic</code> value without Tink’s output prefix;</li>
+<li>a stream header that is not 61 bytes (56 bare) or does not start with <code>0x01</code>;</li>
+<li>an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not <code>60 + w</code>
+bytes.</li>
+</ul>
+<h3 id="beacons-macs-and-digests"><a class="header" href="#beacons-macs-and-digests">Beacons, MACs and digests</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>INVALID_BEACON_FORMAT</code></td><td>encryption</td><td>stored bytes that are not <code>[0x01][key id: u32 BE]</code> and 1 to 32 bytes of HMAC, at <code>Beacon::try_from</code></td></tr>
 <tr><td><code>INVALID_BEACON_CONTEXT</code></td><td>encryption</td><td>a beacon context longer than 2^32 - 1 bytes</td></tr>
 <tr><td><code>BEACON</code></td><td>encryption</td><td>the backend failed to calculate a beacon’s HMAC</td></tr>
+<tr><td><code>INVALID_PAYLOAD</code></td><td>encryption</td><td><code>to_payload</code> or <code>from_payload</code> failed, from a signing or a MAC call, such as a payload that is not the JSON of a <code>JsonEncoded</code> type</td></tr>
+<tr><td><code>MAC_INVALID</code></td><td>encryption</td><td>the tag does not match, or is not the length of the key’s algorithm</td></tr>
+<tr><td><code>INVALID_MAC_FORMAT</code></td><td>encryption</td><td>bytes that are not a <code>Mac</code> or <code>WithMac</code> layout</td></tr>
+<tr><td><code>MAC</code></td><td>encryption</td><td>the backend failed to compute an HMAC</td></tr>
+<tr><td><code>DIGEST</code></td><td>encryption</td><td>the backend failed to compute a SHA-256, of a payload or a pre-image</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="streams"><a class="header" href="#streams">Streams</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>STREAM_ALGORITHM</code></td><td>encryption</td><td>a cipher or key version whose algorithm is not AES-256-GCM asked to encrypt or decrypt a streamed value</td></tr>
-<tr><td><code>STREAM_LENGTH</code></td><td>encryption</td><td>a stored length that the length rules refuse, given to <code>StreamFormat::plan_chunk_read</code> or <code>plan_final_chunk_read</code>; bytes given to <code>decrypt_chunk_read</code> of another length than the plan’s <code>ciphertext()</code>; a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk, where no value ends, or holds more chunks than a value can; a source that ends inside the header that <code>decrypting_stream</code> or <code>decrypting_reader</code> read</td></tr>
+<tr><td><code>STREAM_LENGTH</code></td><td>encryption</td><td>a length or a source that the length rules of the stream format refuse, see the cases below the table</td></tr>
 <tr><td><code>STREAM_KEY_COMMITMENT</code></td><td>encryption</td><td>the header’s commitment is not the one the DEK, the salt and the AAD derive: a wrong key, a wrong AAD, or a modified salt or commitment</td></tr>
 <tr><td><code>STREAM_RANGE</code></td><td>encryption</td><td>a plaintext range past the value’s length or with <code>start &gt; end</code>, or a chunk read plan of a value in another form</td></tr>
-<tr><td><code>STREAM_IO</code></td><td>system</td><td>the source or the sink of <code>encrypt_stream</code> or <code>decrypt_stream</code>, or the source of an <code>EncryptingStream</code> or a <code>DecryptingStream</code>, or the source of <code>decrypting_stream</code> or <code>decrypting_reader</code> while they read the header, failed; the source’s or sink’s error is the root cause. The retry is the whole stream again</td></tr>
+<tr><td><code>STREAM_IO</code></td><td>system</td><td>the source or the sink of a stream call failed, see the cases below the table. The source’s or sink’s error is the root cause. The retry is the whole stream again</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>STREAM_LENGTH</code> is returned for:</p>
+<ul>
+<li>a stored length that the length rules refuse, given to <code>StreamFormat::plan_chunk_read</code> or
+<code>plan_final_chunk_read</code>;</li>
+<li>bytes given to <code>decrypt_chunk_read</code> of another length than the plan’s <code>ciphertext()</code>;</li>
+<li>a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk,
+where no value ends, or holds more chunks than a value can;</li>
+<li>a source that ends inside the header that <code>decrypting_stream</code> or <code>decrypting_reader</code> read.</li>
+</ul>
+<p><code>STREAM_IO</code> is returned when:</p>
+<ul>
+<li>the source or the sink of <code>encrypt_stream</code> or <code>decrypt_stream</code> failed;</li>
+<li>the source of an <code>EncryptingStream</code> or a <code>DecryptingStream</code> failed;</li>
+<li>the source of <code>decrypting_stream</code> or <code>decrypting_reader</code> failed while they read the header.</li>
+</ul>
+<h3 id="asymmetric-keks-7"><a class="header" href="#asymmetric-keks-7">Asymmetric KEKs</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code></td><td>encryption</td><td>a <code>0x02</code> encrypted DEK with an unknown algorithm byte, a header past the end, an <code>i</code> or <code>k</code> of another shape than the reading provider’s, or a block of another length than its key’s, before any KMS call</td></tr>
-<tr><td><code>ASYMMETRIC_KEK_PUBLIC_KEY</code></td><td>system</td><td>public key bytes that are not in the named <code>PublicKeyFormat</code>, or not an RSA key of 2048, 3072 or 4096 bits, a key the backend refuses, a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal version for a local KEK, or a KMS key the fetch describes as another kind</td></tr>
+<tr><td><code>ASYMMETRIC_KEK_PUBLIC_KEY</code></td><td>system</td><td>a public key or a KEK version that cannot be used, see the cases below the table</td></tr>
 <tr><td><code>ASYMMETRIC_KEK_PRIVATE_KEY</code></td><td>system</td><td>local private key bytes that are not in the named <code>PrivateKeyFormat</code>, or not an RSA key of 2048, 3072 or 4096 bits</td></tr>
 <tr><td><code>ASYMMETRIC_KEK_MISMATCH</code></td><td>system</td><td>an <code>AsymmetricKekProvider</code> whose public key names another KEK than its KMS provider, or a <code>pinned</code> producer whose key has another fingerprint</td></tr>
+</tbody>
+</table>
+</div>
+<p><code>ASYMMETRIC_KEK_PUBLIC_KEY</code> is returned for:</p>
+<ul>
+<li>public key bytes that are not in the named <code>PublicKeyFormat</code>;</li>
+<li>a key that is not an RSA key of 2048, 3072 or 4096 bits;</li>
+<li>a key the backend refuses;</li>
+<li>a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal
+version for a local KEK;</li>
+<li>a KMS key the fetch describes as another kind.</li>
+</ul>
+<h3 id="signatures"><a class="header" href="#signatures">Signatures</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SIGN_KEY</code>, <code>GET_PUBLIC_KEY</code></td><td>signature</td><td>a Cloud KMS signing request, or its public key request, whose routing header could not be built</td></tr>
 <tr><td><code>SIGNATURE_INVALID</code></td><td>signature</td><td>no key with the signature’s key id verifies it</td></tr>
 <tr><td><code>SIGNING_KEY_UNKNOWN</code></td><td>signature</td><td>no key in the set has the signature’s key id: the set is stale, or the signer is not trusted; also <code>with_record_signer</code>, <code>create_signed</code> and <code>open_or_create_signed</code> with a signer the registry’s record verification does not hold</td></tr>
 <tr><td><code>INVALID_SIGNATURE_FORMAT</code></td><td>signature</td><td>bytes that are not a <code>Signature</code> or <code>Signed</code> layout, at <code>TryFrom</code></td></tr>
@@ -10656,20 +10903,25 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>INVALID_PUBLIC_KEY</code></td><td>signature</td><td>a public key, JWK or JWK Set that does not parse, is of another algorithm, is not on the curve, or is an Ed25519 point of order 8 or less</td></tr>
 <tr><td><code>EMPTY_KEY_SET</code></td><td>signature</td><td><code>Verifier::new</code> with no key, and <code>KeyringRegistry::new</code> with <code>RecordSignaturePolicy::Required</code> and no key</td></tr>
 <tr><td><code>DUPLICATE_KEY_ID</code></td><td>signature</td><td>two different keys under one key id, at <code>VerifyingKeySet::new</code>, <code>insert</code> or <code>from_jwks</code>, or two local versions sharing one</td></tr>
-<tr><td><code>INVALID_PAYLOAD</code></td><td>encryption</td><td><code>to_payload</code> or <code>from_payload</code> failed, from a signing or a MAC call, such as a payload that is not the JSON of a <code>JsonEncoded</code> type</td></tr>
-<tr><td><code>MAC_INVALID</code></td><td>encryption</td><td>the tag does not match, or is not the length of the key’s algorithm</td></tr>
-<tr><td><code>INVALID_MAC_FORMAT</code></td><td>encryption</td><td>bytes that are not a <code>Mac</code> or <code>WithMac</code> layout</td></tr>
-<tr><td><code>MAC</code></td><td>encryption</td><td>the backend failed to compute an HMAC</td></tr>
-<tr><td><code>DIGEST</code></td><td>encryption</td><td>the backend failed to compute a SHA-256, of a payload or a pre-image</td></tr>
 <tr><td><code>SIGN</code></td><td>signature</td><td>the backend failed to sign with a local signing key</td></tr>
-<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a layout of 0.29 or earlier without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the envelope layouts of 0.29 and earlier in <code>separate</code></td></tr>
-<tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
-<tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
+<tr><td><code>INVALID_LOCAL_SIGNING_KEY_NAME</code></td><td>system</td><td>a local signing key name that is empty, longer than 255 bytes or holds another character than the name allows</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_SOURCE</code></td><td>system</td><td>a key file that cannot be read, is not a regular file or is too large, or an environment variable that is unset, too large or not base64 where base64 is expected</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_FORMAT</code></td><td>system</td><td>key bytes that are not the format, another algorithm, an encrypted PKCS#8 or a P-256 key without its public point, or a key the backend refuses</td></tr>
+<tr><td><code>LOCAL_SIGNING_KEY_VERSIONS</code></td><td>system</td><td>a local signing provider with no keys, or with a version listed twice</td></tr>
+<tr><td><code>AWS_SIGNING_KEY_ALIAS</code></td><td>system</td><td>an AWS signing key named by an alias, which a rotation could point at another key</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="providers"><a class="header" href="#providers">Providers</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Code</th><th>Variant</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>AWS_ERROR</code></td><td>encryption</td><td>an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see <a href="#errors-1">AWS KMS</a></td></tr>
 <tr><td><code>INVALID_LOCAL_KEK_ID</code>, <code>LOCAL_*</code></td><td>system, encryption</td><td>the <a href="#errors-4">local KMS</a></td></tr>
 <tr><td><code>AZURE_*</code></td><td>system, encryption</td><td>the <a href="#errors-2">Azure provider</a></td></tr>
-<tr><td><code>INVALID_LOCAL_SIGNING_KEY_NAME</code>, <code>LOCAL_SIGNING_KEY_SOURCE</code>, <code>LOCAL_SIGNING_KEY_FORMAT</code>, <code>LOCAL_SIGNING_KEY_VERSIONS</code></td><td>system</td><td>the local signing provider’s configuration</td></tr>
-<tr><td><code>AWS_SIGNING_KEY_ALIAS</code></td><td>system</td><td>an AWS signing key named by an alias, which a rotation could point at another key</td></tr>
 <tr><td><code>VAULT_*</code></td><td>system, network, encryption</td><td>the <a href="#errors-3">Vault Transit provider</a></td></tr>
 </tbody>
 </table>
@@ -10683,21 +10935,36 @@ KMS code a <code>SignatureError</code> that keeps the KMS’s code.</p>
 the Azure provider takes in <code>client_options</code>.</p>
 <p>A <code>NetworkError</code> may be retried, with a backoff. An <code>EncryptionError</code> or a <code>SignatureError</code> should
 not be: a revoked permission, a missing key or an encrypted DEK of another key fails the same way on
-every retry.
-The variant per provider:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Provider</th><th><code>NetworkError</code></th><th><code>EncryptionError</code></th></tr>
-</thead>
-<tbody>
-<tr><td>Google Cloud KMS</td><td>gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>, <code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code></td><td>any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>, <code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code></td></tr>
-<tr><td>AWS KMS</td><td><code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>, <code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read</td><td>any other AWS error code, such as <code>AccessDeniedException</code>, <code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>, <code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code></td></tr>
-<tr><td>Azure Key Vault</td><td>a 5xx or 429 status, a connection or I/O failure</td><td>any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that does not parse</td></tr>
-<tr><td>Vault Transit</td><td><code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code></td><td>any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>, <code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code></td></tr>
-</tbody>
-</table>
-</div>
+every retry.</p>
+<p>The variant per provider:</p>
+<p><strong>Google Cloud KMS</strong></p>
+<ul>
+<li><code>NetworkError</code>: gRPC <code>Unavailable</code>, <code>DeadlineExceeded</code>, <code>ResourceExhausted</code>, <code>Aborted</code>,
+<code>Internal</code>, <code>Unknown</code>, <code>Cancelled</code>;</li>
+<li><code>EncryptionError</code>: any other gRPC code, such as <code>PermissionDenied</code>, <code>Unauthenticated</code>,
+<code>NotFound</code>, <code>InvalidArgument</code>, <code>FailedPrecondition</code>.</li>
+</ul>
+<p><strong>AWS KMS</strong></p>
+<ul>
+<li><code>NetworkError</code>: <code>ThrottlingException</code>, <code>KMSInternalException</code>, <code>DependencyTimeoutException</code>,
+<code>KeyUnavailableException</code>, a 5xx or 429 status, a timeout, a connection failure, a response the
+SDK could not read;</li>
+<li><code>EncryptionError</code>: any other AWS error code, such as <code>AccessDeniedException</code>,
+<code>NotFoundException</code>, <code>IncorrectKeyException</code>, <code>InvalidCiphertextException</code>, <code>DisabledException</code>,
+<code>KMSInvalidStateException</code>, a request that could not be built or signed, and <code>AWS_ERROR</code>.</li>
+</ul>
+<p><strong>Azure Key Vault</strong></p>
+<ul>
+<li><code>NetworkError</code>: a 5xx or 429 status, a connection or I/O failure;</li>
+<li><code>EncryptionError</code>: any other status, such as <code>Forbidden</code> or <code>KeyNotFound</code>, and a response that
+does not parse.</li>
+</ul>
+<p><strong>Vault Transit</strong></p>
+<ul>
+<li><code>NetworkError</code>: <code>VAULT_STATUS_5xx</code>, <code>VAULT_STATUS_429</code>, <code>VAULT_HTTP</code>, <code>VAULT_TIMEOUT</code>;</li>
+<li><code>EncryptionError</code>: any other <code>VAULT_STATUS_&lt;status&gt;</code>, <code>VAULT_RESPONSE</code>,
+<code>VAULT_RESPONSE_TOO_LARGE</code>, <code>VAULT_CIPHERTEXT</code>.</li>
+</ul>
 <p>Google’s client libraries retry the Cloud KMS <code>Encrypt</code> and <code>Decrypt</code> calls on <code>Unavailable</code> and
 <code>DeadlineExceeded</code> only. Keep a retry on the other Google Cloud KMS network codes to a few
 attempts.</p>
@@ -10711,6 +10978,7 @@ error, and it says whether a retry can help. The retry is the whole stream again
 <code>KEY_VERSION_COMPROMISED</code>. It is the <code>error_code</code> field of the keyring’s spans and the
 <code>error.type</code> of its metrics. Match on the variant and its fields, or on the code: the <code>Display</code>
 text may change in any release.</p>
+<h3 id="records-and-the-store"><a class="header" href="#records-and-the-store">Records and the store</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -10730,6 +10998,16 @@ text may change in any release.</p>
 <tr><td><code>RecordRegressed</code></td><td><code>RECORD_REGRESSED</code></td><td>a record that moves a version backwards from the one this process holds, from <code>reload</code> and before an administrative write</td></tr>
 <tr><td><code>RecordConflict</code></td><td><code>RECORD_CONFLICT</code></td><td>an administrative write lost every compare-and-swap, <code>attempts</code> of them</td></tr>
 <tr><td><code>KekMismatch</code></td><td><code>KEK_MISMATCH</code></td><td>the provider’s KEK is not the one the record names</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="key-versions"><a class="header" href="#key-versions">Key versions</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>NoActiveVersion</code></td><td><code>NO_ACTIVE_VERSION</code></td><td>no active version of the purpose, so nothing new is encrypted under it</td></tr>
 <tr><td><code>NoAlgorithm</code></td><td><code>NO_ALGORITHM</code></td><td>the record names no algorithm for the purpose, so no version of it is created: <code>change_algorithm</code> sets one</td></tr>
 <tr><td><code>KeyVersionUnknown</code></td><td><code>KEY_VERSION_UNKNOWN</code></td><td>no version with the value’s key id, also after a reload</td></tr>
@@ -10742,15 +11020,26 @@ text may change in any release.</p>
 <tr><td><code>InvalidTransition</code></td><td><code>INVALID_TRANSITION</code></td><td>a lifecycle call that does not apply to the version’s state, see <a href="#states">States</a></td></tr>
 <tr><td><code>PromotionTooEarly</code></td><td><code>PROMOTION_TOO_EARLY</code></td><td>a promotion before <code>record_ttl</code> has passed since the version was staged</td></tr>
 <tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero</td></tr>
+<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="other-calls"><a class="header" href="#other-calls">Other calls</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Variant</th><th>Code</th><th>Meaning</th></tr>
+</thead>
+<tbody>
 <tr><td><code>DeterministicDisabled</code></td><td><code>DETERMINISTIC_DISABLED</code></td><td>a deterministic version created without the <code>deterministic</code> feature</td></tr>
 <tr><td><code>Interop</code></td><td><code>INTEROP</code></td><td>an encryption or a keyset export that a field’s <code>Interop</code> reader would not read</td></tr>
 <tr><td><code>CustomAadUnsupported</code></td><td><code>CUSTOM_AAD_UNSUPPORTED</code></td><td><code>custom_aad</code> on a field BigQuery decrypts</td></tr>
 <tr><td><code>ExportAlgorithmUnsupported</code></td><td><code>EXPORT_ALGORITHM_UNSUPPORTED</code></td><td>a version in an export whose algorithm the keyset’s reader does not read</td></tr>
-<tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
 <tr><td><code>InvalidEncryptionMarker</code></td><td><code>INVALID_ENCRYPTION_MARKER</code></td><td>stored bytes that are not an <code>EncryptionMarker</code></td></tr>
 </tbody>
 </table>
 </div>
+<h3 id="what-a-caller-may-run-again"><a class="header" href="#what-a-caller-may-run-again">What a caller may run again</a></h3>
 <p>Besides the retry policies of the store clients, such as aws-sdk-s3’s, the keyring retries only an
 administrative write’s compare-and-swap, up to <code>cas_retries</code> times. What a caller may run again:</p>
 <ul>
@@ -10780,7 +11069,7 @@ failed, when there is one.</p>
 <li><a href="#spans-and-events">Spans and events</a>: one <code>DEBUG</code> span for every envelope call,
 KMS call and keyring call, with the fields of each; the events both crates log; how to show the
 spans and export them as OpenTelemetry traces; and the event of a JSON value that does not decode;</li>
-<li><a href="#metrics">Metrics</a>: the OpenTelemetry instruments of the <code>opentelemetry</code>
+<li><a href="#metrics-1">Metrics</a>: the OpenTelemetry instruments of the <code>opentelemetry</code>
 feature, the views that leave out the smallest and the largest plaintext size and that limit the
 number of series, and the Prometheus names.</li>
 </ul>
@@ -10800,7 +11089,7 @@ the metrics. The SDK also keeps the smallest and the largest value of each serie
 temporality since the process started, and OTLP exports them: the exact length of the shortest and
 the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
 The OpenTelemetry API gives kms-aead’s instrument no setting to leave them out, so the view in
-<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat
+<a href="#metrics-1">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat
 the histogram like the values themselves where traffic is low, and everywhere without that view.</p>
 <p>The <a href="#json-that-does-not-decode-1"><code>kms_aead::json</code> event</a> is the
 other exception, under a policy that opts in: its outline then carries the length of the values and
@@ -11106,7 +11395,7 @@ retried.</li>
 <a href="#what-is-never-logged">What is never logged</a>. The AAD rule matters most there,
 since the default AAD holds the entity id: neither the AAD nor an <code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="metrics"><a class="header" href="#metrics">Metrics</a></h1>
+<h1 id="metrics-1"><a class="header" href="#metrics-1">Metrics</a></h1>
 <p>With the <code>opentelemetry</code> feature, kms-aead records OpenTelemetry metrics for every envelope call
 and KMS request. kms-aead-keyring’s <code>opentelemetry</code> feature turns it on, and the keyring records
 into the same instruments, with its own attributes. Both depend on the <code>opentelemetry</code> API crate

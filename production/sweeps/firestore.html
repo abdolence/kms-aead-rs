@@ -36,7 +36,7 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-add654e4.js"></script>
@@ -182,6 +182,7 @@
 <p>A sweep of a Firestore collection: the encryption marker as a field, the query for the documents
 behind, and the conditional write back. The mechanism is in <a href="../sweeps.html">Sweeps</a>, and the example
 has the five properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>.</p>
+<h2 id="schema-and-indexing"><a class="header" href="#schema-and-indexing">Schema and indexing</a></h2>
 <p>The marker is a <code>bytes</code> field, <code>encryption_marker</code>, and the query is one range filter on it.
 Firestore indexes a field ascending and descending by default, and the query needs the ascending
 index only, so a field override keeps just that one. firestore-rs declares it with its index
@@ -205,6 +206,63 @@ firestore-rs covers <code>.plan()</code>, <code>.sync()</code> and running them 
 <p>A project that manages its indexes outside Rust sets the same override with <code>gcloud</code>:</p>
 <pre><code class="language-sh">gcloud firestore indexes fields update encryption_marker --collection-group=users --index=order=ASCENDING
 </code></pre>
+<h2 id="querying-behind-and-by-version"><a class="header" href="#querying-behind-and-by-version">Querying behind and by version</a></h2>
+<p>The documents behind are one filter, <code>encryption_marker &lt; current</code>, as in the sweep below. The
+documents that can hold a value under a version, which the administrative job checks before <code>retire</code> and
+<code>destroy</code>, are the range of that version, see <a href="../sweeps.html#records-under-a-version">Records under a
+version</a>. Firestore takes both bounds on the one field and serves them from its ascending index on
+<code>encryption_marker</code>, and an open range is one filter:</p>
+<pre><code class="language-rust no_run">use firestore::{FirestoreDb, FirestoreResult};
+use futures_util::stream::{self, BoxStream, StreamExt};
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
+use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(default)]
+    encryption_marker: EncryptionMarker,
+}
+
+/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
+async fn users_under&lt;'a&gt;(
+    db: &amp;'a FirestoreDb,
+    keyring: &amp;Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;,
+    key_id: KeyId,
+) -&gt; Result&lt;BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt;, Box&lt;dyn std::error::Error&gt;&gt; {
+    // The store's record: a compromise or promotion in another process is in it
+    let range: Option&lt;ReencryptRange&gt; = keyring
+        .reload()
+        .await?
+        .version(key_id)
+        .and_then(KeyVersion::reencrypt_range);
+    let Some(range) = range else {
+        // Never active: no record holds a value under it
+        return Ok(stream::empty().boxed());
+    };
+    let users: BoxStream&lt;'a, FirestoreResult&lt;UserDoc&gt;&gt; = db
+        .fluent()
+        .select()
+        .from("users")
+        .filter(|q| {
+            q.for_all([
+                q.field("encryption_marker").greater_than_or_equal(range.start()),
+                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
+            ])
+        })
+        .obj()
+        .stream_query_with_errors()
+        .await?;
+    Ok(users)
+}
+<span class="boring">
+</span><span class="boring">fn main() {}</span></code></pre>
+<h2 id="re-encrypting-in-batches"><a class="header" href="#re-encrypting-in-batches">Re-encrypting in batches</a></h2>
 <p>The query streams with <code>stream_query_with_errors()</code>, so that a document that does not read is a
 failed candidate, and the sweep never ends early on it. <code>sweep::reencrypt_records_batched</code> cuts the documents into
 batches of 500, each re-encrypted through one encryptor and written back in one <code>BatchWrite</code>. Each
@@ -449,26 +507,30 @@ println!("{report:?}");
 <span class="boring">registry.shutdown(None).await;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
-candidate query included.</p>
-<p><code>CONCURRENCY</code> batches of 500 writes in flight are a high write rate for a collection that has seen
-little traffic. Firestore advises starting a new collection at 500 writes a second and raising the
-rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step on one.</p>
-<p>A range filter never matches a document without the field, so a document written before the marker
-needs the marker written first, see <a href="../envelope-to-keyring.html">Move envelope values to a
-keyring</a>.</p>
-<p>A partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers would
-read every document, the current ones included.</p>
-<p>The marker takes 10 bytes of a document: the field name as a 5-byte string and the 5 bytes of the
-value. Its entry in the ascending index takes the size of the document’s name, of its parent’s
-name, of the field name and of the value, plus 32 bytes, by Firestore’s storage size rules: about
-70 bytes for a short document id in a top-level collection. 10 million documents hold about 0.1 GB
-of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.</p>
+<h2 id="operational-limits"><a class="header" href="#operational-limits">Operational limits</a></h2>
+<ul>
+<li>the retry limit ends the batch writer’s retries, and the request timeout ends a request that
+never gets an answer, the candidate query included, so a sweep against a Firestore that refuses,
+fails or stops answering its requests ends with an error;</li>
+<li><code>CONCURRENCY</code> batches of 500 writes in flight are a high write rate for a collection that has
+seen little traffic. Firestore advises starting a new collection at 500 writes a second and
+raising the rate by 50% every 5 minutes, its 500/50/5 rule, so raise <code>CONCURRENCY</code> step by step
+on one;</li>
+<li>a range filter never matches a document without the field, so a document written before the
+marker needs the marker written first, see <a href="../envelope-to-keyring.html">Move envelope values to a
+keyring</a>;</li>
+<li>a partitioned query does not fit the sweep: <code>PartitionQuery</code> takes no filter, so its workers
+would read every document, the current ones included.</li>
+</ul>
+<h2 id="storage-overhead"><a class="header" href="#storage-overhead">Storage overhead</a></h2>
+<p>The marker takes 23 bytes of a document: the field name, <code>encryption_marker</code>, as an 18-byte string
+(17 bytes of UTF-8 and 1 more, by Firestore’s storage size rules), and the 5 bytes of the value.
+Its entry in the ascending index takes the size of the document’s name, of its parent’s name and 23
+bytes for the field name and the value, plus 32 bytes. 10 million documents hold 0.23 GB of
+markers, and the index adds the names’ size to every entry.</p>
+<h2 id="runnable-example"><a class="header" href="#runnable-example">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs"><code>sweep_firestore</code> example</a>
-runs this sweep end to end, from the writes to the report, on the Firestore emulator. Its memory
-holds the batches in flight only, so it runs the same over millions of documents. A stream that
-ends early, on a deadline or an error, leaves the documents it did not reach below the current
-marker, and the next run of the sweep finds them.</p>
+runs this sweep end to end, from the writes to the report, on the Firestore emulator.</p>
 
                     </main>
 

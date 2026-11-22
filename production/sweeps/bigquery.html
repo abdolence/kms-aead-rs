@@ -36,7 +36,7 @@
             const path_to_root = "../../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../../searchindex-9e67bf3f.js";
+            window.path_to_searchindex_js = "../../searchindex-0787135a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../../toc-add654e4.js"></script>
@@ -181,14 +181,26 @@
                         <h1 id="sweeps-on-bigquery"><a class="header" href="#sweeps-on-bigquery">Sweeps on BigQuery</a></h1>
 <p>A sweep of a BigQuery table, in two paths: one <code>UPDATE</code> in SQL for the fields BigQuery reads, and a
 Rust path for the rest. The mechanism is in <a href="../sweeps.html">Sweeps</a>. The Rust path has the five
-properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>, and the SQL path states its own below.</p>
-<p>The marker is a <code>BYTES</code> column that every write of the encrypted fields sets:</p>
+properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>, and the SQL path states which of them
+it holds.</p>
+<h2 id="schema-and-indexing"><a class="header" href="#schema-and-indexing">Schema and indexing</a></h2>
+<p>The marker is a <code>BYTES</code> column that every write of the encrypted fields sets. BigQuery has no index
+to declare, and the query reads the whole column, see <a href="#storage-overhead">Storage overhead</a>:</p>
 <pre><code class="language-sql">CREATE TABLE users (
   id STRING NOT NULL,
-  phone BYTES NOT NULL,
+  email BYTES NOT NULL,
   encryption_marker BYTES NOT NULL
 );
 </code></pre>
+<h2 id="querying-behind-and-by-version"><a class="header" href="#querying-behind-and-by-version">Querying behind and by version</a></h2>
+<p>The rows behind are those with <code>encryption_marker &lt; @current</code>, the current marker bound as a
+parameter and read from the record’s <code>encryption_marker()</code>, see
+<a href="../sweeps.html#finding-records-behind">Finding records behind</a>. The administrative job retires the
+old version once its range query returns 0:</p>
+<pre><code class="language-sql">SELECT COUNT(*) FROM users
+WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end);
+</code></pre>
+<h2 id="re-encrypting-in-sql"><a class="header" href="#re-encrypting-in-sql">Re-encrypting in SQL</a></h2>
 <p>A field BigQuery reads, declared with <code>Interop::BigQuery</code>, is re-encrypted by one <code>UPDATE</code> in SQL,
 with no Rust loop and no value leaving BigQuery. Its parameters come from a
 <code>Readable(Purpose::Randomized)</code> export, see <a href="../../keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to
@@ -217,33 +229,33 @@ keyset after the promotion. The export is a <code>KeyringAdmin</code> call of th
 them. Fields of several purposes are encrypted under one <code>Readable</code> keyset each, and the statement
 stamps the marker only when their <code>encryption_marker()</code> is the same; otherwise it exports them again.
 A row with a beacon, which SQL does not compute, goes through the Rust path below.</p>
-<p>This sweep:</p>
+<p>Of the five properties of <a href="../sweeps.html#sweeps-by-store">Sweeps by store</a>, the SQL path holds
+these:</p>
 <ul>
-<li>resumes without a checkpoint: the statement is atomic, a failed one changed nothing, and the
-next run’s <code>WHERE</code> finds every row it did not write;</li>
-<li>loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
+<li>it resumes without a checkpoint because the statement is atomic: a failed one changed nothing,
+and the next run’s <code>WHERE</code> finds every row it did not write;</li>
+<li>it loses no concurrent write: BigQuery runs DML under snapshot isolation, and of two conflicting
 statements on the same rows one fails and runs again, and its <code>WHERE</code> then sees the other’s
 marker;</li>
-<li>makes no KMS call per record: BigQuery decrypts the keyset through Cloud KMS for the statement;</li>
-<li>runs on a schedule until it re-encrypts no row. The administrative job retires the old version
-once its range query,
-<code>SELECT COUNT(*) FROM users WHERE encryption_marker &gt;= @start AND (@end IS NULL OR encryption_marker &lt; @end)</code>,
-returns 0.</li>
+<li>it makes no KMS call per record: BigQuery decrypts the keyset through Cloud KMS for the
+statement;</li>
+<li>it runs on a schedule until it re-encrypts no row.</li>
 </ul>
 <p>A <code>Readable</code> keyset leaves a compromised version out, so the values under it fail
 <code>AEAD.DECRYPT_BYTES</code> and the whole statement with them. After a compromise those rows go through
 the Rust path below, where the encryptor’s <code>reencrypt</code> reports their trust.</p>
-<p>Other fields, such as ChaCha20-Poly1305 values or values under a custom AAD, are re-encrypted in
-Rust. BigQuery runs only a few DML statements on one table at a time, so the write is one <code>MERGE</code>
-per batch of rows rather than one <code>UPDATE</code> per row, conditional on the bytes each row held:</p>
+<h2 id="re-encrypting-in-rust"><a class="header" href="#re-encrypting-in-rust">Re-encrypting in Rust</a></h2>
+<p>Values the statement cannot re-encrypt, such as ChaCha20-Poly1305 values or values under a custom
+AAD, are re-encrypted in Rust, in the same column. BigQuery runs only a few DML statements on one
+table at a time, so the write is one <code>MERGE</code> per batch of rows rather than one <code>UPDATE</code> per row,
+conditional on the bytes each row held:</p>
 <pre><code class="language-sql">MERGE users u
 USING UNNEST(@rows) p
-ON u.id = p.id AND u.phone = p.old_phone
-WHEN MATCHED THEN UPDATE SET phone = p.phone, encryption_marker = @encryption_marker;
+ON u.id = p.id AND u.email = p.old_email
+WHEN MATCHED THEN UPDATE SET email = p.email, encryption_marker = @encryption_marker;
 </code></pre>
 <p>The rows stream from the application’s BigQuery client, one query of
-<code>SELECT id, phone, encryption_marker FROM users WHERE encryption_marker &lt; @current</code> with the current
-marker, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
+<code>SELECT id, email, encryption_marker FROM users WHERE encryption_marker &lt; @current</code>, and <code>sweep::reencrypt_records_batched</code> cuts them into batches. Each batch is re-encrypted through one
 encryptor, and the client runs the <code>MERGE</code> with <code>@encryption_marker</code> bound to the marker of the
 encryptor’s record. Every row of a batch goes into <code>@rows</code>, the current ones with their bytes as
 they are, so that each gets the marker:</p>
@@ -267,31 +279,31 @@ use secret_vault_value::SecretValue;
 type UsersKeyring = Keyring&lt;FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 type UsersEncryptor&lt;'k&gt; = Encryptor&lt;'k, FirestoreKeyringStore, GcpKmsProvider, Ring&gt;;
 
-const PHONE: FieldSpec = FieldSpec::new(
+const EMAIL: FieldSpec = FieldSpec::new(
     EntityKind::from_static("user"),
-    FieldName::from_static("phone"),
+    FieldName::from_static("email"),
 );
 const BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 /// BigQuery runs 2 mutating DML statements on a table at once and queues the rest.
 const CONCURRENCY: NonZeroUsize = NonZeroUsize::new(2).unwrap();
 
 <span class="boring">#[derive(Clone)]
-</span><span class="boring">struct Phone(String);
+</span><span class="boring">struct Email(String);
 </span><span class="boring">
-</span><span class="boring">impl Plaintext for Phone {
+</span><span class="boring">impl Plaintext for Email {
 </span><span class="boring">    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
 </span><span class="boring">        self.0.to_plaintext()
 </span><span class="boring">    }
 </span><span class="boring">
 </span><span class="boring">    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-</span><span class="boring">        String::from_plaintext(plaintext).map(Phone)
+</span><span class="boring">        String::from_plaintext(plaintext).map(Email)
 </span><span class="boring">    }
 </span><span class="boring">}
 </span><span class="boring">
-</span>/// A row of `SELECT id, phone FROM users WHERE encryption_marker &lt; @current`.
+</span>/// A row of `SELECT id, email FROM users WHERE encryption_marker &lt; @current`.
 struct UserRow {
     id: String,
-    phone: Encrypted&lt;Phone, Randomized&gt;,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
 /// The row id, and nothing of its columns.
@@ -302,25 +314,25 @@ impl Display for UserRow {
 }
 
 /// One element of `@rows`: a row with the bytes it held and the bytes to write.
-struct PhoneUpdate {
+struct EmailUpdate {
     id: String,
-    old_phone: Vec&lt;u8&gt;,
-    phone: Encrypted&lt;Phone, Randomized&gt;,
+    old_email: Vec&lt;u8&gt;,
+    email: Encrypted&lt;Email, Randomized&gt;,
 }
 
-/// `phone` of user `id` under the active version of `encryptor`, and the outcome of its
+/// `email` of user `id` under the active version of `encryptor`, and the outcome of its
 /// re-encryption. A value under that version comes back as it is, with `ReencryptOutcome::Skipped`.
-async fn reencrypt_phone(
+async fn reencrypt_email(
     encryptor: &amp;UsersEncryptor&lt;'_&gt;,
     id: &amp;str,
-    phone: &amp;Encrypted&lt;Phone, Randomized&gt;,
-) -&gt; KeyringResult&lt;(Encrypted&lt;Phone, Randomized&gt;, ReencryptOutcome)&gt; {
-    let aad = PHONE.aad(&amp;EntityId::try_from(id)?);
-    let reencrypted = encryptor.reencrypt(&amp;aad, phone).await?;
+    email: &amp;Encrypted&lt;Email, Randomized&gt;,
+) -&gt; KeyringResult&lt;(Encrypted&lt;Email, Randomized&gt;, ReencryptOutcome)&gt; {
+    let aad = EMAIL.aad(&amp;EntityId::try_from(id)?);
+    let reencrypted = encryptor.reencrypt(&amp;aad, email).await?;
     let outcome = ReencryptOutcome::from(&amp;reencrypted);
     // A current value still gets the encryptor's marker, so that it leaves the query.
-    let phone = reencrypted.map_or_else(|| phone.clone(), |reencrypted| reencrypted.value);
-    Ok((phone, outcome))
+    let email = reencrypted.map_or_else(|| email.clone(), |reencrypted| reencrypted.value);
+    Ok((email, outcome))
 }
 
 /// Re-encrypts the `rows` of the query in batches, one encryptor per batch, and writes each batch
@@ -328,14 +340,14 @@ async fn reencrypt_phone(
 /// marker of the batch's encryptor, and returns its number of affected rows. `ClientError` is the
 /// error of the application's BigQuery client, which a row that did not read returns and a
 /// `KeyringError` converts into, and its `Display` is the text the sweep logs for a failure.
-async fn sweep_phones&lt;Rows, Merge, Merged, ClientError&gt;(
+async fn sweep_emails&lt;Rows, Merge, Merged, ClientError&gt;(
     keyring: &amp;UsersKeyring,
     rows: Rows,
     merge: Merge,
 ) -&gt; SweepReport
 where
     Rows: Stream&lt;Item = Result&lt;UserRow, ClientError&gt;&gt;,
-    Merge: Fn(Vec&lt;PhoneUpdate&gt;, EncryptionMarker) -&gt; Merged,
+    Merge: Fn(Vec&lt;EmailUpdate&gt;, EncryptionMarker) -&gt; Merged,
     Merged: Future&lt;Output = Result&lt;u64, ClientError&gt;&gt;,
     ClientError: From&lt;KeyringError&gt; + Display,
 {
@@ -349,14 +361,14 @@ where
             let mut done: Vec&lt;(UserRow, Result&lt;ReencryptOutcome, ClientError&gt;)&gt; =
                 Vec::with_capacity(batch.len());
             let mut queued: Vec&lt;(UserRow, ReencryptOutcome)&gt; = Vec::with_capacity(batch.len());
-            let mut updates: Vec&lt;PhoneUpdate&gt; = Vec::with_capacity(batch.len());
+            let mut updates: Vec&lt;EmailUpdate&gt; = Vec::with_capacity(batch.len());
             for row in batch {
-                match reencrypt_phone(&amp;encryptor, &amp;row.id, &amp;row.phone).await {
-                    Ok((phone, outcome)) =&gt; {
-                        updates.push(PhoneUpdate {
+                match reencrypt_email(&amp;encryptor, &amp;row.id, &amp;row.email).await {
+                    Ok((email, outcome)) =&gt; {
+                        updates.push(EmailUpdate {
                             id: row.id.clone(),
-                            old_phone: row.phone.value().to_vec(),
-                            phone,
+                            old_email: row.email.value().to_vec(),
+                            email,
                         });
                         queued.push((row, outcome));
                     }
@@ -377,19 +389,23 @@ where
 }
 <span class="boring">
 </span><span class="boring">fn main() {}</span></code></pre>
-<p>A batch is re-encrypted sequentially inside its call, and <code>concurrency</code> bounds the batches in
+<h2 id="operational-limits"><a class="header" href="#operational-limits">Operational limits</a></h2>
+<ul>
+<li>a batch is re-encrypted sequentially inside its call, and <code>concurrency</code> bounds the batches in
 flight, which BigQuery’s limit on concurrent DML per table sets low. The five properties hold per
 batch: a row that a concurrent writer changed fails the <code>ON</code> condition and stays in the query for
-the next run.</p>
-<p>A <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its rows
-as <code>Skipped</code>, the ones it wrote included. Its re-encryptions from a compromised version then drop
-out of <code>SweepReport::reencrypted_from_compromised</code>, although they went through the trust decision
-below, so on this path that count is a lower bound.</p>
+the next run;</li>
+<li>a <code>MERGE</code> returns a count, not the rows it changed, so a batch with one such row counts all its
+rows as <code>Skipped</code>, the ones it wrote included. Its re-encryptions from a compromised version then
+drop out of <code>SweepReport::reencrypted_from_compromised</code>, although they went through the trust
+decision in <a href="../sweeps.html#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a>, so
+on this path that count is a lower bound.</li>
+</ul>
+<h2 id="storage-overhead"><a class="header" href="#storage-overhead">Storage overhead</a></h2>
 <p>The marker takes 7 bytes of a row: its 5 bytes and the 2 BigQuery counts for every <code>BYTES</code> value.
-Measured on BigQuery, 100,000 markers held 700,000 bytes, and the sweep’s query processed 700,000
-bytes, the <code>encryption_marker</code> column alone. BigQuery does not cluster a <code>BYTES</code> column, so the query
-reads the whole column: about 70 MB at 10 million rows, about $0.0004 per query at $6.25 per TiB on
-demand, and its storage about $0.0013 a month at $0.02 per GiB.</p>
+BigQuery does not cluster a <code>BYTES</code> column, so the sweep’s query reads the whole <code>encryption_marker</code>
+column and nothing else: 7 bytes a row, about 70 MB at 10 million rows.</p>
+<h2 id="runnable-example"><a class="header" href="#runnable-example">Runnable example</a></h2>
 <p>The <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs"><code>sweep_bigquery</code>
 example</a>
 runs the <code>UPDATE</code> above end to end, from the writes to the count of re-encrypted rows, against Cloud
