@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-11fe4803.js";
+            window.path_to_searchindex_js = "searchindex-2313879a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -195,7 +195,9 @@ fetch;</li>
 <li>whoever can read the memory of a process while it holds plaintext DEKs, in the
 <a href="./dek-caching.html#key-lifetime">DEK cache</a> or as a store-less writer’s DEK;</li>
 <li>a reader of the store learning which values are equal, for values encrypted with
-<a href="./deterministic.html#what-it-leaks">deterministic encryption</a>.</li>
+<a href="./deterministic.html#what-it-leaks">deterministic encryption</a>;</li>
+<li>a reader of the store learning the length of each plaintext, since a stored value is as long as
+its plaintext plus a fixed overhead, see <a href="./stored-values.html#plaintext"><code>Plaintext</code></a>.</li>
 </ul>
 <p>The AAD protects a value from being moved: a value copied into another row or column, with an AAD
 that names its place, fails to decrypt there. The AAD itself is not encrypted, and neither is the

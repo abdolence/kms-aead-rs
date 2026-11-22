@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-11fe4803.js";
+            window.path_to_searchindex_js = "searchindex-2313879a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -503,12 +503,15 @@ values, such as BigQuery’s <code>AEAD.DECRYPT_STRING</code>, decode them:</p>
 <tbody>
 <tr><td><code>String</code></td><td>UTF-8</td></tr>
 <tr><td><code>Vec&lt;u8&gt;</code>, <code>SecretValue</code></td><td>the bytes themselves</td></tr>
-<tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr>
 <tr><td><code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code></td><td>decimal ASCII, which SQL reads with <code>CAST</code></td></tr>
 <tr><td><code>JsonEncoded&lt;T&gt;</code></td><td>the compact JSON of any serde type</td></tr>
 </tbody>
 </table>
 </div>
+<p>A stored value is as long as its encoding plus a fixed overhead, so whoever reads the store reads
+the length of the plaintext: the number of digits of an integer, the length of a string. There is
+no impl for <code>bool</code> for this reason, since <code>true</code> and <code>false</code> differ in length. A type whose length
+must not show pads its encoding to a fixed length in its own <code>Plaintext</code> impl.</p>
 <ul>
 <li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>, and the
 error never quotes the bytes;</li>

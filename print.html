@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-11fe4803.js";
+            window.path_to_searchindex_js = "searchindex-2313879a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -4829,12 +4829,15 @@ values, such as BigQuery’s <code>AEAD.DECRYPT_STRING</code>, decode them:</p>
 <tbody>
 <tr><td><code>String</code></td><td>UTF-8</td></tr>
 <tr><td><code>Vec&lt;u8&gt;</code>, <code>SecretValue</code></td><td>the bytes themselves</td></tr>
-<tr><td><code>bool</code></td><td><code>true</code> or <code>false</code></td></tr>
 <tr><td><code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code></td><td>decimal ASCII, which SQL reads with <code>CAST</code></td></tr>
 <tr><td><code>JsonEncoded&lt;T&gt;</code></td><td>the compact JSON of any serde type</td></tr>
 </tbody>
 </table>
 </div>
+<p>A stored value is as long as its encoding plus a fixed overhead, so whoever reads the store reads
+the length of the plaintext: the number of digits of an integer, the length of a string. There is
+no impl for <code>bool</code> for this reason, since <code>true</code> and <code>false</code> differ in length. A type whose length
+must not show pads its encoding to a fixed length in its own <code>Plaintext</code> impl.</p>
 <ul>
 <li><code>decrypt</code> fails with <code>INVALID_PLAINTEXT</code> when the plaintext is not an encoding of <code>T</code>, and the
 error never quotes the bytes;</li>
@@ -10198,8 +10201,8 @@ targets has Tink’s framing, so it reads as an <code>Envelope</code> value in e
 <code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>, see
 <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
-bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
-the integers, and compact JSON for <code>JsonEncoded&lt;T&gt;</code>. See
+bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, decimal ASCII for the integers, and compact JSON
+for <code>JsonEncoded&lt;T&gt;</code>. See
 <a href="#plaintext">Stored values</a>.</p>
 <h2 id="tinks-kms-envelope"><a class="header" href="#tinks-kms-envelope">Tink’s KMS envelope</a></h2>
 <p><code>KmsAeadEnvelope::encrypt</code> writes Tink’s KMS envelope, and <code>Encrypted::join</code> writes it from a
@@ -11709,7 +11712,9 @@ fetch;</li>
 <li>whoever can read the memory of a process while it holds plaintext DEKs, in the
 <a href="#key-lifetime">DEK cache</a> or as a store-less writer’s DEK;</li>
 <li>a reader of the store learning which values are equal, for values encrypted with
-<a href="#what-it-leaks">deterministic encryption</a>.</li>
+<a href="#what-it-leaks">deterministic encryption</a>;</li>
+<li>a reader of the store learning the length of each plaintext, since a stored value is as long as
+its plaintext plus a fixed overhead, see <a href="#plaintext"><code>Plaintext</code></a>.</li>
 </ul>
 <p>The AAD protects a value from being moved: a value copied into another row or column, with an AAD
 that names its place, fails to decrypt there. The AAD itself is not encrypted, and neither is the

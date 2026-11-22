@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-11fe4803.js";
+            window.path_to_searchindex_js = "../searchindex-2313879a.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -212,8 +212,8 @@ targets has Tink’s framing, so it reads as an <code>Envelope</code> value in e
 <code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>, see
 <a href="../migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
-bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
-the integers, and compact JSON for <code>JsonEncoded&lt;T&gt;</code>. See
+bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, decimal ASCII for the integers, and compact JSON
+for <code>JsonEncoded&lt;T&gt;</code>. See
 <a href="../stored-values.html#plaintext">Stored values</a>.</p>
 <h2 id="tinks-kms-envelope"><a class="header" href="#tinks-kms-envelope">Tink’s KMS envelope</a></h2>
 <p><code>KmsAeadEnvelope::encrypt</code> writes Tink’s KMS envelope, and <code>Encrypted::join</code> writes it from a
