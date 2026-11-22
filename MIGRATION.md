@@ -76,6 +76,38 @@
   returns more or fewer outcomes than it was given candidates, and counts none of its outcomes.
   It took the outcomes up to the number of candidates, so errors among the extra ones went
   uncounted.
+- `KeyringAdmin::export_bigquery_keyset` is on an admin with a record signer too. It was on a
+  `NoRecordSigner` admin only, so an administration that signs its records could not export to
+  BigQuery.
+- `KeyVersionState`, `CompromisedReadPolicy` and `KeysetSelection` are `#[non_exhaustive]`, so that
+  a minor release can add a variant. A `match` on one of them outside the crate takes a `_` arm.
+- `store::Stored` is `#[non_exhaustive]`, so that a minor release can add a field. An
+  application's own `KeyringStore` builds one with `Stored::new(record, revision)` instead of a
+  struct literal. Its `record` and `revision` fields stay public to read.
+- The revision of `FirestoreKeyringStore` is the new `store::FirestoreRevision`, not firestore-rs's
+  `FirestoreTimestamp`, as the other stores have revision types of their own. Code that names it,
+  as in `Stored<FirestoreTimestamp>`, names `FirestoreRevision`. Its `Display` prints the update
+  time as before.
+- `PostgresTable::DEFAULT_NAME` is a `PostgresTable`, not a `&'static str`, as the default
+  collection and prefixes of the other stores are typed. Code that read it as a string calls
+  `to_string()` on it.
+- A keyring key id with any of bits 24 to 29 set is reserved, beside an id whose ordinal is zero,
+  so that a purpose a later release adds is never read as one of the four of today. A value that
+  carries such an id fails with `ReservedKeyId`, and a record that holds one with `RecordInvalid`
+  and the reason `ReservedKeyId`. Each purpose has 2^24 - 1 ordinals. Ordinals count up from 1,
+  and a record under its 1 MiB cap holds a few thousand versions at most, so no record written
+  before holds such an id, see
+  [Keyring key ids](https://kms-aead-rust.abdolence.dev/formats/keyring-records.html#keyring-key-ids).
+- The Firestore store writes every `null` member of a record as a field of Firestore's null type.
+  It left them out of the document, as firestore-rs does with a JSON `null`, so from 0.31 on every
+  signed record on Firestore read back with another canonical digest and failed with
+  `RecordSignatureInvalid`, caused by `SIGNATURE_INVALID`. To repair a signed record written
+  before, remove the document's `signature` field and run `sign_record` from a signing admin whose
+  registry is `VerifyIfSigned`, which writes the `null` members and signs the record again.
+  Writing the document again with its `null` members repairs it too, and keeps its signature. An
+  admin of 0.31 to 0.33 leaves the `null` members out again on its next write, so upgrade the
+  administrative binaries first, as in
+  [Roll out](https://kms-aead-rust.abdolence.dev/production/signed-records.html#roll-out).
 
 ## 0.33
 
