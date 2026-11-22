@@ -94,7 +94,8 @@ jobs:
           cargo clippy --all-targets --features "$FEATURES" -- -Dwarnings
           cargo test --features "$FEATURES"
   # A provider build that names no AEAD backend must fail with the crate's own message. `stream`
-  # with no backend at all must lint clean, which no build row covers.
+  # with no backend at all must lint clean, which no build row covers, and so must the tests and
+  # examples of both crates with no features at all.
   backend-guard:
     name: provider without a backend is refused
     if: github.event_name != 'schedule'
@@ -105,6 +106,8 @@ jobs:
         with:
           components: clippy
       - run: cargo clippy --features stream -- -Dwarnings
+      - run: cargo clippy -p kms-aead --all-targets -- -Dwarnings
+      - run: cargo clippy -p kms-aead-keyring --all-targets -- -Dwarnings
       - run: |
           if output=$(cargo check --features aws-kms-encryption 2>&1); then
             echo "cargo check --features aws-kms-encryption built without a backend"
