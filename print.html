@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-aa9f55fb.js";
+            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-855509b8.js"></script>
+        <script src="toc-c666288c.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -456,6 +456,25 @@ run it with <code>cargo run -p kms-aead-keyring --example local_kms --features r
 <h2 id="msrv"><a class="header" href="#msrv">MSRV</a></h2>
 <p>The minimum supported Rust version is 1.99, for every feature.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="protect-data-in-your-database"><a class="header" href="#protect-data-in-your-database">Protect data in your database</a></h1>
+<p>The values live in your own tables and the application reads them back. These use cases cover
+encrypting the columns, the cost in KMS calls, a set of keys for each customer, lookups by an
+encrypted value, and erasing a customer.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Pick this when</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td>Customers’ emails, phone numbers or API tokens sit in your own tables</td><td><a href="#encrypt-personal-data-and-secrets-in-your-database">Encrypt personal data and secrets in your database</a></td></tr>
+<tr><td>Reads or writes make too many KMS calls</td><td><a href="#cut-kms-calls-with-a-dek-cache-and-dek-reuse">Cut KMS calls with a DEK cache and DEK reuse</a></td></tr>
+<tr><td>One customer needs its keys rotated or destroyed without touching the others</td><td><a href="#give-each-customer-of-a-saas-its-own-keys">Give each customer of a SaaS its own keys</a></td></tr>
+<tr><td>A row has to be found by an encrypted value, such as an email</td><td><a href="#find-a-user-by-an-encrypted-email">Find a user by an encrypted email</a></td></tr>
+<tr><td>A customer’s data has to become unreadable, backups included</td><td><a href="#erase-one-customers-data-for-good">Erase one customer’s data for good</a></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="encrypt-personal-data-and-secrets-in-your-database"><a class="header" href="#encrypt-personal-data-and-secrets-in-your-database">Encrypt personal data and secrets in your database</a></h1>
 <p>An application stores customers’ emails and phone numbers, or the API tokens of their integrations,
 in its own tables. A copy of the database, a backup or a read-only replica leaks them, and so does
@@ -768,6 +787,74 @@ equal beacon never proves an equal value.</li>
 <p>A deterministic field in BigQuery is queried in SQL, with one <code>DETERMINISTIC_ENCRYPT</code> per version,
 see <a href="#queries">Queries</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="erase-one-customers-data-for-good"><a class="header" href="#erase-one-customers-data-for-good">Erase one customer’s data for good</a></h1>
+<p>A customer closes its account and asks for its data to be erased, or a retention rule requires it.
+Deleting its rows leaves the values in backups, exports and every other copy of the store, and
+those cannot all be found and rewritten. Destroying the keys that decrypt the values makes every
+copy unreadable at once.</p>
+<h2 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h2>
+<p>A scope’s values become unreadable once nothing can decrypt their DEKs. With kms-aead alone, the
+DEKs are encrypted by the KEK, so shredding is the destruction of the KEK’s versions that encrypted
+them, backups included. Per KMS:</p>
+<ul>
+<li><strong>Google Cloud KMS</strong>: destroy the key versions. Cloud KMS schedules the destruction, 30 days
+later by default, and until then a version can be restored, see
+<a href="#key-versions-and-rotation">Google Cloud KMS</a>;</li>
+<li><strong>AWS KMS</strong>: delete the key. Rotated key material is never destroyed on its own, see
+<a href="#key-versions-and-rotation-1">AWS KMS</a>;</li>
+<li><strong>Azure Key Vault</strong>: delete the key, which deletes it with all its versions: Key Vault never
+deletes one version alone, see <a href="#key-versions-and-rotation-2">Azure Key Vault</a>.
+Soft delete and purge protection delay the shredding, see
+<a href="#crypto-shredding-1">Crypto-shredding</a>;</li>
+<li><strong>Vault Transit</strong>: <code>min_available_version</code> and a trim of the key delete the versions below it, see
+<a href="#key-versions-and-rotation-3">Vault Transit</a>, and a deletion of
+the key, once its configuration sets <code>deletion_allowed</code>, deletes every version;</li>
+<li><strong>local KMS</strong>: destroy every copy of the KEK version, backups included, see
+<a href="#key-versions-and-rotation-4">Local KMS</a>.</li>
+</ul>
+<p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
+Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>:
+it destroys every version of the keyring and deletes its record from the store, with the earlier
+versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
+backup, and in every keyset exported from the keyring, see
+<a href="#crypto-shredding-1">Crypto-shredding</a>. A deployment that needs shredding
+guarantees uses a KEK per scope, see <a href="#give-each-customer-of-a-saas-its-own-keys">A keyring per tenant</a>.</p>
+<h3 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h3>
+<p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
+destroys every version and deletes the record from the store. The call can be repeated after a
+failure, and returns <code>Ok</code> on a keyring that is gone already. The keyring id is free for a new
+keyring afterwards.</p>
+<ul>
+<li>Every process that holds the keyring takes the deletion at its next revalidation, within seconds
+with push. Its handles fail with <code>NoActiveVersion</code> for a write and <code>KeyVersionDestroyed</code> for a
+read, and the plaintext DEK leaves its memory with that revalidation;</li>
+<li>a copy of the record from before the shred is refused by a process that took the deletion, with
+<code>RecordRegressed</code> and an <code>ERROR</code>, because it revives versions the process holds destroyed. A
+store writer who restores an old record gains nothing against that process;</li>
+<li>after a deliberate restore, such as one that undoes an accidental deletion, restart every process
+that took the deletion. A process that starts after the restore takes the record;</li>
+<li><code>dangerously_shred()</code> leaves the store’s backups, its history and every exported keyset where
+they are, and the KMS untouched. They still decrypt while a KEK version that encrypted their DEKs
+exists, see <a href="#what-survives-a-shred">What survives a shred</a>.</li>
+</ul>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/shred.rs">here</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="share-encrypted-data-with-other-systems"><a class="header" href="#share-encrypted-data-with-other-systems">Share encrypted data with other systems</a></h1>
+<p>The reader is not the application that wrote the value: an analyst in BigQuery, a service in
+another language, or a producer that must never read its own data back.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Pick this when</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td>BigQuery SQL or a Tink reader in Java or Python needs an encrypted column</td><td><a href="#decrypt-columns-in-bigquery-sql-or-with-tink">Decrypt columns in BigQuery SQL or with Tink</a></td></tr>
+<tr><td>Partners, devices or upload clients encrypt data and must not be able to decrypt it</td><td><a href="#accept-data-from-partners-and-devices-that-cannot-read-it-back">Accept data from partners and devices that cannot read it back</a></td></tr>
+</tbody>
+</table>
+</div>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="decrypt-columns-in-bigquery-sql-or-with-tink"><a class="header" href="#decrypt-columns-in-bigquery-sql-or-with-tink">Decrypt columns in BigQuery SQL or with Tink</a></h1>
 <p>An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
 or Python needs to read values a Rust service wrote. Values the library writes are in Tink’s
@@ -835,6 +922,123 @@ and of a BigQuery sweep in SQL
 record’s readable versions, see <a href="#keyring-limits">Keyring limits</a>. BigQuery cannot
 calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
 <a href="#bigquery">BigQuery</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="accept-data-from-partners-and-devices-that-cannot-read-it-back"><a class="header" href="#accept-data-from-partners-and-devices-that-cannot-read-it-back">Accept data from partners and devices that cannot read it back</a></h1>
+<p>A partner posts documents, a device reports readings, an upload client sends files. Each encrypts
+what it sends and has no way to decrypt it again, whatever its credentials leak. An asymmetric KEK
+is a KMS key pair: the public half encrypts the DEKs and is not a secret, the private half stays in
+the KMS and decrypts them for the readers. See <a href="#asymmetric-keks-1">Asymmetric KEKs</a>.</p>
+<h2 id="the-three-sides"><a class="header" href="#the-three-sides">The three sides</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Side</th><th>Holds</th><th>Does</th></tr>
+</thead>
+<tbody>
+<tr><td>Producer</td><td>the public key and its fingerprint, in its configuration</td><td>encrypts values; no KMS client, no KMS right</td></tr>
+<tr><td>Reader</td><td>a KMS provider, with decrypt on the key</td><td>decrypts values, as for any KEK</td></tr>
+<tr><td>Administration</td><td>the public key’s source, read right on the key</td><td>hands the public key to the producers</td></tr>
+</tbody>
+</table>
+</div>
+<ol>
+<li>Create an RSA key for asymmetric decryption in the KMS, 3072 bits, with the algorithm
+RSA-OAEP SHA-256. Cloud KMS, AWS KMS, Azure Key Vault and Vault Transit offer it;</li>
+<li>grant the readers the decrypt right and the administration the right to read the public key,
+see <a href="#producers-and-readers">the rights per KMS</a>;</li>
+<li>the administration fetches the public key on its provider, writes <code>to_json()</code> and the key’s
+fingerprint to the producers’ configuration;</li>
+<li>each producer builds a <code>PublicKeyKekProvider</code> from them and an envelope over it.</li>
+</ol>
+<h2 id="the-producer"><a class="header" href="#the-producer">The producer</a></h2>
+<p>The fingerprint comes from a channel other than the one that delivered the key. <code>pinned</code> refuses a
+key with another fingerprint with <code>ASYMMETRIC_KEK_MISMATCH</code>, so a key taken from a wrong place does
+not become a key that encrypts for whoever supplied it:</p>
+<pre><code class="language-rust">use kms_aead::backends::AwsLc;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::PublicKeyKekProvider;
+use kms_aead::{AsymmetricKekPublicKey, Encrypted, KmsAeadEnvelope, AsymmetricKekFingerprint};
+use secret_vault_value::SecretValue;
+<span class="boring">use kms_aead::providers::{LocalAsymmetricKmsProvider, LocalKekId};
+</span><span class="boring">use kms_aead::AsymmetricKekAlgorithm;
+</span>
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let reader_provider = LocalAsymmetricKmsProvider::&lt;AwsLc&gt;::ephemeral(
+</span><span class="boring">    LocalKekId::try_from("submissions".to_string())?,
+</span><span class="boring">    AsymmetricKekAlgorithm::RsaOaepSha256,
+</span><span class="boring">)?;
+</span><span class="boring">let public_key = reader_provider.public_key(None)?;
+</span><span class="boring">let public_key_json = public_key.to_json()?;
+</span><span class="boring">let fingerprint_from_config = public_key.fingerprint().to_string();
+</span>let public_key = AsymmetricKekPublicKey::try_from_json(&amp;public_key_json)?;
+let fingerprint = AsymmetricKekFingerprint::try_from(fingerprint_from_config)?;
+let producer = KmsAeadEnvelope::&lt;_, AwsLc&gt;::new(PublicKeyKekProvider::&lt;AwsLc&gt;::pinned(
+    public_key,
+    fingerprint,
+)?)?;
+
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; = producer
+    .encrypt(b"submissions/1042", &amp;SecretValue::from("account 1234"))
+    .await?;
+
+// The reader's side: the provider it uses today
+let reader =
+    KmsAeadEnvelope::&lt;LocalAsymmetricKmsProvider&lt;AwsLc&gt;, AwsLc&gt;::new(reader_provider)?;
+let decrypted: SecretValue = reader.decrypt(b"submissions/1042", &amp;encrypted).await?;
+<span class="boring">assert_eq!(decrypted, SecretValue::from("account 1234"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Encrypt one test value and decrypt it with a reader before a new producer writes anything that
+matters. The provider logs the fingerprint at <code>INFO</code> when it is built, which an operator compares
+with the administration’s.</p>
+<h2 id="what-the-compiler-guarantees"><a class="header" href="#what-the-compiler-guarantees">What the compiler guarantees</a></h2>
+<p><code>PublicKeyKekProvider</code> encrypts and does not decrypt. Every call that decrypts a value or a DEK,
+<code>decrypt</code>, <code>beacon</code>, the stream decryptors and the <code>*_with_encrypted_dek</code> calls, requires a
+decrypting provider, so over a producer none of them compiles. A producer streams as well: an
+envelope over it encrypts a large file with <code>stream_encryptor</code> and decrypts none, see
+<a href="#store-customer-uploads-and-serve-byte-ranges">Large files</a>.</p>
+<p>The guarantee covers the producer’s calls into the library. A producer process holds the plaintext
+DEKs of its cached writes, and its own code can read what it wrote in memory. A service that writes
+and reads holds a KMS provider and is a reader.</p>
+<h2 id="with-a-keyring-4"><a class="header" href="#with-a-keyring-4">With a keyring</a></h2>
+<p>The administration opens its registry with an <code>AsymmetricKekProvider</code>, which encrypts each new
+version’s DEK with the public key, and the applications open theirs with the plain KMS provider.
+Whoever holds the public key can also encrypt a DEK of their own and file it in a record they can
+write, and every application then decrypts it. Run every keyring under an asymmetric KEK with signed
+records, and <code>RecordSignaturePolicy::Required</code> on every application, before the first DEK a public
+key encrypts, see <a href="#protect-the-keyring-record">Protect the keyring record</a>.</p>
+<h2 id="what-to-watch-for-1"><a class="header" href="#what-to-watch-for-1">What to watch for</a></h2>
+<ul>
+<li>The producer encrypts randomised values only. A beacon or a deterministic value needs a key’s
+plaintext, which only a reader holds;</li>
+<li><code>Ring</code> has no RSA encryption: a producer on it fails at construction with
+<code>UNSUPPORTED_ALGORITHM</code>. Use <code>AwsLc</code> or <code>RustCrypto</code>;</li>
+<li>the encryption is local, so the KMS audit log no longer shows who encrypted a DEK. The decrypt
+log stays;</li>
+<li>anyone holding the public key makes a reader pay for an asymmetric KMS decryption by sending a
+made-up value. Rate-limit what readers decrypt;</li>
+<li>a rotation of the KEK is a new public key for every producer;</li>
+<li>RSA is not quantum-safe, so data that must stay confidential for decades stays under a symmetric
+KEK.</li>
+</ul>
+<p>Full example available
+<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/asymmetric_kek.rs">here</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="files-and-streams"><a class="header" href="#files-and-streams">Files and streams</a></h1>
+<p>The data is too large to hold in memory. It is encrypted in chunks, as it is written or sent, and
+read in chunks.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Pick this when</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td>Uploads of any size are stored encrypted, and readers need byte ranges of them</td><td><a href="#store-customer-uploads-and-serve-byte-ranges">Store customer uploads and serve byte ranges</a></td></tr>
+<tr><td>A handler sends a large export over HTTP, and the body has to leave the server encrypted</td><td><a href="#send-a-large-export-over-http-encrypted">Send a large export over HTTP, encrypted</a></td></tr>
+</tbody>
+</table>
+</div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="store-customer-uploads-and-serve-byte-ranges"><a class="header" href="#store-customer-uploads-and-serve-byte-ranges">Store customer uploads and serve byte ranges</a></h1>
 <p>Customers upload videos and archives of any size, and the object store must not hold them in
@@ -964,7 +1168,7 @@ object instead, so that nothing is stored beside it, and <code>decrypting_stream
 reads the whole object back, see <a href="#with-an-envelope-1">Streaming encryption</a>. A
 store-less envelope, one with a <code>DekReusePolicy</code>, encrypts many objects under one DEK in either
 form.</p>
-<h2 id="what-to-watch-for-1"><a class="header" href="#what-to-watch-for-1">What to watch for</a></h2>
+<h2 id="what-to-watch-for-2"><a class="header" href="#what-to-watch-for-2">What to watch for</a></h2>
 <ul>
 <li>The stored length a range is planned with is the object store’s word until the final chunk has
 been decrypted. A store that cuts an object inside a chunk and reports the shorter size passes
@@ -1112,7 +1316,7 @@ async fn download_orders(
 <p>The example runs both sides in one process, on a loopback port, with the local KMS and no
 credentials. It decodes 50,000 orders from a body of about 3.8 MB and compares each one with the
 order that was sent. Run it with <code>cargo run --example axum_encrypted_stream --features stream,ring</code>.</p>
-<h2 id="what-to-watch-for-2"><a class="header" href="#what-to-watch-for-2">What to watch for</a></h2>
+<h2 id="what-to-watch-for-3"><a class="header" href="#what-to-watch-for-3">What to watch for</a></h2>
 <ul>
 <li>Cobblestone releases a chunk only when 16 KiB of plaintext has gathered or the stream ends, and
 <code>EncryptingStream</code> has no flush. This fits exports, reports and bulk downloads. A feed that sends
@@ -1133,6 +1337,22 @@ keeps a body from decrypting under another route, see
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/axum_encrypted_stream.rs">here</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="prove-where-data-came-from"><a class="header" href="#prove-where-data-came-from">Prove where data came from</a></h1>
+<p>The bytes stay readable, and the reader checks who produced them and that nobody changed them on
+the way. A signature answers it for anyone with a public key, and a MAC (a keyed hash) answers it
+between services that share a key.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Pick this when</th><th>Use case</th></tr>
+</thead>
+<tbody>
+<tr><td>A file, an export or a release is published, and anyone has to be able to verify it</td><td><a href="#publish-a-rate-sheet-or-a-release-anyone-can-verify">Publish a rate sheet or a release anyone can verify</a></td></tr>
+<tr><td>Your own services pass jobs, cache entries or rows to each other, and the reader checks that nobody changed them</td><td><a href="#detect-tampering-with-jobs-and-rows-between-your-services">Detect tampering with jobs and rows between your services</a></td></tr>
+</tbody>
+</table>
+</div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="publish-a-rate-sheet-or-a-release-anyone-can-verify"><a class="header" href="#publish-a-rate-sheet-or-a-release-anyone-can-verify">Publish a rate sheet or a release anyone can verify</a></h1>
 <p>A rate sheet, a data export or a release goes out with a signature, and whoever downloads it checks
@@ -1257,7 +1477,7 @@ the test vectors that run against it in CI. Use P-256 where every engine must ve
 verifiers pick the key with no coordination. Removing a key from the set revokes every signature
 under it, which is the response to a compromised key. See
 <a href="#key-ids-and-rotation">Key ids and rotation</a>.</p>
-<h2 id="what-to-watch-for-3"><a class="header" href="#what-to-watch-for-3">What to watch for</a></h2>
+<h2 id="what-to-watch-for-4"><a class="header" href="#what-to-watch-for-4">What to watch for</a></h2>
 <ul>
 <li>The JWK Set is the trust root. Serve it over HTTPS from a domain the publisher controls, and let
 a verifier that needs more pin it in its own configuration. The library does not sign the set;</li>
@@ -1363,7 +1583,7 @@ services:</p>
 <p>A webhook your customers verify, a release, and a record whose writer must be told apart from its
 readers are signatures. See <a href="#publish-a-rate-sheet-or-a-release-anyone-can-verify">Publish content anyone can verify</a>, and
 <a href="#protect-the-keyring-record">Protect the keyring record</a> for the keyring’s own record.</p>
-<h2 id="what-to-watch-for-4"><a class="header" href="#what-to-watch-for-4">What to watch for</a></h2>
+<h2 id="what-to-watch-for-5"><a class="header" href="#what-to-watch-for-5">What to watch for</a></h2>
 <ul>
 <li>Nothing outside the payload type and the payload is authenticated. A message that must not be
 replayed carries a timestamp or a nonce, and a message for one recipient names it;</li>
@@ -1373,107 +1593,19 @@ the keyring gets its first MAC version.</li>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/mac.rs">here</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="accept-data-from-partners-and-devices-that-cannot-read-it-back"><a class="header" href="#accept-data-from-partners-and-devices-that-cannot-read-it-back">Accept data from partners and devices that cannot read it back</a></h1>
-<p>A partner posts documents, a device reports readings, an upload client sends files. Each encrypts
-what it sends and has no way to decrypt it again, whatever its credentials leak. An asymmetric KEK
-is a KMS key pair: the public half encrypts the DEKs and is not a secret, the private half stays in
-the KMS and decrypts them for the readers. See <a href="#asymmetric-keks-1">Asymmetric KEKs</a>.</p>
-<h2 id="the-three-sides"><a class="header" href="#the-three-sides">The three sides</a></h2>
+<h1 id="keep-sensitive-data-out-of-logs"><a class="header" href="#keep-sensitive-data-out-of-logs">Keep sensitive data out of logs</a></h1>
+<p>A log line that explains a failure often needs the data that failed, and the data is the thing a
+log must not keep. This use case needs no KMS and no keys.</p>
 <div class="table-wrapper">
 <table>
 <thead>
-<tr><th>Side</th><th>Holds</th><th>Does</th></tr>
+<tr><th>Pick this when</th><th>Use case</th></tr>
 </thead>
 <tbody>
-<tr><td>Producer</td><td>the public key and its fingerprint, in its configuration</td><td>encrypts values; no KMS client, no KMS right</td></tr>
-<tr><td>Reader</td><td>a KMS provider, with decrypt on the key</td><td>decrypts values, as for any KEK</td></tr>
-<tr><td>Administration</td><td>the public key’s source, read right on the key</td><td>hands the public key to the producers</td></tr>
+<tr><td>A payload that fails to parse has to be logged, and it holds emails, phone numbers or amounts</td><td><a href="#log-a-webhook-payload-that-failed-to-parse">Log a webhook payload that failed to parse</a></td></tr>
 </tbody>
 </table>
 </div>
-<ol>
-<li>Create an RSA key for asymmetric decryption in the KMS, 3072 bits, with the algorithm
-RSA-OAEP SHA-256. Cloud KMS, AWS KMS, Azure Key Vault and Vault Transit offer it;</li>
-<li>grant the readers the decrypt right and the administration the right to read the public key,
-see <a href="#producers-and-readers">the rights per KMS</a>;</li>
-<li>the administration fetches the public key on its provider, writes <code>to_json()</code> and the key’s
-fingerprint to the producers’ configuration;</li>
-<li>each producer builds a <code>PublicKeyKekProvider</code> from them and an envelope over it.</li>
-</ol>
-<h2 id="the-producer"><a class="header" href="#the-producer">The producer</a></h2>
-<p>The fingerprint comes from a channel other than the one that delivered the key. <code>pinned</code> refuses a
-key with another fingerprint with <code>ASYMMETRIC_KEK_MISMATCH</code>, so a key taken from a wrong place does
-not become a key that encrypts for whoever supplied it:</p>
-<pre><code class="language-rust">use kms_aead::backends::AwsLc;
-use kms_aead::formats::Envelope;
-use kms_aead::providers::PublicKeyKekProvider;
-use kms_aead::{AsymmetricKekPublicKey, Encrypted, KmsAeadEnvelope, AsymmetricKekFingerprint};
-use secret_vault_value::SecretValue;
-<span class="boring">use kms_aead::providers::{LocalAsymmetricKmsProvider, LocalKekId};
-</span><span class="boring">use kms_aead::AsymmetricKekAlgorithm;
-</span>
-<span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; kms_aead::KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let reader_provider = LocalAsymmetricKmsProvider::&lt;AwsLc&gt;::ephemeral(
-</span><span class="boring">    LocalKekId::try_from("submissions".to_string())?,
-</span><span class="boring">    AsymmetricKekAlgorithm::RsaOaepSha256,
-</span><span class="boring">)?;
-</span><span class="boring">let public_key = reader_provider.public_key(None)?;
-</span><span class="boring">let public_key_json = public_key.to_json()?;
-</span><span class="boring">let fingerprint_from_config = public_key.fingerprint().to_string();
-</span>let public_key = AsymmetricKekPublicKey::try_from_json(&amp;public_key_json)?;
-let fingerprint = AsymmetricKekFingerprint::try_from(fingerprint_from_config)?;
-let producer = KmsAeadEnvelope::&lt;_, AwsLc&gt;::new(PublicKeyKekProvider::&lt;AwsLc&gt;::pinned(
-    public_key,
-    fingerprint,
-)?)?;
-
-let encrypted: Encrypted&lt;SecretValue, Envelope&gt; = producer
-    .encrypt(b"submissions/1042", &amp;SecretValue::from("account 1234"))
-    .await?;
-
-// The reader's side: the provider it uses today
-let reader =
-    KmsAeadEnvelope::&lt;LocalAsymmetricKmsProvider&lt;AwsLc&gt;, AwsLc&gt;::new(reader_provider)?;
-let decrypted: SecretValue = reader.decrypt(b"submissions/1042", &amp;encrypted).await?;
-<span class="boring">assert_eq!(decrypted, SecretValue::from("account 1234"));
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>Encrypt one test value and decrypt it with a reader before a new producer writes anything that
-matters. The provider logs the fingerprint at <code>INFO</code> when it is built, which an operator compares
-with the administration’s.</p>
-<h2 id="what-the-compiler-guarantees"><a class="header" href="#what-the-compiler-guarantees">What the compiler guarantees</a></h2>
-<p><code>PublicKeyKekProvider</code> encrypts and does not decrypt. Every call that decrypts a value or a DEK,
-<code>decrypt</code>, <code>beacon</code>, the stream decryptors and the <code>*_with_encrypted_dek</code> calls, requires a
-decrypting provider, so over a producer none of them compiles. A producer streams as well: an
-envelope over it encrypts a large file with <code>stream_encryptor</code> and decrypts none, see
-<a href="#store-customer-uploads-and-serve-byte-ranges">Large files</a>.</p>
-<p>The guarantee covers the producer’s calls into the library. A producer process holds the plaintext
-DEKs of its cached writes, and its own code can read what it wrote in memory. A service that writes
-and reads holds a KMS provider and is a reader.</p>
-<h2 id="with-a-keyring-4"><a class="header" href="#with-a-keyring-4">With a keyring</a></h2>
-<p>The administration opens its registry with an <code>AsymmetricKekProvider</code>, which encrypts each new
-version’s DEK with the public key, and the applications open theirs with the plain KMS provider.
-Whoever holds the public key can also encrypt a DEK of their own and file it in a record they can
-write, and every application then decrypts it. Run every keyring under an asymmetric KEK with signed
-records, and <code>RecordSignaturePolicy::Required</code> on every application, before the first DEK a public
-key encrypts, see <a href="#protect-the-keyring-record">Protect the keyring record</a>.</p>
-<h2 id="what-to-watch-for-5"><a class="header" href="#what-to-watch-for-5">What to watch for</a></h2>
-<ul>
-<li>The producer encrypts randomised values only. A beacon or a deterministic value needs a key’s
-plaintext, which only a reader holds;</li>
-<li><code>Ring</code> has no RSA encryption: a producer on it fails at construction with
-<code>UNSUPPORTED_ALGORITHM</code>. Use <code>AwsLc</code> or <code>RustCrypto</code>;</li>
-<li>the encryption is local, so the KMS audit log no longer shows who encrypted a DEK. The decrypt
-log stays;</li>
-<li>anyone holding the public key makes a reader pay for an asymmetric KMS decryption by sending a
-made-up value. Rate-limit what readers decrypt;</li>
-<li>a rotation of the KEK is a new public key for every producer;</li>
-<li>RSA is not quantum-safe, so data that must stay confidential for decades stays under a symmetric
-KEK.</li>
-</ul>
-<p>Full example available
-<a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/asymmetric_kek.rs">here</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="log-a-webhook-payload-that-failed-to-parse"><a class="header" href="#log-a-webhook-payload-that-failed-to-parse">Log a webhook payload that failed to parse</a></h1>
 <p>A webhook handler or a queue consumer receives JSON from outside, and some of it does not parse: a
@@ -1574,59 +1706,6 @@ written as JSON escapes, and cut after 64 bytes;</li>
 <p><code>JsonEncoded&lt;T, P&gt;</code> applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see <a href="#json-that-does-not-decode">JSON that does not decode</a>. The
 event it logs is in <a href="#json-that-does-not-decode-1">Observability</a>.</p>
-<div style="break-before: page; page-break-before: always;"></div>
-<h1 id="erase-one-customers-data-for-good"><a class="header" href="#erase-one-customers-data-for-good">Erase one customer’s data for good</a></h1>
-<p>A customer closes its account and asks for its data to be erased, or a retention rule requires it.
-Deleting its rows leaves the values in backups, exports and every other copy of the store, and
-those cannot all be found and rewritten. Destroying the keys that decrypt the values makes every
-copy unreadable at once.</p>
-<h2 id="crypto-shredding"><a class="header" href="#crypto-shredding">Crypto-shredding</a></h2>
-<p>A scope’s values become unreadable once nothing can decrypt their DEKs. With kms-aead alone, the
-DEKs are encrypted by the KEK, so shredding is the destruction of the KEK’s versions that encrypted
-them, backups included. Per KMS:</p>
-<ul>
-<li><strong>Google Cloud KMS</strong>: destroy the key versions. Cloud KMS schedules the destruction, 30 days
-later by default, and until then a version can be restored, see
-<a href="#key-versions-and-rotation">Google Cloud KMS</a>;</li>
-<li><strong>AWS KMS</strong>: delete the key. Rotated key material is never destroyed on its own, see
-<a href="#key-versions-and-rotation-1">AWS KMS</a>;</li>
-<li><strong>Azure Key Vault</strong>: delete the key, which deletes it with all its versions: Key Vault never
-deletes one version alone, see <a href="#key-versions-and-rotation-2">Azure Key Vault</a>.
-Soft delete and purge protection delay the shredding, see
-<a href="#crypto-shredding-1">Crypto-shredding</a>;</li>
-<li><strong>Vault Transit</strong>: <code>min_available_version</code> and a trim of the key delete the versions below it, see
-<a href="#key-versions-and-rotation-3">Vault Transit</a>, and a deletion of
-the key, once its configuration sets <code>deletion_allowed</code>, deletes every version;</li>
-<li><strong>local KMS</strong>: destroy every copy of the KEK version, backups included, see
-<a href="#key-versions-and-rotation-4">Local KMS</a>.</li>
-</ul>
-<p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
-Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>:
-it destroys every version of the keyring and deletes its record from the store, with the earlier
-versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
-backup, and in every keyset exported from the keyring, see
-<a href="#crypto-shredding-1">Crypto-shredding</a>. A deployment that needs shredding
-guarantees uses a KEK per scope, see <a href="#give-each-customer-of-a-saas-its-own-keys">A keyring per tenant</a>.</p>
-<h3 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h3>
-<p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
-destroys every version and deletes the record from the store. The call can be repeated after a
-failure, and returns <code>Ok</code> on a keyring that is gone already. The keyring id is free for a new
-keyring afterwards.</p>
-<ul>
-<li>Every process that holds the keyring takes the deletion at its next revalidation, within seconds
-with push. Its handles fail with <code>NoActiveVersion</code> for a write and <code>KeyVersionDestroyed</code> for a
-read, and the plaintext DEK leaves its memory with that revalidation;</li>
-<li>a copy of the record from before the shred is refused by a process that took the deletion, with
-<code>RecordRegressed</code> and an <code>ERROR</code>, because it revives versions the process holds destroyed. A
-store writer who restores an old record gains nothing against that process;</li>
-<li>after a deliberate restore, such as one that undoes an accidental deletion, restart every process
-that took the deletion. A process that starts after the restore takes the record;</li>
-<li><code>dangerously_shred()</code> leaves the store’s backups, its history and every exported keyset where
-they are, and the KMS untouched. They still decrypt while a KEK version that encrypted their DEKs
-exists, see <a href="#what-survives-a-shred">What survives a shred</a>.</li>
-</ul>
-<p>Full example available
-<a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/shred.rs">here</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="choose-a-provider-and-a-backend"><a class="header" href="#choose-a-provider-and-a-backend">Choose a provider and a backend</a></h1>
 <p>A build makes two choices that do not constrain each other: the KMS that holds the KEK, and the
@@ -9471,7 +9550,9 @@ encrypts can be constructed, since no type implements <code>AeadBackend</code>.<
 <tr><td><code>firestore-tls-roots</code></td><td><code>firestore</code> with the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings native-tls and so OpenSSL on Linux, and firestore-rs’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>firestore-tls-webpki</code></td><td><code>firestore</code> on rustls, with the bundled WebPKI roots for the gRPC connection to Firestore and no native TLS, and firestore-rs’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>postgres</code></td><td>the PostgreSQL keyring store, and <code>Encrypted</code> and <code>EncryptionMarker</code> in tokio-postgres, as <code>BYTEA</code></td></tr>
-<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, with the TLS variants listed in <a href="#cloud-storage">Keyring stores</a></td></tr>
+<tr><td><code>gcs</code></td><td>the Cloud Storage keyring store, on gcloud-sdk without a TLS root store or crypto provider. The application enables a gcloud-sdk root store feature, or uses one of the two below, see <a href="#cloud-storage">Keyring stores</a></td></tr>
+<tr><td><code>gcs-tls-roots</code></td><td><code>gcs</code> with the system’s native roots, gcloud-sdk’s <code>tls-roots</code>, which brings native-tls and so OpenSSL on Linux, and gcloud-sdk’s <code>auth-default-crypto</code></td></tr>
+<tr><td><code>gcs-tls-webpki</code></td><td><code>gcs</code> on rustls, with the bundled WebPKI roots for the gRPC connection to Cloud Storage and no native TLS, and gcloud-sdk’s <code>auth-default-crypto</code></td></tr>
 <tr><td><code>s3</code></td><td>the S3 keyring store</td></tr>
 <tr><td><code>sqlx</code></td><td><code>Encrypted</code> and <code>EncryptionMarker</code> in sqlx on PostgreSQL, as <code>BYTEA</code></td></tr>
 <tr><td><code>stream</code></td><td>kms-aead’s <code>stream</code>, <code>Encryptor::stream_encryptor</code>, <code>Keyring::stream_decryptor</code>, <code>decrypting_stream</code> and <code>decrypting_reader</code>, and the <code>stream</code> module re-exported. Needs a backend feature, see <a href="#streaming-encryption">Streaming encryption</a></td></tr>
