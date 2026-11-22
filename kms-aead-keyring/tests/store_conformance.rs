@@ -438,7 +438,7 @@ async fn the_memory_store_conforms() -> TestResult {
 mod firestore_store {
     use std::error::Error;
 
-    use firestore::{FirestoreCollectionId, FirestoreDb, FirestoreTimestamp};
+    use firestore::{FirestoreCollectionId, FirestoreDb};
     use kms_aead_keyring::store::FirestoreKeyringStore;
 
     use super::*;
@@ -459,13 +459,17 @@ mod firestore_store {
         conformance(|| store.clone()).await
     }
 
-    /// Firestore refuses an update time that is not a whole microsecond.
+    /// Firestore refuses a collection id that starts and ends with `__`, which firestore-rs
+    /// lets through.
     #[tokio::test]
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn a_store_error_carries_no_record_bytes() -> TestResult {
-        let misaligned =
-            FirestoreTimestamp(jiff::Timestamp::new(jiff::Timestamp::now().as_second(), 1)?);
-        super::a_store_error_carries_no_record_bytes(store().await?, Some(&misaligned)).await
+        let failing = store()
+            .await?
+            .with_collection(FirestoreCollectionId::from_static(
+                "__kms_aead_rs_refused__",
+            ));
+        super::a_store_error_carries_no_record_bytes(failing, None).await
     }
 
     /// The watches of a store and its clones share one listener, so a watch per keyring starts
