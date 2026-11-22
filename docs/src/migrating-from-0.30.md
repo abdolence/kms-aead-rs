@@ -1,14 +1,28 @@
 # Migrating from 0.30
 
-0.31 adds streaming encryption, signatures and MACs, record signing for keyrings, asymmetric
-KEKs and the deletion of a keyring's record. Eight changes break a build against 0.30: one public
-field changes its type, two enums gain a variant and become `#[non_exhaustive]`, the three
-`LocalKek` loaders take a format, the `serde` and `serde-json` features are removed, the provider
-trait's decryption moves to a trait of its own, `KeyringStore` gains a required method, the
-`firestore` feature is split into three, and the keyring's write-handle and sweep names, with
-`KekProvider` and `KekVersion`, are renamed without aliases. One behaviour changes without breaking
-a build: a running process takes a keyring record gone from the store as shredded. The readers of a
-deployment move to 0.31 before its producers. Everything else is additive.
+0.31 adds streaming encryption, signatures and MACs, record signing for keyrings, asymmetric KEKs
+and the deletion of a keyring's record. Move the readers of a deployment to 0.31 before its
+producers, see [Readers before producers](#readers-before-producers). Apply this guide after
+[Migrating from 0.29](./migrating-from-0.29.md) if the deployment is older than 0.30.
+
+Eight changes break a build against 0.30:
+
+- [`KmsAeadUnsupportedAlgorithmError::algorithm`](#the-unsupported-algorithm-error) changes its
+  type;
+- [`Purpose` and `KeyAlgorithm`](#purpose-and-keyalgorithm) gain a variant and become
+  `#[non_exhaustive]`;
+- [the `LocalKek` loaders](#loading-a-local-kek) take a format;
+- [the `serde` and `serde-json` features](#the-serde-features) are removed;
+- [the provider trait](#your-own-provider) is split, with decryption in a trait of its own;
+- [`KeyringStore`](#your-own-keyring-store) has a required `delete` method;
+- [the `firestore` feature](#the-firestore-features) is split into three;
+- [the keyring's write-handle and sweep names](#names), with `KekProvider` and `KekVersion`, are
+  renamed without aliases.
+
+One behaviour changes without breaking a build: [a running process takes a keyring record gone from
+the store as shredded](#a-keyring-record-gone-from-the-store).
+
+Everything else is additive, see [New in 0.31](#new-in-031).
 
 ## The unsupported algorithm error
 
@@ -57,9 +71,9 @@ compile until it names a format.
 
 `SymmetricKeyFormat` is in `kms_aead::formats` and is `#[non_exhaustive]`. `Raw` is the key bytes
 themselves, `Base64` the standard base64 of the key bytes, trailing whitespace allowed, and `Jwk` an
-`oct` JSON Web Key. The key is 32 bytes in every format. The loaders of the signing and asymmetric KEK keys take the same kind
-of enum, see [Key formats](./signing.md#key-formats). `from_file` reads a file of up to 32 KiB,
-where 0.30 read up to 256 bytes.
+`oct` JSON Web Key. The key is 32 bytes in every format. `from_file` reads a file of up to 32 KiB,
+where 0.30 read up to 256 bytes. The loaders of the signing and asymmetric KEK keys take the same
+kind of enum, see [Key formats](./signing.md#key-formats).
 
 ## The serde features
 
@@ -125,9 +139,9 @@ Key Vault or Vault Transit RSA deployment moves its encryptions to the producer 
 [Migrating an Azure or Transit RSA
 deployment](./asymmetric-kek.md#migrating-an-azure-or-transit-rsa-deployment).
 
-A store-less writer whose renewed DEK leaves the DEK cache before it encrypts now encrypts with the
-DEK it generated, in place of decrypting its encrypted DEK again, so a store-less `encrypt` makes no
-KMS decryption under any provider, see
+In 0.31 a store-less writer whose renewed DEK leaves the DEK cache before it encrypts uses the DEK
+it generated, in place of decrypting its encrypted DEK again. A store-less `encrypt` makes no KMS
+decryption under any provider, see
 [The DEK lives in the cache](./dek-caching.md#the-dek-lives-in-the-cache).
 
 ## Names
@@ -318,7 +332,9 @@ and only new processes failed at `open`. In 0.31 the process takes it as a shred
 So an accidental deletion of a record stops a running process at its next revalidation, within
 `reload_min_interval` of the signal with push and once the cached record is older than `record_ttl`
 without. A record restored from a copy is refused by that process with `RecordRegressed`, because
-it revives versions the process holds destroyed, so the process restarts after a restore. The text of the `WARN` ended in "the cached record stays in use" in 0.30, so change a log alert that
+it revives versions the process holds destroyed, so the process restarts after a restore.
+
+The text of the `WARN` ended in "the cached record stays in use" in 0.30, so change a log alert that
 matches that ending. The runbook is
 [The keyring record was deleted or corrupted](./production/runbook.md#the-keyring-record-was-deleted-or-corrupted).
 

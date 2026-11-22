@@ -1,11 +1,25 @@
 # Migrating from 0.29
 
-0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse,
-the DEK cache, deterministic encryption and the local KMS, and makes ring optional. It writes
-Tink's KMS envelope format for every provider, so values written by 0.29 and earlier read only
-with the deprecated `legacy-formats` feature, which also rewrites them in the new format, see
-[Old values](#old-values). The default algorithm of the envelope is AES-256-GCM, see
-[Default algorithm](#default-algorithm).
+This guide moves a build from 0.29 to 0.30. To reach a later release, apply the guides after it in
+order, starting with [Migrating from 0.30](./migrating-from-0.30.md).
+
+0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse, the DEK
+cache, deterministic encryption and the local KMS, and makes ring optional. It writes the KMS
+envelope format of Tink, Google's open-source cryptography library, for every provider. Values written by 0.29 and earlier read only with the deprecated
+`legacy-formats` feature, which also rewrites them in the new format, see [Old values](#old-values).
+
+Eight changes break a build against 0.29:
+
+- [the Cargo features](#features) are renamed, and a provider feature no longer turns on ring;
+- [the names](#names) of the envelope, the ciphers, the options and the DEK types change, and the
+  Vault Transit types gain the `Hc` prefix;
+- [`AeadEncryption` and `KmsAeadEnvelopeEncryption`](#traits-replaced-by-inherent-methods) are
+  gone, replaced by inherent methods;
+- [the provider trait](#your-own-provider) is renamed and loses `#[async_trait]`;
+- [the errors](#errors) gain variants, change codes and lose the `From` conversions of SDK errors;
+- [AWS KMS decryption](#aws-kms-decryption-names-the-key) names the configured key;
+- [the default algorithm](#default-algorithm) is AES-256-GCM, not ChaCha20-Poly1305;
+- [values written by 0.29 and earlier](#old-values) read only with `legacy-formats`.
 
 0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:
 
@@ -28,12 +42,12 @@ with the deprecated `legacy-formats` feature, which also rewrites them in the ne
 | `vault-transit-kms-encryption-tls-roots`, `-tls-webpki` | `hashicorp-vault-transit-kms-encryption-tls-roots`, `-tls-webpki` |
 | `vault-transit-kms-encryption-tls-aws-lc-rs`, `-tls-ring` | `hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs`, `-tls-ring` |
 
-ring is no longer turned on by the provider features. A 0.29 build that relied on it fails with
+In 0.30 the provider features do not turn on ring. A 0.29 build that relied on it fails with
 "kms-aead needs a crypto backend for its KMS providers", so add a backend feature. `aws-lc` adds
 no second crypto library to a cloud provider build, see [Choose a provider and a
 backend](./getting-started/choosing.md#crypto-backends).
 
-The crate declares `rust-version = "1.99"`.
+0.30 declares `rust-version = "1.99"`.
 
 ## Names
 
@@ -48,7 +62,7 @@ The crate declares `rust-version = "1.99"`.
 | module `kms_aead::ring_encryption` | removed; `AeadCipher<Ring>`, with `AeadCipher` at the crate root and `Ring` in `kms_aead::backends` |
 | `RingAeadEncryption::new()` | `AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?` |
 | `RingAeadEncryption::with_algorithm(&ring::aead::AES_256_GCM, rand)` | `AeadCipher::<Ring>::new(AeadAlgorithm::Aes256Gcm)?` |
-| `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG, and the random nonce was the only option |
+| `RingAeadEncryption::with_rand`, `with_options`, `with_algorithm_options` | removed; the backend owns its CSPRNG (cryptographically secure random number generator), and the random nonce was the only option |
 | `RingAeadEncryptionOptions`, `RingAeadEncryptionNonceKind` | removed |
 | `RingAeadEncryption.algo` | `AeadCipher::algorithm()` |
 | `RingAeadEncryption::generate_data_encryption_key()` | `AeadCipher::generate_dek()` |
@@ -62,7 +76,7 @@ The crate declares `rust-version = "1.99"`.
 | `encrypted_dek.wrapped()`, `to_bytes()?`, `TryFrom<&[u8]>` | `encrypted_dek.value()`, a `&[u8]`, and `EncryptedDataEncryptionKey::from(bytes)` |
 | `encrypted_dek.to_hex_string()?` | `encrypted_dek.to_hex_string()`, infallible |
 | `encrypted_dek.key_version()` | `encrypted_dek.kek_version()`, the KEK version the KMS reported, on an encrypted DEK the provider has just returned or a keyring record holds, and `None` on one read back from the bytes; the `kek_version` field of the KMS spans |
-| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, `KmsKeyVersion` from 0.31, the type of `AzureKmsKeyRef::kek_version` |
+| `kms_aead::KmsKeyVersion` | `kms_aead::providers::KekVersion`, the type of `AzureKmsKeyRef::kek_version` |
 | `AzureKmsKeyRef::with_key_version`, `opt_key_version`, `without_key_version`, `key_version`, `mopt_key_version`, `reset_key_version` | `AzureKmsKeyRef::with_kek_version`, `opt_kek_version`, `without_kek_version`, `kek_version`, `mopt_kek_version`, `reset_kek_version` |
 | `AzureKmsKeyRef.key_version` | `AzureKmsKeyRef.kek_version` |
 | `DataEncryptionKey(secret)`, `DataEncryptionKey::new(secret)`, `dek.0` | `DataEncryptionKey::from(secret)`, `dek.value()` |
@@ -103,7 +117,11 @@ calls that make no KMS call are not `async`:
 
 Every cipher text is an `Encrypted<T, F>`, see [Formats](./formats/values.md#formats-of-encrypted). It
 has its own `value()` and `into_value()`, and so has `EncryptedDataEncryptionKey`.
-`DataEncryptionKey` no longer implements `ValueStruct`, and has its own `value()`.
+`DataEncryptionKey` does not implement `ValueStruct` in 0.30, and has its own `value()`.
+
+0.30 does not implement `ConstantTimeEq` on the public types. `==` still compares in constant
+time. The `Debug` of `Encrypted` prints only the length, and `==` is gone from randomised values:
+only an `Encrypted<T, Deterministic>` has it.
 
 ## Your own provider
 
@@ -111,8 +129,7 @@ An application's own implementation of the provider trait:
 
 - implements `KmsAeadEncryptionProvider` instead of `KmsAeadRingEncryptionProvider`, without
   `#[async_trait]`. Its methods stay `async fn`, and their futures must be `Send`;
-- adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other`, `KmsProvider::Other` from 0.31, and
-  a key name that identifies the key;
+- adds `fn kek(&self) -> &KekRef`, with `KekProvider::Other`, and a key name that identifies the key;
 - deletes `generate_encryption_key` when it returned the backend's key. The replacement,
   `generate_key_material(&self, len)`, has a default implementation that lets the backend generate
   the key, and is implemented only for a KMS generator;
@@ -126,9 +143,6 @@ The plaintext the provider encrypts is the DEK serialised as a Tink key, see
 The trait has no `dyn` form, so a `Box<dyn KmsAeadRingEncryptionProvider>` becomes a type
 parameter `P: KmsAeadEncryptionProvider`, or an enum of the providers the application uses. The
 trait requires `Send` and `Sync`, so `P: KmsAeadEncryptionProvider` needs no `+ Send + Sync`.
-
-0.31 moves `decrypt_data_encryption_key` to a trait of its own, `KmsAeadDecryptionProvider`, see
-[Migrating from 0.30](./migrating-from-0.30.md#your-own-provider).
 
 ## Errors
 
@@ -148,13 +162,9 @@ The `From` conversions of SDK errors into `KmsAeadError` are gone: `gcloud_sdk::
 
 The variant of a Google Cloud KMS or AWS KMS error follows its code. In 0.29 every gRPC status was
 a `NetworkError` and every AWS error an `EncryptionError`. A `PermissionDenied` or `NotFound` from
-Google Cloud KMS is an `EncryptionError` now, and a timeout, a connection failure or a
+Google Cloud KMS is an `EncryptionError` in 0.30, and a timeout, a connection failure or a
 `ThrottlingException` from AWS KMS a `NetworkError`. The codes stay the same. See
 [Retries](./errors.md#retries).
-
-`ConstantTimeEq` is no longer implemented on the public types. `==` still compares in constant
-time. The `Debug` of `Encrypted` prints only the length, and `==` is gone from randomised values:
-only an `Encrypted<T, Deterministic>` has it.
 
 Error codes that changed:
 
