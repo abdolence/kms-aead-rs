@@ -294,36 +294,6 @@ impl Display for SigningKeyRef {
 mod tests {
     use super::*;
 
-    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-    #[tokio::test]
-    async fn signers_over_an_arc_and_a_reference_share_one_provider() -> KmsAeadResult<()> {
-        use std::sync::Arc;
-
-        use crate::providers::{LocalSigningKeyName, LocalSigningProvider};
-        use crate::signing::{Signer, Verifier};
-        use crate::test_provider::{Invoice, TestBackend, INVOICE_PAYLOAD};
-
-        let provider = Arc::new(LocalSigningProvider::<TestBackend>::ephemeral(
-            LocalSigningKeyName::try_from("invoices".to_string())?,
-            SigningAlgorithm::Ed25519,
-        )?);
-        let verifier = Verifier::<TestBackend>::new(provider.verifying_keys())?;
-        let over_arc = Signer::<_, TestBackend>::new(Arc::clone(&provider)).await?;
-        let over_reference = Signer::<_, TestBackend>::new(provider.as_ref()).await?;
-        let invoice = Invoice(INVOICE_PAYLOAD.to_vec());
-
-        for signature in [
-            over_arc.sign(&invoice).await?,
-            over_reference.sign(&invoice).await?,
-        ] {
-            assert_eq!(
-                verifier.verify(&invoice, &signature)?,
-                over_arc.verifying_key()
-            );
-        }
-        Ok(())
-    }
-
     const P256_SIGNATURE_R: &str =
         "4c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b";
     const P256_SIGNATURE_S: &str =

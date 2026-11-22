@@ -440,7 +440,8 @@ impl DekCache {
     ///
     /// The provider's error, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised Tink
     /// key, and `LEGACY_FORMAT` for a key encrypted by 0.29 or earlier. Every caller waiting on the
-    /// same decryption receives the error, and nothing is cached. The errors of `use_dek` come back in its own return value.
+    /// same decryption receives the error, and nothing is cached. The errors of `use_dek` come back
+    /// in its own return value.
     pub async fn with_dek<P, T>(
         &self,
         provider: &P,

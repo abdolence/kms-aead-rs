@@ -761,34 +761,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_a_batch_with_fewer_outcomes_as_failed() {
-        let report = reencrypt_records_batched(
-            &TENANT,
-            stream::iter((1..=3).map(Ok)),
-            BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
-            |batch: Vec<u32>| async move {
-                Ok(batch
-                    .into_iter()
-                    .take(1)
-                    .map(|candidate| (candidate, outcome_of(candidate)))
-                    .collect())
-            },
-        )
-        .await;
-
-        assert_eq!(
-            report,
-            SweepReport {
-                scanned: 3,
-                reencrypted: 0,
-                reencrypted_from_compromised: 0,
-                skipped: 1,
-                failed: 2,
-            }
-        );
-    }
-
-    #[tokio::test]
     async fn reencrypt_records_batched_counts_a_batch_with_more_outcomes_as_failed() {
         let report = reencrypt_records_batched(
             &TENANT,

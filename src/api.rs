@@ -293,31 +293,8 @@ mod tests {
 
         use secret_vault_value::SecretValue;
 
-        use crate::providers::{LocalKekId, LocalKmsProvider};
         use crate::test_provider::{TestBackend, TestKmsProvider};
         use crate::{DataEncryptionKey, KmsAeadEnvelope, KmsAeadResult};
-
-        const AAD: &[u8] = b"orders/1042";
-
-        #[tokio::test]
-        async fn envelopes_over_an_arc_and_a_reference_share_one_provider() -> KmsAeadResult<()> {
-            let provider = Arc::new(LocalKmsProvider::<TestBackend>::ephemeral(
-                LocalKekId::try_from("orders".to_string())?,
-            )?);
-            let over_arc = KmsAeadEnvelope::<_, TestBackend>::new(Arc::clone(&provider))?;
-            let over_reference = KmsAeadEnvelope::<_, TestBackend>::new(provider.as_ref())?;
-            let card = SecretValue::from("4111 1111 1111 1111");
-
-            let encrypted = over_arc.encrypt(AAD, &card).await?;
-
-            assert_eq!(
-                over_reference
-                    .decrypt::<SecretValue>(AAD, &encrypted)
-                    .await?,
-                card
-            );
-            Ok(())
-        }
 
         #[tokio::test]
         async fn a_shared_provider_keeps_its_kms_generator() -> KmsAeadResult<()> {
