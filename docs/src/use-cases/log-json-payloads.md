@@ -5,8 +5,7 @@ sender cut the body short, a proxy answered with an HTML page, a field changed i
 line that explains the failure needs the payload, and the payload holds emails, phone numbers and
 amounts that a log must not keep. `RedactedJson` writes an outline of the bytes instead: the shape
 of the JSON, with every value hidden unless the application opts into showing it. It does no
-encryption and needs no KMS, so it works for any bytes and any logger. `kms-aead` builds without
-features for it, which is the default.
+encryption and needs no KMS, so it works for any bytes and any logger. It needs no Cargo feature.
 
 ## Outline instead of the payload
 
@@ -101,4 +100,4 @@ not JSON: base64-like text
 
 `JsonEncoded<T, P>` applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see [JSON that does not decode](../stored-values.md#json-that-does-not-decode). The
-event it logs is in [Observability](../observability/spans-and-events.md#json-that-does-not-decode).
+event it logs is in [Spans and events](../observability/spans-and-events.md#json-that-does-not-decode).
