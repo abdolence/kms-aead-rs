@@ -209,6 +209,7 @@ impl KeyringRecord {
             canonical_digest(&parsed).map_err(|_| KeyringError::malformed(id, None))?;
         let stored = StoredRecord::deserialize(&parsed)
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
+        #[cfg(feature = "admin")]
         let unknown_members = serde_json::to_value(&stored)
             .map(|known| holds_unknown_members(&parsed, &known))
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
@@ -278,6 +279,7 @@ impl KeyringRecord {
             updated_at: stored.updated_at,
             signature,
             canonical_digest,
+            #[cfg(feature = "admin")]
             unknown_members,
         };
         record.check_versions().map_err(invalid)?;
@@ -347,6 +349,7 @@ fn canonical_digest(document: &Value) -> Result<[u8; 32], CanonicalError> {
 /// Whether `document` holds a member, at any depth, that `known` lacks: `known` is the document
 /// this release writes for the same values, which holds every member it knows, `null` ones
 /// included, so a member that a document of an earlier release lacks is no difference.
+#[cfg(feature = "admin")]
 fn holds_unknown_members(document: &Value, known: &Value) -> bool {
     match document {
         Value::Object(members) => members.iter().any(|(name, member)| {

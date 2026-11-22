@@ -563,6 +563,7 @@ pub struct KeyringRecord {
     canonical_digest: [u8; 32],
     /// Whether the document the record was parsed from holds a member that the document of
     /// [`to_json`](Self::to_json) leaves out, so that writing the record back would drop it.
+    #[cfg(feature = "admin")]
     unknown_members: bool,
 }
 

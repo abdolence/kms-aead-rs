@@ -63,7 +63,7 @@ impl MemoryKeyringStore {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "admin"))]
 impl MemoryKeyringStore {
     /// Stores `json` as the document of `id` at a new revision, as a writer of another release
     /// would, without parsing it: the next read checks it.
