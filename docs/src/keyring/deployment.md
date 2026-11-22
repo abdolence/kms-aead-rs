@@ -116,4 +116,4 @@ only the administration writes the record, and the applications read it and list
 
 Each side logs events an operator acts on, such as a refused record, a failed revalidation or a
 re-encryption that failed, and records metrics with the `opentelemetry` feature. The list, with the
-next step for each, is in [What to alert on](../use-cases/deployment.md#what-to-alert-on).
+next step for each, is in [What to alert on](../production/deployment.md#what-to-alert-on).

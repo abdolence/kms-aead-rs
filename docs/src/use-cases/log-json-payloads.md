@@ -1,4 +1,4 @@
-# Log JSON payloads without leaking data
+# Log a webhook payload that failed to parse
 
 A webhook handler or a queue consumer receives JSON from outside, and some of it does not parse: a
 sender cut the body short, a proxy answered with an HTML page, a field changed its type. The log

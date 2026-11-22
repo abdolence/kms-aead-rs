@@ -34,7 +34,7 @@ page is the checklist of each side, and what to alert on in production.
 - opens its registry with the longest `record_ttl` in the fleet, which the promotion guard waits.
 
 An application that creates keyrings lazily, such as one per tenant on its first request, is both
-sides at once, see [A keyring per tenant](./keyring-per-tenant.md#creating-the-keyrings).
+sides at once, see [A keyring per tenant](../use-cases/keyring-per-tenant.md#creating-the-keyrings).
 
 ## What to alert on
 

@@ -1,4 +1,4 @@
-# Publish content anyone can verify
+# Publish a rate sheet or a release anyone can verify
 
 A rate sheet, a data export or a release goes out with a signature, and whoever downloads it checks
 that it came from the publisher and was not changed on the way, with no KMS and no secret. The

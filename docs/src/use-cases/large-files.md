@@ -1,6 +1,7 @@
-# Encrypt large files and serve ranges
+# Store customer uploads and serve byte ranges
 
-Uploads of any size are encrypted as they arrive, with one chunk of 16 KiB in memory, and a reader
+Customers upload videos and archives of any size, and the object store must not hold them in
+plaintext. Uploads are encrypted as they arrive, with one chunk of 16 KiB in memory, and a reader
 fetches only the chunks that cover the bytes it needs: one entry of a zip archive, or the range a
 video player asks for. The object store holds the encrypted object and serves `Range` requests as it
 does for any object. Feature `stream`, see [Streaming encryption](../streaming.md).

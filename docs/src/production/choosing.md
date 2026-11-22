@@ -25,7 +25,7 @@ Notes on the table:
   [Tink's KMS envelope](../formats.md#tinks-kms-envelope), and keyring keysets with
   `KeysetHandle.read`, see [Exporting a keyset to Tink](../keyring/bigquery.md#exporting-a-keyset-to-tink);
 - BigQuery's `KEYS.KEYSET_CHAIN` decrypts with Cloud KMS only, see
-  [Read values in BigQuery or Tink](./bigquery-and-tink.md);
+  [Read values in BigQuery or Tink](../use-cases/bigquery-and-tink.md);
 - the KEK version decides how a KEK rotation is checked before the old version is disabled, see
   [Rotate keys and re-encrypt values](./rotation.md#kek-rotation). Each provider page has its
   rotation, under "Key versions and rotation": [Google Cloud KMS](../providers/gcp.md),
@@ -36,8 +36,8 @@ Notes on the table:
   with `algorithm` set to `AzureKmsAlgorithm::Aes256KeyWrap`, see
   [Azure Key Vault](../providers/azure.md#options) and [Keyring limits](../security.md#keyring-limits);
 - the local KMS has no IAM, no audit log and no HSM, see [Local KMS](../providers/local.md#limits);
-- crypto-shredding per KMS is in [A leaked key or a shredded
-  tenant](./incidents.md#crypto-shredding); a keyring under a shared KEK is shredded with
+- crypto-shredding per KMS is in [Erase one customer's data for
+  good](../use-cases/erase-a-tenant.md#crypto-shredding); a keyring under a shared KEK is shredded with
   `dangerously_shred()`, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring).
 
 The TLS root store and the TLS crypto provider are a feature choice for Google Cloud KMS, Azure and
@@ -60,7 +60,7 @@ data, see [Cross-backend compatibility](../crypto-backends.md#cross-backend-comp
 
 - **Producers under an asymmetric KEK**: a producer that encrypts DEKs with a public key fails at
   construction with `UNSUPPORTED_ALGORITHM` on `ring`, which has no RSA encryption. Readers need
-  nothing of RSA on any backend, see [Writers that can never read](./write-only-producers.md);
+  nothing of RSA on any backend, see [Writers that can never read](../use-cases/write-only-producers.md);
 - **No second crypto library**: the default features of the four cloud providers already build
   aws-lc-rs for TLS, so `aws-lc` adds nothing to a provider build;
 - **FIPS**: `aws-lc-fips` runs the backend on the AWS-LC FIPS module and moves every user of

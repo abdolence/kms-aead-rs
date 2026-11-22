@@ -1,16 +1,18 @@
-# Encrypt fields with a KMS
+# Encrypt personal data and secrets in your database
 
-A field or a secret in the application's own table, encrypted under a DEK that a cloud KMS encrypts,
-with no keyring store. Every value carries its encrypted DEK, so nothing is stored apart from the
-values. For central rotation, deterministic fields across rotations or BigQuery reads across
-rotations, see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
+An application stores customers' emails and phone numbers, or the API tokens of their integrations,
+in its own tables. A copy of the database, a backup or a read-only replica leaks them, and so does
+anyone with a SQL console. Each field is encrypted under a DEK that a cloud KMS encrypts, with no
+keyring store. Every value carries its encrypted DEK, so nothing is stored apart from the values.
+For central rotation, deterministic fields across rotations or BigQuery reads across rotations,
+see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
 
 ## Which mode
 
 | Values are | Mode | See |
 |---|---|---|
 | written rarely, such as secrets and configuration | per-call envelope: a new DEK for every value, one KMS call to encrypt it | [Envelope encryption](../envelope-encryption.md) |
-| written at a high rate | store-less DEK reuse: one DEK for many values, renewed by age, count and bytes | [Store-less DEK reuse](../dek-caching.md#store-less-dek-reuse) |
+| written at a high rate, or read repeatedly | store-less DEK reuse for writes, and a DEK cache for reads | [Cut KMS calls with a DEK cache and DEK reuse](./fewer-kms-calls.md) |
 | grouped, such as a file in chunks or a tenant's rows, with one DEK the application keeps | the `*_with_dek` and `*_with_encrypted_dek` calls, with the encrypted DEK stored apart | [Working with DEKs yourself](../envelope-encryption.md#working-with-deks-yourself) |
 | encrypted with a key the application holds, with no KMS | `AeadCipher` | [AEAD without a KMS](../crypto-backends.md#aead-without-a-kms) |
 
@@ -39,6 +41,6 @@ A first example, with the local KMS, is in [With an envelope](../getting-started
 - Tink reads envelope values on Cloud KMS and AWS KMS keys, and BigQuery does not, see
   [Read values in BigQuery or Tink](./bigquery-and-tink.md);
 - the KEK rotates in the KMS, and the stored DEKs are encrypted again before the old version is
-  disabled, see [Rotate keys and re-encrypt values](./rotation.md#with-kms-aead-alone);
+  disabled, see [Rotate keys and re-encrypt values](../production/rotation.md#with-kms-aead-alone);
 - values move to a keyring later with a sweep, see
-  [Move envelope values to a keyring](./envelope-to-keyring.md).
+  [Move envelope values to a keyring](../production/envelope-to-keyring.md).

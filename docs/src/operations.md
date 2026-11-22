@@ -2,8 +2,8 @@
 
 Running a keyring in production: how often to rotate, how sweeps move values to the active
 versions, the migration from envelope values, and what to do when a key leaks. The tasks, step by
-step with their checks and alerts, are in [Rotate keys and re-encrypt values](./use-cases/rotation.md)
-and [A leaked key or a shredded tenant](./use-cases/incidents.md).
+step with their checks and alerts, are in [Rotate keys and re-encrypt values](./production/rotation.md)
+and [Respond to a leaked key](./production/incidents.md).
 
 ## Rotation cadence
 
@@ -30,7 +30,7 @@ sweeps by store have the queries and writes of [Firestore](./operations/sweeps-f
 
 Values that `KmsAeadEnvelope` wrote move to keyring values in five steps, with the encryption
 marker telling the two layouts apart and a sweep re-encrypting the envelope values. See [Move
-envelope values to a keyring](./use-cases/envelope-to-keyring.md).
+envelope values to a keyring](./production/envelope-to-keyring.md).
 
 ## Emergency runbook
 

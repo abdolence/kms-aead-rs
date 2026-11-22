@@ -58,7 +58,7 @@ runs the whole cycle on the memory store and the local KMS:
 - **a retire too early** refuses a value the sweep missed, see
   [Retiring the old version](../operations/sweeps.md#retiring-the-old-version);
 - **a stale keyset** misses the values under the new version in SQL, see
-  [Read values in BigQuery or Tink](./bigquery-and-tink.md#with-a-keyring);
+  [Read values in BigQuery or Tink](../use-cases/bigquery-and-tink.md#with-a-keyring);
 - **a destroy** is final, apart from the copies of the DEK that backups of the record and earlier
   keyset exports keep, see [Crypto-shredding](../operations/runbook.md#crypto-shredding).
 

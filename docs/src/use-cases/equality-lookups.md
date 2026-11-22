@@ -1,7 +1,7 @@
-# Find rows by an encrypted value
+# Find a user by an encrypted email
 
-A randomised value is different every time it is encrypted, so a data store cannot find a row by it.
-Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
+A login form asks for an email, and the users table stores it encrypted. A randomised value is
+different every time it is encrypted, so a data store cannot find a row by it. Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
 for equal plaintexts, and a beacon, a truncated HMAC stored beside a field that stays randomised.
 Both leak which rows hold the same value, see
 [What it leaks](../deterministic.md#what-it-leaks) and

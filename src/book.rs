@@ -65,6 +65,9 @@ mod migrating_from_0_29 {}
 #[doc = include_str!("../docs/src/migrating-from-0.30.md")]
 mod migrating_from_0_30 {}
 
+#[doc = include_str!("../docs/src/use-cases/fewer-kms-calls.md")]
+mod fewer_kms_calls {}
+
 #[doc = include_str!("../docs/src/use-cases/publish-verifiable.md")]
 mod publish_verifiable {}
 

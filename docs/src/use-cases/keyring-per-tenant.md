@@ -1,8 +1,10 @@
-# A keyring per tenant
+# Give each customer of a SaaS its own keys
 
-A multi-tenant application gives each tenant a keyring of its own: its own key versions, rotated,
-flagged and destroyed apart from the others, in one keyring store such as Firestore or
-PostgreSQL. The keyring id names the tenant, see
+A SaaS product stores the data of many customers. One of them asks for its keys to be rotated, or
+leaves and wants its data gone, and with one set of keys for everybody that cannot be done without
+touching the others. A multi-tenant application gives each tenant a keyring of its own: its own key
+versions, rotated, flagged and destroyed apart from the others, in one keyring store such as
+Firestore or PostgreSQL. The keyring id names the tenant, see
 [The record](../keyring/lifecycle.md#the-record) for the ids it takes.
 
 ## One KEK per tenant or one shared KEK
@@ -15,7 +17,7 @@ PostgreSQL. The keyring id names the tenant, see
 | KMS keys to manage | one per tenant | one |
 
 The first row is the store-writer threat of [Keyring deployment](../security.md#keyring-deployment),
-and the third the two routes of [Crypto-shredding](./incidents.md#crypto-shredding). A deployment
+and the third the two routes of [Crypto-shredding](./erase-a-tenant.md#crypto-shredding). A deployment
 that needs either guarantee uses a KEK per tenant.
 
 ## Creating the keyrings
@@ -45,7 +47,7 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
    [The registry and its handles](../keyring.md#the-registry-and-its-handles).
 
 Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
-[Rotate keys and re-encrypt values](./rotation.md).
+[Rotate keys and re-encrypt values](../production/rotation.md).
 
 ## What many keyrings cost
 
@@ -62,6 +64,6 @@ A keyring stays open until the registry shuts down, so a process holds every key
   process serves times the versions each uses, see [Sizing](../dek-caching.md#sizing);
 - **KMS calls**: one decryption per version per DEK cache TTL in every process, and two per version
   in each `reencrypt_deks`. A KEK rotation re-encrypts every keyring under the KEK, see
-  [The KMS decrypt burst](./rotation.md#the-kms-decrypt-burst);
+  [The KMS decrypt burst](../production/rotation.md#the-kms-decrypt-burst);
 - **metrics**: the plaintext size histogram has a series per keyring and version, see
   [Metrics](../observability.md#metrics) for its cardinality limit.

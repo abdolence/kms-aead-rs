@@ -1,4 +1,4 @@
-# Check integrity between your own services
+# Detect tampering with jobs and rows between your services
 
 One service puts a job on a queue, an entry in a cache or a row in a table, and another reads it.
 The reader needs to know that nobody who can write the queue, the cache or the table changed the
@@ -72,14 +72,14 @@ own, such as the columns of a row, `Encryptor::mac` computes a detached `Mac<T>`
 and `Keyring::verify_mac` checks it against the payload as read.
 
 Both services build a `Keyring` for the same keyring id, with decrypt on the keyring's KEK and read
-access to its record, see [Applications and administration apart](./deployment.md). Every service
+access to its record, see [Applications and administration apart](../production/deployment.md). Every service
 that holds the key can compute a valid tag, so a MAC protects the bytes from whoever writes the
 store, and says nothing about which service wrote them.
 
 ## Rotation
 
 A MAC version rotates and retires like the others, see [Rotate keys and re-encrypt
-values](./rotation.md). A sweep re-encrypts `Encrypted` fields and does not touch MACs, and a value
+values](../production/rotation.md). A sweep re-encrypts `Encrypted` fields and does not touch MACs, and a value
 under a retired version fails with `KEY_VERSION_RETIRED`. Authenticate the payloads that still
 matter again under the active version before retiring the old one. Messages that are consumed within
 minutes, such as a queue's, need no such pass: wait for them to drain.
@@ -97,7 +97,7 @@ services:
 
 A webhook your customers verify, a release, and a record whose writer must be told apart from its
 readers are signatures. See [Publish content anyone can verify](./publish-verifiable.md), and
-[Protect the keyring record](./signed-records.md) for the keyring's own record.
+[Protect the keyring record](../production/signed-records.md) for the keyring's own record.
 
 ## What to watch for
 

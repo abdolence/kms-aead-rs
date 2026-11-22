@@ -1,4 +1,4 @@
-# Writers that can never read
+# Accept data from partners and devices that cannot read it back
 
 A partner posts documents, a device reports readings, an upload client sends files. Each encrypts
 what it sends and has no way to decrypt it again, whatever its credentials leak. An asymmetric KEK
@@ -88,7 +88,7 @@ version's DEK with the public key, and the applications open theirs with the pla
 Whoever holds the public key can also encrypt a DEK of their own and file it in a record they can
 write, and every application then decrypts it. Run every keyring under an asymmetric KEK with signed
 records, and `RecordSignaturePolicy::Required` on every application, before the first DEK a public
-key encrypts, see [Protect the keyring record](./signed-records.md).
+key encrypts, see [Protect the keyring record](../production/signed-records.md).
 
 ## What to watch for
 

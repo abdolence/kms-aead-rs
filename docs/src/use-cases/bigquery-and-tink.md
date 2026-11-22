@@ -1,7 +1,8 @@
-# Read values in BigQuery or Tink
+# Decrypt columns in BigQuery SQL or with Tink
 
-Values the library writes are in Tink's formats, so Tink in another language and BigQuery's SQL
-read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
+An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
+or Python needs to read values a Rust service wrote. Values the library writes are in Tink's
+formats, so Tink in another language and BigQuery's SQL read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
 whether the key rotates:
 
 | | Envelope values | One fixed key | Keyring |

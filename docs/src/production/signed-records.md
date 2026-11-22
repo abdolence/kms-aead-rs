@@ -83,7 +83,7 @@ rest need the signer's KMS right, `cloudkms.cryptoKeyVersions.useToSign` on Clou
 
 Add the new public key to every registry's set first, then run `sign_record` on every keyring with
 the new signer. Remove the old key from the sets once every keyring is signed by the new one. The
-rotation of the key itself is that of [Publish content anyone can verify](./publish-verifiable.md#rotate-signing-keys).
+rotation of the key itself is that of [Publish content anyone can verify](../use-cases/publish-verifiable.md#rotate-signing-keys).
 
 ## What a signature closes
 
@@ -119,7 +119,7 @@ running ones refuse the unsigned record until they do.
 - Whoever may sign records and write the store may write any record. Give the signing right to the
   administration only, and read its audit log;
 - a keyring under an asymmetric KEK runs with `Required` on every application before the first DEK
-  a public key encrypts, see [Writers that can never read](./write-only-producers.md);
+  a public key encrypts, see [Writers that can never read](../use-cases/write-only-producers.md);
 - an administration without a signer is refused over a signed record with `RECORD_SIGNER_MISSING`.
 
 Full example available

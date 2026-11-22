@@ -59,9 +59,10 @@ stored value holds:
 
 - **Per-call envelope**, the default of `KmsAeadEnvelope`: a new DEK for every value, encrypted
   with one KMS call, and stored in the value itself. Every decryption decrypts its DEK with one
-  more KMS call, unless the envelope has a DEK cache. Use it when values are written rarely,
-  such as secrets and configuration, or when one DEK per value is a requirement. See
-  [Envelope encryption](./envelope-encryption.md);
+  more KMS call, unless the envelope has a DEK cache, which serves repeated reads without the KMS,
+  see [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md). Use it when
+  values are written rarely, such as secrets and configuration, or when one DEK per value is a
+  requirement. See [Envelope encryption](./envelope-encryption.md);
 - **Store-less DEK reuse**, a `KmsAeadEnvelope` with a `DekReusePolicy`: one DEK encrypts many
   values and is renewed by age or by count, so a write calls the KMS only to renew it. Values
   still carry their encrypted DEK, so nothing is stored apart from them, and reads decrypt through
@@ -92,7 +93,7 @@ stored value holds:
 | Crypto-shredding | KEK destruction | KEK destruction | KEK destruction | KEK destruction, or `dangerously_shred()` and the deletion of the record's backups |
 
 No mode needs another. Values of the envelope modes move to a keyring with a sweep, see
-[Move envelope values to a keyring](./use-cases/envelope-to-keyring.md).
+[Move envelope values to a keyring](./production/envelope-to-keyring.md).
 
 Streamed values come in the same modes: under a keyring, under an envelope, or with a DEK the
 application holds, see [Streaming encryption](./streaming.md).
@@ -107,26 +108,37 @@ holds.
 
 ## Where to start
 
+Use cases, each a situation and the way through it:
+
 | To | Read |
 |---|---|
-| Encrypt a few fields or secrets with a cloud KMS and no store | [Encrypt fields with a KMS](./use-cases/encrypt-fields.md) |
-| Give each tenant its own keys | [A keyring per tenant](./use-cases/keyring-per-tenant.md) |
-| Find rows by an encrypted value | [Find rows by an encrypted value](./use-cases/equality-lookups.md) |
-| Read the values in BigQuery or with Tink | [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md) |
-| Encrypt large files and read byte ranges of them | [Encrypt large files and serve ranges](./use-cases/large-files.md) |
-| Stream an export over HTTP, encrypted as it is sent | [Encrypt streaming HTTP bodies](./use-cases/encrypted-http-streams.md) |
-| Publish a file or a document that anyone can verify | [Publish content anyone can verify](./use-cases/publish-verifiable.md) |
-| Check that your own services' messages and rows were not changed | [Check integrity between your own services](./use-cases/service-integrity.md) |
-| Log the shape of a JSON payload that fails to parse, with no encryption | [Log JSON payloads without leaking data](./use-cases/log-json-payloads.md) |
-| Let partners, devices or upload clients encrypt and never decrypt | [Writers that can never read](./use-cases/write-only-producers.md) |
-| Stop a writer of the keyring store from changing which keys are used | [Protect the keyring record](./use-cases/signed-records.md) |
-| Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./use-cases/rotation.md) |
-| Respond to a leaked key, or shred a tenant | [A leaked key or a shredded tenant](./use-cases/incidents.md) |
-| Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./use-cases/deployment.md) |
-| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./use-cases/choosing.md) |
-| Develop and test without a cloud account | [Develop and test without a cloud](./use-cases/local-development.md) |
-| Move envelope values to a keyring | [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md) |
-| Upgrade from 0.29 | [Migrating from 0.29](./migrating-from-0.29.md) |
+| Encrypt customers' emails, phone numbers or API tokens in your own tables | [Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md) |
+| Make fewer KMS calls on reads and on writes | [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md) |
+| Give each customer of a SaaS its own keys | [Give each customer of a SaaS its own keys](./use-cases/keyring-per-tenant.md) |
+| Look a user up by an encrypted email | [Find a user by an encrypted email](./use-cases/equality-lookups.md) |
+| Read encrypted columns in BigQuery or with Tink | [Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md) |
+| Encrypt uploads of any size and read byte ranges of them | [Store customer uploads and serve byte ranges](./use-cases/large-files.md) |
+| Stream an export over HTTP, encrypted as it is sent | [Send a large export over HTTP, encrypted](./use-cases/encrypted-http-streams.md) |
+| Publish a file or a document that anyone can verify | [Publish a rate sheet or a release anyone can verify](./use-cases/publish-verifiable.md) |
+| Check that your own services' messages and rows were not changed | [Detect tampering with jobs and rows between your services](./use-cases/service-integrity.md) |
+| Let partners, devices or upload clients encrypt and never decrypt | [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md) |
+| Log the shape of a JSON payload that fails to parse, with no encryption | [Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md) |
+| Make one customer's data unreadable for good | [Erase one customer's data for good](./use-cases/erase-a-tenant.md) |
+
+Running in production:
+
+| To | Read |
+|---|---|
+| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./production/choosing.md) |
+| Develop and test without a cloud account | [Develop and test without a cloud](./production/local-development.md) |
+| Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./production/deployment.md) |
+| Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./production/rotation.md) |
+| Respond to a leaked key | [Respond to a leaked key](./production/incidents.md) |
+| Stop a writer of the keyring store from changing which keys are used | [Protect the keyring record](./production/signed-records.md) |
+| Move envelope values to a keyring | [Move envelope values to a keyring](./production/envelope-to-keyring.md) |
+
+Moving to a newer version is in the Upgrading section at the end of the book, starting with
+[Migrating from 0.30](./migrating-from-0.30.md).
 
 ## Licence
 

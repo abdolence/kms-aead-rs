@@ -56,7 +56,7 @@ mod sweeps_bigquery {}
 #[doc = include_str!("../../docs/src/operations/runbook.md")]
 mod runbook {}
 
-#[doc = include_str!("../../docs/src/use-cases/envelope-to-keyring.md")]
+#[doc = include_str!("../../docs/src/production/envelope-to-keyring.md")]
 mod envelope_to_keyring {}
 
 /// The streaming chapter, whose examples use both crates, so that this crate compiles them.
@@ -77,7 +77,7 @@ mod signing {}
 #[doc = include_str!("../../docs/src/use-cases/service-integrity.md")]
 mod service_integrity {}
 
-#[doc = include_str!("../../docs/src/use-cases/signed-records.md")]
+#[doc = include_str!("../../docs/src/production/signed-records.md")]
 mod signed_records {}
 
 /// The README's quick start, compiled so it cannot drift from the API it demonstrates.

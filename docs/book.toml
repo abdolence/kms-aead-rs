@@ -19,3 +19,14 @@ cname = "kms-aead-rust.abdolence.dev"
 
 [output.html.playground]
 runnable = false
+
+[output.html.redirect]
+"/use-cases/choosing.html" = "/production/choosing.html"
+"/use-cases/local-development.html" = "/production/local-development.html"
+"/use-cases/deployment.html" = "/production/deployment.html"
+"/use-cases/rotation.html" = "/production/rotation.html"
+"/use-cases/incidents.html" = "/production/incidents.html"
+"/use-cases/incidents.html#crypto-shredding" = "/use-cases/erase-a-tenant.html#crypto-shredding"
+"/use-cases/incidents.html#shredding-a-tenant-with-dangerously_shred" = "/use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred"
+"/use-cases/signed-records.html" = "/production/signed-records.html"
+"/use-cases/envelope-to-keyring.html" = "/production/envelope-to-keyring.html"

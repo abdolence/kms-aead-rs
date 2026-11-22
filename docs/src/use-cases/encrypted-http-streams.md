@@ -1,4 +1,4 @@
-# Encrypt streaming HTTP bodies
+# Send a large export over HTTP, encrypted
 
 A handler streams a large export, one record at a time, and the body leaves the server encrypted.
 The client decrypts it as it arrives and decodes the records one by one. Neither side holds the

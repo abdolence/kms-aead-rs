@@ -5,25 +5,28 @@
 
 # Use cases
 
-- [Encrypt fields with a KMS](./use-cases/encrypt-fields.md)
-- [A keyring per tenant](./use-cases/keyring-per-tenant.md)
-- [Find rows by an encrypted value](./use-cases/equality-lookups.md)
-- [Read values in BigQuery or Tink](./use-cases/bigquery-and-tink.md)
-- [Encrypt large files and serve ranges](./use-cases/large-files.md)
-- [Encrypt streaming HTTP bodies](./use-cases/encrypted-http-streams.md)
-- [Publish content anyone can verify](./use-cases/publish-verifiable.md)
-- [Check integrity between your own services](./use-cases/service-integrity.md)
-- [Log JSON payloads without leaking data](./use-cases/log-json-payloads.md)
-- [Writers that can never read](./use-cases/write-only-producers.md)
-- [Protect the keyring record](./use-cases/signed-records.md)
-- [Rotate keys and re-encrypt values](./use-cases/rotation.md)
-- [A leaked key or a shredded tenant](./use-cases/incidents.md)
-- [Applications and administration apart](./use-cases/deployment.md)
-- [Choose a provider and a backend](./use-cases/choosing.md)
-- [Develop and test without a cloud](./use-cases/local-development.md)
-- [Move envelope values to a keyring](./use-cases/envelope-to-keyring.md)
-- [Migrating from 0.29](./migrating-from-0.29.md)
-- [Migrating from 0.30](./migrating-from-0.30.md)
+- [Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md)
+- [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md)
+- [Give each customer of a SaaS its own keys](./use-cases/keyring-per-tenant.md)
+- [Find a user by an encrypted email](./use-cases/equality-lookups.md)
+- [Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md)
+- [Store customer uploads and serve byte ranges](./use-cases/large-files.md)
+- [Send a large export over HTTP, encrypted](./use-cases/encrypted-http-streams.md)
+- [Publish a rate sheet or a release anyone can verify](./use-cases/publish-verifiable.md)
+- [Detect tampering with jobs and rows between your services](./use-cases/service-integrity.md)
+- [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md)
+- [Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md)
+- [Erase one customer's data for good](./use-cases/erase-a-tenant.md)
+
+# Running in production
+
+- [Choose a provider and a backend](./production/choosing.md)
+- [Develop and test without a cloud](./production/local-development.md)
+- [Applications and administration apart](./production/deployment.md)
+- [Rotate keys and re-encrypt values](./production/rotation.md)
+- [Respond to a leaked key](./production/incidents.md)
+- [Protect the keyring record](./production/signed-records.md)
+- [Move envelope values to a keyring](./production/envelope-to-keyring.md)
 
 # Values and keys
 
@@ -72,3 +75,8 @@
 - [Error handling](./errors.md)
 - [Observability](./observability.md)
 - [Security considerations](./security.md)
+
+# Upgrading
+
+- [Migrating from 0.30](./migrating-from-0.30.md)
+- [Migrating from 0.29](./migrating-from-0.29.md)
