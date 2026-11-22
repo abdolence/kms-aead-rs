@@ -523,7 +523,7 @@ where
     ///
     /// It leaves the KMS untouched, and every copy of the record outside the store's API: its
     /// backups, the keysets exported from it, and what the store keeps of a deleted record for a
-    /// time, see [Crypto-shredding](https://kms-aead-rust.abdolence.dev/operations/runbook.html#crypto-shredding).
+    /// time, see [Crypto-shredding](https://kms-aead-rust.abdolence.dev/use-cases/erase-a-tenant.html#crypto-shredding).
     ///
     /// # Errors
     ///

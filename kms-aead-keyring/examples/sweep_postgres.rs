@@ -2,7 +2,7 @@
 //! current one, a batch at a time through one `Encryptor`, each batch in one `UPDATE` that writes a
 //! row only if it still holds the bytes the query read. The sweep is `sweep_users` and
 //! `reencrypt_batch`, and
-//! [Sweeps on PostgreSQL](https://kms-aead-rust.abdolence.dev/operations/sweeps-postgres.html)
+//! [Sweeps on PostgreSQL](https://kms-aead-rust.abdolence.dev/production/sweeps/postgres.html)
 //! in the book explains it. The rest of the file runs it: it creates a schema, seeds users,
 //! rotates, sweeps, and drops the schema.
 //!

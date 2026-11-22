@@ -2,7 +2,7 @@
 //! had an encryption marker read as `EncryptionMarker::ENVELOPE`, the lowest marker, so one sweep
 //! re-encrypts them under the keyring and marks them, and after a rotation the same sweep moves
 //! every row to the new version. The sweep is `reencrypt` and `sweep_table`, and [Move envelope
-//! values to a keyring](https://kms-aead-rust.abdolence.dev/use-cases/envelope-to-keyring.html)
+//! values to a keyring](https://kms-aead-rust.abdolence.dev/production/envelope-to-keyring.html)
 //! in the book explains it. The rest of the file writes the envelope rows, runs the migration and
 //! the rotation, and prints the rows.
 //!

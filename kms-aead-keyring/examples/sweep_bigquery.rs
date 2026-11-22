@@ -2,7 +2,7 @@
 //! re-encrypts every row whose encryption marker is below the current one. BigQuery re-encrypts the
 //! field itself, with no Rust loop and no value leaving it, so the sweep is `sweep_users` and not
 //! `sweep::reencrypt_records`. [Sweeps on
-//! BigQuery](https://kms-aead-rust.abdolence.dev/operations/sweeps-bigquery.html) in the book
+//! BigQuery](https://kms-aead-rust.abdolence.dev/production/sweeps/bigquery.html) in the book
 //! explains it. The rest of the file runs it: it seeds users, rotates, sweeps, checks that
 //! BigQuery reads every user, and drops the dataset.
 //!

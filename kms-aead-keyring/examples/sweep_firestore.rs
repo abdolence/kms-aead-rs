@@ -2,7 +2,7 @@
 //! current one, a batch at a time through one `Encryptor`, each batch in one `BatchWrite` that
 //! writes a document only if it is unchanged since the query read it. The sweep is `sweep_users`
 //! and `reencrypt_batch`, and
-//! [Sweeps on Firestore](https://kms-aead-rust.abdolence.dev/operations/sweeps-firestore.html)
+//! [Sweeps on Firestore](https://kms-aead-rust.abdolence.dev/production/sweeps/firestore.html)
 //! in the book explains it. The rest of the file runs it: it seeds users, rotates, sweeps, and
 //! deletes the users.
 //!

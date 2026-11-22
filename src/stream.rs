@@ -26,7 +26,7 @@
 //!
 //! The book's [Streaming encryption](https://kms-aead-rust.abdolence.dev/streaming.html) chapter
 //! walks through these calls, and
-//! [Formats](https://kms-aead-rust.abdolence.dev/formats.html#streamed-values) has the bytes and
+//! [Formats](https://kms-aead-rust.abdolence.dev/formats/streamed-values.html) has the bytes and
 //! the length and seeking rules.
 //!
 //! ```rust
