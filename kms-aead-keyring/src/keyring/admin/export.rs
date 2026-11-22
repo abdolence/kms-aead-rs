@@ -116,7 +116,12 @@ impl<E: KeysetEncoding> Debug for EncryptedKeyset<E> {
 /// The BigQuery export, which exists for keyrings on a Cloud KMS key alone: `KEYS.KEYSET_CHAIN`
 /// decrypts with Cloud KMS only.
 #[cfg(feature = "bigquery-export")]
-impl<S: KeyringStore, B: AeadBackend> KeyringAdmin<S, GcpKmsProvider, B> {
+impl<S, B, R> KeyringAdmin<S, GcpKmsProvider, B, R>
+where
+    S: KeyringStore,
+    B: AeadBackend,
+    R: MaybeRecordSigner,
+{
     /// The versions `selection` names as a Tink keyset encrypted by the keyring's KMS key, for
     /// BigQuery's `KEYS.KEYSET_CHAIN` in the KMS key's location. An administrative call: it
     /// decrypts every selected key through the provider, never through the
@@ -710,5 +715,23 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// A unit test has no Cloud KMS client to run the BigQuery export with, so this checks that
+    /// the call exists on an admin that signs its records.
+    #[cfg(feature = "bigquery-export")]
+    #[test]
+    fn a_signing_admin_exports_a_bigquery_keyset() {
+        use kms_aead::providers::LocalSigningProvider;
+        use kms_aead::signing::Signer;
+
+        use crate::test_support::TestBackend;
+
+        let _export = KeyringAdmin::<
+            MemoryKeyringStore,
+            GcpKmsProvider,
+            TestBackend,
+            Signer<LocalSigningProvider<TestBackend>, TestBackend>,
+        >::export_bigquery_keyset;
     }
 }
