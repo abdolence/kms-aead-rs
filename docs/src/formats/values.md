@@ -1,7 +1,8 @@
 # Values and DEKs
 
-The bytes of the values an application stores and of the DEKs that go with them. The layouts of
-every kind of value are listed on [Formats](../formats.md).
+This page has the bytes of the values an application stores and of the DEKs that go with them:
+read it to parse, store or interoperate with an `Encrypted` value, an encrypted DEK or a beacon.
+The layouts of every kind of value are listed on [Formats](../formats.md).
 
 ## Formats of `Encrypted`
 
@@ -21,13 +22,14 @@ A `Bare` value is Tink's AEAD output under a key with the output prefix RAW, and
 that decrypts it.
 
 The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With `legacy-formats`, an `Envelope` value also holds the envelope layout v1 of 0.29 and
-the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
-same type until they are upgraded, see
+decrypted. With `legacy-formats`, an `Envelope` value also holds the legacy envelope layout v1 and
+the legacy length-prefixed envelope, checked by their lengths, so a column decodes its old rows into
+the same type until they are upgraded, see
 [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values). Without the feature,
-`Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses them in every build. The
-layout of 32-bit targets before 0.24.0 has Tink's framing, so it reads as an
-`Envelope` value in every build, and `KmsAeadEnvelope::decrypt` decrypts it with `legacy-formats`.
+`Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses them in every build. A legacy layout that early releases wrote on 32-bit
+targets has Tink's framing, so it reads as an `Envelope` value in every build, and
+`KmsAeadEnvelope::decrypt` decrypts it with `legacy-formats`, see
+[Migrating from 0.29](../migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
 bytes themselves for `Vec<u8>` and `SecretValue`, `true` or `false` for `bool`, decimal ASCII for
@@ -77,8 +79,8 @@ kms-aead or Tink, are configured with the same algorithm. Tink calls it the DEK 
 | AES-256-GCM-SIV | `AesGcmSivKey` | reads and writes | reads and writes |
 
 AES-256-GCM is the default of `KmsAeadEnvelope::new`, so every Tink implementation reads the
-values of an envelope that names no algorithm. The default of 0.29 and earlier was
-ChaCha20-Poly1305, see [Migrating from 0.29](../migrating-from-0.29.md#default-algorithm).
+values of an envelope that names no algorithm. Legacy values default to ChaCha20-Poly1305, see
+[Migrating from 0.29](../migrating-from-0.29.md#default-algorithm).
 
 Tink for Python reads a kms-aead value with the key URI of the provider's key:
 
@@ -93,9 +95,8 @@ envelope = aead.KmsEnvelopeAead(aead.aead_key_templates.AES256_GCM, remote)
 plain_text = envelope.decrypt(value, aad)
 ```
 
-Checked on a Cloud KMS key and an AWS KMS key, both ways: AES-128-GCM, AES-256-GCM and
-AES-256-GCM-SIV with Tink 1.16.1 for Python, and ChaCha20-Poly1305 with Tink 1.24.0 for Java on
-the Cloud KMS key. `tests/tink_interop.py` and `examples/tink_interop.rs` repeat the Python check.
+`tests/tink_interop.py` and `examples/tink_interop.rs` run the Python read against a Cloud KMS key
+and an AWS KMS key, for AES-128-GCM, AES-256-GCM and AES-256-GCM-SIV.
 
 ## Encrypted DEKs
 
@@ -115,16 +116,17 @@ encrypted the DEK where the KMS needs one to decrypt:
 
 The Azure layout is the library's own: Key Vault decrypts only with the key version that encrypted,
 and no Tink client exists for Azure. For the same reason, the Key Vault encrypted DEK is the KMS
-ciphertext of the raw DEK of 16, 32 or 64 bytes, as in 0.29, not of the serialised DEK: AES key
+ciphertext of the raw DEK of 16, 32 or 64 bytes, as the legacy layouts have it, not of the serialised DEK: AES key
 wrap, `A128KW` to `A256KW`, takes only multiples of 8 bytes, which no serialised DEK is. The local
 KMS encrypts the DEK with AES-256-GCM under the KEK version, with its header up to the version as
 the AAD, so neither the id nor the version can be changed without the decryption failing.
 
 The `0x02` layout is the same for every KMS: a producer holding the public half of an RSA key
 encrypts the DEK in its own process, and the provider of the KMS that holds the private half
-decrypts it. The providers of 0.31 read it beside their own bytes, and no earlier release reads it,
-see [DEKs encrypted with a public key](#deks-encrypted-with-a-public-key) and [Asymmetric
-KEKs](../asymmetric-kek.md).
+decrypts it. The providers read it beside their own bytes, and a release that predates asymmetric
+KEKs cannot read it, see [DEKs encrypted with a public key](#deks-encrypted-with-a-public-key),
+[Asymmetric KEKs](../asymmetric-kek.md) and
+[Readers before producers](../migrating-from-0.30.md#readers-before-producers).
 
 Store `value()` or `to_hex_string()`, and read them back with `EncryptedDataEncryptionKey::from`
 or `try_from_hex_string`. Neither holds the KEK version of `kek_version()`, see
@@ -134,7 +136,11 @@ or `try_from_hex_string`. Neither holds the KEK version of `kek_version()`, see
 
 The plaintext a provider encrypts is the DEK serialised as Tink serialises a key, the message of its
 Tink key type with `version` 0, which protobuf leaves out. The Azure provider encrypts the raw DEK
-instead, see [Encrypted DEKs](#encrypted-deks):
+instead, see [Encrypted DEKs](#encrypted-deks).
+
+The messages are protobuf. A field starts with a tag byte, the field number shifted left by three
+bits and the wire type 2 of a length-delimited field, so `0x12` is field 2, `0x1a` is field 3, and
+the length of the bytes follows:
 
 | Algorithm | Message | Bytes |
 |---|---|---|
@@ -147,9 +153,9 @@ instead, see [Encrypted DEKs](#encrypted-deks):
 | HMAC-SHA512, MAC key | `HmacKey` | `[0x1a][0x40][key: 64]` |
 
 A beacon key of HMAC-SHA256 is serialised as `[0x1a][0x20][key: 32]`, its 32 bytes in
-`key_value`, field 3, as in Tink's `HmacPrfKey` without its parameters: the bytes of a 32-byte
-`AesGcmKey`. It is encrypted as a DEK is, raw under an Azure key. A MAC key of a keyring is serialised the same
-way, in field 3 and never in field 2, since `[0x12][0x40][key: 64]` is byte for byte an AES-SIV key,
+`key_value`, field 3 (tag `0x1a`), as in Tink's `HmacPrfKey` without its parameters: the bytes of a
+32-byte `AesGcmKey`. It is encrypted as a DEK is, raw under an Azure key. A MAC key of a keyring is
+serialised the same way, in field 3 and never in field 2 (tag `0x12`), since `[0x12][0x40][key: 64]` is byte for byte an AES-SIV key,
 see [MACs in a keyring](../signing.md#macs-in-a-keyring).
 
 `KmsAeadEnvelope::generate_encrypted_dek`, `generate_encrypted_deterministic_dek` and the
@@ -158,8 +164,8 @@ message does not name its type, and AES-256-GCM and AES-256-GCM-SIV keys are wri
 algorithm of the reader decides how the key is used, as in Tink.
 
 A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
-`INVALID_KEY_FORMAT`. An encrypted Tink
-keyset decrypts under the same KEK too, and this is what keeps it out of the DEK cache.
+`INVALID_KEY_FORMAT`. An encrypted Tink keyset decrypts under the same KEK too, and this is what
+keeps it out of the DEK cache.
 
 ## DEKs encrypted with a public key
 
@@ -169,7 +175,7 @@ An encrypted DEK that a public key encrypted has one layout for every KMS:
 [0x02][a: u8][i: u8][KEK id: i bytes][k: u8][KEK version: k ASCII alphanumerics][RSA block]
 ```
 
-- `0x02` is the layout. No encrypted DEK of a built-in provider starts with it before 0.31, see
+- `0x02` marks the layout. No other encrypted DEK of a built-in provider starts with it, see
   [Telling layouts apart](../formats.md#telling-layouts-apart);
 - `a` is the algorithm: `0x01` for RSA-OAEP with SHA-256 as the OAEP hash and the MGF1 hash, and an
   empty label. A later algorithm is another value;

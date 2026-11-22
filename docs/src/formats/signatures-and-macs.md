@@ -1,7 +1,8 @@
 # Signature and MAC formats
 
-The layouts of signatures and MACs, what they are computed over, the key ids of signing keys and
-the test vectors. The layouts of every kind of value are listed on [Formats](../formats.md).
+This page has the layouts of signatures and MACs, what they are computed over, the key ids of
+signing keys and the test vectors. Read it to verify a signature or a MAC outside the library. The
+layouts of every kind of value are listed on [Formats](../formats.md).
 
 Detached and attached signatures and MACs are Tink-prefixed values:
 
@@ -88,11 +89,11 @@ pre-image = PAE("application/vnd.kms-aead.keyring-record+json", SHA-256(canonica
 JCS is the JSON Canonicalization Scheme of [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785):
 members sorted by name, no whitespace, standard string escaping with non-ASCII kept as UTF-8 and
 control characters as `\u00XX`. It is computed over the parsed JSON document with every member
-kept, including members this release does not know, so a later release may add members and sign
+kept, including members the reader does not know, so a newer release may add members and sign
 records that carry them. A record holds strings, integers, booleans, `null`, arrays and objects; a
 fraction, an exponent or an integer beyond 2^53 anywhere in it is `RECORD_INVALID`. The canonical
 document of a record with a `null`, a nested `compromised`, a note holding `é` and the control
-character `0x07`, and a member `future` this release does not define, on one line of 579 bytes
+character `0x07`, and a member `future` the reader does not define, on one line of 579 bytes
 without the line breaks shown here:
 
 ```text
@@ -113,7 +114,7 @@ digest, 90 bytes. Under the Ed25519 key of the vectors below the stored member i
 
 ## Signature and MAC test vectors
 
-Generated with Python's `cryptography` 50.0.2 from published keys, so that nothing in them is
+Generated with Python's `cryptography` package from published keys, so that nothing in them is
 secret. Payload type `application/vnd.example.invoice+json`, payload
 `{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":12500}`:
 

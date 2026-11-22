@@ -1,5 +1,10 @@
 # Error handling
 
+This page lists the errors of both crates: the variants of `KmsAeadError` and the codes of the
+library, what may be retried, the errors of `kms-aead-keyring`, and what an error never carries.
+Read it to decide how a caller reacts to a failure; the [Incident runbook](./production/runbook.md)
+covers what an operator does about one.
+
 Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors::KmsAeadError`:
 
 - `SystemError`: the configuration or the environment, such as invalid provider options or a KMS
@@ -13,7 +18,7 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
 - `SignatureError`: a signature could not be made, read or verified, or a KMS refused a sign or
   public-key request; never retried;
-- `LegacyFormat`: a stored value in a layout of 0.29 or earlier, which only the
+- `LegacyFormat`: a stored value in a legacy layout, which only the
   `legacy-formats` feature reads, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
@@ -65,10 +70,10 @@ The library's codes, by area:
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `JsonEncoded` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
-| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted DEK layout v1 of 0.29 that cannot be read, with `legacy-formats` |
-| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
+| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the legacy encrypted DEK layout v1 that cannot be read, with `legacy-formats` |
+| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a legacy layout |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
-| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
+| `LEGACY_FORMAT` | legacy format | a legacy layout without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the legacy envelope layouts in `separate` |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 

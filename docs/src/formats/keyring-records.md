@@ -1,8 +1,9 @@
 # Keyring records and keysets
 
-The key ids, the stored record and the encryption markers of kms-aead-keyring, and the Tink keysets
-that carry keys to Tink and BigQuery. The layouts of every kind of value are listed on
-[Formats](../formats.md).
+This page has the key ids, the stored record and the encryption markers of kms-aead-keyring, and
+the Tink keysets that carry keys to Tink and BigQuery. Read it to write a keyring store, to
+read a record outside the library, or to query encryption markers. The layouts of every kind of
+value are listed on [Formats](../formats.md).
 
 ## Tink keysets and the TINK prefix
 
@@ -140,7 +141,7 @@ staged, with the encrypted DEKs shortened:
 - `signature` is an optional top-level member, absent from the record above:
   `"signature": "<standard base64 of the detached Signature bytes>"`, written where the
   administration signs its records, see
-  [The signed keyring record](./signatures-and-macs.md#the-signed-keyring-record). A reader of 0.30 ignores it;
+  [The signed keyring record](./signatures-and-macs.md#the-signed-keyring-record). A reader that predates record signing ignores it;
 - `seal_epoch` is the record's re-encryption epoch: it counts the writes that made a version active,
   from 1 at the creation, see [Encryption markers](#encryption-markers);
 - `versions` holds every version ever created, in creation order, each under its

@@ -1,7 +1,9 @@
 # Streamed values
 
-The layouts written by the stream encryptors of kms-aead and kms-aead-keyring, and the arithmetic of
-a range read. The layouts of every kind of value are listed on [Formats](../formats.md).
+This page has the layouts written by the stream encryptors of kms-aead and kms-aead-keyring, and the
+arithmetic of a range read. Read it to parse a streamed value without the library, or to fetch a
+byte range of one from a store. The layouts of every kind of value are listed on
+[Formats](../formats.md).
 
 A streamed value is a header and chunks. Every length is in bytes and integers are big-endian. The
 prefixed form, the one of `AeadCipher::stream_encryptor` and of the keyring:
@@ -16,8 +18,8 @@ offset          len     field
     61 + k × 16,400     chunk k
 ```
 
-The bare form is a Cobblestone-256 message as [C2SP chunked encryption](https://c2sp.org/chunked-encryption)
-writes it, with the caller's AAD as its *context* and the DEK as its *input key*:
+The bare form is a Cobblestone-256 message, the chunked AES-256-GCM format with a key commitment
+that [C2SP chunked encryption](https://c2sp.org/chunked-encryption) specifies, with the caller's AAD as its *context* and the DEK as its *input key*:
 
 ```text
 offset          len     field
@@ -57,6 +59,9 @@ offset          len     field
   call names the form.
 
 The keys come from the DEK `K` of 32 bytes, the salt and the AAD `A`:
+
+HKDF-Expand is the key derivation step of HKDF that turns a pseudorandom key (PRK) into output
+keys, and the DEK is the PRK here:
 
 ```text
 key || base nonce || commitment = HKDF-Expand(SHA-512, PRK = K,
