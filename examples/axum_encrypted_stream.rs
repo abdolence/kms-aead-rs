@@ -5,8 +5,8 @@
 //! time. Neither side holds the export in memory. The server binds a loopback port, and the local
 //! KMS needs no cloud credentials.
 //!
-//! The response carries `application/octet-stream`, since the body is ciphertext, and names the
-//! format of the plaintext in `X-Inner-Content-Type`, which the client hands to the decoder.
+//! The response carries `application/octet-stream`, since the body is ciphertext. The format of the
+//! plaintext is part of the endpoint's contract, and the client asks the decoder for it by name.
 //!
 //! ```sh
 //! cargo run --example axum_encrypted_stream --features stream,ring
@@ -36,7 +36,6 @@ type Envelope = KmsAeadEnvelope<LocalKmsProvider<Ring>, Ring>;
 /// Binds the plaintext to this export, so that the body of another export, or of another route,
 /// does not decrypt under it.
 const EXPORT_AAD: &[u8] = b"exports/orders/2026-10";
-const INNER_CONTENT_TYPE: &str = "x-inner-content-type";
 const ORDERS: u64 = 50_000;
 /// The longest line the client's decoder accepts, which bounds what a hostile server makes it
 /// buffer.
@@ -65,21 +64,19 @@ async fn export_orders(
     State(envelope): State<Arc<Envelope>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let orders = stream::iter((0..ORDERS).map(Order::sample));
-    let encoded = StreamBodyAs::json_nl(orders).into_response();
-    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
+    let encoded = StreamBodyAs::json_nl(orders).into_response().into_body();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_data_stream());
 
     Ok((
         [(
             CONTENT_TYPE,
             HeaderValue::from_static("application/octet-stream"),
         )],
-        inner_content_type.map(|value| [(INNER_CONTENT_TYPE, value)]),
         Body::from_stream(ciphertext),
     ))
 }
@@ -103,12 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await?
         .error_for_status()?;
     let content_type = response.headers().get(CONTENT_TYPE).cloned();
-    let inner_content_type = response
-        .headers()
-        .get(INNER_CONTENT_TYPE)
-        .cloned()
-        .ok_or("the response names no inner content type")?;
-    println!("content-type: {content_type:?}, {INNER_CONTENT_TYPE}: {inner_content_type:?}");
+    println!("content-type: {content_type:?}");
 
     let wire_bytes = Arc::new(AtomicU64::new(0));
     let counted = {
@@ -124,11 +116,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .await?
         .map_err(io::Error::other);
 
-    // reqwest-streams decodes a `reqwest::Response`, so the decrypted frames are wrapped in one
-    // that carries the inner content type.
-    let decrypted_response = Response::builder()
-        .header(CONTENT_TYPE, inner_content_type)
-        .body(reqwest::Body::wrap_stream(plaintext))?;
+    // reqwest-streams decodes a `reqwest::Response`, so the decrypted frames are wrapped in one.
+    let decrypted_response = Response::new(reqwest::Body::wrap_stream(plaintext));
     let mut orders =
         reqwest::Response::from(decrypted_response).json_nl_stream::<Order>(MAX_ORDER_LEN);
 

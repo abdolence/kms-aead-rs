@@ -21,10 +21,10 @@ The encryption sits on the bytes of the body, between the format and the socket:
 
 ## The server
 
-The handler reads the `Content-Type` of the `StreamBodyAs` response, which names the format, and
-takes its body, the encoded bytes. The handler replaces the content type with an opaque one, since
-the body is ciphertext, and keeps the format's in a header of its own. The AAD names the export, so
-that a body of another export does not decrypt under it:
+The handler takes the body of the `StreamBodyAs` response, the encoded bytes, and sends it with an
+opaque content type, since the body is ciphertext. The format is part of the endpoint's contract,
+so the response does not name it. The AAD names the export, so that a body of another export does
+not decrypt under it:
 
 ```rust
 use std::sync::Arc;
@@ -54,18 +54,16 @@ async fn export_orders(
     State(envelope): State<Arc<Envelope>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     let orders = stream::iter((0..50_000).map(|id| Order { id }));
-    let encoded = StreamBodyAs::json_nl(orders).into_response();
-    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
+    let encoded = StreamBodyAs::json_nl(orders).into_response().into_body();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_data_stream());
 
     Ok((
         [(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
-        inner_content_type.map(|value| [("x-inner-content-type", value)]),
         Body::from_stream(ciphertext),
     ))
 }
@@ -78,13 +76,12 @@ mapped by hand. An error in the items ends the body with an error, never with a 
 
 ## The client
 
-reqwest-streams decodes a `reqwest::Response`, so the decrypted bytes are wrapped in one that
-carries the format's content type, which the decoder reads. The source of `decrypting_stream` is
+reqwest-streams decodes a `reqwest::Response`, so the decrypted bytes are wrapped in one. The
+decoder reads the body only, in the format the client asks for. The source of `decrypting_stream` is
 `Unpin`, so the byte stream of the response goes through `Box::pin`. The decoder takes the longest
 record it accepts, which bounds what a server can make the client buffer:
 
 ```rust
-use axum::http::header::CONTENT_TYPE;
 use axum::http::Response;
 use futures::TryStreamExt;
 use kms_aead::backends::Ring;
@@ -105,19 +102,12 @@ async fn download_orders(
     url: &str,
 ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let response = reqwest::get(url).await?.error_for_status()?;
-    let inner_content_type = response
-        .headers()
-        .get("x-inner-content-type")
-        .cloned()
-        .ok_or("the response names no inner content type")?;
 
     let plaintext = envelope
         .decrypting_stream(EXPORT_AAD, Box::pin(response.bytes_stream()))
         .await?
         .map_err(std::io::Error::other);
-    let decrypted = Response::builder()
-        .header(CONTENT_TYPE, inner_content_type)
-        .body(reqwest::Body::wrap_stream(plaintext))?;
+    let decrypted = Response::new(reqwest::Body::wrap_stream(plaintext));
 
     let mut orders = reqwest::Response::from(decrypted).json_nl_stream::<Order>(MAX_ORDER_LEN);
     let mut total_cents = 0;
