@@ -419,14 +419,14 @@ PostgreSQL and BigQuery compare them. `EncryptionMarker::ENVELOPE`, `01 00 00 00
 marker of a record of envelope values. `EncryptionMarker::try_from` fails with
 `InvalidEncryptionMarker` on bytes of any other length or first byte. Serde stores a marker as bytes,
 an array of numbers in serde_json, and the `postgres` and `sqlx` features as `BYTEA`. See
-[Sweeps](./operations/sweeps.md) for the query it serves.
+[Sweeps](./production/sweeps.md) for the query it serves.
 
 The record's JSON members for the epoch and the ranges keep the names `seal_epoch` and
 `seal_epochs`. `KeyVersion::reencrypt_range()` returns the markers of a version's `seal_epochs` as a
 `ReencryptRange`: `start()`, and `end()`, `None` while the range is open. A record whose fields were
 encrypted through one `Encryptor`, and which stores the marker of the encryptor's record, lies in
 the range of every version its fields are under. See [Records under a
-version](./operations/sweeps.md#records-under-a-version) for the query it serves.
+version](./production/sweeps.md#records-under-a-version) for the query it serves.
 
 ## DEKs encrypted with a public key
 
@@ -861,7 +861,7 @@ The AEAD bytes stay as they are.
 
 An upgraded DEK is encrypted under the KEK's current version, so the upgrade also does what
 `reencrypt_dek` and `reencrypt_encrypted_dek` do for a value or a DEK already in Tink's format, see
-[Re-encrypting DEKs after a KEK rotation](./envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation).
+[Re-encrypt DEKs after a KEK rotation](./production/reencrypt-deks.md).
 Those two refuse a layout of 0.29 or earlier with `LEGACY_FORMAT`, so a sweep after a KEK rotation
 upgrades a value in an old layout and re-encrypts the DEK of a value in Tink's format.
 

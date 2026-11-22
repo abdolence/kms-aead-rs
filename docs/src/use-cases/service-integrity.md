@@ -72,7 +72,7 @@ own, such as the columns of a row, `Encryptor::mac` computes a detached `Mac<T>`
 and `Keyring::verify_mac` checks it against the payload as read.
 
 Both services build a `Keyring` for the same keyring id, with decrypt on the keyring's KEK and read
-access to its record, see [Applications and administration apart](../production/deployment.md). Every service
+access to its record, see [Permissions: applications and administration](../production/permissions.md). Every service
 that holds the key can compute a valid tag, so a MAC protects the bytes from whoever writes the
 store, and says nothing about which service wrote them.
 

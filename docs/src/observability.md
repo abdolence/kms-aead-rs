@@ -311,7 +311,7 @@ those of `KeyringAdmin` calls, under the `admin` feature.
   [A record gone from the store](./keyring/record-cache.md#a-record-gone-from-the-store). It is an
   `INFO`, "The keyring store no longer holds the keyring record of a shredded keyring; every
   version is destroyed in this process", when the record the process held had every version
-  destroyed already, which a [shred](./operations/runbook.md#shredding-a-keyring) leaves before it
+  destroyed already, which a [shred](./use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred) leaves before it
   deletes the record. The process that ran the shred logs nothing for it;
 - `ERROR`: a refreshed record refused because it moves a version backwards, with the first rule it
   breaks. Alert on it: it is the detection of a rewritten or restored record;
@@ -472,7 +472,7 @@ A Prometheus exporter adds the unit to the name and replaces the dots with under
 `kms_aead_plaintext_size_bytes_count` and `kms_aead_plaintext_size_bytes_sum`,
 `kms_aead_operation_duration_seconds`, and attributes such as `kms_aead_key_id`. For an alert on
 the values and bytes under one keyring version, see
-[Alerting on volume](./operations/rotation.md#alerting-on-volume).
+[Alerting on volume](./production/monitoring.md#alerting-on-volume).
 
 The keyring's plaintext size has one time series per keyring, purpose, key version and operation.
 With a keyring per tenant, that is a series per tenant and version. Under cumulative temporality,

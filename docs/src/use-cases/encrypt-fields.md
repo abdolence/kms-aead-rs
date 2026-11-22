@@ -19,8 +19,8 @@ see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
 ## The path
 
 1. A provider for the KMS, such as `GcpKmsProvider::new(&key_ref)`, with the rights of
-   [KMS rights](../keyring/deployment.md#kms-rights): decrypt for a reader, encrypt too for a
-   writer, see [KMS providers](../providers.md);
+   [KMS rights](../production/permissions.md#with-kms-aead-alone): decrypt for a reader, encrypt
+   too for a writer, see [KMS providers](../providers.md);
 2. `KmsAeadEnvelope::new(provider)`, or `with_options` with a `DekReusePolicy` for store-less DEK
    reuse and a `DekCache` for repeated reads, see [DEK caching and reuse](../dek-caching.md);
 3. a newtype per field, such as `Email`, that implements `Plaintext`, and normalises the value if

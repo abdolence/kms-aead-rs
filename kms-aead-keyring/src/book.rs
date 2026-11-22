@@ -11,8 +11,8 @@ mod getting_started {}
 #[doc = include_str!("../../docs/src/keyring.md")]
 mod keyring {}
 
-#[doc = include_str!("../../docs/src/keyring/deployment.md")]
-mod deployment {}
+#[doc = include_str!("../../docs/src/production/permissions.md")]
+mod permissions {}
 
 #[doc = include_str!("../../docs/src/keyring/lifecycle.md")]
 mod lifecycle {}
@@ -35,25 +35,22 @@ mod beacons {}
 #[doc = include_str!("../../docs/src/keyring/bigquery.md")]
 mod bigquery {}
 
-#[doc = include_str!("../../docs/src/operations.md")]
-mod operations {}
-
-#[doc = include_str!("../../docs/src/operations/rotation.md")]
+#[doc = include_str!("../../docs/src/production/rotation.md")]
 mod rotation {}
 
-#[doc = include_str!("../../docs/src/operations/sweeps.md")]
+#[doc = include_str!("../../docs/src/production/sweeps.md")]
 mod sweeps {}
 
-#[doc = include_str!("../../docs/src/operations/sweeps-firestore.md")]
+#[doc = include_str!("../../docs/src/production/sweeps/firestore.md")]
 mod sweeps_firestore {}
 
-#[doc = include_str!("../../docs/src/operations/sweeps-postgres.md")]
+#[doc = include_str!("../../docs/src/production/sweeps/postgres.md")]
 mod sweeps_postgres {}
 
-#[doc = include_str!("../../docs/src/operations/sweeps-bigquery.md")]
+#[doc = include_str!("../../docs/src/production/sweeps/bigquery.md")]
 mod sweeps_bigquery {}
 
-#[doc = include_str!("../../docs/src/operations/runbook.md")]
+#[doc = include_str!("../../docs/src/production/runbook.md")]
 mod runbook {}
 
 #[doc = include_str!("../../docs/src/production/envelope-to-keyring.md")]

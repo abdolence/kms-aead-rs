@@ -320,7 +320,7 @@ So an accidental deletion of a record stops a running process at its next revali
 without. A record restored from a copy is refused by that process with `RecordRegressed`, because
 it revives versions the process holds destroyed, so the process restarts after a restore. The text of the `WARN` ended in "the cached record stays in use" in 0.30, so change a log alert that
 matches that ending. The runbook is
-[The keyring record was deleted or corrupted](./operations/runbook.md#the-keyring-record-was-deleted-or-corrupted).
+[The keyring record was deleted or corrupted](./production/runbook.md#the-keyring-record-was-deleted-or-corrupted).
 
 Under record signing, the deleted record stays the baseline of the id: the next record must be
 signed if the deleted one was, and a keyring created again opens, see
@@ -340,4 +340,4 @@ The other changes are additive. `KmsAeadError` is already `#[non_exhaustive]`, s
 - signed keyring records, see [Signing the keyring record](./signing.md#signing-the-keyring-record);
 - `KeyringAdmin::dangerously_shred()`, which destroys every version of a keyring in one write and
   deletes its record from the store with the earlier versions the store keeps, see [Shredding a
-  keyring](./operations/runbook.md#shredding-a-keyring).
+  keyring](./use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred).

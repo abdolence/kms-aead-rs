@@ -204,7 +204,7 @@ let provider = LocalKmsProvider::<Ring>::new(
 A version that is not in the list fails `with_encrypting_version` with `LOCAL_KEK_VERSIONS`.
 
 Then sweep, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+[Re-encrypt DEKs after a KEK rotation](../production/reencrypt-deks.md),
 and check with a provider that lists the new version alone, before the deploy that drops the old
 version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
 the old version from the list disables it, and listing it again restores it. Destroying it means

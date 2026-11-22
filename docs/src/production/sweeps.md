@@ -383,8 +383,8 @@ nothing else. A record id is often an entity id, so read the sweep's log as an a
 The stream returns `Result<T, E>` and the re-encryption `Result<ReencryptOutcome, E>`, with the
 application's own error type, any type that implements `Display`. The keyring's calls inside it
 return a `KeyringError`, and a `From` impl on the application's error lets `?` convert it, as the
-examples on [Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
-[BigQuery](./sweeps-bigquery.md) do with an error of their data store; a re-encryption with no
+examples on [Firestore](./sweeps/firestore.md), [PostgreSQL](./sweeps/postgres.md) and
+[BigQuery](./sweeps/bigquery.md) do with an error of their data store; a re-encryption with no
 errors of its own returns `KeyringResult<ReencryptOutcome>`, as above. The error's `Display` is the
 application's text and goes to the log as it is, so it carries no value, secret or personal data.
 The report counts failures and keeps no error: an application that wants the errors themselves
@@ -411,7 +411,7 @@ destroys it, on its `KeyringAdmin`:
 5. keep the version retired for as long as the backups of the stored values taken before the
    sweep are kept. A destroyed version makes the values in them unreadable, as a destroyed KEK
    version does, see
-   [Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+   [Re-encrypt DEKs after a KEK rotation](./reencrypt-deks.md),
    and only a backup of the record from before the destroy still decrypts them, see below.
    A value the sweep missed fails with `KeyVersionRetired`: `reinstate(key_id)`, export the
    keysets again, sweep again, and go back to step 3;
@@ -424,15 +424,16 @@ destroys it, on its `KeyringAdmin`:
 `destroy` removes the encrypted DEK from the record only. A backup of the record still holds it, and
 so does every copy of a keyset exported while the version decrypted, both decrypted by the KMS as
 long as the KEK version that encrypted them exists, see
-[Crypto-shredding](./runbook.md#crypto-shredding). `dangerously_shred()` destroys every version and
-deletes the record, with the same copies left behind.
+[What survives a shred](../use-cases/erase-a-tenant.md#what-survives-a-shred).
+`dangerously_shred()` destroys every version and deletes the record, with the same copies left
+behind.
 
 ## Sweeps by store
 
 At millions of records a sweep streams its candidates from the store in one query and never holds
 its result in memory, and it writes them back in batches. Every example, on
-[Firestore](./sweeps-firestore.md), [PostgreSQL](./sweeps-postgres.md) and
-[BigQuery](./sweeps-bigquery.md), has the same five properties:
+[Firestore](./sweeps/firestore.md), [PostgreSQL](./sweeps/postgres.md) and
+[BigQuery](./sweeps/bigquery.md), has the same five properties:
 
 - it resumes without a checkpoint: the query is the checkpoint, since a re-encrypted record no
   longer matches it, so a cancelled or failed run is started again over the same query;
@@ -468,4 +469,4 @@ So after a compromise the application decides per record before it re-encrypts:
 - or acceptance, when forged values do no harm.
 
 `SweepReport::reencrypted_from_compromised` counts the records that went through that decision, or
-fewer on the [BigQuery `MERGE` path](./sweeps-bigquery.md), whose batches with a conflict count as skipped.
+fewer on the [BigQuery `MERGE` path](./sweeps/bigquery.md), whose batches with a conflict count as skipped.

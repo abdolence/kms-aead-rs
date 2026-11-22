@@ -1,8 +1,8 @@
 # Sweeps on Firestore
 
 A sweep of a Firestore collection: the encryption marker as a field, the query for the documents
-behind, and the conditional write back. The mechanism is in [Sweeps](./sweeps.md), and the example
-has the five properties of [Sweeps by store](./sweeps.md#sweeps-by-store).
+behind, and the conditional write back. The mechanism is in [Sweeps](../sweeps.md), and the example
+has the five properties of [Sweeps by store](../sweeps.md#sweeps-by-store).
 
 The marker is a `bytes` field, `encryption_marker`, and the query is one range filter on it.
 Firestore indexes a field ascending and descending by default, and the query needs the ascending
@@ -292,7 +292,7 @@ rate by 50% every 5 minutes, its 500/50/5 rule, so raise `CONCURRENCY` step by s
 
 A range filter never matches a document without the field, so a document written before the marker
 needs the marker written first, see [Move envelope values to a
-keyring](../production/envelope-to-keyring.md).
+keyring](../envelope-to-keyring.md).
 
 A partitioned query does not fit the sweep: `PartitionQuery` takes no filter, so its workers would
 read every document, the current ones included.

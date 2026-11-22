@@ -27,7 +27,7 @@ from at `INFO` when it is created.
 
 - **Tests**: `MemoryKeyringStore`, in `kms_aead_keyring::testing`, loses its records, and with them
   every DEK, when the process exits. A test that creates keyrings in it enables `admin` in
-  `[dev-dependencies]` only, see [Applications and administration](../keyring/deployment.md);
+  `[dev-dependencies]` only, see [Permissions: applications and administration](../production/permissions.md);
 - **Firestore**: the emulator of the Google Cloud CLI, `gcloud emulators firestore start`, and
   `FIRESTORE_EMULATOR_HOST` set to its address. `FirestoreDb::new` connects to the emulator while
   the variable is set, so the store needs no change. The

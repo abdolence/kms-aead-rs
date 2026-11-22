@@ -1,8 +1,8 @@
 # Sweeps on BigQuery
 
 A sweep of a BigQuery table, in two paths: one `UPDATE` in SQL for the fields BigQuery reads, and a
-Rust path for the rest. The mechanism is in [Sweeps](./sweeps.md). The Rust path has the five
-properties of [Sweeps by store](./sweeps.md#sweeps-by-store), and the SQL path states its own below.
+Rust path for the rest. The mechanism is in [Sweeps](../sweeps.md). The Rust path has the five
+properties of [Sweeps by store](../sweeps.md#sweeps-by-store), and the SQL path states its own below.
 
 The marker is a `BYTES` column that every write of the encrypted fields sets:
 
@@ -17,7 +17,7 @@ CREATE TABLE users (
 A field BigQuery reads, declared with `Interop::BigQuery`, is re-encrypted by one `UPDATE` in SQL,
 with no Rust loop and no value leaving BigQuery. Its parameters come from a
 `Readable(Purpose::Randomized)` export, see [Exporting a keyset to
-BigQuery](../keyring/bigquery.md#exporting-a-keyset-to-bigquery): `@kms_key` is the export's
+BigQuery](../../keyring/bigquery.md#exporting-a-keyset-to-bigquery): `@kms_key` is the export's
 `key_uri()`, `@keyset` its `value()`, and `@encryption_marker` the bytes of its marker,
 `keyset.encryption_marker().value()`:
 
@@ -37,7 +37,7 @@ WHERE encryption_marker < @encryption_marker;
 text. `AEAD.ENCRYPT` encrypts under the keyset's primary, which a `Readable` export sets to the
 active version of the record it reads from the store, and `EncryptedKeyset::encryption_marker()` is
 that record's marker. So every row the statement re-encrypts lies in the
-[range](./sweeps.md#records-under-a-version) of the primary, as a row written through an `Encryptor`
+[range](../sweeps.md#records-under-a-version) of the primary, as a row written through an `Encryptor`
 does. A keyset exported before a promotion has the previous version as its primary and the previous
 epoch's marker, and the rows it re-encrypts stay in the next sweep's query, so the sweep exports its
 keyset after the promotion. The export is a `KeyringAdmin` call of the administrative job.

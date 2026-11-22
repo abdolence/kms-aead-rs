@@ -48,7 +48,7 @@ still decrypts:
   for a lookup, see [Beacons](../keyring/beacons.md).
 
 Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
-[Rotation cadence](../operations/rotation.md#rotation-cadence).
+[Rotation cadence](../production/rotation.md#rotation-cadence).
 
 ## A lookup
 

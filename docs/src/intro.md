@@ -108,32 +108,28 @@ holds.
 
 ## Where to start
 
-Use cases, each a situation and the way through it:
+The setup is under [Getting started](./getting-started.md): [Choose a provider and a
+backend](./getting-started/choosing.md), FIPS included, and [Develop and test without a
+cloud](./getting-started/local-development.md).
+
+Use cases are in five groups, each a situation and the way through it:
 
 | To | Read |
 |---|---|
-| Encrypt customers' emails, phone numbers or API tokens in your own tables | [Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md) |
-| Make fewer KMS calls on reads and on writes | [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md) |
-| Give each customer of a SaaS its own keys | [Give each customer of a SaaS its own keys](./use-cases/keyring-per-tenant.md) |
-| Look a user up by an encrypted email | [Find a user by an encrypted email](./use-cases/equality-lookups.md) |
-| Read encrypted columns in BigQuery or with Tink | [Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md) |
-| Encrypt uploads of any size and read byte ranges of them | [Store customer uploads and serve byte ranges](./use-cases/large-files.md) |
-| Stream an export over HTTP, encrypted as it is sent | [Send a large export over HTTP, encrypted](./use-cases/encrypted-http-streams.md) |
-| Publish a file or a document that anyone can verify | [Publish a rate sheet or a release anyone can verify](./use-cases/publish-verifiable.md) |
-| Check that your own services' messages and rows were not changed | [Detect tampering with jobs and rows between your services](./use-cases/service-integrity.md) |
-| Let partners, devices or upload clients encrypt and never decrypt | [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md) |
-| Log the shape of a JSON payload that fails to parse, with no encryption | [Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md) |
-| Make one customer's data unreadable for good | [Erase one customer's data for good](./use-cases/erase-a-tenant.md) |
+| Encrypt columns, make fewer KMS calls, give each customer its own keys, look a row up by an encrypted value or erase a customer | [Protect data in your database](./use-cases/database.md) |
+| Let BigQuery or Tink read encrypted columns, or let partners and devices encrypt without being able to decrypt | [Share encrypted data with other systems](./use-cases/sharing.md) |
+| Encrypt uploads and exports of any size, and read byte ranges of them | [Files and streams](./use-cases/files-and-streams.md) |
+| Publish a file anyone can verify, or detect tampering between your own services | [Prove where data came from](./use-cases/provenance.md) |
+| Log a payload that fails to parse, with no encryption | [Keep sensitive data out of logs](./use-cases/logs.md) |
 
-Running in production:
+Running in production, one page per task:
 
 | To | Read |
 |---|---|
-| Pick a KMS and a crypto backend, FIPS included | [Choose a provider and a backend](./getting-started/choosing.md) |
-| Develop and test without a cloud account | [Develop and test without a cloud](./getting-started/local-development.md) |
-| Run the applications and the administration with their own rights, and alert on both | [Applications and administration apart](./production/deployment.md) |
+| Give the applications and the administration their own rights | [Permissions: applications and administration](./production/permissions.md) |
+| Alert on both | [Monitoring and alerts](./production/monitoring.md) |
 | Rotate the DEKs and the KEK without downtime | [Rotate keys and re-encrypt values](./production/rotation.md) |
-| Respond to a leaked key | [Respond to a leaked key](./production/incidents.md) |
+| Respond to a leaked key or a damaged keyring record | [Incident runbook](./production/runbook.md) |
 | Stop a writer of the keyring store from changing which keys are used | [Protect the keyring record](./production/signed-records.md) |
 | Move envelope values to a keyring | [Move envelope values to a keyring](./production/envelope-to-keyring.md) |
 

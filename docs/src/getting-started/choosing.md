@@ -38,7 +38,7 @@ Notes on the table:
 - the local KMS has no IAM, no audit log and no HSM, see [Local KMS](../providers/local.md#limits);
 - crypto-shredding per KMS is in [Erase one customer's data for
   good](../use-cases/erase-a-tenant.md#crypto-shredding); a keyring under a shared KEK is shredded with
-  `dangerously_shred()`, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring).
+  `dangerously_shred()`, see [Shredding a tenant with `dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred).
 
 The TLS root store and the TLS crypto provider are a feature choice for Google Cloud KMS, Azure and
 Vault Transit, with the rules in [Feature rules](../features.md#feature-rules).

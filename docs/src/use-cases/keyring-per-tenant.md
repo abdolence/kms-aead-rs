@@ -27,7 +27,7 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
 - by the administrative job, as part of onboarding a tenant, with `create` or `open_or_create`;
 - or by the application on the tenant's first request, with `open_or_create`. Such an application
   builds with the `admin` feature and runs with the administrative rights, so it is trusted as the
-  administration is, see [Applications and administration](../keyring/deployment.md) and
+  administration is, see [Permissions: applications and administration](../production/permissions.md) and
   [Keyring limits](../security.md#keyring-limits).
 
 ## The path through the API
@@ -41,7 +41,7 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
 3. a `FieldSpec` constant per encrypted field, the same for every tenant, since each keyring
    has DEKs of its own, see [Encrypted fields and AAD](../keyring/fields.md);
 4. on every write, `keyring.encryptor()` and its `encrypt`, and the encryption marker it gives,
-   see [The encryption marker](../operations/sweeps.md#the-encryption-marker); on every read,
+   see [The encryption marker](../production/sweeps.md#the-encryption-marker); on every read,
    `keyring.decrypt`;
 5. `registry.shutdown(None)` before the process exits, see
    [The registry and its handles](../keyring.md#the-registry-and-its-handles).

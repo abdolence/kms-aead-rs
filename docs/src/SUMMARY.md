@@ -28,9 +28,15 @@
 
 # Running in production
 
-- [Applications and administration apart](./production/deployment.md)
+- [Permissions: applications and administration](./production/permissions.md)
+- [Monitoring and alerts](./production/monitoring.md)
 - [Rotate keys and re-encrypt values](./production/rotation.md)
-- [Respond to a leaked key](./production/incidents.md)
+  - [Re-encrypt DEKs after a KEK rotation](./production/reencrypt-deks.md)
+  - [Sweeps](./production/sweeps.md)
+    - [Sweeps on Firestore](./production/sweeps/firestore.md)
+    - [Sweeps on PostgreSQL](./production/sweeps/postgres.md)
+    - [Sweeps on BigQuery](./production/sweeps/bigquery.md)
+- [Incident runbook](./production/runbook.md)
 - [Protect the keyring record](./production/signed-records.md)
 - [Move envelope values to a keyring](./production/envelope-to-keyring.md)
 
@@ -55,7 +61,6 @@
 # Keyring
 
 - [Keyring and field encryption](./keyring.md)
-  - [Applications and administration](./keyring/deployment.md)
   - [Key versions and lifecycle](./keyring/lifecycle.md)
   - [Keyring stores](./keyring/stores.md)
   - [Record cache](./keyring/record-cache.md)
@@ -63,16 +68,6 @@
   - [Deterministic fields](./keyring/deterministic.md)
   - [Beacons](./keyring/beacons.md)
   - [BigQuery and Tink interop](./keyring/bigquery.md)
-
-# Operating a keyring
-
-- [Operations](./operations.md)
-  - [Rotation](./operations/rotation.md)
-  - [Sweeps](./operations/sweeps.md)
-    - [Sweeps on Firestore](./operations/sweeps-firestore.md)
-    - [Sweeps on PostgreSQL](./operations/sweeps-postgres.md)
-    - [Sweeps on BigQuery](./operations/sweeps-bigquery.md)
-  - [Emergency runbook](./operations/runbook.md)
 
 # Reference
 

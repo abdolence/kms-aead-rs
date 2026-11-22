@@ -103,7 +103,7 @@ under the old version. The `kek_version()` of the encrypted DEK an encryption re
 version Key Vault encrypted with, read from the `kid` of its response.
 
 Once the sweep has reached every value, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation),
+[Re-encrypt DEKs after a KEK rotation](../production/reencrypt-deks.md),
 disable the old version: Key Vault refuses to decrypt under it, and enabling it again restores it.
 Key Vault deletes a key with all its versions and never one version alone, so the old version stays
 disabled rather than destroyed.

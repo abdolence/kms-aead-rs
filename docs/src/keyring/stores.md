@@ -16,10 +16,10 @@ read checks it. A store with push makes a change reach the other processes withi
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
 
 The rights of the application and the administration on each store are in
-[Store rights](./deployment.md#store-rights).
+[Store rights](../production/permissions.md#store-rights).
 
 Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
-in the record, see [the runbook](../operations/runbook.md#the-keyring-record-was-deleted-or-corrupted).
+in the record, see [the runbook](../production/runbook.md#the-keyring-record-was-deleted-or-corrupted).
 A backup is also a copy of the record that `KeyringAdmin::dangerously_shred()` does not reach, see
 [What a delete removes](#what-a-delete-removes).
 
@@ -103,7 +103,7 @@ CREATE TABLE kms_keyrings (
 ```
 
 - the rights of the application and the administration on the table are in
-  [Store rights](./deployment.md#store-rights);
+  [Store rights](../production/permissions.md#store-rights);
 - the table name is unqualified, so the connection's `search_path` selects the schema;
 - the `revision` of a row is the server's clock in microseconds when the row is created, and the
   larger of that and the previous revision plus one at each write. A row deleted and created again
@@ -180,7 +180,7 @@ conditional on the generation the writer read, and a revalidation reads the obje
 generation changed.
 
 - the rights of the application and the administration on the bucket are in
-  [Store rights](./deployment.md#store-rights);
+  [Store rights](../production/permissions.md#store-rights);
 - Cloud Storage has no change notification the store listens to, so a process sees a change once
   its record is older than `record_ttl`, 5 minutes by default;
 - turn on object versioning on the bucket: every record written is then kept as a noncurrent
@@ -221,7 +221,7 @@ conditional on no object existing (`If-None-Match: *`), an update on the ETag th
 the read).
 
 - the rights of the application and the administration on the objects are in
-  [Store rights](./deployment.md#store-rights);
+  [Store rights](../production/permissions.md#store-rights);
 - S3 has no change notification the store listens to, so a process sees a change once its record
   is older than `record_ttl`, 5 minutes by default;
 - turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
@@ -296,7 +296,7 @@ let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_
 ## What a delete removes
 
 `KeyringStore::delete` is the call `KeyringAdmin::dangerously_shred()` makes once every version of
-the record is destroyed, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring). It
+the record is destroyed, see [Shredding a tenant with `dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred). It
 removes the record with the copies the store itself keeps. A copy the store keeps outside the reach
 of its API is the operator's to delete:
 
@@ -321,7 +321,7 @@ leaves the live records alone. The condition of the S3 delete holds only on a se
 ignore it; PGSTY's Silo fork honours it from `RELEASE.2026-09-16`, within one server pool.
 
 A delete needs rights a write does not: the administration's permissions per store are in
-[Store rights](./deployment.md#store-rights).
+[Store rights](../production/permissions.md#store-rights).
 
 ## Your own store
 

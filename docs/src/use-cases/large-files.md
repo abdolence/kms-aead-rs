@@ -11,7 +11,7 @@ does for any object. Feature `stream`, see [Streaming encryption](../streaming.m
 | | Keyring | Envelope |
 |---|---|---|
 | Key | the keyring's active version, named by a 4-byte key id in the object's header | a DEK of the object's own, or a reused one under a `DekReusePolicy` |
-| Stored beside the object | the encryption marker, see [The encryption marker](../operations/sweeps.md#the-encryption-marker) | the encrypted DEK, in the object's metadata or in the row that names the object |
+| Stored beside the object | the encryption marker, see [The encryption marker](../production/sweeps.md#the-encryption-marker) | the encrypted DEK, in the object's metadata or in the row that names the object |
 | KMS calls | one decryption per key version per DEK cache TTL | one encryption per new DEK, one decryption per object per DEK cache TTL |
 | Rotation | the keyring's | the KEK's, by re-encrypting the stored DEKs |
 

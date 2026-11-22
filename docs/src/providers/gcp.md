@@ -70,7 +70,7 @@ key's rotation schedule. New DEKs are encrypted under the primary version from t
 KMS decrypts every DEK with the version that encrypted it, for as long as that version is enabled.
 
 To retire the old version, disable it once the sweep has reached every value, see
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation):
+[Re-encrypt DEKs after a KEK rotation](../production/reencrypt-deks.md):
 decryptions under it fail, and enabling it again restores them. Destroying it schedules its
 destruction, 30 days later by default, and until then the version can be restored.
 
@@ -85,7 +85,7 @@ disabled", for several hours in exceptional cases. So:
   name the version Cloud KMS encrypted with, the `N` of `cryptoKeyVersions/N`, see
   [Observability](../observability.md). A keyring whose `reencrypt_deks` ran before the new
   primary version had propagated still lists the old version among its `kek_versions_in_use`:
-  run `reencrypt_deks` again, see [Rotating the KEK](../operations/rotation.md#rotating-the-kek);
+  run `reencrypt_deks` again, see [Re-encrypting a keyring's DEKs](../production/rotation.md#re-encrypting-a-keyrings-deks);
 - run the check only once the disable has propagated, and run it again before destroying the
   version. A check inside that window passes on DEKs that are still under the old version.
 

@@ -72,7 +72,7 @@ afterwards. An encryption's response names no key material, so the `kek_version(
 encrypted DEK it returns is `None`.
 
 Key material that AWS KMS generated cannot be disabled or deleted on its own. The sweep of
-[Re-encrypting DEKs after a KEK rotation](../envelope-encryption.md#re-encrypting-deks-after-a-kek-rotation)
+[Re-encrypt DEKs after a KEK rotation](../production/reencrypt-deks.md)
 is optional for it: it moves each DEK to the current key material, and with nothing to disable,
 the check and the destruction do not apply.
 
@@ -88,7 +88,7 @@ A sweep therefore retires no imported key material from a key in use, and with e
 `kek_version` `None`, neither a keyring record nor a stored `kek_version` shows which DEKs are under
 which material. After a deletion or an expiry, import the material again and decrypt every stored
 DEK: each keyring's with `reencrypt_deks`, the application's own as in
-[The check](../envelope-encryption.md#the-check). An error means the key is still in
+[The check](../production/reencrypt-deks.md#the-check). An error means the key is still in
 `PendingImport`: `ListKeyRotations` lists each material with its import state, and the one still
 missing is imported again.
 

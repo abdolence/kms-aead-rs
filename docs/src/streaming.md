@@ -347,7 +347,7 @@ let body = DecryptingReader::new(
 
 A write stores the encryption marker of the encryptor's record beside the object's own record, as
 it does for fields, so that a sweep finds the object by the marker, see
-[Sweeps](./operations/sweeps.md#the-encryption-marker).
+[Sweeps](./production/sweeps.md#the-encryption-marker).
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/stream.rs).

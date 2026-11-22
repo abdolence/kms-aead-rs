@@ -126,7 +126,7 @@ of the record from before the deletion fails with `RecordRegressed`, so a record
 accidental deletion is taken by a new process, not by the one that took the deletion. See
 [Signing the keyring record](../signing.md#signing-the-keyring-record). The deletion is what
 `KeyringAdmin::dangerously_shred()` ends with, see
-[Shredding a keyring](../operations/runbook.md#shredding-a-keyring), and a deletion by anyone else
+[Shredding a tenant with `dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred), and a deletion by anyone else
 has the same effect on the process.
 
 ## DEK eviction

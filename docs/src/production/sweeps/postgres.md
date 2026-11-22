@@ -1,8 +1,8 @@
 # Sweeps on PostgreSQL
 
 A sweep of a PostgreSQL table: the encryption marker as a column, the query for the rows behind,
-and the conditional write back. The mechanism is in [Sweeps](./sweeps.md), and the example has the
-five properties of [Sweeps by store](./sweeps.md#sweeps-by-store).
+and the conditional write back. The mechanism is in [Sweeps](../sweeps.md), and the example has the
+five properties of [Sweeps by store](../sweeps.md#sweeps-by-store).
 
 The marker is a `BYTEA` column with a btree index:
 

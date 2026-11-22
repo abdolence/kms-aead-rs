@@ -43,9 +43,9 @@ can build:
      version has none. Until then, an equality lookup in SQL computes no probe under the new
      version and misses the rows encrypted under it, with no error.
 
-   See [Rotation cadence](../operations/rotation.md#rotation-cadence),
-   [Retiring the old version](../operations/sweeps.md#retiring-the-old-version) and
-   [Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
+   See [Rotation cadence](../production/rotation.md#rotation-cadence),
+   [Retiring the old version](../production/sweeps.md#retiring-the-old-version) and
+   [Encrypted keysets](../production/reencrypt-deks.md#encrypted-keysets).
 
 Full example of a Tink export available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs),

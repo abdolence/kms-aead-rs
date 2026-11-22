@@ -121,7 +121,7 @@ A [keyring](./keyring.md) record decides which versions are read and which one e
 and the administration signs it where record signing is on, see
 [Signing the keyring record](./signing.md#signing-the-keyring-record); without it, its integrity
 rests on the keyring store's access control. The two principals of a deployment and their rights
-are in [Applications and administration](./keyring/deployment.md).
+are in [Permissions: applications and administration](./production/permissions.md).
 
 A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
 or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
@@ -170,7 +170,7 @@ version.
 - **a destroyed version's DEK lives as long as the KEK version that encrypted it.** A backup of the
   record holds encrypted DEKs the KMS still decrypts, and a keyset exported before the destroy holds
   the version's key under the same KEK, see
-  [Crypto-shredding](./operations/runbook.md#crypto-shredding);
+  [What survives a shred](./use-cases/erase-a-tenant.md#what-survives-a-shred);
 - **`dangerously_shred()` reaches the store's API only.** It deletes the record with the earlier
   versions the store keeps, and never calls the KMS. What the store keeps beyond its API stays until
   the operator deletes it: Firestore serves a deleted document to reads at an earlier time for one
@@ -194,7 +194,7 @@ version.
   again after every rotation and every `mark_compromised`;
 - **a sweep re-encrypts forgeries as trusted values.** Values read through a compromised version are
   decided per record before a sweep re-encrypts them, see
-  [The trust of re-encrypted values](./operations/sweeps.md#the-trust-of-re-encrypted-values);
+  [The trust of re-encrypted values](./production/sweeps.md#the-trust-of-re-encrypted-values);
 - **deterministic fields leak equality and frequency**, and an equality query across a rotation
   links a value's history for whoever reads the query, see
   [Queries across rotations](./keyring/deterministic.md#queries-across-rotations);

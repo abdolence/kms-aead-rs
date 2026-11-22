@@ -12,10 +12,10 @@ A keyring record holds:
 - the algorithms new versions use, one per purpose;
 - the re-encryption epoch, which every write that makes a version active moves on by one, and which
   the application stores beside its records as an `EncryptionMarker`, see
-  [Sweeps](../operations/sweeps.md);
+  [Sweeps](../production/sweeps.md);
 - every key version ever created, in creation order, each with its encrypted DEK, its state and,
   once it was active, its re-encryption range: the markers of the records encrypted under it, see
-  [Records under a version](../operations/sweeps.md#records-under-a-version).
+  [Records under a version](../production/sweeps.md#records-under-a-version).
 
 Every store keeps it as the same JSON document, see [Keyring records](../formats.md#keyring-records)
 for the document and the rules every read checks. A record that breaks one fails with
@@ -74,7 +74,7 @@ as pending, except the replacement `mark_compromised` adds for an active version
 at once.
 
 The calls, on a `KeyringAdmin`, with the `admin` feature, see
-[Applications and administration](./deployment.md):
+[Permissions: applications and administration](../production/permissions.md):
 
 | Call | Does |
 |---|---|
@@ -86,7 +86,7 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
-| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see [Shredding a keyring](../operations/runbook.md#shredding-a-keyring), and the record stays in the store |
+| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see [Shredding a tenant with `dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred), and the record stays in the store |
 | `dangerously_shred()` | destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see [Shredding a keyring](#shredding-a-keyring) |
 | `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
 
@@ -207,16 +207,16 @@ pending version if the purpose has one: `promote` would refuse with `PromotionTo
 backup of the record still holds them, and a keyset exported while the version decrypted holds its
 key under the same KEK. The KMS decrypts both as long as the KEK version that encrypted them exists,
 see
-[Crypto-shredding](../operations/runbook.md#crypto-shredding).
+[What survives a shred](../use-cases/erase-a-tenant.md#what-survives-a-shred).
 
 ## Shredding a keyring
 
 `dangerously_shred()` is the call for a keyring whose values must become unreadable under a KEK that
 other keyrings share. It destroys every version in one write, as `dangerously_destroy_all_versions`
 does, signed as every lifecycle write is, then deletes the record from the store at the revision
-that write left. The runbook has the rules of the two steps, the retry of a shred that failed, and
-the copies a store keeps beyond its API, see [Shredding a
-keyring](../operations/runbook.md#shredding-a-keyring).
+that write left. The rules of the two steps, the retry of a shred that failed, and the copies a
+store keeps beyond its API are in [Shredding a tenant with
+`dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred).
 
 ```rust,no_run
 use kms_aead::backends::Ring;
@@ -260,7 +260,7 @@ encrypted under the keyring stay where they are and decrypt under nothing. Every
 the keyring takes the deletion at its next revalidation, see [A record gone from the
 store](./record-cache.md#a-record-gone-from-the-store). A stream decryptor made before the shred
 keeps decrypting until it is dropped, so a service builds one per request, see [Shredding a
-keyring](../operations/runbook.md#shredding-a-keyring).
+keyring](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred).
 
 ## Reading a compromised version
 
@@ -275,5 +275,5 @@ version:
 
 `decrypt_with_trust` decrypts the value whatever the policy, and returns a `Decrypted` with the
 value, the key id of the version that decrypted it and its `KeyTrust`, `Trusted` or
-`Compromised`. It is the call for a [sweep](../operations/sweeps.md). A compromised version's DEK
+`Compromised`. It is the call for a [sweep](../production/sweeps.md). A compromised version's DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.

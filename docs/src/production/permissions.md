@@ -1,4 +1,11 @@
-# Applications and administration
+# Permissions: applications and administration
+
+Without a keyring, the principals that write values and the ones that only read them differ in
+their KMS rights, see [KMS rights](#with-kms-aead-alone). A keyring adds an administration side that
+builds with another feature, calls another handle and writes the keyring store, and the sections
+below give each side its checklist and its rights.
+
+## Two sides of a keyring
 
 A keyring has two sides, each with its own handle and its own rights:
 
@@ -36,7 +43,8 @@ application opens it:
 - or from an application that provisions lazily, such as one keyring per tenant on the tenant's
   first request. Such an application enables `admin` and is given the administrative rights
   deliberately, and is then trusted as the administration is, see
-  [Keyring limits](../security.md#keyring-limits).
+  [Keyring limits](../security.md#keyring-limits) and
+  [A keyring per tenant](../use-cases/keyring-per-tenant.md#creating-the-keyrings).
 
 An application's own tests that create keyrings in `MemoryKeyringStore` enable `admin` for the
 tests only:
@@ -49,29 +57,68 @@ kms-aead-keyring = { version = "0.33", features = ["ring", "firestore-tls-roots"
 kms-aead-keyring = { version = "0.33", features = ["ring", "firestore-tls-roots", "admin"] }
 ```
 
-Be aware Cargo unifies the features of the packages one command builds: a `cargo build` of a
-workspace with both the application and an administrative job gives the application `admin`
-too. Build and deploy the application with `cargo build -p <application>`.
+## The application
+
+- builds without the `admin` feature, with `cargo build -p <application>`: Cargo unifies the
+  features of the packages one command builds, so a `cargo build` of a workspace with both the
+  application and an administrative job gives the application `admin` too;
+- calls `KeyringRegistry::open`, and on the `Keyring` it returns `encryptor`, `decrypt`, the beacons
+  and the probes, and runs the sweeps. None of its calls asks the KMS to encrypt;
+- runs as a principal with KMS decrypt on the KEK and read access to the keyring store, listen
+  included, see [KMS rights](#kms-rights) and [Store rights](#store-rights);
+- where records are signed, opens its registry with `RecordSignaturePolicy::Required` and the public
+  key of the record signer, from its configuration and never from the store, see
+  [Protect the keyring record](./signed-records.md);
+- awaits `registry.shutdown(None)` before it exits.
+
+## The administration
+
+- builds with the `admin` feature, and `bigquery-export` where it exports BigQuery keysets;
+- calls the registry's `create` or `open_or_create` for each new keyring, and `admin`, and on the
+  `KeyringAdmin` they return the lifecycle calls (`rotate`, `promote`, `change_algorithm`,
+  `mark_compromised`, `retire`, `reinstate`, `destroy` and `dangerously_destroy_all_versions`),
+  `dangerously_shred`, `reencrypt_deks` and the keyset exports `export_bigquery_keyset` and
+  `export_tink_keyset`, see [Key versions and lifecycle](../keyring/lifecycle.md);
+- runs in a job or in infrastructure automation, never in a request handler, as the only principal
+  with KMS encrypt and decrypt on the KEK, or under an asymmetric KEK decrypt and the read of the
+  public key and no encrypt right, and with write access to the keyring store;
+- holds the record signer where records are signed: a `Signer` on a KMS signing key, with the right
+  to sign and no other principal holding it, passed to `create_signed`, `open_or_create_signed` or
+  `with_record_signer`, see [Protect the keyring record](./signed-records.md);
+- logs every call it makes, since a version its log does not show is the start of
+  [A version the administrative job did not create](./runbook.md#a-version-the-administrative-job-did-not-create);
+- opens its registry with the longest `record_ttl` in the fleet, which the promotion guard waits.
 
 ## KMS rights
 
 A [keyring](../keyring.md) record is signed only where the administration holds a record signer, see
 [Signing the keyring record](../signing.md#signing-the-keyring-record) and
-[Keyring deployment](../security.md#keyring-deployment), so a deployment splits the two sides
-above into two principals:
+[Keyring deployment](../security.md#keyring-deployment), so a deployment splits the two sides above
+into two principals.
 
-- **Application**: builds without the `admin` feature, and calls `Keyring` only: encryption,
-  decryption, beacons and sweeps. It needs KMS decrypt on the KEK and read access to the keyring
-  store. None of its calls asks the KMS to encrypt, so it needs nothing more;
-- **Administration**: builds with the `admin` feature, and calls the registry's `create`,
-  `open_or_create` and `admin`, and the `KeyringAdmin` they return: `rotate`, `promote`,
-  `change_algorithm`, `mark_compromised`, `retire`, `reinstate`, `destroy`,
-  `dangerously_destroy_all_versions`, `shred`, `reencrypt_deks`, `export_bigquery_keyset` and
-  `export_tink_keyset`. It needs KMS encrypt and decrypt on the KEK, or under an asymmetric KEK
-  decrypt and the read of the public key and no encrypt right, and where it signs records the
-  right to sign with the record signer's key. It is the only principal with write access to the
-  keyring store. It runs in a job or in infrastructure automation, never
-  in a request handler.
+### With kms-aead alone
+
+An envelope that writes needs KMS encrypt on the KEK: one encryption per value with a per-call
+envelope, and one per renewed DEK with store-less DEK reuse. An envelope that reads needs KMS
+decrypt, on every DEK cache miss. A principal that does both needs both, and so does a re-encryption
+of stored DEKs, see [Re-encrypt DEKs after a KEK rotation](./reencrypt-deks.md). The local KMS has
+no rights to grant.
+
+| KMS | Writer: encrypt | Reader: decrypt |
+|---|---|---|
+| GCP | `cloudkms.cryptoKeyVersions.useToEncrypt` | `cloudkms.cryptoKeyVersions.useToDecrypt`, as in `roles/cloudkms.cryptoKeyDecrypter` |
+| AWS | `kms:Encrypt` on the key | `kms:Decrypt` on the key |
+| Azure Key Vault | `keys/wrap/action` on the key | `keys/unwrap/action` on the key |
+| Vault Transit | `update` on `<mount>/encrypt/<key>` | `update` on `<mount>/decrypt/<key>` |
+
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` carries both GCP permissions. With the KMS random
+generator on, the writer also needs `cloudkms.locations.generateRandomBytes` on the location under
+GCP, and `kms:GenerateRandom` under AWS. See the page of each provider in
+[KMS providers](../providers.md).
+
+### With a keyring
+
+The rights of the two sides, per KMS:
 
 | KMS | Application | Administration |
 |---|---|---|
@@ -79,6 +126,8 @@ above into two principals:
 | AWS | `kms:Decrypt` on the key | `kms:Encrypt` and `kms:Decrypt` on the key, plus `kms:GenerateRandom` with the KMS random generator |
 | Azure Key Vault | a role with `keys/unwrap/action` on the key | a role with `keys/wrap/action` and `keys/unwrap/action` on the key |
 | Vault Transit | `update` on `transit/decrypt/<key>` | `update` on `transit/encrypt/<key>` and `transit/decrypt/<key>` |
+
+### Under an asymmetric KEK
 
 Under an asymmetric KEK the public key encrypts new DEKs in the administration's own process, so no
 side has the KMS encrypt right: Cloud KMS `useToEncrypt`, AWS `kms:Encrypt`, Key Vault
@@ -116,4 +165,4 @@ only the administration writes the record, and the applications read it and list
 
 Each side logs events an operator acts on, such as a refused record, a failed revalidation or a
 re-encryption that failed, and records metrics with the `opentelemetry` feature. The list, with the
-next step for each, is in [What to alert on](../production/deployment.md#what-to-alert-on).
+next step for each, is in [Monitoring and alerts](./monitoring.md#what-to-alert-on).

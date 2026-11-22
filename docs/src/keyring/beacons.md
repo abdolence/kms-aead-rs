@@ -141,14 +141,14 @@ is re-indexed:
    version, compromised ones included, newest first;
 4. the promotion moved the keyring's re-encryption epoch on, so every row written before it has a
    `EncryptionMarker` below the current one, and a re-index sweep visits them, see
-   [Sweeps](../operations/sweeps.md). It computes each row's beacon again under the active version
+   [Sweeps](../production/sweeps.md). It computes each row's beacon again under the active version
    of its encryptor and writes the encryptor's marker; a row without a beacon gets the marker alone;
 5. once the sweep reports no failure and that query returns nothing, `retire` the old version, and
    its probe drops out of every lookup.
 
 `beacon.key_id()` reads the key id of a stored beacon, so that the sweep recomputes only the beacons
 under an older version. Here a re-index over an in-memory table, run by `sweep::reencrypt_records` as any sweep
-is, see [Running a sweep](../operations/sweeps.md#running-a-sweep). A beacon under the active
+is, see [Running a sweep](../production/sweeps.md#running-a-sweep). A beacon under the active
 version keeps its bytes and only the value is re-encrypted; any other gives both again from the
 plaintext:
 

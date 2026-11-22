@@ -222,7 +222,7 @@ A KEK rotation changes no key inside a keyset and leaves the keyset under the KE
 encrypted it at the export, so `KEYS.KEYSET_CHAIN` fails once that version is disabled. Export
 every keyset again after `reencrypt_deks`, once the new primary version has propagated, and replace
 the old bytes in every query and column that holds them before the old version is disabled, see
-[Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
+[Encrypted keysets](../production/reencrypt-deks.md#encrypted-keysets).
 
 ### Queries
 
@@ -260,7 +260,7 @@ The requirements:
   version the keyset could not hold, see [Fields BigQuery reads](#fields-bigquery-reads);
 - the principal that queries has decrypt on the KMS key, and the one that exports has encrypt and
   decrypt on it. The export is a `KeyringAdmin` call, see
-  [KMS rights](./deployment.md#kms-rights).
+  [KMS rights](../production/permissions.md#kms-rights).
 
 ### How it behaves
 
@@ -299,7 +299,7 @@ and `InteropRequirement::Kek`, before any store or KMS call.
 
 After a KEK rotation, a Tink keyset is exported again and replaces the old one wherever a Tink
 reader decrypts it, as a BigQuery keyset does, see
-[Encrypted keysets](../envelope-encryption.md#encrypted-keysets).
+[Encrypted keysets](../production/reencrypt-deks.md#encrypted-keysets).
 
 ```rust,no_run
 use kms_aead::backends::Ring;

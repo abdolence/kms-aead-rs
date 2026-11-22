@@ -22,7 +22,7 @@ the envelope modes of kms-aead.
 
 ## Applications and administration
 
-See [Applications and administration](./keyring/deployment.md).
+See [Permissions: applications and administration](./production/permissions.md).
 
 ## The registry and its handles
 
@@ -78,7 +78,7 @@ ephemeral local KEK has no second copy to `open` the keyring with: `LocalKmsProv
 active versions; `decrypt` uses the version the value names. A write takes one encryptor and
 encrypts every encrypted field of the record through it, so that the encryption marker it stores
 beside them names the versions they are under, see [The encryption
-marker](./operations/sweeps.md#the-encryption-marker). Neither calls the store while the cached
+marker](./production/sweeps.md#the-encryption-marker). Neither calls the store while the cached
 record is fresh, nor the KMS while the version's DEK is in the DEK cache, see [Record
 cache](./keyring/record-cache.md).
 

@@ -35,7 +35,7 @@ ALTER TABLE users ALTER COLUMN encryption_marker SET DEFAULT b'\x01\x00\x00\x00\
 UPDATE users SET encryption_marker = b'\x01\x00\x00\x00\x00' WHERE encryption_marker IS NULL;
 ```
 
-The `UPDATE` in SQL of [Sweeps on BigQuery](../operations/sweeps-bigquery.md) does not decrypt an
+The `UPDATE` in SQL of [Sweeps on BigQuery](./sweeps/bigquery.md) does not decrypt an
 envelope value, so its `WHERE` leaves the envelope rows out with
 `AND encryption_marker > b'\x01\x00\x00\x00\x00'`, and they go through the Rust sweep.
 
