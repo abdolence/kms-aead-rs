@@ -100,7 +100,7 @@ where
     ///
     /// # Errors
     ///
-    /// - [`KeyringError::ReservedKeyId`] for an ordinal of zero and
+    /// - [`KeyringError::ReservedKeyId`] for a reserved id and
     ///   [`KeyringError::KeyPurposeMismatch`] for an id of another purpose;
     /// - [`KeyringError::KeyVersionUnknown`], also after one reload,
     ///   [`KeyringError::KeyVersionRetired`], [`KeyringError::KeyVersionDestroyed`] and

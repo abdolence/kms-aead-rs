@@ -37,7 +37,8 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 | 31 | set for deterministic versions, alone |
 | 30 | set for beacon versions, alone |
 | 31 and 30 | set for MAC versions |
-| 0 to 29 | the ordinal, from 1, counted per purpose |
+| 24 to 29 | reserved: clear in the id of every version |
+| 0 to 23 | the ordinal, from 1, counted per purpose |
 
 So the ids of each purpose are:
 
@@ -46,11 +47,17 @@ So the ids of each purpose are:
 - beacon: `1073741825`, `1073741826`, …;
 - MAC: `3221225473`, `3221225474`, ….
 
-An id whose ordinal is 0 is reserved: `0`, `2^30`, `2^31` and `2^31 + 2^30`. A value that carries
-one fails with `ReservedKeyId`. A value whose id is of another
-purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. Ids
-are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
-a SQL column holding one is a `BIGINT`.
+Two kinds of id are reserved, and no version has one:
+
+- an id whose ordinal is 0: `0`, `2^30`, `2^31` and `2^31 + 2^30`;
+- an id with any of bits 24 to 29 set. These bits are kept for purposes a later release may add,
+  so a reader refuses such an id rather than take it for a version of one of the four purposes.
+
+A value that carries a reserved id fails with `ReservedKeyId`, and a value whose id is of another
+purpose than the call fails with `KeyPurposeMismatch`. Both fail before any store or KMS call. A
+record that holds a reserved id fails with `RecordInvalid` and the reason `ReservedKeyId`. Each
+purpose has 2^24 - 1 ordinals, and ids are never reused: a destroyed version keeps its id in the
+record. A key id goes up to 2^32 - 1, so a SQL column holding one is a `BIGINT`.
 
 ## Keyring records
 

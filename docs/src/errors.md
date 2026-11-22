@@ -262,7 +262,7 @@ text may change in any release.
 | `KeyPurposeMismatch` | `KEY_PURPOSE_MISMATCH` | a key id of another purpose than the call's |
 | `InvalidTransition` | `INVALID_TRANSITION` | a lifecycle call that does not apply to the version's state, see [States](./keyring/lifecycle.md#states) |
 | `PromotionTooEarly` | `PROMOTION_TOO_EARLY` | a promotion before `record_ttl` has passed since the version was staged |
-| `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero |
+| `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero, or one of bits 24 to 29 set, see [Keyring key ids](./formats/keyring-records.md#keyring-key-ids) |
 | `UnknownKeyVersionState` | `UNKNOWN_KEY_VERSION_STATE` | `FromStr` of a name that is no `KeyVersionState` |
 
 ### Other calls

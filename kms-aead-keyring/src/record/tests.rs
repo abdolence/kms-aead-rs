@@ -258,6 +258,23 @@ fn a_key_id_of_the_wrong_purpose_is_rejected() -> KeyringResult<()> {
 }
 
 #[test]
+fn a_key_id_with_an_ordinal_from_2_to_the_24_is_rejected() -> KeyringResult<()> {
+    for key_id in [
+        1 << 24,
+        (1 << 24) | 1,
+        (1 << 30) - 1,
+        (1 << 30) | (1 << 24) | 1,
+    ] {
+        assert_eq!(
+            refusal(&document(vec![version(key_id, "active", false)?])),
+            Some(RecordInvalidReason::ReservedKeyId),
+            "{key_id:#x}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn duplicate_key_ids_are_rejected() -> KeyringResult<()> {
     let document = document(vec![
         version(1, "decrypt_only", false)?,

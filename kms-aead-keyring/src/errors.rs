@@ -92,8 +92,9 @@ pub enum KeyringError {
     /// [`remaining`](PromotionTooEarlyError::remaining) has passed, and
     /// `KeyringAdmin::promote_now` makes it without the wait.
     PromotionTooEarly(PromotionTooEarlyError),
-    /// A key id that a value, beacon or MAC carries, or that an operation names, is reserved: its
-    /// ordinal is zero, so no version has it.
+    /// A key id that a value, beacon or MAC carries, or that an operation names, is reserved, so
+    /// no version has it: its ordinal is zero, or it sets one of bits 24 to 29, which are kept
+    /// for later purposes.
     ReservedKeyId(KeyId),
     /// Creating a deterministic key version needs the `deterministic` feature.
     DeterministicDisabled,
@@ -575,7 +576,8 @@ pub enum RecordInvalidReason {
     UnknownAlgorithm(Option<KeyId>),
     /// A state name this release does not know, on the version with this key id.
     UnknownState(KeyId),
-    /// A key id whose ordinal is zero, which names no version.
+    /// A reserved key id, which names no version: its ordinal is zero, or it sets one of bits 24
+    /// to 29.
     ReservedKeyId,
     /// Two versions with one key id.
     DuplicateKeyId(KeyId),
