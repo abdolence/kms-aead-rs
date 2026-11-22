@@ -31,7 +31,7 @@ that read the shred's first write logs an `INFO` instead.
 | `WARN`: a read of a compromised version under the `Allow` policy | values under a leaked DEK are being read | the sweep of [A plaintext DEK leaked](./runbook.md#a-plaintext-dek-leaked) |
 | `WARN`: a read refused because its version is retired or destroyed | a value the sweep missed | `reinstate` a retired version, and sweep again |
 | `WARN`: a record a sweep could not re-encrypt, or `SweepReport::failed` above zero | a record left under an old version | the cause in the event's `error`, see [Running a sweep](./sweeps.md#running-a-sweep) |
-| `WARN`, once per process: the first read of a layout of 0.29 or earlier | values not yet upgraded | [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values) |
+| `WARN`, once per process: the first read of a legacy layout | values not yet upgraded | [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values) |
 
 ### The process and the KMS
 
@@ -71,8 +71,9 @@ Without a keyring, the rows of kms-aead apply: `error.type` on `kms_aead.operati
 With the `opentelemetry` feature, the keyring records the plaintext size of each value it encrypts
 under each version, see [Metrics](../observability/metrics.md#metrics): the histogram's count is the
 values, and its sum their bytes. Each process records its own, and the alert sums them across the
-fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
-export, with the range covering the version's life:
+fleet. Here at half of the bounds of a version, 2^32 values ([Nonces](../security.md#nonces)) and
+2^38 bytes ([Data volume](../security.md#data-volume)), in PromQL over the Prometheus export, with
+the range covering the version's life:
 
 ```promql
 sum by (kms_aead_keyring, kms_aead_key_id) (
@@ -93,7 +94,7 @@ A histogram starts at zero in every new process, and `increase()` counts across 
 The `[90d]` range needs 90 days of retention: Prometheus keeps 15 days by default, so keep the
 metric in long-term storage, through remote write or in a backend with a longer retention. The bytes
 alert keeps to AES-GCM versions, the only ones with a volume bound. Rotate the version the alert
-names, as in [Staging a rotation](./rotation.md#rotation-cadence).
+names, as in [Rotation cadence](./rotation.md#rotation-cadence).
 
 ## During a DEK rotation
 
