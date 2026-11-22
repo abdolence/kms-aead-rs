@@ -11,6 +11,10 @@ optionally signals changes to it. The library provides:
 | Cloud Storage | `store::GcsKeyringStore` | `gcs` | the object's generation | none |
 | S3 | `store::S3KeyringStore` | `s3` | the object's ETag | none |
 
+Each production store below has the same sections: its feature and client, its storage layout, its
+setup, how a change reaches the other processes, its rights, backups and deletion, and its caveats
+where it has any.
+
 Every store keeps the record as the same [JSON document](../formats/keyring-records.md#keyring-records), and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
@@ -35,10 +39,31 @@ signals a watch on every write. A delete removes the entry.
 
 ## Firestore
 
+### Feature and client
+
+The `firestore` feature is the store on firestore-rs without its default features, so it has no TLS
+root store and no crypto provider, and needs a firestore-rs or gcloud-sdk root store feature from
+the application, or one of:
+
+- `firestore-tls-roots`: the system's native roots, firestore-rs's `tls-roots`, which brings
+  native-tls and so OpenSSL on Linux;
+- `firestore-tls-webpki`: rustls, with the bundled WebPKI roots for the gRPC connection to
+  Firestore, and no native TLS;
+
+each with firestore-rs's `auth-default-crypto`.
+
+`FirestoreDb` is the `firestore` crate's own client: the application builds it with the
+project, database and credentials it chooses. The version of the `firestore` crate is part of
+this crate's API under the Firestore features.
+
+### Storage layout
+
 The record of a keyring is the document `kms_keyrings/<keyring id>`, whose fields are those of the
 record's JSON. `with_collection` takes another collection than
 `FirestoreKeyringStore::DEFAULT_COLLECTION`, as firestore-rs's `FirestoreCollectionId`. A create fails when the document exists, and an
 update carries the update time it read as its precondition.
+
+### Setup
 
 ```rust,no_run
 use firestore::FirestoreDb;
@@ -67,28 +92,33 @@ registry.shutdown(None).await;
 # }
 ```
 
-`FirestoreDb` is the `firestore` crate's own client: the application builds it with the
-project, database and credentials it chooses. The version of the `firestore` crate is part of
-this crate's API under the Firestore features.
+### Change propagation
 
-The `firestore` feature is the store on firestore-rs without its default features, so it has no TLS
-root store and no crypto provider, and needs a firestore-rs or gcloud-sdk root store feature from
-the application, or one of:
+Each store holds one listen stream, with a target on the document of each keyring it watches.
 
-- `firestore-tls-roots`: the system's native roots, firestore-rs's `tls-roots`, which brings
-  native-tls and so OpenSSL on Linux;
-- `firestore-tls-webpki`: rustls, with the bundled WebPKI roots for the gRPC connection to
-  Firestore, and no native TLS;
+### Rights, backups and deletion
 
-each with firestore-rs's `auth-default-crypto`. A delete removes the document, with its update time
-as the precondition.
+The rights of the application and the administration on the keyring documents are in
+[Store rights](../production/permissions.md#store-rights). Firestore's point-in-time recovery
+restores an earlier record, and what a delete leaves behind is in
+[What a delete removes](#what-a-delete-removes).
 
-Each store holds one listen stream, with a target on the document of each keyring it watches. Firestore's point-in-time recovery
-restores an earlier record. Be aware the `firestore` crate logs every listen event at `trace` level on its
+### Caveats
+
+Be aware the `firestore` crate logs every listen event at `trace` level on its
 `firestore` target, documents included, so that level writes encrypted DEKs to the log. Keep it off
 where the log leaves the administration's reach.
 
 ## PostgreSQL
+
+### Feature and client
+
+The `postgres` feature connects through tokio-postgres, with a `tokio_postgres::Config` and a TLS
+connector the application chooses. It also enables kms-aead's `postgres` feature, which gives
+`Encrypted` tokio-postgres's `ToSql` and `FromSql` as `BYTEA`, see
+[Encrypted fields](./fields.md#postgresql).
+
+### Storage layout
 
 One row per keyring, in a table the operator creates. The library runs no migrations. The table,
 `kms_keyrings` unless `with_table` names another:
@@ -102,20 +132,15 @@ CREATE TABLE kms_keyrings (
 );
 ```
 
-- the rights of the application and the administration on the table are in
-  [Store rights](../production/permissions.md#store-rights);
 - the table name is unqualified, so the connection's `search_path` selects the schema;
 - the `revision` of a row is the server's clock in microseconds when the row is created, and the
   larger of that and the previous revision plus one at each write. A row deleted and created again
   therefore never repeats a revision of the id, which a running process that missed the deletion
-  would take for an unchanged record;
-- every write sends `NOTIFY <table>, '<keyring id>'` when it commits, through `pg_notify` in the
-  same statement, and so does a delete, which removes the row at its revision;
-- PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
-  `reload_min_interval` however many signals arrive, so a stray `NOTIFY` costs one read.
+  would take for an unchanged record.
 
-The store connects through tokio-postgres, with a `tokio_postgres::Config` and a TLS connector the
-application chooses. `NoTls` for a local database:
+### Setup
+
+`NoTls` for a local database:
 
 ```rust,no_run
 use kms_aead_keyring::store::{PostgresKeyringStore, PostgresTable};
@@ -156,6 +181,11 @@ let store: PostgresKeyringStore<MakeRustlsConnect> = PostgresKeyringStore::new(c
 
 `postgres-native-tls`'s `MakeTlsConnector` works the same way for the platform TLS library.
 
+### Change propagation
+
+Every write sends `NOTIFY <table>, '<keyring id>'` when it commits, through `pg_notify` in the
+same statement, and so does a delete, which removes the row at its revision.
+
 The store opens at most two connections, whatever the number of keyrings on it:
 
 - the query connection, on the first read or write. When it is lost, the call that finds it lost
@@ -167,11 +197,29 @@ The store opens at most two connections, whatever the number of keyrings on it:
 Clones of the store share both connections. Set `connect_timeout` on the `Config` to bound each
 attempt: calls wait for the attempt in progress.
 
-The `postgres` feature also enables kms-aead's `postgres` feature, which gives `Encrypted`
-tokio-postgres's `ToSql` and `FromSql` as `BYTEA`, see
-[Encrypted fields](./fields.md#postgresql).
+### Rights, backups and deletion
+
+The rights of the application and the administration on the table are in
+[Store rights](../production/permissions.md#store-rights), and what a delete leaves behind is in
+[What a delete removes](#what-a-delete-removes).
+
+### Caveats
+
+PostgreSQL lets any session notify any channel. A keyring revalidates at most once per
+`reload_min_interval` however many signals arrive, so a stray `NOTIFY` costs one read.
 
 ## Cloud Storage
+
+### Feature and client
+
+The client is gcloud-sdk's, built with the credentials, endpoint and TLS stack the application
+chooses. The `gcs` feature has no TLS root store, so it needs one of gcloud-sdk's root store
+features from the application, or one of:
+
+- `gcs-tls-roots`: the system's native roots;
+- `gcs-tls-webpki`: the bundled WebPKI roots.
+
+### Storage layout
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through the
 `google.storage.v2` gRPC API. `with_prefix` sets another `ObjectPrefix` than
@@ -179,15 +227,7 @@ Each record is the object `kms-keyrings/<keyring id>.json` in a bucket, through 
 conditional on the generation the writer read, and a revalidation reads the object only when its
 generation changed.
 
-- the rights of the application and the administration on the bucket are in
-  [Store rights](../production/permissions.md#store-rights);
-- Cloud Storage has no change notification the store listens to, so a process sees a change once
-  its record is older than `record_ttl`, 5 minutes by default;
-- turn on object versioning on the bucket: every record written is then kept as a noncurrent
-  version, to restore from;
-- a delete removes every generation of the object, the noncurrent ones included, so versioning
-  does not keep a shredded record. Soft delete keeps what a delete removes, see
-  [What a delete removes](#what-a-delete-removes).
+### Setup
 
 ```rust,no_run
 use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
@@ -204,14 +244,30 @@ let store = GcsKeyringStore::new(client, GcsBucketName::try_from("my-keyrings".t
 # }
 ```
 
-The client is gcloud-sdk's, built with the credentials, endpoint and TLS stack the application
-chooses. The `gcs` feature has no TLS root store, so it needs one of gcloud-sdk's root store
-features from the application, or one of:
+### Change propagation
 
-- `gcs-tls-roots`: the system's native roots;
-- `gcs-tls-webpki`: the bundled WebPKI roots.
+Cloud Storage has no change notification the store listens to, so a process sees a change once its
+record is older than `record_ttl`, see [Record cache](./record-cache.md#how-late-a-change-is-seen).
+
+### Rights, backups and deletion
+
+- the rights of the application and the administration on the bucket are in
+  [Store rights](../production/permissions.md#store-rights);
+- turn on object versioning on the bucket: every record written is then kept as a noncurrent
+  version, to restore from;
+- a delete removes every generation of the object, the noncurrent ones included, so versioning
+  does not keep a shredded record. Soft delete keeps what a delete removes, see
+  [What a delete removes](#what-a-delete-removes).
 
 ## S3
+
+### Feature and client
+
+The client is aws-sdk-s3's, built with the credentials, region, endpoint and HTTP client the
+application chooses. The `s3` feature enables the SDK's default HTTPS client, rustls on
+aws-lc-rs, as kms-aead's AWS KMS provider does.
+
+### Storage layout
 
 Each record is the object `kms-keyrings/<keyring id>.json` in a bucket of Amazon S3 or of an
 S3-compatible server. `with_prefix` sets another `ObjectPrefix` than
@@ -220,14 +276,7 @@ conditional on no object existing (`If-None-Match: *`), an update on the ETag th
 (`If-Match`), and a revalidation reads the object only when its ETag changed (`If-None-Match` on
 the read).
 
-- the rights of the application and the administration on the objects are in
-  [Store rights](../production/permissions.md#store-rights);
-- S3 has no change notification the store listens to, so a process sees a change once its record
-  is older than `record_ttl`, 5 minutes by default;
-- turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
-  restore from;
-- a delete removes every version and delete marker of the object, so versioning does not keep a
-  shredded record, see [What a delete removes](#what-a-delete-removes).
+### Setup
 
 ```rust,no_run
 use aws_config::BehaviorVersion;
@@ -245,11 +294,23 @@ let store = S3KeyringStore::new(
 # }
 ```
 
-The client is aws-sdk-s3's, built with the credentials, region, endpoint and HTTP client the
-application chooses. The `s3` feature enables the SDK's default HTTPS client, rustls on
-aws-lc-rs, as kms-aead's AWS KMS provider does.
+### Change propagation
 
-### S3-compatible servers
+S3 has no change notification the store listens to, so a process sees a change once its record is
+older than `record_ttl`, see [Record cache](./record-cache.md#how-late-a-change-is-seen).
+
+### Rights, backups and deletion
+
+- the rights of the application and the administration on the objects are in
+  [Store rights](../production/permissions.md#store-rights);
+- turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
+  restore from;
+- a delete removes every version and delete marker of the object, so versioning does not keep a
+  shredded record, see [What a delete removes](#what-a-delete-removes).
+
+### Caveats
+
+#### S3-compatible servers
 
 A server is S3-compatible for this store when it passes the store conformance suite,
 [`kms-aead-keyring/tests/store_conformance.rs`](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/tests/store_conformance.rs).
