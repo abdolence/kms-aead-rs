@@ -109,10 +109,10 @@
 //! BigQuery rows written before the marker get `ENVELOPE` written into them first, or the
 //! migration scans them once instead of querying.
 //!
-//! Values written by kms-aead 0.29 or earlier are in layouts this call does not read: they are
-//! upgraded in place first, with kms-aead's `legacy-formats` feature and
-//! `KmsAeadEnvelope::upgrade_legacy_value`, which takes the value's AAD. The layout of a value
-//! is always the marker's, never guessed from its bytes.
+//! Values written by kms-aead 0.29 or earlier are in layouts this call does not read, and fail
+//! with the code `LEGACY_FORMAT`: they are rewritten in place first, on kms-aead 0.33 with its
+//! `legacy-formats` feature, whose `KmsAeadEnvelope::upgrade_legacy_value` takes the value's AAD.
+//! The layout of a value is always the marker's, never guessed from its bytes.
 //!
 //! # Cancellation
 //!
