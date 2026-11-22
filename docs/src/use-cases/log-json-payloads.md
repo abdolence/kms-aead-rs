@@ -43,20 +43,15 @@ WARN webhook payload rejected (Eof): {<key>: <string>, <key>: {<key>: <string>},
 
 The log shows the type of every value, `<key>` for every key, the nesting, and where serde_json
 stopped reading. `error.classify()` gives the category of the failure, `Eof`, `Syntax`, `Data` or
-`Io`. Log that, and not the message of `serde_json::Error`, which for a value of the wrong type can
-quote the input.
+`Io`.
 
 ## Choose what the outline shows
 
 A policy is a type of the application's own that implements `JsonRedaction` and sets the constants
-it needs. Each constant is off by default:
-
-| Constant | Effect on the outline |
-|---|---|
-| `FIELD_NAMES` | shows the keys of objects, except the keys of `DATA_KEYED_MAPS`; |
-| `DATA_KEYED_MAPS` | lists the objects whose keys are data, such as a map from an email to a balance, so their keys stay hidden; `balances[]` names the values of the map `balances`; |
-| `SIZES` | shows the length of every hidden value and key, the length of the JSON and the line and column of the failure; |
-| `REVEALED_FIELDS` | shows the values of the listed fields, and the names of the fields on the way to each. |
+it needs, each of them off by default: `FIELD_NAMES` shows the keys, `SIZES` the lengths, and
+`REVEALED_FIELDS` the values of the fields it lists, such as `items[].sku` for the `sku` of every item
+of `items`. Every constant and the grammar of a path are in
+[Redaction policies](../stored-values.md#redaction-policies).
 
 ```rust
 use kms_aead::redaction::{FieldPaths, JsonRedaction, RedactedJson};
@@ -81,17 +76,6 @@ The outline of the same kind of body:
 {"event": "order.paid", "customer": {"email": <string>}, "items": [{"sku": "desk", "qty": <number>}, {"sku": "lamp", "qty": <number>}], "total_cents": <number>, <error: EOF while parsing an object>
 ```
 
-A path is the names of the fields joined by `.`, with `[]` after a field for every item of the array
-it holds, such as `customer.plan` or `items[].sku`, and `[].id` for the items of an array at the top
-level. A path takes in the whole value at its end. A field whose name has a `.`, `[` or `]` cannot
-be named. A malformed path is a compile error in the build that uses the policy.
-
-Revealed values go to the log whenever the JSON fails to parse. Reveal codes and identifiers, never
-personal data.
-
-`SIZES` has a cost: a length gives away a hidden boolean, since `true` and `false` differ in
-length, and it narrows a short string down. Leave it off for any payload where that matters.
-
 ## Input that is not JSON
 
 Broken, truncated and non-JSON input is outlined as far as it goes, and the outline never panics.
@@ -104,17 +88,16 @@ not JSON: base64-like text
 {"event": "order.paid", "a": <error: expected value>
 ```
 
-The classes of bytes that do not start as JSON are `empty`, `whitespace only`, `hex digits`,
-`base64-like text`, `text` and `binary data`.
+## What to watch for
 
-## Limits
-
-- The outline is one line of printable ASCII, 4 KiB at most, whatever the input;
-- a revealed string is escaped, with `"`, `\`, `<`, `>` and every character outside printable ASCII
-  written as JSON escapes, and cut after 64 bytes;
-- the items of an array with the shape of the item before them print as a count, such as `<2 more
-  of the same shape>`, and an array prints 8 items of different shapes at most;
-- serde_json reads 128 levels of nesting at most.
+- Log the category from `error.classify()`, and not the message of `serde_json::Error`, which for a
+  value of the wrong type can quote the input;
+- revealed values go to the log whenever the JSON fails to parse. Reveal codes and identifiers, never
+  personal data;
+- `SIZES` has a cost: a length gives away a hidden boolean, since `true` and `false` differ in
+  length, and it narrows a short string down. Leave it off for any payload where that matters;
+- an outline is bounded in length and depth, see the limits in
+  [Redaction policies](../stored-values.md#redaction-policies).
 
 `JsonEncoded<T, P>` applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see [JSON that does not decode](../stored-values.md#json-that-does-not-decode). The

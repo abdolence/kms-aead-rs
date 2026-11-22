@@ -411,8 +411,8 @@ boolean](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.
 Finding the field that changed takes more, and a type opts into it with a policy, the second type
 parameter of `JsonEncoded`: a type of the application's own that implements
 [`JsonRedaction`](https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html) and
-sets the constants it needs. The rustdoc says what each shows and how
-[`FieldPaths`](https://docs.rs/kms-aead/latest/kms_aead/redaction/struct.FieldPaths.html) names a
+sets the constants it needs. [Redaction policies](#redaction-policies) lists what each shows and
+how [`FieldPaths`](https://docs.rs/kms-aead/latest/kms_aead/redaction/struct.FieldPaths.html) names a
 field.
 
 ```rust
@@ -470,3 +470,33 @@ the same way, with no encryption, see
 
 Full example available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/encrypted_json.rs).
+
+### Redaction policies
+
+A policy `P` says what an outline shows. `JsonEncoded<T, P>` outlines the JSON that fails to decode
+under it, and `RedactedJson::new::<P>(bytes)` outlines any bytes under it, with no encryption, see
+[Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md). A policy is a type of
+the application's own that implements `JsonRedaction` and sets the constants it needs. Each
+constant is off by default:
+
+| Constant | Effect on the outline |
+|---|---|
+| `FIELD_NAMES` | shows the keys of objects, except the keys of `DATA_KEYED_MAPS` |
+| `DATA_KEYED_MAPS` | lists the objects whose keys are data, such as a map from an email to a balance, so their keys stay hidden; `balances[]` names the values of the map `balances` |
+| `SIZES` | shows the length of every hidden value and key, the length of the JSON and the line and column of the failure |
+| `REVEALED_FIELDS` | shows the values of the listed fields, and the names of the fields on the way to each |
+
+A path is the names of the fields joined by `.`, with `[]` after a field for every item of the array
+it holds, such as `customer.plan` or `items[].sku`, and `[].id` for the items of an array at the top
+level. A path takes in the whole value at its end. A field whose name has a `.`, `[` or `]` cannot
+be named. A malformed path is a compile error in the build that uses the policy.
+
+Bytes that do not start as JSON are outlined by their class: `empty`, `whitespace only`,
+`hex digits`, `base64-like text`, `text` or `binary data`. The limits of an outline:
+
+- the outline is one line of printable ASCII, 4 KiB at most, whatever the input;
+- a revealed string is escaped, with `"`, `\`, `<`, `>` and every character outside printable ASCII
+  written as JSON escapes, and cut after 64 bytes;
+- the items of an array with the shape of the item before them print as a count, such as `<2 more
+  of the same shape>`, and an array prints 8 items of different shapes at most;
+- serde_json reads 128 levels of nesting at most.

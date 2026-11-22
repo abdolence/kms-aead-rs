@@ -2,8 +2,8 @@
 
 An analyst needs a column that the application encrypted, in a BigQuery query, or a service in Java
 or Python needs to read values a Rust service wrote. Values the library writes are in Tink's
-formats, so Tink in another language and BigQuery's SQL read them, given the keys. Three routes lead there, and they differ in what the reader needs and in
-whether the key rotates:
+formats, so Tink in another language and BigQuery's SQL read them, given the keys. Three routes lead
+there, and they differ in what the reader needs and in whether the key rotates:
 
 | | Envelope values | One fixed key | Keyring |
 |---|---|---|---|
@@ -51,11 +51,6 @@ Full example of a Tink export available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/tink_export.rs),
 and of a BigQuery sweep in SQL
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_bigquery.rs).
-
-An exported keyset holds the keys of the versions it selects, so treat it as a copy of the
-record's readable versions, see [Keyring limits](../security.md#keyring-limits). BigQuery cannot
-calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
-[BigQuery](../beacons.md#bigquery).
 
 ## Query keyring values in BigQuery
 
@@ -107,3 +102,10 @@ email_aead = keyset_handle.primitive(aead.Aead)
 def decrypt_email(value: bytes, user_id: str) -> str:
   return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
 ```
+
+## What to watch for
+
+- An exported keyset holds the keys of the versions it selects, so treat it as a copy of the
+  record's readable versions, see [Keyring limits](../security.md#keyring-limits);
+- BigQuery cannot calculate a beacon: a beacon lookup in BigQuery matches beacons the application
+  calculated, see [BigQuery](../beacons.md#bigquery).

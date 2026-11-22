@@ -34,18 +34,8 @@ A handler that holds the body as a `Stream` of `Bytes` uses an `EncryptingStream
 #     EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringId, KeyringRegistry,
 #     KeyringRegistryOptions,
 # };
-use kms_aead_keyring::stream::{ChunkReadPlan, EncryptingWriter, PrefixedStreamHeader, StreamFormat};
+use kms_aead_keyring::stream::EncryptingWriter;
 use tokio::io::AsyncWriteExt;
-# /// An object store that serves `Range` requests, held in memory.
-# struct Store(Vec<u8>);
-# impl Store {
-#     fn get(&self, range: std::ops::Range<u64>) -> &[u8] {
-#         &self.0[range.start as usize..range.end as usize]
-#     }
-#     fn size(&self) -> u64 {
-#         self.0.len() as u64
-#     }
-# }
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
@@ -71,11 +61,69 @@ let mut writer = EncryptingWriter::new(encryptor, &mut sink);
 tokio::io::copy(&mut body, &mut writer).await?;
 writer.shutdown().await?;
 # let stored_len = writer.stored_len_written();
+# assert_eq!(sink.len() as u64, stored_len);
+# registry.shutdown(None).await;
+# Ok(())
+# }
+```
+
+## Serve byte ranges
+
+A reader plans each range from the size the object store reports, and fetches and decrypts only the
+chunks the plan names. This example uses `StreamFormat::Prefixed`, whose header starts with the key id
+of the version that encrypted the object, as every keyring object does. The envelope example below
+uses `StreamFormat::Bare`, which has no key reference, since the encrypted DEK is stored beside the
+object.
+
+```rust
+# use kms_aead::backends::Ring;
+# use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+# use kms_aead_keyring::testing::MemoryKeyringStore;
+# use kms_aead_keyring::{
+#     EntityId, EntityKind, FieldName, FieldSpec, KeyringAlgorithms, KeyringId, KeyringRegistry,
+#     KeyringRegistryOptions,
+# };
+# use kms_aead_keyring::stream::EncryptingWriter;
+use kms_aead_keyring::stream::{ChunkReadPlan, PrefixedStreamHeader, StreamFormat};
+# use tokio::io::AsyncWriteExt;
+# /// An object store that serves `Range` requests, held in memory.
+# struct Store(Vec<u8>);
+# impl Store {
+#     fn get(&self, range: std::ops::Range<u64>) -> &[u8] {
+#         &self.0[range.start as usize..range.end as usize]
+#     }
+#     fn size(&self) -> u64 {
+#         self.0.len() as u64
+#     }
+# }
+# #[tokio::main]
+# async fn main() -> Result<(), Box<dyn std::error::Error>> {
+# let registry = KeyringRegistry::<MemoryKeyringStore, Ring>::new(
+#     MemoryKeyringStore::new(),
+#     KeyringRegistryOptions::new(),
+# )?;
+# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("uploads".to_string())?)?;
+# let admin = registry
+#     .open_or_create(provider, KeyringId::from_static("tenant-42"), KeyringAlgorithms::new())
+#     .await?;
+# let keyring = admin.keyring();
+# let mut body = &vec![7_u8; 1_200_000][..];
+# let mut sink = Vec::new();
+# const UPLOAD_FILE: FieldSpec = FieldSpec::new(
+#     EntityKind::from_static("upload"),
+#     FieldName::from_static("file"),
+# );
+# let aad = UPLOAD_FILE.aad(&EntityId::try_from("upload-7")?);
+# let encryptor = keyring.encryptor().await.stream_encryptor(&aad).await?;
+# let mut writer = EncryptingWriter::new(encryptor, &mut sink);
+# tokio::io::copy(&mut body, &mut writer).await?;
+# writer.shutdown().await?;
+# let stored_len = writer.stored_len_written();
 # let store = Store(sink);
 # assert_eq!(store.size(), stored_len);
 
-// Serving: plan from the size the store reports first, so that a length the rules refuse
-// reaches neither the store nor the KMS. One zip entry, or the range of a video request
+// Plan from the size the store reports first, so that a length the rules refuse reaches neither
+// the store nor the KMS. One zip entry, or the range of a video request
 let last: ChunkReadPlan = StreamFormat::Prefixed.plan_final_chunk_read(store.size())?;
 let plan = StreamFormat::Prefixed.plan_chunk_read(store.size(), 1_000_000..1_064_512)?;
 

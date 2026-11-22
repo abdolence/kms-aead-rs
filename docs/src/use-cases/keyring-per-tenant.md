@@ -25,10 +25,8 @@ that needs either guarantee uses a KEK per tenant.
 An application opens only keyrings that exist, so each tenant's keyring is created first:
 
 - by the administrative job, as part of onboarding a tenant, with `create` or `open_or_create`;
-- or by the application on the tenant's first request, with `open_or_create`. Such an application
-  builds with the `admin` feature and runs with the administrative rights, so it is trusted as the
-  administration is, see [Permissions: applications and administration](../production/permissions.md) and
-  [Keyring limits](../security.md#keyring-limits).
+- or by the application on the tenant's first request, with `open_or_create`, see
+  [What to watch for](#what-to-watch-for).
 
 ## The path through the API
 
@@ -49,7 +47,14 @@ An application opens only keyrings that exist, so each tenant's keyring is creat
 Rotations and sweeps run per keyring: the administrative job loops over the tenants, see
 [Rotate keys and re-encrypt values](../production/rotation.md).
 
-## What many keyrings cost
+## What to watch for
+
+An application that creates a keyring on a tenant's first request builds with the `admin` feature
+and runs with the administrative rights, so it is trusted as the administration is, see
+[Permissions: applications and administration](../production/permissions.md) and
+[Keyring limits](../security.md#keyring-limits).
+
+### What many keyrings cost
 
 A keyring stays open until the registry shuts down, so a process holds every keyring it opened:
 

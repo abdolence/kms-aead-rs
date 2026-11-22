@@ -1,12 +1,9 @@
 # Find a user by an encrypted email
 
 A login form asks for an email, and the users table stores it encrypted. A randomised value is
-different every time it is encrypted, so a data store cannot find a row by it. Two ways make a field searchable by equality: a deterministic field, whose stored value is equal
-for equal plaintexts, and a beacon, a truncated HMAC stored beside a field that stays randomised.
-Both leak which rows hold the same value, see
-[What it leaks](../deterministic.md#what-it-leaks) and
-[What a beacon leaks](../beacons.md#what-a-beacon-leaks). Neither suits a field with few distinct
-values, such as a status or a country.
+different every time it is encrypted, so a data store cannot find a row by it. Two ways make a field
+searchable by equality: a deterministic field, whose stored value is equal for equal plaintexts,
+and a beacon, a truncated HMAC stored beside a field that stays randomised.
 
 ## Beacon or deterministic field
 
@@ -47,9 +44,6 @@ still decrypts:
 - a beacon: an encryptor's `encrypt` and `beacon` in the same write, and `Keyring::beacon_probes`
   for a lookup, see [Beacons](../keyring/beacons.md).
 
-Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
-[Rotation cadence](../production/rotation.md#rotation-cadence).
-
 ## A lookup
 
 1. Normalise the value in its newtype, such as a lowercased email, so that the write and the lookup
@@ -64,3 +58,12 @@ Each rotation of a deterministic or beacon version adds a probe to every lookup 
 
 A deterministic field in BigQuery is queried in SQL, with one `DETERMINISTIC_ENCRYPT` per version,
 see [Query keyring values in BigQuery](./bigquery-and-tink.md#query-keyring-values-in-bigquery).
+
+## What to watch for
+
+- Both ways leak which rows hold the same value, see
+  [What it leaks](../deterministic.md#what-it-leaks) and
+  [What a beacon leaks](../beacons.md#what-a-beacon-leaks). Neither suits a field with few distinct
+  values, such as a status or a country;
+- each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
+  [Rotation cadence](../production/rotation.md#rotation-cadence).

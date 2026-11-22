@@ -34,9 +34,11 @@ see [Choosing a mode](../intro.md#choosing-a-mode) and the keyring.
 
 A first example, with the local KMS, is in [With an envelope](../getting-started.md#with-an-envelope).
 
-## Lookups, readers and rotation
+## What to watch for
 
-- Finding rows by an encrypted field needs a deterministic field or a beacon, see
+- The value does not record its algorithm, so the writer and the reader use the same one, see
+  [Envelope encryption](../envelope-encryption.md);
+- finding rows by an encrypted field needs a deterministic field or a beacon, see
   [Find rows by an encrypted value](./equality-lookups.md);
 - Tink reads envelope values on Cloud KMS and AWS KMS keys, and BigQuery does not, see
   [Read values in BigQuery or Tink](./bigquery-and-tink.md);

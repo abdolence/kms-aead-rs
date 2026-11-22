@@ -38,7 +38,7 @@ backup, and in every keyset exported from the keyring, see
 [What survives a shred](#what-survives-a-shred). A deployment that needs shredding guarantees uses
 a KEK per scope, see [A keyring per tenant](./keyring-per-tenant.md).
 
-### Shredding a tenant with `dangerously_shred()`
+## Shredding a tenant with `dangerously_shred()`
 
 Under a shared KEK, `KeyringAdmin::dangerously_shred()` ends the tenant's keyring in one call: it
 destroys every version of the keyring in one write, as `dangerously_destroy_all_versions` does,
@@ -78,12 +78,15 @@ made keeps the key derived for its value, and goes on decrypting or encrypting w
 dropped. Build a decryptor per request and do not cache it across requests, so that a shred takes
 effect for new requests, see [Streaming encryption](../streaming.md#limits).
 
-`dangerously_shred()` never calls the KMS and leaves every KMS key version as it was. Values
-encrypted under the keyring stay where they are and decrypt under nothing. The store's backups, its
-history and every exported keyset stay where they are too, and still decrypt while a KEK version
-that encrypted their DEKs exists, see [What survives a shred](#what-survives-a-shred).
+## What to watch for
 
-#### What survives a shred
+- `dangerously_shred()` never calls the KMS and leaves every KMS key version as it was. Values
+  encrypted under the keyring stay where they are and decrypt under nothing;
+- the store's backups, its history and every exported keyset stay where they are too, and still
+  decrypt while a KEK version that encrypted their DEKs exists, see
+  [What survives a shred](#what-survives-a-shred).
+
+### What survives a shred
 
 Every copy of the record outside the store's API still holds the encrypted DEKs, which the KMS
 decrypts as long as a KEK version that encrypted them exists. The operator deletes them or ends the
