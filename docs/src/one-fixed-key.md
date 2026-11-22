@@ -1,10 +1,16 @@
 # One fixed key
 
-`AeadCipher::encrypt` encrypts a field under a key the application holds, in Tink's layout of a key
-whose output prefix is TINK, `[0x01][key id: u32 BE]` before the AEAD value: an
+This page specifies the calls that encrypt under one key the application holds, in the layout that
+Tink, Google's cryptography library, and BigQuery read. For the BigQuery side of a column, read
+[Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md). A column that
+needs key rotation belongs under a keyring.
+
+`AeadCipher::encrypt` encrypts a field under a key the application holds, in Tink's layout for a
+key with the output prefix TINK: `[0x01][key id: u32 BE]` before the AEAD value, an
 `Encrypted<T, Randomized>`. `DeterministicCipher::encrypt` does the same for an
-`Encrypted<T, Deterministic>`. The key id is a `KeyId`, the application's constant, and Tink
-and BigQuery read the values with a keyset of the one key under that id:
+`Encrypted<T, Deterministic>`. The key id is a `KeyId`, the application's constant. Tink and
+BigQuery read the values with a keyset, Tink's serialised list of keys and their ids, of the one
+key under that id:
 
 ```rust,no_run
 use kms_aead::backends::Ring;

@@ -8,6 +8,10 @@ Without a cache, every read of a value decrypts its DEK with one KMS call, and e
 - store-less DEK reuse, with a `DekReusePolicy`, where one DEK encrypts many values, so a write
   calls the KMS only when the DEK is renewed.
 
+This page specifies both, with their defaults and limits. To choose between them for a workload and
+to read the KMS call counts they save, read [Cut KMS calls with a DEK cache and DEK
+reuse](./use-cases/fewer-kms-calls.md) first.
+
 ## DEK cache
 
 `kms_aead::cache::DekCache` holds plaintext DEKs a provider decrypted, keyed by the provider's
@@ -136,8 +140,8 @@ key: a copy taken out of it outlives the cache's control of its lifetime.
 ## Store-less DEK reuse
 
 A `KmsAeadEnvelope` with a `DekReusePolicy` encrypts many values under one DEK and renews it at
-the first encryption past `max_age`, past `max_uses` or past `max_bytes`, whichever comes first. A renewal makes one
-KMS encrypt call. Each value still carries its encrypted DEK in Tink's KMS envelope, so nothing is
+the first encryption past `max_age`, past `max_uses` or past `max_bytes`, whichever comes first.
+A renewal makes one KMS encrypt call. Each value still carries its encrypted DEK in Tink's KMS envelope, so nothing is
 stored apart from the values, and values under earlier DEKs stay readable.
 
 ```rust
@@ -177,8 +181,9 @@ assert_eq!(decrypted_second, SecretValue::from("second"));
 ```
 
 The defaults are a `max_age` of 24 hours and a `max_uses` of 2^24. `max_age` must be longer than
-zero and `max_uses` at most 2^32, the bound for random 96-bit nonces under one key, otherwise the
-envelope fails to build with `INVALID_DEK_REUSE_POLICY`.
+zero and `max_uses` at most 2^32, the bound for random 96-bit nonces under one key, see
+[Nonces](./security.md#nonces). Otherwise the envelope fails to build with
+`INVALID_DEK_REUSE_POLICY`.
 
 ### Volume limit
 

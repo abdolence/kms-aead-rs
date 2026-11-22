@@ -54,14 +54,14 @@ as well.
 
 ### Choosing the TTL and the size
 
-- A cache serves an entry for its TTL after it was inserted, 15 minutes by default. A longer TTL
-  saves more KMS calls, and keeps DEKs in memory for longer and delays the effect of a revoked KMS
-  permission;
-- `max_entries` is 1024 by default, and past it the cache evicts the oldest entry. Set it above the
-  number of distinct DEKs read per TTL, otherwise reads evict each other's keys and the KMS is
-  called again;
+- A cache serves an entry for its TTL after it was inserted. A longer TTL saves more KMS calls,
+  keeps DEKs in memory for longer and delays the effect of a revoked KMS permission;
+- past `max_entries` the cache evicts the oldest entry. Set it above the number of distinct DEKs
+  read per TTL, otherwise reads evict each other's keys and the KMS is called again;
 - with per-call envelopes every value has its own DEK, so the cache helps only values read more
   than once within the TTL. A value read once is one KMS call with or without it.
+
+The defaults of the TTL and of `max_entries` are in [DEK cache](../dek-caching.md#dek-cache).
 
 As an example, a service reads 100 values a second, drawn from 2,000 distinct values, each with its
 own DEK. Without a cache that is 100 × 3,600 = 360,000 KMS decryptions an hour. With a cache of
@@ -91,6 +91,8 @@ let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
     provider,
     KmsAeadEnvelopeOptions::new().with_dek_reuse(
         DekReusePolicy::new()
+            // The envelope's DEK cache drops the DEK after its TTL, 15 minutes by default, and the
+            // next write renews it, so `max_age` decides only when the cache's TTL is longer
             .with_max_age(Duration::from_secs(60 * 60))
             .with_max_uses(NonZeroU64::new(1_000_000).expect("not zero")),
     ),
@@ -116,11 +118,11 @@ earlier DEKs stay readable. Readers need no policy: any envelope over the same K
 and a reader with a `DekCache` calls the KMS once per DEK and TTL, as in the previous section.
 
 As an example, a writer encrypts 1,000 values a second. With one DEK per value that is 3,600,000 KMS
-encryptions an hour. A store-less envelope keeps its DEK in a cache that has a TTL of 15 minutes
-by default, and renews the DEK when the cache drops it, so this writer renews it every 15 minutes,
-before `max_uses` of 1,000,000 values or `max_age` of an hour is reached: 4 KMS encryptions an hour
-for the process. To renew by `max_age` instead, give the envelope a `DekCache` whose TTL is longer
-than it.
+encryptions an hour. A store-less envelope keeps its DEK in a cache and renews the DEK when the
+cache drops it. With the default TTL of 15 minutes this writer renews it every 15 minutes, before
+`max_uses` of 1,000,000 values or `max_age` of an hour is reached: 4 KMS encryptions an hour for
+the process. To renew by `max_age` instead, give the envelope a `DekCache` whose TTL is longer than
+it.
 
 ## With a keyring
 
