@@ -69,7 +69,7 @@ The keyring's provider decrypts the envelope values, so they must have been encr
 keyring's KEK. `decrypt_envelope_for_migration` reads Tink's KMS envelope, the layout kms-aead 0.30 writes.
 Values written by kms-aead 0.29 or earlier are upgraded in place first, with
 `KmsAeadEnvelope::upgrade_legacy_value(aad, value)` under kms-aead's `legacy-formats` feature, see
-[Upgrading stored values](../formats.md#upgrading-stored-values). The layout of a value is always
+[Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values). The layout of a value is always
 the marker's, never inferred from its bytes.
 
 `decrypt_envelope_for_migration` decrypts whatever encrypted DEK an envelope value carries, under the

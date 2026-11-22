@@ -14,7 +14,7 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
 - `SignatureError`: a signature could not be made, read or verified, or a KMS refused a sign or
   public-key request; never retried;
 - `LegacyFormat`: a stored value in a layout of 0.29 or earlier, which only the
-  `legacy-formats` feature reads, see [Formats](./formats.md#values-written-by-029-and-earlier).
+  `legacy-formats` feature reads, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
 

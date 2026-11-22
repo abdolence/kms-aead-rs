@@ -30,6 +30,10 @@ algorithm, and a value Tink encrypts decrypts with `KmsAeadEnvelope::decrypt`.
 `k = 0` records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
 provider encrypts the raw DEK in every release, see [Encrypted DEKs](#encrypted-deks).
 
+The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature. The
+reading rules and the upgrade of stored values are in
+[Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
+
 ## Tink's KMS envelope
 
 `KmsAeadEnvelope::encrypt` writes Tink's KMS envelope, and `Encrypted::join` writes it from a
@@ -199,9 +203,10 @@ that decrypts it.
 The check reads the framing only, and whether the bytes are authentic is known when they are
 decrypted. With `legacy-formats`, an `Envelope` value also holds the envelope layout v1 of 0.29 and
 the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
-same type until they are upgraded, see [Upgrading stored values](#upgrading-stored-values). Without
-the feature, `Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses them in
-every build. The layout of 32-bit targets before 0.24.0 has Tink's framing, so it reads as an
+same type until they are upgraded, see
+[Upgrading stored values](./migrating-from-0.29.md#upgrading-stored-values). Without the feature,
+`Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses them in every build. The
+layout of 32-bit targets before 0.24.0 has Tink's framing, so it reads as an
 `Envelope` value in every build, and `KmsAeadEnvelope::decrypt` decrypts it with `legacy-formats`.
 
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the
@@ -819,128 +824,3 @@ A column that holds two layouts:
 - encrypted DEKs of 0.29 and of 0.30: `0xFF 0x01` starts no encrypted DEK of a built-in provider, so
   the library tells them apart for those. It never inspects the bytes of an application's own
   provider: strip the header `[0xFF][0x01][k][key version]` of its 0.29 keys before reading them.
-
-## Values written by 0.29 and earlier
-
-The layouts of 0.29 and earlier are read only with the deprecated `legacy-formats` feature:
-
-- `KmsAeadEnvelope::decrypt` reads the three envelope layouts, which `Encrypted<T, Envelope>`
-  holds with the feature;
-- the `*_with_encrypted_dek` calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
-  raw encrypted DEKs.
-
-`Encrypted::separate` never reads the older envelope layouts: for Azure, the encrypted DEK they
-hold needs the provider to become its bytes.
-
-Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the code
-`LEGACY_FORMAT`, and one of:
-
-- `KmsAeadLegacyFormat::EnvelopeV1`;
-- `KmsAeadLegacyFormat::LengthPrefixedEnvelope`;
-- `KmsAeadLegacyFormat::EncryptedDekV1`;
-- `KmsAeadLegacyFormat::RawEncryptedDek`, for an encrypted DEK that decrypts to the raw key. The
-  values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink's.
-
-The error never echoes the bytes read. With the feature, the first read of each layout in a
-process logs one `WARN` event that names the upgrade methods. Without it, the `KMS AEAD decrypt`
-spans of such values record `error_code=LEGACY_FORMAT`, see [Observability](./observability.md).
-
-## Upgrading stored values
-
-With `legacy-formats`, two methods of `KmsAeadEnvelope` rewrite a stored value in Tink's format,
-and return `None` when it already is in it, so a sweep writes only the rows that change:
-
-- `upgrade_legacy_value`, for envelope values;
-- `upgrade_legacy_encrypted_dek`, for encrypted DEKs stored apart, such as the bytes of 0.29's
-  `to_bytes`.
-
-Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
-serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
-one. A value in Tink's framing needs the decryption to be told from the 32-bit layout before 0.24.0.
-The AEAD bytes stay as they are.
-
-An upgraded DEK is encrypted under the KEK's current version, so the upgrade also does what
-`reencrypt_dek` and `reencrypt_encrypted_dek` do for a value or a DEK already in Tink's format, see
-[Re-encrypt DEKs after a KEK rotation](./production/reencrypt-deks.md).
-Those two refuse a layout of 0.29 or earlier with `LEGACY_FORMAT`, so a sweep after a KEK rotation
-upgrades a value in an old layout and re-encrypts the DEK of a value in Tink's format.
-
-The envelope's algorithm is the one the values were encrypted with: ChaCha20-Poly1305 for values
-that 0.29 and earlier encrypted under their default. A raw DEK does not record its algorithm, and
-the encrypted DEK of the upgrade records it as a Tink key type, so `upgrade_legacy_value` takes the
-value's AAD and decrypts the value before it writes anything. Under another algorithm or another AAD
-it fails with `DECRYPT`. `upgrade_legacy_encrypted_dek` has no value to decrypt, so it records the
-envelope's algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
-another algorithm than its values were encrypted with: use `upgrade_legacy_value` wherever the
-values are at hand.
-
-A sweep over stored rows:
-
-```rust
-use kms_aead::backends::AeadBackend;
-use kms_aead::formats::Envelope;
-use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
-use secret_vault_value::SecretValue;
-
-/// A stored envelope value and the AAD it was encrypted under.
-struct Row {
-    aad: Vec<u8>,
-    value: Vec<u8>,
-}
-
-/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
-#[allow(deprecated)]
-async fn upgrade_values<P, B>(
-    envelope: &KmsAeadEnvelope<P, B>,
-    rows: &mut [Row],
-) -> KmsAeadResult<usize>
-where
-    P: KmsAeadDecryptionProvider,
-    B: AeadBackend,
-{
-    let mut upgraded = 0;
-    for row in rows.iter_mut() {
-        let stored = Encrypted::<SecretValue, Envelope>::try_from(row.value.clone())?;
-        if let Some(value) = envelope.upgrade_legacy_value(&row.aad, &stored).await? {
-            row.value = value.into_value();
-            upgraded += 1;
-        }
-    }
-    Ok(upgraded)
-}
-# use kms_aead::backends::Ring;
-# use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-# use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
-# #[tokio::main(flavor = "current_thread")]
-# async fn main() -> KmsAeadResult<()> {
-# let provider = LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-# // A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
-# let cipher = AeadCipher::<Ring>::new(AeadAlgorithm::ChaCha20Poly1305)?;
-# let dek = cipher.generate_dek()?;
-# let bare = cipher.encrypt_bare(b"aad", &SecretValue::from("secret"), &dek)?;
-# let encrypted_dek = provider.encrypt_data_encryption_key(&dek).await?;
-# let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
-# legacy.extend_from_slice(encrypted_dek.value());
-# legacy.extend_from_slice(bare.value());
-# let envelope = KmsAeadEnvelope::<LocalKmsProvider<Ring>, Ring>::with_options(
-#     provider,
-#     KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-# )?;
-# let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
-# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 1);
-# assert_eq!(upgrade_values(&envelope, &mut rows).await?, 0);
-# let upgraded = Encrypted::<SecretValue, Envelope>::try_from(rows[0].value.clone())?;
-# let decrypted: SecretValue = envelope.decrypt(b"aad", &upgraded).await?;
-# assert_eq!(decrypted, SecretValue::from("secret"));
-# Ok(())
-# }
-```
-
-Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink's format.
-
-## Deprecation
-
-Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
-breaking release, together with the `legacy-formats` feature and the upgrade methods, which carry
-`#[deprecated]` from their first release, so every call site warns. Without the feature, the
-older layouts keep failing with `LEGACY_FORMAT`.

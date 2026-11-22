@@ -108,7 +108,7 @@ earlier release reads it, see [DEKs encrypted with a public
 key](./formats.md#deks-encrypted-with-a-public-key). A deployment moves every reader, every
 application and administrative job that decrypts, to 0.31 before the first producer encrypts with a
 public key, as every reader moved to 0.30 before the first value in Tink's envelope format, see
-[Upgrading stored values](./formats.md#upgrading-stored-values). Nothing already stored changes: the
+[Upgrading stored values](./migrating-from-0.29.md#upgrading-stored-values). Nothing already stored changes: the
 encrypted DEKs the KMS encrypted keep their bytes and keep decrypting.
 
 A keyring record gains a `signature` member, which 0.30 reads and ignores, and which a 0.30

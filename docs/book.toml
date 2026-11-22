@@ -63,3 +63,6 @@ runnable = false
 "/envelope-encryption.html#pacing" = "/production/reencrypt-deks.html#pacing"
 "/envelope-encryption.html#the-check" = "/production/reencrypt-deks.html#the-check"
 "/envelope-encryption.html#rolling-back-a-rotation" = "/production/reencrypt-deks.html#rolling-back-a-rotation"
+"/formats.html#values-written-by-029-and-earlier" = "/migrating-from-0.29.html#values-written-by-029-and-earlier"
+"/formats.html#upgrading-stored-values" = "/migrating-from-0.29.html#upgrading-stored-values"
+"/formats.html#deprecation" = "/migrating-from-0.29.html#deprecation"
