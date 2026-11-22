@@ -327,6 +327,7 @@ The `SweepReport` counts every candidate once in `scanned`, and once more in `re
 | The record needed nothing, or changed after it was read | `skipped` | not logged |
 | The re-encryption failed | `failed` | `WARN` with the candidate's `Display` and the error's `Display` |
 | The stream returned the candidate as an error | `failed` | `WARN` with the error's `Display` |
+| A batch of `reencrypt_records_batched` failed as a whole, or returned more or fewer outcomes than it was given candidates | `failed`, every candidate of the batch | one `WARN` per batch, with the number of candidates and the error's `Display` or the number of outcomes |
 
 A failure does not stop the sweep. A stream whose query cannot go on returns its error and ends. A
 re-encryption that fails with `EncryptorOutdated` is a failure of the second row: a process with a

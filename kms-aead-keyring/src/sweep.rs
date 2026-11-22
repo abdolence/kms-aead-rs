@@ -325,8 +325,9 @@ pub struct SweepReport {
     pub reencrypted_from_compromised: u64,
     /// The records the re-encryption skipped.
     pub skipped: u64,
-    /// The candidates the stream returned as an error, and the records whose re-encryption returned
-    /// an error or no outcome.
+    /// The candidates the stream returned as an error, the records whose re-encryption returned
+    /// an error, and every candidate of a batch that failed as a whole or returned another number
+    /// of outcomes than it was given candidates.
     pub failed: u64,
 }
 
@@ -462,12 +463,12 @@ where
 ///
 /// `reencrypt_batch` returns one outcome per candidate it was given, each beside its candidate, in
 /// any order, or an error for the whole batch, which counts every candidate of the batch in
-/// `failed` and logs one `WARN` with the error's `Display` and the size of the batch. The sweep
-/// counts a batch by the candidates it was given: an outcome for a candidate outside the batch,
-/// or a second one for the same candidate, can only take the place of one the batch left out, and
-/// never adds to `scanned`. A batch that returns fewer outcomes than it was given counts the
-/// difference in `failed`, since the sweep cannot tell which candidates they were. Either way the
-/// sweep logs one `WARN` with both counts.
+/// `failed` and logs one `WARN` with the error's `Display` and the size of the batch. A batch that
+/// returns more or fewer outcomes than it was given candidates counts every one of them in
+/// `failed` too, since the sweep cannot tell which outcome is whose, and logs one `WARN` with
+/// both counts; its outcomes are neither counted nor logged. With as many outcomes as candidates,
+/// an outcome for a candidate outside the batch, or a second one for the same candidate, takes the
+/// place of the one the batch left out and is counted for it.
 ///
 /// A failed outcome is counted and logged as in [`reencrypt_records`], and the sweep goes on. One
 /// [`Encryptor`](crate::Encryptor) re-encrypts a whole batch and stamps its marker on every record
@@ -510,22 +511,20 @@ where
             }
             let given_count = u64::try_from(given).unwrap_or(u64::MAX);
             match outcomes {
-                Some(Ok(outcomes)) => {
-                    let returned = outcomes.len();
-                    if returned != given {
-                        let returned_count = u64::try_from(returned).unwrap_or(u64::MAX);
-                        spans::sweep_batch_outcomes_mismatched(
-                            keyring_id,
-                            given_count,
-                            returned_count,
-                        );
-                    }
+                Some(Ok(outcomes)) if outcomes.len() == given => {
                     report.scanned += given_count;
-                    report.failed +=
-                        u64::try_from(given.saturating_sub(returned)).unwrap_or(u64::MAX);
-                    for (candidate, outcome) in outcomes.into_iter().take(given) {
+                    for (candidate, outcome) in outcomes {
                         report.count_outcome(keyring_id, &candidate, outcome);
                     }
+                }
+                Some(Ok(outcomes)) => {
+                    report.scanned += given_count;
+                    report.failed += given_count;
+                    spans::sweep_batch_outcomes_mismatched(
+                        keyring_id,
+                        given_count,
+                        u64::try_from(outcomes.len()).unwrap_or(u64::MAX),
+                    );
                 }
                 Some(Err(error)) => {
                     report.scanned += given_count;
@@ -762,10 +761,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_the_outcomes_a_batch_left_out_as_failed() {
+    async fn reencrypt_records_batched_counts_a_batch_with_fewer_outcomes_as_failed() {
         let report = reencrypt_records_batched(
             &TENANT,
-            stream::iter((1..=5).map(Ok)),
+            stream::iter((1..=3).map(Ok)),
             BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
             |batch: Vec<u32>| async move {
                 Ok(batch
@@ -780,27 +779,27 @@ mod tests {
         assert_eq!(
             report,
             SweepReport {
-                scanned: 5,
-                reencrypted: 1,
+                scanned: 3,
+                reencrypted: 0,
                 reencrypted_from_compromised: 0,
                 skipped: 1,
-                failed: 3,
+                failed: 2,
             }
         );
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_no_more_outcomes_than_a_batch_was_given() {
+    async fn reencrypt_records_batched_counts_a_batch_with_more_outcomes_as_failed() {
         let report = reencrypt_records_batched(
             &TENANT,
-            stream::iter([Ok(1), Ok(2)]),
+            stream::iter((1..=3).map(Ok)),
             BatchedSweepOptions::new().with_batch_size(NonZeroUsize::new(2).unwrap()),
             |batch: Vec<u32>| async move {
+                let failed_outside_the_batch = batch.contains(&1).then(|| (4, outcome_of(4)));
                 Ok(batch
                     .into_iter()
-                    .flat_map(|candidate| {
-                        [candidate; 2].map(|candidate| (candidate, outcome_of(candidate)))
-                    })
+                    .map(|candidate| (candidate, outcome_of(candidate)))
+                    .chain(failed_outside_the_batch)
                     .collect())
             },
         )
@@ -809,11 +808,11 @@ mod tests {
         assert_eq!(
             report,
             SweepReport {
-                scanned: 2,
-                reencrypted: 2,
+                scanned: 3,
+                reencrypted: 0,
                 reencrypted_from_compromised: 0,
-                skipped: 0,
-                failed: 0,
+                skipped: 1,
+                failed: 2,
             }
         );
     }
