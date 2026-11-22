@@ -46,6 +46,30 @@
   `with_options(key_ref, options, credential)`. `options` is the new
   `AzureKmsSigningProviderOptions`, `#[non_exhaustive]` and built as `AzureKmsProviderOptions` is:
   `AzureKmsSigningProviderOptions::new().with_client_options(client_options)`.
+- An administrative write refuses a keyring record that holds a member this release does not know,
+  at any depth, with `KeyringError::RecordInvalid` and the reason
+  `RecordInvalidReason::UnknownMembers`, before the compare-and-swap. An earlier release rewrote
+  such a record from its own fields, so it dropped the members a later release added, and a
+  signing admin signed what was left. Readers still read the record. No record that 0.30 to 0.33
+  wrote holds such a member.
+- The Firestore store reads a record from its document's fields alone. It also read the
+  `_firestore_id`, `_firestore_full_id`, `_firestore_created` and `_firestore_updated` fields that
+  firestore-rs adds to a document, which went into the record's canonical digest, and which an
+  administrative write would refuse as unknown members.
+- Under `RecordSignaturePolicy::Required`, `KeyringRegistry::create`, `open_or_create` where it
+  would create the record, and every write of a `KeyringAdmin` without a record signer,
+  `dangerously_unsign_record` included, fail with `KeyringError::RecordSignerMissing` before any
+  KMS or store call. They wrote and cached an unsigned record, which every reader under the policy
+  refused. Create keyrings with `create_signed` or `open_or_create_signed`, give an admin a signer
+  with `with_record_signer`, and move the admin's registry to `VerifyIfSigned` before
+  `dangerously_unsign_record`.
+- A `create` under the id of a signed record that the process took the deletion of is checked
+  against that record before the write. An unsigned one fails with `RecordSignatureRemoved`, as
+  before, and leaves the store without a record; before, it was written first.
+- `sweep::reencrypt_records_batched` counts every candidate of a batch in `failed` when the batch
+  returns more or fewer outcomes than it was given candidates, and counts none of its outcomes.
+  It took the outcomes up to the number of candidates, so errors among the extra ones went
+  uncounted.
 
 ## 0.33
 
