@@ -3,6 +3,11 @@
 Keyring values are in Tink's wire format, so Tink and BigQuery's AEAD functions read the values the
 keyring writes, and the keyring reads theirs, given the same keys under the same key ids.
 
+This page is the keyring reference for `Interop::BigQuery`, `Interop::Tink` and the keyset exports:
+the wire format, the interop checks and the contract of the export calls. For an end-to-end
+walkthrough with the queries and a Tink reader, read
+[Decrypt columns in BigQuery SQL or with Tink](../use-cases/bigquery-and-tink.md).
+
 ## Wire format
 
 Every value starts with Tink's 5-byte TINK prefix, a version byte `0x01` and the key id, followed
@@ -244,9 +249,7 @@ The requirements:
   decrypt on it. The export is a `KeyringAdmin` call, see
   [KMS rights](../production/permissions.md#kms-rights).
 
-### How it behaves
-
-The crate's live test runs the export and the queries against Cloud KMS and BigQuery:
+### Runtime behaviour and limits
 
 - a value whose key id is not in the keyset fails to decrypt, and reads as `NULL` under
   `SAFE.AEAD.DECRYPT_STRING`;

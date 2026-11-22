@@ -4,11 +4,14 @@ The `kms-aead-keyring` crate encrypts fields of application records under a keyr
 of one scope's key versions, such as a tenant's, kept in a keyring store. Each key version is a
 data encryption key (DEK) encrypted by a KEK in the KMS, with a lifecycle state.
 
+This page covers what a keyring is, how the registry opens one and hands out handles, and how it
+shuts down. Read it before the pages below, which hold one topic each.
+
 Compared to an envelope, a keyring value carries a 4-byte key id instead of its encrypted DEK:
 
 - no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on write
   and read;
-- 33 bytes of overhead per value, 21 for deterministic values, see
+- a fixed framing overhead per value, smaller than an envelope value's, see
   [Formats of `Encrypted`](./formats/values.md#formats-of-encrypted);
 - central staged rotation, retirement, destruction and a compromised flag, for every process
   that uses the keyring;
@@ -20,9 +23,20 @@ The price is one more piece of infrastructure, the keyring store, which holds on
 document per keyring. See [Choosing a mode](./intro.md#choosing-a-mode) for the comparison with
 the envelope modes of kms-aead.
 
-## Applications and administration
+## Pages in this section
 
-See [Permissions: applications and administration](./production/permissions.md).
+| Page | Read it to |
+|---|---|
+| [Key versions and lifecycle](./keyring/lifecycle.md) | read the record, the version states, staged rotation, compromised versions and shredding |
+| [Keyring stores](./keyring/stores.md) | choose, configure and operate a store, or write your own |
+| [Record cache](./keyring/record-cache.md) | tune how fast processes see a change, and know what a process does when the store fails |
+| [Encrypted fields and AAD](./keyring/fields.md) | encrypt the fields of a record with a structured AAD |
+| [Deterministic fields](./keyring/deterministic.md) | find rows by equality on an encrypted field |
+| [Beacons](./keyring/beacons.md) | find rows by equality beside randomised fields |
+| [BigQuery and Tink interop](./keyring/bigquery.md) | read values in BigQuery SQL or with Tink, and export keysets |
+
+Which credentials and permissions an application and an administrative job need is in
+[Permissions: applications and administration](./production/permissions.md).
 
 ## The registry and its handles
 
@@ -81,6 +95,8 @@ beside them names the versions they are under, see [The encryption
 marker](./production/sweeps.md#the-encryption-marker). Neither calls the store while the cached
 record is fresh, nor the KMS while the version's DEK is in the DEK cache, see [Record
 cache](./keyring/record-cache.md).
+
+## Shutdown
 
 A keyring stays open until the registry shuts down. Where the store has push, the registry follows
 the change signals of each open keyring with a task on the current tokio runtime.

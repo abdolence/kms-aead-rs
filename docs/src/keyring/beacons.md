@@ -1,26 +1,23 @@
 # Beacons
 
+This page covers how a keyring computes, probes and rotates beacons. Beacons need no Cargo feature.
+The generic [Beacons](../beacons.md) page owns the primitive, `Beacon<T>` and `BeaconBits`, what a
+beacon leaks, its bits and its normalisation; [Formats](../formats/values.md#beacons) has its bytes.
+To choose between a beacon and a deterministic field, read
+[Find a user by an encrypted email](../use-cases/equality-lookups.md).
+
 A beacon, or blind index, finds rows by a field's value without decrypting the column: a
 truncated HMAC-SHA256 of the value, stored beside the field's randomised value, which a data store
 matches by equality. The keyring computes beacons under its beacon versions, of the purpose
 `Purpose::Beacon`, which rotate like any other.
 
-kms-aead's [Beacons](../beacons.md) describes the primitive, `Beacon<T>`
-and `BeaconBits`, with keys the application keeps itself, and [Formats](../formats/values.md#beacons) its
-bytes.
-
-A [deterministic field](./deterministic.md) also finds rows by equality, by its encrypted value,
-see [Find rows by an encrypted value](../use-cases/equality-lookups.md).
-
 ## What a beacon leaks
 
-A beacon column leaks likely equality and frequency to anyone who reads it, and a leaked beacon
-key lets its holder test candidate values offline, see
-[What a beacon leaks](../beacons.md#what-a-beacon-leaks) in kms-aead.
-
-A beacon is computed in a field's context, `<kind>/<field>` such as `user/email`, with no entity
-id: equal values in different rows give equal beacons, which is what a lookup matches. A beacon of
-one field never matches a beacon of another.
+What a beacon leaks, and what a leaked beacon key allows, is in
+[What a beacon leaks](../beacons.md#what-a-beacon-leaks). The keyring computes a beacon in a field's
+context, `<kind>/<field>` such as `user/email`, with no entity id: equal values in different rows
+give equal beacons, which is what a lookup matches. A beacon of one field never matches a beacon of
+another.
 
 ## Usage
 
@@ -102,12 +99,9 @@ registry.shutdown(None).await;
 # }
 ```
 
-The probes go into the query as the probes of a deterministic field do:
-
-| Store | Query |
-|---|---|
-| PostgreSQL | `WHERE email_beacon = ANY($1)`, with the probes bound as a `BYTEA[]` |
-| Firestore | an `in` filter on the field, which takes up to 30 values |
+The probes go into the query as the probes of a deterministic field do, see the
+[table of queries](./deterministic.md#queries-across-rotations), with the beacon column in place of
+the deterministic one. It has no BigQuery row: the keyring never exports beacon keys.
 
 `Beacon` is stored as `Encrypted` is, see [Stored values](../stored-values.md#beacont).
 
@@ -131,43 +125,38 @@ matches beacons the application computed, see [BigQuery](../beacons.md#bigquery)
 
 A beacon version rotates as the other purposes do, see [Staged
 rotation](./lifecycle.md#staged-rotation), and a column holds beacons of several versions while it
-is re-indexed:
+is re-indexed. What differs for beacons:
 
-1. `rotate(Purpose::Beacon)` stages the version. `beacon_probes` returns a probe under it from the
-   next refresh of each process, so lookups find the beacons computed under it before every
-   process has seen the promotion;
-2. after the wait, `promote` it. Writes compute beacons under it from each process's next refresh;
-3. lookups use `beacon_probes` throughout: one probe per pending, active or decrypt-only beacon
-   version, compromised ones included, newest first;
-4. the promotion moved the keyring's re-encryption epoch on, so every row written before it has a
-   `EncryptionMarker` below the current one, and a re-index sweep visits them, see
-   [Sweeps](../production/sweeps.md). It computes each row's beacon again under the active version
-   of its encryptor and writes the encryptor's marker; a row without a beacon gets the marker alone;
-5. once the sweep reports no failure and that query returns nothing, `retire` the old version, and
-   its probe drops out of every lookup.
+- lookups use `beacon_probes` throughout: one probe per pending, active or decrypt-only beacon
+  version, compromised ones included, newest first. A probe under a staged version is returned from
+  the next refresh of each process, so lookups find the beacons computed under it before every
+  process has seen the promotion;
+- a beacon cannot be re-encrypted, since it is a MAC of the plaintext. The promotion moves the
+  keyring's re-encryption epoch on, so every row written before it has an `EncryptionMarker` below
+  the current one and a re-index sweep visits it, see [Sweeps](../production/sweeps.md). It reads
+  the value, computes the beacon again under the active version and writes the encryptor's marker;
+  a row without a beacon gets the marker alone;
+- once the sweep reports no failure and the version's range query returns nothing, `retire` the
+  old version, and its probe drops out of every lookup, see
+  [Retiring the old version](../production/sweeps.md#retiring-the-old-version).
 
 `beacon.key_id()` reads the key id of a stored beacon, so that the sweep recomputes only the beacons
-under an older version. Here a re-index over an in-memory table, run by `sweep::reencrypt_records` as any sweep
-is, see [Running a sweep](../production/sweeps.md#running-a-sweep). A beacon under the active
+under an older version. In the re-encryption of the sweep, see
+[Running a sweep](../production/sweeps.md#running-a-sweep), `reindex` handles one row: a beacon under the active
 version keeps its bytes and only the value is re-encrypted; any other gives both again from the
-plaintext:
+plaintext. The caller writes the returned row back, conditional on the row as it was read:
 
 ```rust
-use std::collections::BTreeMap;
-use std::num::NonZeroUsize;
-use std::sync::Mutex;
-
-use futures_util::stream;
-use kms_aead::backends::Ring;
-use kms_aead::providers::LocalKmsProvider;
-use kms_aead::{Beacon, BeaconBits};
-use kms_aead_keyring::formats::Randomized;
-use kms_aead_keyring::sweep::{self, ReencryptOutcome, EncryptionMarker, SweepReport};
-use kms_aead_keyring::testing::MemoryKeyringStore;
-use kms_aead_keyring::{
-    Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring,
-    KeyringResult, Purpose,
-};
+# use kms_aead::backends::Ring;
+# use kms_aead::providers::LocalKmsProvider;
+# use kms_aead::{Beacon, BeaconBits};
+# use kms_aead_keyring::formats::Randomized;
+# use kms_aead_keyring::sweep::{ReencryptOutcome, EncryptionMarker};
+# use kms_aead_keyring::testing::MemoryKeyringStore;
+# use kms_aead_keyring::{
+#     Decrypted, Encrypted, EntityId, EntityKind, FieldName, FieldSpec, KeyTrust, Keyring,
+#     KeyringResult, Purpose,
+# };
 # use kms_aead::providers::LocalKekId;
 # use kms_aead::{BeaconAlgorithm, KmsAeadResult};
 # use kms_aead_keyring::{
@@ -175,14 +164,14 @@ use kms_aead_keyring::{
 #     Plaintext,
 # };
 # use secret_vault_value::SecretValue;
-
-type UsersKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>;
-
-const EMAIL: FieldSpec = FieldSpec::new(
-    EntityKind::from_static("user"),
-    FieldName::from_static("email"),
-)
-.with_beacon_bits(BeaconBits::DEFAULT);
+#
+# type UsersKeyring = Keyring<MemoryKeyringStore, LocalKmsProvider<Ring>, Ring>;
+#
+# const EMAIL: FieldSpec = FieldSpec::new(
+#     EntityKind::from_static("user"),
+#     FieldName::from_static("email"),
+# )
+# .with_beacon_bits(BeaconBits::DEFAULT);
 #
 # #[derive(Debug, Clone, PartialEq)]
 # struct Email(String);
@@ -196,24 +185,21 @@ const EMAIL: FieldSpec = FieldSpec::new(
 #         String::from_plaintext(plaintext).map(Email)
 #     }
 # }
-
-#[derive(Clone)]
-struct UserRow {
-    email: Encrypted<Email, Randomized>,
-    email_beacon: Beacon<Email>,
-    encryption_marker: EncryptionMarker,
-}
-
-/// The users table, by user id.
-type Table = Mutex<BTreeMap<String, UserRow>>;
-
+#
+# #[derive(Clone)]
+# struct UserRow {
+#     email: Encrypted<Email, Randomized>,
+#     email_beacon: Beacon<Email>,
+#     encryption_marker: EncryptionMarker,
+# }
+#
 /// Computes the beacon of the row of `user` again under the active beacon version, and re-encrypts
 /// its value under the active randomised version, with the marker of the encryptor's record.
-async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringResult<ReencryptOutcome> {
-    let Some(row) = table.lock().unwrap().get(user).cloned() else {
-        return Ok(ReencryptOutcome::Skipped);
-    };
-    let read: Vec<u8> = row.email.value().to_vec();
+async fn reindex(
+    keyring: &UsersKeyring,
+    user: &str,
+    row: UserRow,
+) -> KeyringResult<(UserRow, ReencryptOutcome)> {
     let encryptor = keyring.encryptor().await;
     let aad = EMAIL.aad(&EntityId::try_from(user)?);
     let (email, email_beacon, outcome) = if encryptor.is_current(row.email_beacon.key_id()).await? {
@@ -229,18 +215,9 @@ async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRe
         (email, email_beacon, ReencryptOutcome::Reencrypted { from_compromised })
     };
     let encryption_marker: EncryptionMarker = encryptor.record().encryption_marker();
-    // Conditional on the row as it was read: a row the application rewrote meanwhile keeps its
-    // own value, which it encrypted under the active versions anyway.
-    let mut table = table.lock().unwrap();
-    match table.get_mut(user) {
-        Some(stored) if stored.email.value() == read.as_slice() => {
-            *stored = UserRow { email, email_beacon, encryption_marker };
-            Ok(outcome)
-        }
-        _ => Ok(ReencryptOutcome::Skipped),
-    }
+    Ok((UserRow { email, email_beacon, encryption_marker }, outcome))
 }
-
+#
 # #[tokio::main]
 # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 # let provider =
@@ -257,49 +234,22 @@ async fn reindex(keyring: &UsersKeyring, table: &Table, user: &str) -> KeyringRe
 #     )
 #     .await?;
 # let keyring: &UsersKeyring = admin.keyring();
-# let table = Table::default();
-# for (user, email) in [("41", "ada@example.com"), ("42", "alice@example.com")] {
-#     let encryptor = keyring.encryptor().await;
-#     let email = Email(email.to_string());
-#     let row = UserRow {
-#         email: encryptor.encrypt(&EMAIL.aad(&EntityId::try_from(user)?), &email).await?,
-#         email_beacon: encryptor.beacon(&EMAIL, &email).await?,
-#         encryption_marker: encryptor.record().encryption_marker(),
-#     };
-#     table.lock().unwrap().insert(user.to_string(), row);
-# }
+# let encryptor = keyring.encryptor().await;
+# let email = Email("alice@example.com".to_string());
+# let row = UserRow {
+#     email: encryptor.encrypt(&EMAIL.aad(&EntityId::try_from("42")?), &email).await?,
+#     email_beacon: encryptor.beacon(&EMAIL, &email).await?,
+#     encryption_marker: encryptor.record().encryption_marker(),
+# };
 # let staged: KeyId = admin.rotate(Purpose::Beacon).await?;
 # admin.promote_now(staged).await?;
-// Every row whose marker is below the keyring's, after the promotion of a beacon version
-let current: EncryptionMarker = keyring.record().encryption_marker();
-let candidates = table
-    .lock()
-    .unwrap()
-    .iter()
-    .filter(|(_, row)| row.encryption_marker < current)
-    .map(|(user, _)| user.clone())
-    .collect::<Vec<String>>();
-
-let report: SweepReport = sweep::reencrypt_records(
-    keyring.id(),
-    stream::iter(candidates.into_iter().map(Ok)),
-    NonZeroUsize::new(8).unwrap(),
-    |candidate| {
-        let table = &table;
-        async move { reindex(keyring, table, &candidate).await }
-    },
-)
-.await;
-println!("{report:?}");
-# assert_eq!(report.reencrypted, 2);
-# assert_eq!(table.lock().unwrap()["42"].email_beacon.key_id(), staged);
+# let (reindexed, outcome) = reindex(keyring, "42", row).await?;
+# assert_eq!(outcome, ReencryptOutcome::Reencrypted { from_compromised: false });
+# assert_eq!(reindexed.email_beacon.key_id(), staged);
 # registry.shutdown(None).await;
 # Ok(())
 # }
 ```
-
-A deterministic field is re-encrypted the same way, with `reencrypt_deterministic`, under the
-`deterministic` feature.
 
 Beacon versions are rotated by policy and on compromise only: each one adds a probe to every lookup
 until the re-index is done.

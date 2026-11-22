@@ -1,7 +1,12 @@
 # Keyring stores
 
+This page covers the stores the library provides, what a delete removes from each, and how to
+implement your own. Read it to choose, configure and operate a store; the rights it needs are in
+[Store rights](../production/permissions.md#store-rights).
+
 A keyring store keeps one record per keyring id, with a compare-and-swap and a delete on each, and
-optionally signals changes to it. The library provides:
+optionally signals changes to it. A compare-and-swap is a write that succeeds only when the record
+is still at the revision the writer read. The library provides:
 
 | Store | Type | Feature | Revision | Push |
 |---|---|---|---|---|
@@ -18,9 +23,6 @@ where it has any.
 Every store keeps the record as the same [JSON document](../formats/keyring-records.md#keyring-records), and every
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see [Record cache](./record-cache.md).
-
-The rights of the application and the administration on each store are in
-[Store rights](../production/permissions.md#store-rights).
 
 Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
 in the record, see [the runbook](../production/runbook.md#the-keyring-record-was-deleted-or-corrupted).
@@ -379,7 +381,7 @@ age or an S3 expiration of current versions, shreds the keyrings it removes: eve
 that holds one takes the deletion at its next revalidation. A rule on noncurrent versions only
 leaves the live records alone. The condition of the S3 delete holds only on a server that honours
 `If-Match` on `DeleteObject`, as S3 does for general purpose buckets. Community MinIO releases
-ignore it; PGSTY's Silo fork honours it from `RELEASE.2026-09-16`, within one server pool.
+ignore it. The [conformance suite](#s3-compatible-servers) checks whether a server honours it.
 
 A delete needs rights a write does not: the administration's permissions per store are in
 [Store rights](../production/permissions.md#store-rights).
@@ -392,17 +394,17 @@ A delete needs rights a write does not: the administration's permissions per sto
 
 - write each method as an `async fn` whose future is `Send`;
 - implement `delete(id, expected)`, which has no default:
-  - it deletes the record when its stored revision is `expected`, with every earlier version of it
-    the store keeps, and returns `Deletion::Deleted` once the store holds no record of the id, also
-    when it held none, and `Deletion::Conflict` when the stored revision is another, leaving the
-    record;
-  - it returns errors as `load` does, as `KeyringError::Store` with `StoreOperation::Delete`. A
-    delete that fails may have removed part of the earlier versions already, and the caller
-    repeats it with the same `expected`; one that conflicts may have removed them too. The keyring
+  - on a match, it deletes the record when its stored revision is `expected`, with every earlier
+    version of it the store keeps, and returns `Deletion::Deleted` once the store holds no record
+    of the id, also when it held none;
+  - on a mismatch, it leaves the record and returns `Deletion::Conflict`;
+  - it returns errors as `load` does, as `KeyringError::Store` with `StoreOperation::Delete`;
+  - a delete that fails may have removed part of the earlier versions already, and so may one that
+    conflicts; the caller repeats it with the same `expected`. This is safe because the keyring
     deletes a record only in a shred, once every version of it is destroyed, so those versions hold
-    only keys the shred destroys. A store that cannot delete them in one step with the live record
-    removes them first, since a record gone from the store reads as shredded and no shred deletes
-    it again;
+    only keys the shred destroys;
+  - a store that cannot delete the earlier versions in one step with the live record removes them
+    first, since a record gone from the store reads as shredded and no shred deletes it again;
   - it never gives an id the same revision twice, across a delete too: a revision that restarts at
     1 for a record created again lets a process that missed the deletion keep the deleted record;
   - a store with push signals the deletion as a change;

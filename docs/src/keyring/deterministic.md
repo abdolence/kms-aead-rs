@@ -1,21 +1,21 @@
 # Deterministic fields
 
-Feature `deterministic`, to create deterministic key versions. The deterministic types exist in
-every build, so values pass through a process without the feature.
+This page covers how a keyring encrypts, queries and rotates deterministic fields. Feature
+`deterministic`, to create deterministic key versions. The deterministic types exist in every
+build, so values pass through a process without the feature.
 
-Deterministic fields fit exact-match lookups where the leak of equality is acceptable. When a
-field only needs lookups and its stored value should stay randomised, a
-[beacon](./beacons.md) fits instead.
+The generic [Deterministic encryption](../deterministic.md) page owns the AES-SIV primitive and what
+it leaks. Deterministic fields fit exact-match lookups where the leak of equality is acceptable;
+to choose between them and a [beacon](./beacons.md), read
+[Find a user by an encrypted email](../use-cases/equality-lookups.md).
 
 ## What they leak
 
-A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
-deterministic DEK lets its holder test candidate values offline, see
-[What it leaks](../deterministic.md#what-it-leaks) in kms-aead.
-
-The AAD of a deterministic field names its kind and field and no entity, see [AAD](#aad), so a
-deterministic value also decrypts in any row of the same kind and field, and a deterministic field
-never decides identity or authorisation on its own.
+What a deterministic column and a leaked deterministic DEK allow is in
+[What it leaks](../deterministic.md#what-it-leaks). The keyring adds one rule: the AAD of a
+deterministic field names its kind and field and no entity, see [AAD](#aad), so a deterministic
+value also decrypts in any row of the same kind and field, and a deterministic field never decides
+identity or authorisation on its own.
 
 ## Usage
 
@@ -181,3 +181,12 @@ a full sweep, see [Rotation cadence](../production/rotation.md#rotation-cadence)
 
 Be aware a query with several probes puts the values of one plaintext under each version side by
 side, so a reader of the query log links a value's history across a rotation.
+
+A sweep re-encrypts a deterministic field with `reencrypt_deterministic`, as it re-encrypts a
+randomised one with `reencrypt`, see [Re-encrypting a value](../production/sweeps.md#re-encrypting-a-value).
+
+## BigQuery
+
+BigQuery reads deterministic values with the keysets of `export_bigquery_keyset`, and a query
+encrypts its probes in SQL with a `Single` keyset per version, see
+[Exporting a keyset to BigQuery](./bigquery.md#exporting-a-keyset-to-bigquery).

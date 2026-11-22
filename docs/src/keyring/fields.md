@@ -1,5 +1,10 @@
 # Encrypted fields and AAD
 
+This page covers the encrypted value a keyring produces, how to keep it in an application record,
+and how the keyring builds the additional authenticated data (AAD) that binds a value to its field
+and row. Read it when you model the encrypted fields of an application; the end-to-end walkthrough
+is [Encrypt personal data and secrets in your database](../use-cases/encrypt-fields.md).
+
 ## Encrypted values
 
 A keyring value is kms-aead's [`Encrypted<T, Randomized>`](../stored-values.md#encryptedt-f),
@@ -217,9 +222,8 @@ application chooses the bytes and rebuilds them itself on every read. The keyrin
 There are three ways to put the application's own data, such as a user id or a tenant, into the
 AAD:
 
-- `spec.aad(&id)` with the application's id as the `EntityId`. The id follows the `EntityId`
-  rules: 1 to 255 bytes of UTF-8 without `/`, NUL or another ASCII control character. It is
-  treated as personal data and never logged;
+- `spec.aad(&id)` with the application's id as the `EntityId`, which follows the rules of
+  [AAD](#aad) and is treated as personal data and never logged;
 - `FieldAad::with_context(bytes)` appends `/` and any bytes, such as a tenant or a schema version. A
   value encrypted with a context decrypts only with the same one. The context may itself hold `/`,
   so keep the contexts of one field apart yourself. A BigQuery reader appends the same bytes in SQL,

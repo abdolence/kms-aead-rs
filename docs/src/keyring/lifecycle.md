@@ -1,5 +1,9 @@
 # Key versions and lifecycle
 
+This page covers the keyring record, the states of a key version, staged rotation, compromised
+versions and shredding. Read it before building an administrative job or interpreting a version's
+state; the step-by-step procedures are in [Rotate keys and re-encrypt values](../production/rotation.md).
+
 ## The record
 
 A keyring record holds:
@@ -33,11 +37,10 @@ reads it as `admin.keyring().record()`.
 ## Key ids
 
 Every value carries the key id of the version that encrypted it, and the id names the version's
-purpose: randomised, deterministic or beacon. So a value of one purpose never decrypts under a
-version of another, and the purpose of a value is known from its bytes, see
-[Keyring key ids](../formats/keyring-records.md#keyring-key-ids). The keyring numbers the versions of each purpose
-from its first id: randomised versions are `1`, `2`, `3`, …, deterministic ones `2147483649`,
-`2147483650`, … and beacon ones `1073741825`, `1073741826`, …. Ids are never reused: a destroyed
+purpose: randomised, deterministic, beacon or MAC. So a value of one purpose never decrypts under a
+version of another, and the purpose of a value is known from its bytes. The keyring numbers the
+versions of each purpose in its own range, in creation order; the ranges are in
+[Keyring key ids](../formats/keyring-records.md#keyring-key-ids). Ids are never reused: a destroyed
 version keeps its id in the record.
 
 A key id is a `kms_aead::KeyId`, which the keyring re-exports. `value.key_id()` reads the key id
@@ -73,8 +76,11 @@ it.
 as pending, except the replacement `mark_compromised` adds for an active version, which is active
 at once.
 
-The calls, on a `KeyringAdmin`, with the `admin` feature, see
-[Permissions: applications and administration](../production/permissions.md):
+The calls that change a version's state are on a `KeyringAdmin`, with the `admin` feature, see
+[Permissions: applications and administration](../production/permissions.md). The other calls of
+`KeyringAdmin` are in its
+[rustdoc](https://docs.rs/kms-aead-keyring/latest/kms_aead_keyring/struct.KeyringAdmin.html). The
+state-changing ones:
 
 | Call | Does |
 |---|---|
@@ -88,7 +94,9 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
 | `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write; the record stays in the store, see below the table |
 | `dangerously_shred()` | destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see [Shredding a keyring](#shredding-a-keyring) |
-| `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
+
+`reencrypt_deks()` changes no state: it re-encrypts the DEKs under the KEK's current version, see
+[Re-encrypt DEKs after a KEK rotation](../production/reencrypt-deks.md).
 
 After `dangerously_destroy_all_versions()` the keyring encrypts and decrypts nothing, except through a
 stream encryptor or decryptor already made, see [Shredding a tenant with
@@ -102,7 +110,8 @@ version, its state and the `Transition`:
 - `retire`, `mark_compromised` and `reinstate` refuse a pending version, which never encrypted a
   value. `destroy` it instead.
 
-Each call reads the record, applies the change and writes it with a compare-and-swap, reading
+Each call reads the record, applies the change and writes it with a compare-and-swap, a write
+that succeeds only if the record is still at the revision the call read, reading
 again after a conflict up to `KeyringOptions::cas_retries` times,
 `KeyringOptions::DEFAULT_CAS_RETRIES` by default, before `RecordConflict`.
 
@@ -123,9 +132,9 @@ Promote only after the longest time any process may run without a successful ref
 record, counted from `KeyVersion::staged_at()`. For a healthy process that time is at most
 `record_ttl`, `KeyringRegistryOptions::DEFAULT_RECORD_TTL` by default. A process whose
 revalidations fail keeps its cached record for as long as they fail, and logs a `WARN` on each
-failure: "The keyring record could not be revalidated; the cached record stays in use". A
-deployment whose instances can take hours to update or to reach the store waits as long. Alert on
-that `WARN`: an instance that logs it is one a promotion can leave behind.
+failure. A deployment whose instances can take hours to update or to reach the store waits as
+long. Alert on that `WARN`, see [Keyring events](../observability/spans-and-events.md#keyring-events):
+an instance that logs it is one a promotion can leave behind.
 
 `promote` holds the promotion back for the registry's `record_ttl` from `staged_at()`: before
 that it fails with `PromotionTooEarly`, whose `remaining` is the time left, so the job can sleep
