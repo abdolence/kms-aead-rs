@@ -154,13 +154,23 @@ impl LocalSigningKey {
         let content = read_local_key_env(variable, &origin).map_err(|error| {
             error.into_error("LOCAL_SIGNING_KEY_SOURCE", "LOCAL_SIGNING_KEY_SOURCE")
         })?;
+        Self::from_env_text(version, content, format, &origin)
+    }
+
+    /// The key an environment variable holding `content` gives, read from `origin`.
+    fn from_env_text(
+        version: LocalSigningKeyVersion,
+        content: SecretValue,
+        format: PrivateKeyFormat,
+        origin: &str,
+    ) -> KmsAeadResult<Self> {
         let content = format.decode_env_text(content).ok_or_else(|| {
             KmsAeadSystemError::create(
                 "LOCAL_SIGNING_KEY_SOURCE",
                 &format!("{origin} does not hold standard base64"),
             )
         })?;
-        Self::decode(version, content, format, "env", &origin)
+        Self::decode(version, content, format, "env", origin)
     }
 
     /// The key `content` holds in `format`, read from `origin`.
@@ -543,15 +553,6 @@ mod tests {
                 pkcs8_der_secret(pkcs8_der),
                 PrivateKeyFormat::Pkcs8Der,
             )?;
-            let variable = format!("KMS_AEAD_LOCAL_SIGNING_TEST_{}", &pkcs8_der[..8]);
-            // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
-            // read of a different one by another test thread.
-            unsafe {
-                std::env::set_var(
-                    &variable,
-                    SecretValue::new(hex::decode(pkcs8_der).unwrap()).as_sensitive_base64_str(),
-                )
-            };
             let keys = [
                 LocalSigningKey::from_secret(
                     local_signing_key_version(1),
@@ -568,15 +569,23 @@ mod tests {
                     &dir.file("pem", pkcs8_pem(pkcs8_der)),
                     PrivateKeyFormat::Pkcs8Pem,
                 )?,
-                LocalSigningKey::from_env(
+                LocalSigningKey::from_env_text(
                     local_signing_key_version(1),
-                    &variable,
+                    SecretValue::from(
+                        pkcs8_der_secret(pkcs8_der)
+                            .as_sensitive_base64_str()
+                            .as_str(),
+                    ),
                     PrivateKeyFormat::Pkcs8Der,
+                    "the environment variable",
+                )?,
+                LocalSigningKey::from_env_text(
+                    local_signing_key_version(1),
+                    SecretValue::from(pkcs8_pem(pkcs8_der)),
+                    PrivateKeyFormat::Pkcs8Pem,
+                    "the environment variable",
                 )?,
             ];
-            // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
-            // read of a different one by another test thread.
-            unsafe { std::env::remove_var(&variable) };
 
             for key in keys {
                 assert_eq!(key.verifying_key(), expected.verifying_key(), "{key:?}");
@@ -620,9 +629,6 @@ mod tests {
     #[test]
     fn a_source_that_cannot_be_read_is_refused() {
         let dir = TestDir::new("sources");
-        // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
-        // read of a different one by another test thread.
-        unsafe { std::env::set_var("KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64", "not base64!") };
         let large = dir.file("large", vec![0x30; LOCAL_KEY_MAX_LEN_PLUS_ONE]);
         for result in [
             LocalSigningKey::from_file(
@@ -645,10 +651,11 @@ mod tests {
                 "KMS_AEAD_LOCAL_SIGNING_TEST_UNSET",
                 PrivateKeyFormat::Pkcs8Pem,
             ),
-            LocalSigningKey::from_env(
+            LocalSigningKey::from_env_text(
                 local_signing_key_version(1),
-                "KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64",
+                SecretValue::from("not base64!"),
                 PrivateKeyFormat::Pkcs8Der,
+                "the environment variable",
             ),
         ] {
             assert!(
@@ -656,9 +663,6 @@ mod tests {
                 "{result:?}"
             );
         }
-        // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
-        // read of a different one by another test thread.
-        unsafe { std::env::remove_var("KMS_AEAD_LOCAL_SIGNING_TEST_NOT_BASE64") };
     }
 
     const LOCAL_KEY_MAX_LEN_PLUS_ONE: usize =

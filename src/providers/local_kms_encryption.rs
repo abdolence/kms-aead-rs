@@ -1017,20 +1017,17 @@ mod tests {
     }
 
     #[test]
-    fn a_jwk_is_read_from_an_environment_variable() -> KmsAeadResult<()> {
-        const VARIABLE: &str = "KMS_AEAD_LOCAL_KEK_TEST_JWK";
-        // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
-        // read of a different one by another test thread.
-        unsafe { std::env::set_var(VARIABLE, format!(r#"{{"kty":"oct","k":"{KEK_JWK_K}"}}"#)) };
-
-        let kek = LocalKek::from_env(
+    fn an_unset_environment_variable_is_refused() {
+        let result = LocalKek::from_env(
             LocalKekVersion::from(NonZeroU32::MIN),
-            VARIABLE,
+            "KMS_AEAD_LOCAL_KEK_TEST_UNSET",
             SymmetricKeyFormat::Jwk,
-        )?;
+        );
 
-        assert_eq!(kek.material.ref_sensitive_value(), &KEK_MATERIAL.to_vec());
-        Ok(())
+        assert!(
+            matches!(&result, Err(error) if error.code() == "LOCAL_KEK_SOURCE"),
+            "{result:?}"
+        );
     }
 
     mod files {

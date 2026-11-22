@@ -185,9 +185,7 @@
 //! ```
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
-// The unit tests of the local key sources change environment variables, which is `unsafe` since
-// edition 2024.
-#![cfg_attr(not(test), forbid(unsafe_code))]
+#![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 #[cfg(all(
