@@ -25,6 +25,9 @@
 - `KmsAeadNetworkError` does not implement `PartialEq` and `Eq`, as the other error structs do not,
   so that a later release can give it a root cause. Code that compared two network errors compares
   their `public.code`.
+- `LocalSigningProvider::ephemeral` returns a CSPRNG failure, `RANDOM_GENERATOR`, as a
+  `KmsAeadError::EncryptionError`, the variant of every other `RANDOM_GENERATOR` error. It was a
+  `SystemError`.
 
 ## 0.33
 

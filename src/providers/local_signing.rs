@@ -8,7 +8,9 @@ use secret_vault_value::SecretValue;
 
 use super::local_key_source::{read_local_key_env, read_local_key_file};
 use crate::backends::AeadBackend;
-use crate::errors::{KmsAeadError, KmsAeadSignatureError, KmsAeadSystemError};
+use crate::errors::{
+    KmsAeadEncryptionError, KmsAeadError, KmsAeadSignatureError, KmsAeadSystemError,
+};
 use crate::formats::PrivateKeyFormat;
 use crate::signing::private_key::Pkcs8SigningKey;
 use crate::signing::{
@@ -376,7 +378,7 @@ impl<B: AeadBackend> LocalSigningProvider<B> {
     /// `RANDOM_GENERATOR` when the CSPRNG fails.
     pub fn ephemeral(id: LocalSigningKeyName, algorithm: SigningAlgorithm) -> KmsAeadResult<Self> {
         let (private_key, public_key) = B::generate_signing_key(algorithm).map_err(|_| {
-            KmsAeadSystemError::create(
+            KmsAeadEncryptionError::create(
                 "RANDOM_GENERATOR",
                 &format!("Unable to generate a {algorithm} key"),
             )
