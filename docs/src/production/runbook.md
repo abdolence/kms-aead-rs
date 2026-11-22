@@ -13,7 +13,7 @@ Rehearse each on a staging keyring, on a schedule, and record how long propagati
 | A principal got KMS rights it should not have, or the KMS audit log shows an `Encrypt` or a `Decrypt` by one that should not | [A KMS IAM over-grant](#a-kms-iam-over-grant) |
 | An encrypted DEK or a keyring record leaked | [An encrypted DEK or the keyring record leaked](#an-encrypted-dek-or-the-keyring-record-leaked) |
 | An `ERROR` for a refused record that moves backwards, or a version the job did not create | [A version the administrative job did not create](#a-version-the-administrative-job-did-not-create) |
-| A keyring record was deleted or corrupted, or a `WARN` that the store no longer holds the record | [The keyring record was deleted or corrupted](#the-keyring-record-was-deleted-or-corrupted) |
+| A keyring record was deleted or corrupted, or a `WARN` about a record gone from the store | [The keyring record was deleted or corrupted](#the-keyring-record-was-deleted-or-corrupted) |
 | The KMS is down | [A KMS outage](#a-kms-outage) |
 | A tenant's values must become unreadable | [A scope's values must become unreadable](#a-scopes-values-must-become-unreadable) |
 
