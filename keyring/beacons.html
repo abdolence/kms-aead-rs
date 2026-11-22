@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -307,14 +307,14 @@ process has seen the promotion;</li>
 version, compromised ones included, newest first;</li>
 <li>the promotion moved the keyring’s re-encryption epoch on, so every row written before it has a
 <code>EncryptionMarker</code> below the current one, and a re-index sweep visits them, see
-<a href="../operations/sweeps.html">Sweeps</a>. It computes each row’s beacon again under the active version
+<a href="../production/sweeps.html">Sweeps</a>. It computes each row’s beacon again under the active version
 of its encryptor and writes the encryptor’s marker; a row without a beacon gets the marker alone;</li>
 <li>once the sweep reports no failure and that query returns nothing, <code>retire</code> the old version, and
 its probe drops out of every lookup.</li>
 </ol>
 <p><code>beacon.key_id()</code> reads the key id of a stored beacon, so that the sweep recomputes only the beacons
 under an older version. Here a re-index over an in-memory table, run by <code>sweep::reencrypt_records</code> as any sweep
-is, see <a href="../operations/sweeps.html#running-a-sweep">Running a sweep</a>. A beacon under the active
+is, see <a href="../production/sweeps.html#running-a-sweep">Running a sweep</a>. A beacon under the active
 version keeps its bytes and only the value is re-encrypted; any other gives both again from the
 plaintext:</p>
 <pre><code class="language-rust">use std::collections::BTreeMap;

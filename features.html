@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -248,7 +248,7 @@ encrypts can be constructed, since no type implements <code>AeadBackend</code>.<
 </thead>
 <tbody>
 <tr><td><code>ring</code>, <code>aws-lc</code>, <code>aws-lc-fips</code>, <code>rustcrypto</code></td><td>the crypto backends of kms-aead, see <a href="./crypto-backends.html">Crypto backends</a>. A keyring names its backend as a type parameter, such as <code>kms_aead::backends::Ring</code></td></tr>
-<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="./keyring/deployment.html">Applications and administration</a></td></tr>
+<tr><td><code>admin</code></td><td><code>KeyringAdmin</code>, the registry’s <code>create</code>, <code>open_or_create</code> and <code>admin</code>, and the types of the administrative calls, <code>Rotation</code>, <code>EncryptedKeyset</code>, <code>KeysetSelection</code> and the <code>encodings</code> module, see <a href="./production/permissions.html">Permissions: applications and administration</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic key versions and every call on them, <code>encrypt_deterministic</code> and <code>reencrypt_deterministic</code> on an <code>Encryptor</code>, and <code>decrypt_deterministic</code>, <code>decrypt_deterministic_with_trust</code> and <code>deterministic_probes</code> on a <code>Keyring</code>, see <a href="./keyring/deterministic.html">Deterministic fields</a>. The deterministic types exist in every build, so a process without the feature keeps a record’s deterministic versions intact</td></tr>
 <tr><td><code>firestore</code></td><td>the Firestore keyring store, on firestore-rs without its default features: no TLS root store and no crypto provider. The application enables a firestore-rs or gcloud-sdk root store feature, or uses one of the two below, see <a href="./keyring/stores.html#firestore">Keyring stores</a></td></tr>
 <tr><td><code>firestore-tls-roots</code></td><td><code>firestore</code> with the system’s native roots, firestore-rs’s <code>tls-roots</code>, which brings native-tls and so OpenSSL on Linux, and firestore-rs’s <code>auth-default-crypto</code></td></tr>
@@ -273,7 +273,7 @@ type’s <code>Plaintext</code> encodes to.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="operations/runbook.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="keyring/bigquery.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -287,7 +287,7 @@ type’s <code>Plaintext</code> encodes to.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="operations/runbook.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="keyring/bigquery.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

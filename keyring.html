@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -197,7 +197,7 @@ that uses the keyring;</li>
 document per keyring. See <a href="./intro.html#choosing-a-mode">Choosing a mode</a> for the comparison with
 the envelope modes of kms-aead.</p>
 <h2 id="applications-and-administration"><a class="header" href="#applications-and-administration">Applications and administration</a></h2>
-<p>See <a href="./keyring/deployment.html">Applications and administration</a>.</p>
+<p>See <a href="./production/permissions.html">Permissions: applications and administration</a>.</p>
 <h2 id="the-registry-and-its-handles"><a class="header" href="#the-registry-and-its-handles">The registry and its handles</a></h2>
 <p>A first keyring, on the memory store with a local KEK, is in
 <a href="./getting-started.html#with-a-keyring">With a keyring</a>.</p>
@@ -243,7 +243,7 @@ ephemeral local KEK has no second copy to <code>open</code> the keyring with: <c
 <p><code>Keyring::encryptor</code> takes the cached record, and the <code>Encryptor</code> encrypts under that record’s
 active versions; <code>decrypt</code> uses the version the value names. A write takes one encryptor and
 encrypts every encrypted field of the record through it, so that the encryption marker it stores
-beside them names the versions they are under, see <a href="./operations/sweeps.html#the-encryption-marker">The encryption
+beside them names the versions they are under, see <a href="./production/sweeps.html#the-encryption-marker">The encryption
 marker</a>. Neither calls the store while the cached
 record is fresh, nor the KMS while the version’s DEK is in the DEK cache, see <a href="./keyring/record-cache.html">Record
 cache</a>.</p>
@@ -270,7 +270,7 @@ with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no h
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="keyring/deployment.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="keyring/lifecycle.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -284,7 +284,7 @@ with a <code>WARN</code> that counts the aborted tasks, and an abort leaves no h
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="keyring/deployment.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="keyring/lifecycle.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>

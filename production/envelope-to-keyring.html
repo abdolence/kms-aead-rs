@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -207,7 +207,7 @@ them:</p>
 ALTER TABLE users ALTER COLUMN encryption_marker SET DEFAULT b'\x01\x00\x00\x00\x00';
 UPDATE users SET encryption_marker = b'\x01\x00\x00\x00\x00' WHERE encryption_marker IS NULL;
 </code></pre>
-<p>The <code>UPDATE</code> in SQL of <a href="../operations/sweeps-bigquery.html">Sweeps on BigQuery</a> does not decrypt an
+<p>The <code>UPDATE</code> in SQL of <a href="./sweeps/bigquery.html">Sweeps on BigQuery</a> does not decrypt an
 envelope value, so its <code>WHERE</code> leaves the envelope rows out with
 <code>AND encryption_marker &gt; b'\x01\x00\x00\x00\x00'</code>, and they go through the Rust sweep.</p>
 <p>Firestore documents written before the marker get <code>ENVELOPE</code> written into them first, or the

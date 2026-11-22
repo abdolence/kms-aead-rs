@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -207,7 +207,7 @@ that needs either guarantee uses a KEK per tenant.</p>
 <li>by the administrative job, as part of onboarding a tenant, with <code>create</code> or <code>open_or_create</code>;</li>
 <li>or by the application on the tenant’s first request, with <code>open_or_create</code>. Such an application
 builds with the <code>admin</code> feature and runs with the administrative rights, so it is trusted as the
-administration is, see <a href="../keyring/deployment.html">Applications and administration</a> and
+administration is, see <a href="../production/permissions.html">Permissions: applications and administration</a> and
 <a href="../security.html#keyring-limits">Keyring limits</a>.</li>
 </ul>
 <h2 id="the-path-through-the-api"><a class="header" href="#the-path-through-the-api">The path through the API</a></h2>
@@ -221,7 +221,7 @@ other providers are built once per keyring;</li>
 <li>a <code>FieldSpec</code> constant per encrypted field, the same for every tenant, since each keyring
 has DEKs of its own, see <a href="../keyring/fields.html">Encrypted fields and AAD</a>;</li>
 <li>on every write, <code>keyring.encryptor()</code> and its <code>encrypt</code>, and the encryption marker it gives,
-see <a href="../operations/sweeps.html#the-encryption-marker">The encryption marker</a>; on every read,
+see <a href="../production/sweeps.html#the-encryption-marker">The encryption marker</a>; on every read,
 <code>keyring.decrypt</code>;</li>
 <li><code>registry.shutdown(None)</code> before the process exits, see
 <a href="../keyring.html#the-registry-and-its-handles">The registry and its handles</a>.</li>

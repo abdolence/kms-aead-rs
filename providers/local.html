@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -343,7 +343,7 @@ let provider = LocalKmsProvider::&lt;Ring&gt;::new(
 </span><span class="boring">}</span></code></pre>
 <p>A version that is not in the list fails <code>with_encrypting_version</code> with <code>LOCAL_KEK_VERSIONS</code>.</p>
 <p>Then sweep, see
-<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>,
 and check with a provider that lists the new version alone, before the deploy that drops the old
 version, so that a DEK the sweep missed fails the check and no read in the application. Dropping
 the old version from the list disables it, and listing it again restores it. Destroying it means

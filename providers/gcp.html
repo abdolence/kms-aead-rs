@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -236,7 +236,7 @@ on the location when the KMS generator is on.</p>
 key’s rotation schedule. New DEKs are encrypted under the primary version from then on, and Cloud
 KMS decrypts every DEK with the version that encrypted it, for as long as that version is enabled.</p>
 <p>To retire the old version, disable it once the sweep has reached every value, see
-<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>:
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>:
 decryptions under it fail, and enabling it again restores them. Destroying it schedules its
 destruction, 30 days later by default, and until then the version can be restored.</p>
 <p>Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
@@ -250,7 +250,7 @@ encrypted DEK an encryption returns, and the <code>kek_version</code> field of t
 name the version Cloud KMS encrypted with, the <code>N</code> of <code>cryptoKeyVersions/N</code>, see
 <a href="../observability.html">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
 primary version had propagated still lists the old version among its <code>kek_versions_in_use</code>:
-run <code>reencrypt_deks</code> again, see <a href="../operations/rotation.html#rotating-the-kek">Rotating the KEK</a>;</li>
+run <code>reencrypt_deks</code> again, see <a href="../production/rotation.html#re-encrypting-a-keyrings-deks">Re-encrypting a keyring’s DEKs</a>;</li>
 <li>run the check only once the disable has propagated, and run it again before destroying the
 version. A check inside that window passes on DEKs that are still under the old version.</li>
 </ul>

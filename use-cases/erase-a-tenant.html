@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -195,38 +195,97 @@ later by default, and until then a version can be restored, see
 <li><strong>Azure Key Vault</strong>: delete the key, which deletes it with all its versions: Key Vault never
 deletes one version alone, see <a href="../providers/azure.html#key-versions-and-rotation">Azure Key Vault</a>.
 Soft delete and purge protection delay the shredding, see
-<a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>;</li>
+<a href="#what-survives-a-shred">What survives a shred</a>;</li>
 <li><strong>Vault Transit</strong>: <code>min_available_version</code> and a trim of the key delete the versions below it, see
 <a href="../providers/hc-vault-transit.html#key-versions-and-rotation">Vault Transit</a>, and a deletion of
 the key, once its configuration sets <code>deletion_allowed</code>, deletes every version;</li>
 <li><strong>local KMS</strong>: destroy every copy of the KEK version, backups included, see
 <a href="../providers/local.html#key-versions-and-rotation">Local KMS</a>.</li>
 </ul>
+<p>Under a keyring, the KEK encrypts the record’s DEKs and every keyset exported from the keyring, so
+destroying the KEK’s versions makes the backups of the record and the exported keysets
+unrecoverable too.</p>
 <p>Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
 Vault needs a key per scope. With a keyring, a shared KEK has a second route, <code>dangerously_shred()</code>:
 it destroys every version of the keyring and deletes its record from the store, with the earlier
 versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
 backup, and in every keyset exported from the keyring, see
-<a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>. A deployment that needs shredding
-guarantees uses a KEK per scope, see <a href="../use-cases/keyring-per-tenant.html">A keyring per tenant</a>.</p>
+<a href="#what-survives-a-shred">What survives a shred</a>. A deployment that needs shredding guarantees uses
+a KEK per scope, see <a href="./keyring-per-tenant.html">A keyring per tenant</a>.</p>
 <h3 id="shredding-a-tenant-with-dangerously_shred"><a class="header" href="#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a></h3>
 <p>Under a shared KEK, <code>KeyringAdmin::dangerously_shred()</code> ends the tenant’s keyring in one call: it
-destroys every version and deletes the record from the store. The call can be repeated after a
-failure, and returns <code>Ok</code> on a keyring that is gone already. The keyring id is free for a new
-keyring afterwards.</p>
+destroys every version of the keyring in one write, as <code>dangerously_destroy_all_versions</code> does,
+then deletes the record from the store with every earlier version of it the store keeps. The
+keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor
+already made, see below, and the id is free for a new keyring.</p>
 <ul>
-<li>Every process that holds the keyring takes the deletion at its next revalidation, within seconds
-with push. Its handles fail with <code>NoActiveVersion</code> for a write and <code>KeyVersionDestroyed</code> for a
-read, and the plaintext DEK leaves its memory with that revalidation;</li>
+<li>the write is signed as every lifecycle write is: an administration without a record signer is
+refused with <code>RecordSignerMissing</code> over a signed record, and a signing one with <code>RecordUnsigned</code>
+over an unsigned record, both before any store write;</li>
+<li>a conflict of the write or of the delete starts again from a new read, up to <code>cas_retries</code>, then
+<code>RecordConflict</code>;</li>
+<li>a shred that fails is run again. A record whose every version is destroyed already, as a failure
+between the write and the delete leaves it, is deleted without a write, and a record already
+gone returns <code>Ok</code>. The record left between the two steps holds no encrypted DEK, and every
+process that reads it destroys its versions;</li>
+<li><code>KeyringRegistry::admin</code> on a keyring already gone fails with <code>RecordMissing</code>, which an erasure
+treats as done;</li>
 <li>a copy of the record from before the shred is refused by a process that took the deletion, with
 <code>RecordRegressed</code> and an <code>ERROR</code>, because it revives versions the process holds destroyed. A
 store writer who restores an old record gains nothing against that process;</li>
 <li>after a deliberate restore, such as one that undoes an accidental deletion, restart every process
-that took the deletion. A process that starts after the restore takes the record;</li>
-<li><code>dangerously_shred()</code> leaves the store’s backups, its history and every exported keyset where
-they are, and the KMS untouched. They still decrypt while a KEK version that encrypted their DEKs
-exists, see <a href="../operations/runbook.html#what-survives-a-shred">What survives a shred</a>.</li>
+that took the deletion. A process that starts after the restore takes the record.</li>
 </ul>
+<p>Every process that holds the keyring takes the shred as a deleted record, see
+<a href="../production/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a>.
+Its handles fail with <code>NoActiveVersion</code> for a write and <code>KeyVersionDestroyed</code> for a read. How late:</p>
+<ul>
+<li>with push, within <code>reload_min_interval</code> of the store’s signal;</li>
+<li>without push, on Cloud Storage and S3 or with <code>watch</code> off, once the cached record is older than
+<code>record_ttl</code>, at the next call.</li>
+</ul>
+<p>The plaintext DEK leaves the process’s memory at that revalidation. A process that makes no call
+keeps it until the DEK cache drops it: its TTL, with <code>purge_expired</code> on a timer, see
+<a href="../keyring/record-cache.html#dek-eviction">DEK eviction</a>. A stream decryptor or encryptor already
+made keeps the key derived for its value, and goes on decrypting or encrypting with it, until it is
+dropped. Build a decryptor per request and do not cache it across requests, so that a shred takes
+effect for new requests, see <a href="../streaming.html#limits">Streaming encryption</a>.</p>
+<p><code>dangerously_shred()</code> never calls the KMS and leaves every KMS key version as it was. Values
+encrypted under the keyring stay where they are and decrypt under nothing. The store’s backups, its
+history and every exported keyset stay where they are too, and still decrypt while a KEK version
+that encrypted their DEKs exists, see <a href="#what-survives-a-shred">What survives a shred</a>.</p>
+<h4 id="what-survives-a-shred"><a class="header" href="#what-survives-a-shred">What survives a shred</a></h4>
+<p>Every copy of the record outside the store’s API still holds the encrypted DEKs, which the KMS
+decrypts as long as a KEK version that encrypted them exists. The operator deletes them or ends the
+KEK versions:</p>
+<ul>
+<li><strong>Firestore</strong>: serves a deleted document to reads at an earlier time for one hour, and for seven days
+with point-in-time recovery on, which keeps the versions of every document for that window.
+Backups and exports hold the record until they are deleted;</li>
+<li><strong>PostgreSQL</strong>: the row’s earlier versions until a vacuum reclaims them, and backups, WAL archives
+and replicas. The WAL is the write-ahead log, which holds every committed change;</li>
+<li><strong>Cloud Storage</strong>: <code>dangerously_shred()</code> deletes every generation of the object, noncurrent ones
+included. Soft delete keeps every deleted generation restorable for the bucket’s retention, 7 days
+by default, so a bucket of keyring records turns soft delete off, or counts the retention into the
+time a shred takes;</li>
+<li><strong>S3</strong>: <code>dangerously_shred()</code> deletes every version and delete marker of the object. Replication
+to another bucket and backups hold copies it does not reach;</li>
+<li><strong>exported keysets</strong>: every BigQuery and Tink keyset exported from the keyring holds the keys of
+the versions it was exported with, under the same KEK, see
+<a href="../security.html#keyring-limits">Keyring limits</a>.</li>
+</ul>
+<p>Per store, what <code>dangerously_shred()</code> deletes is in <a href="../keyring/stores.html">Keyring stores</a>.</p>
+<p>So after a shred, either delete the record’s backups and every copy of the keysets exported from
+the keyring, or destroy every KEK version that encrypted them. On GCP, Vault Transit and the local
+KMS, rotate the KEK, re-encrypt every other keyring under it as in
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>,
+then destroy every previous KEK version, the ones an earlier rotation left disabled included. On
+AWS rotated key material is never destroyed, so only the deletion of the KMS key itself shreds.
+Azure Key Vault deletes a key with all its versions and never one version alone, so there too only
+the deletion of the key shreds. A vault with soft delete keeps a deleted key recoverable until it
+is purged, and with purge protection on, no purge is possible until the vault’s retention period of
+7 to 90 days has passed, see
+<a href="https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview">Azure Key Vault soft-delete</a>.</p>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/shred.rs">here</a>.</p>
 

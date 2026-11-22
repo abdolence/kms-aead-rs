@@ -1,0 +1,567 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Re-encrypt DEKs after a KEK rotation - KMS envelope encryption for Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-a4ca9268.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="re-encrypt-deks-after-a-kek-rotation"><a class="header" href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a></h1>
+<p>A KEK rotation makes the KMS encrypt new DEKs under a new key version, and every DEK stored before
+it keeps decrypting with the old version only. <code>reencrypt_encrypted_dek</code> and <code>reencrypt_dek</code> move a
+stored DEK to the current version, so the old version can be retired while the application keeps
+reading and writing:</p>
+<ol>
+<li>rotate the KEK in the KMS, as the page of each provider describes. Under Cloud KMS, wait until
+the new primary version has propagated, see <a href="../providers/gcp.html#key-versions-and-rotation">Google Cloud
+KMS</a>. Then wait until every store-less writer has
+renewed its DEK. Until then a writer keeps encrypting under its current DEK, encrypted under the
+old version, so the sweep of step 2 misses the values it writes, the check of step 3 does not see
+them, and they first fail at the check of step 6, after the disable. A writer renews its DEK when
+its <code>DekReusePolicy</code> says so, and at the latest when the DEK leaves its cache, at the cache’s
+<code>DekCacheOptions::ttl</code>, <code>DekCacheOptions::DEFAULT_TTL</code> of 15 minutes by default, see <a href="../dek-caching.html#the-dek-lives-in-the-cache">The DEK
+lives in the cache</a>;</li>
+<li>re-encrypt every stored DEK: the DEKs of the stored values, the DEKs stored apart from their
+values, and the record of each keyring under the KEK with <code>KeyringAdmin::reencrypt_deks</code>. Then
+export the keyrings’ keysets again and re-encrypt the application’s own encrypted keysets, see
+<a href="#encrypted-keysets">Encrypted keysets</a>, and replace the old keyset bytes wherever they are
+kept, see <a href="../keyring/bigquery.html#exporting-a-keyset-to-bigquery">Exporting a keyset to BigQuery</a>;</li>
+<li>check that the <code>kek_versions_in_use</code> of every keyring record lists the new version alone, and so
+does the KEK version an application stores beside its own DEKs. A <code>None</code> never passes this
+check, see <a href="./rotation.html#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a>;</li>
+<li>wait until no process holds an encrypted DEK from before step 2: the longest <code>record_ttl</code> in the
+fleet after the last <code>reencrypt_deks</code>, with no process logging “The keyring record could not
+be revalidated” meanwhile, and every process has read its DEKs stored apart from their values
+again, see <a href="#the-check">The check</a>;</li>
+<li>disable the old version, and wait until the disable has propagated in the KMS: under Cloud KMS
+typically up to a minute, and several hours in exceptional cases;</li>
+<li>check that the KMS decrypts every stored DEK, every keyring’s DEKs with <code>reencrypt_deks</code>, and
+every encrypted keyset, see <a href="#the-check">The check</a>. A DEK or a keyset it refuses is one the
+sweep missed: enable the old version again, sweep again, and go back to step 3;</li>
+<li>keep the old version disabled for as long as the backups of the stored values and of the
+keyring records are kept. Immediately before destroying it, run the check of step 6 again, and
+destroy it only when it passes.</li>
+</ol>
+<p>A backup taken before the sweep holds the DEKs under the old version, so destroying the old version
+makes every such backup unreadable for good. Keyring records are the same, see
+<a href="../keyring/lifecycle.html#compromised-versions">Key lifecycle</a>. What a rotation, a disabled version
+and a destroyed version are differs per KMS, see the page of each provider.</p>
+<h2 id="the-sweep"><a class="header" href="#the-sweep">The sweep</a></h2>
+<p><code>reencrypt_encrypted_dek</code> makes two KMS calls: the KMS decrypts the DEK with the version that
+encrypted it and encrypts it again with its current one. The AEAD bytes of a value stay as they
+are, so the sweep takes no AAD, decrypts nothing, and the value decrypts as before. Each distinct
+encrypted DEK is re-encrypted once and joined with each of its values, so the values a store-less
+envelope wrote under one DEK still share one afterwards:</p>
+<pre><code class="language-rust">use std::collections::HashMap;
+
+use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{
+    Encrypted, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult,
+};
+use secret_vault_value::SecretValue;
+
+/// The bytes to write back for each stored value in `rows`, beside the bytes read, with its DEK
+/// under the KEK's current version. Each distinct encrypted DEK is re-encrypted once.
+async fn reencrypt_values&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;[Vec&lt;u8&gt;],
+) -&gt; KmsAeadResult&lt;Vec&lt;(Vec&lt;u8&gt;, Vec&lt;u8&gt;)&gt;&gt;
+where
+    P: KmsAeadDecryptionProvider,
+    B: AeadBackend,
+{
+    let mut reencrypted: HashMap&lt;EncryptedDataEncryptionKey, EncryptedDataEncryptionKey&gt; =
+        HashMap::new();
+    let mut updates = Vec::with_capacity(rows.len());
+    for row in rows {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.clone())?;
+        let (bare, encrypted_dek) = stored.separate()?;
+        let new_encrypted_dek = match reencrypted.get(&amp;encrypted_dek) {
+            Some(new_encrypted_dek) =&gt; new_encrypted_dek.clone(),
+            None =&gt; {
+                let new_encrypted_dek = envelope.reencrypt_encrypted_dek(&amp;encrypted_dek).await?;
+                reencrypted.insert(encrypted_dek, new_encrypted_dek.clone());
+                new_encrypted_dek
+            }
+        };
+        updates.push((row.clone(), Encrypted::join(&amp;bare, &amp;new_encrypted_dek)?.into_value()));
+    }
+    Ok(updates)
+}
+<span class="boring">use std::num::NonZeroU32;
+</span><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::formats::SymmetricKeyFormat;
+</span><span class="boring">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{DekReusePolicy, KmsAeadEnvelopeOptions};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span><span class="boring">let kek_id = LocalKekId::try_from("orders".to_string())?;
+</span><span class="boring">let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+</span><span class="boring">    LocalKmsProvider::new(
+</span><span class="boring">        kek_id.clone(),
+</span><span class="boring">        vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">    )?,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_dek_reuse(DekReusePolicy::new()),
+</span><span class="boring">)?;
+</span><span class="boring">let mut rows = Vec::new();
+</span><span class="boring">for card in ["4111 1111 1111 1111", "5500 0000 0000 0004"] {
+</span><span class="boring">    rows.push(envelope.encrypt(b"orders/1042", &amp;SecretValue::from(card)).await?.into_value());
+</span><span class="boring">}
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(LocalKmsProvider::new(
+</span><span class="boring">    kek_id.clone(),
+</span><span class="boring">    vec![
+</span><span class="boring">        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?,
+</span><span class="boring">        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?,
+</span><span class="boring">    ],
+</span><span class="boring">)?)?;
+</span><span class="boring">for (read, new) in reencrypt_values(&amp;envelope, &amp;rows).await? {
+</span><span class="boring">    if let Some(row) = rows.iter_mut().find(|row| **row == read) {
+</span><span class="boring">        *row = new;
+</span><span class="boring">    }
+</span><span class="boring">}
+</span><span class="boring">let encrypted_deks = rows
+</span><span class="boring">    .iter()
+</span><span class="boring">    .map(|row| Ok(Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.clone())?.separate()?.1))
+</span><span class="boring">    .collect::&lt;KmsAeadResult&lt;Vec&lt;EncryptedDataEncryptionKey&gt;&gt;&gt;()?;
+</span><span class="boring">assert_eq!(encrypted_deks[0], encrypted_deks[1]);
+</span><span class="boring">let disabled = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(LocalKmsProvider::new(
+</span><span class="boring">    kek_id,
+</span><span class="boring">    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">)?)?;
+</span><span class="boring">for row in &amp;rows {
+</span><span class="boring">    let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.clone())?;
+</span><span class="boring">    disabled.decrypt(b"orders/1042", &amp;stored).await?;
+</span><span class="boring">}
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Write each value back only where the stored bytes are still the ones read, with a compare-and-set
+such as <code>UPDATE orders SET card = $new WHERE id = $id AND card = $read</code>, or the store’s own
+conditional write. An unconditional write puts back the value the sweep read over one the
+application wrote in the meantime, which is then lost. A row the application rewrote keeps its new
+value, and the checks of steps 3 and 6 find it if its DEK is still under the old version.</p>
+<p><code>reencrypt_dek</code> does the same for one value. It gives each value an encrypted DEK of its own, so
+values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
+each on a cache miss afterwards. The same <code>reencrypt_encrypted_dek</code> re-encrypts the DEKs stored
+apart from their values, such as those of the <code>*_with_encrypted_dek</code> calls, of beacons and of
+deterministic fields. A value or a DEK in a layout of 0.29 or earlier fails with <code>LEGACY_FORMAT</code>:
+<code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, with its DEK
+under the current version, see <a href="../formats.html#upgrading-stored-values">Upgrading stored values</a>.</p>
+<p>The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
+so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
+current version. The sweep needs KMS encrypt and decrypt on the KEK.</p>
+<p>The <code>kek_version()</code> of the encrypted DEK that <code>reencrypt_encrypted_dek</code> returns names the KEK
+version the KMS encrypted it with. Under Cloud KMS, a sweep that ran before the new primary version
+had propagated shows the old version there, and the DEKs it names are re-encrypted again.</p>
+<h2 id="encrypted-keysets"><a class="header" href="#encrypted-keysets">Encrypted keysets</a></h2>
+<p>An encrypted keyset is a KMS ciphertext as well, under the KEK version that encrypted it, and
+<code>reencrypt_encrypted_dek</code> refuses one with <code>INVALID_KEY_FORMAT</code>, since what the KMS decrypts from
+it is a serialised keyset. A sweep of the DEKs leaves every keyset under the old version, so a
+query or a reader that decrypts one fails once the old version is disabled:</p>
+<ul>
+<li>a keyring’s <code>export_bigquery_keyset</code> and <code>export_tink_keyset</code>: export each keyset again, with the
+same selection, after <code>reencrypt_deks</code> and, under Cloud KMS, after the new primary version has
+propagated. The new export holds the same keys, encrypted under the KEK’s current version. Write
+its bytes wherever the old ones are kept: the query parameter of each <code>KEYS.KEYSET_CHAIN</code>, a
+column or a setting that holds the keyset, and the file or the setting a
+Tink reader decrypts. See <a href="../keyring/bigquery.html#exporting-a-keyset-to-bigquery">BigQuery</a>;</li>
+<li>the application’s own encrypted keyset, such as <code>first_level_keyset</code> in
+<a href="../envelope-encryption.html#one-fixed-key">One fixed key</a>: the provider decrypts it and encrypts it again, and the new bytes
+replace the old ones wherever they are kept:</li>
+</ul>
+<pre><code class="language-rust">use kms_aead::{EncryptedDataEncryptionKey, KmsAeadDecryptionProvider, KmsAeadResult};
+
+/// `first_level_keyset` encrypted again under the KEK version the provider encrypts with now.
+async fn reencrypt_keyset&lt;P: KmsAeadDecryptionProvider&gt;(
+    provider: &amp;P,
+    first_level_keyset: &amp;EncryptedDataEncryptionKey,
+) -&gt; KmsAeadResult&lt;EncryptedDataEncryptionKey&gt; {
+    let keyset = provider.decrypt_data_encryption_key(first_level_keyset).await?;
+    provider.encrypt_data_encryption_key(&amp;keyset).await
+}
+<span class="boring">use std::num::NonZeroU32;
+</span><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::formats::SymmetricKeyFormat;
+</span><span class="boring">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{DataEncryptionKey, KmsAeadEncryptionProvider};
+</span><span class="boring">use secret_vault_value::SecretValue;
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span><span class="boring">let kek_id = LocalKekId::try_from("orders".to_string())?;
+</span><span class="boring">let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+</span><span class="boring">let keyset = DataEncryptionKey::from(SecretValue::new(vec![0x0a; 16]));
+</span><span class="boring">let first_level_keyset = LocalKmsProvider::&lt;Ring&gt;::new(
+</span><span class="boring">    kek_id.clone(),
+</span><span class="boring">    vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">)?
+</span><span class="boring">.encrypt_data_encryption_key(&amp;keyset)
+</span><span class="boring">.await?;
+</span><span class="boring">let rotated = LocalKmsProvider::&lt;Ring&gt;::new(
+</span><span class="boring">    kek_id.clone(),
+</span><span class="boring">    vec![
+</span><span class="boring">        LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?,
+</span><span class="boring">        LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?,
+</span><span class="boring">    ],
+</span><span class="boring">)?;
+</span><span class="boring">let reencrypted = reencrypt_keyset(&amp;rotated, &amp;first_level_keyset).await?;
+</span><span class="boring">let disabled = LocalKmsProvider::&lt;Ring&gt;::new(
+</span><span class="boring">    kek_id,
+</span><span class="boring">    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">)?;
+</span><span class="boring">assert_eq!(disabled.decrypt_data_encryption_key(&amp;reencrypted).await?, keyset);
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The check decrypts the bytes of a BigQuery keyset and of the application’s own keyset through the
+provider, as it does an encrypted DEK, with <code>EncryptedDataEncryptionKey::from</code> of the bytes. A
+Tink keyset is a <code>google.crypto.tink.EncryptedKeyset</code> around the KMS ciphertext, and its check is
+a decryption with the Tink reader that uses it.</p>
+<h2 id="pacing"><a class="header" href="#pacing">Pacing</a></h2>
+<p>The sweep makes two KMS calls per distinct encrypted DEK, and the check one, on top of the calls
+the application makes. Under a KMS with a request quota, as the cloud KMSs have, pace the sweep
+below it: a fixed number of DEKs per second, or a pause after each batch, with room left for the
+application. A sweep over the quota fails with the KMS’s error, such as <code>ResourceExhausted</code> on GCP,
+and so do the application’s own calls meanwhile.</p>
+<h2 id="the-check"><a class="header" href="#the-check">The check</a></h2>
+<p>Once the old version is disabled, the KMS refuses every DEK still under it, so the check decrypts
+each distinct encrypted DEK through the provider, never through the DEK cache, which would serve a
+missed DEK from memory. It needs no AAD and decrypts no value, and it runs online, under every
+provider. Any error counts as a missed DEK:</p>
+<pre><code class="language-rust">use std::collections::HashSet;
+
+use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{
+    Encrypted, EncryptedDataEncryptionKey, KmsAeadDecryptionProvider, KmsAeadEnvelope,
+    KmsAeadResult,
+};
+use secret_vault_value::SecretValue;
+
+/// The distinct encrypted DEKs of the values in `rows` that the provider fails to decrypt.
+async fn missed_deks&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;[Vec&lt;u8&gt;],
+) -&gt; KmsAeadResult&lt;Vec&lt;EncryptedDataEncryptionKey&gt;&gt;
+where
+    P: KmsAeadDecryptionProvider,
+    B: AeadBackend,
+{
+    let mut encrypted_deks: HashSet&lt;EncryptedDataEncryptionKey&gt; = HashSet::new();
+    for row in rows {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.clone())?;
+        let (_, encrypted_dek) = stored.separate()?;
+        encrypted_deks.insert(encrypted_dek);
+    }
+    let mut missed = Vec::new();
+    for encrypted_dek in encrypted_deks {
+        if envelope
+            .provider()
+            .decrypt_data_encryption_key(&amp;encrypted_dek)
+            .await
+            .is_err()
+        {
+            missed.push(encrypted_dek);
+        }
+    }
+    Ok(missed)
+}
+<span class="boring">use std::num::NonZeroU32;
+</span><span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::formats::SymmetricKeyFormat;
+</span><span class="boring">use kms_aead::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span><span class="boring">let kek_id = LocalKekId::try_from("orders".to_string())?;
+</span><span class="boring">let [v1, v2] = [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(LocalKmsProvider::new(
+</span><span class="boring">    kek_id.clone(),
+</span><span class="boring">    vec![LocalKek::from_secret(v1, SecretValue::new(vec![0x01; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">)?)?;
+</span><span class="boring">let stored = envelope.encrypt(b"orders/1042", &amp;SecretValue::from("4111 1111 1111 1111")).await?;
+</span><span class="boring">let rows = vec![stored.into_value()];
+</span><span class="boring">let disabled = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(LocalKmsProvider::new(
+</span><span class="boring">    kek_id,
+</span><span class="boring">    vec![LocalKek::from_secret(v2, SecretValue::new(vec![0x02; 32]), SymmetricKeyFormat::Raw)?],
+</span><span class="boring">)?)?;
+</span><span class="boring">assert_eq!(missed_deks(&amp;disabled, &amp;rows).await?.len(), 1);
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>A keyring’s record names the KEK version of each of its DEKs, as the KMS reported it, so a first
+check makes no KMS call and runs before the old version is disabled: <code>kek_versions_in_use</code> of the
+record that <code>Keyring::reload</code> returns must list the new version alone. Under Cloud KMS, a
+<code>reencrypt_deks</code> that ran before the new primary version had propagated leaves the old version
+listed. A <code>None</code> there is a version the KMS did not report, so the first check fails on it. Once the
+old version is disabled, <code>KeyringAdmin::reencrypt_deks</code> runs again: it decrypts every DEK in the
+record through the provider, and fails on one still under the old version. See
+<a href="./rotation.html#re-encrypting-a-keyrings-deks">Re-encrypting a keyring’s DEKs</a>. An application that stores the <code>kek_version</code>
+of its own DEKs beside them checks those the same way.</p>
+<p>Under the local KMS the check needs no disable. A provider that lists the new version alone, as
+the sample above builds it, refuses every DEK under the old version, so the check runs before the
+deploy that drops the old version from the list, and a missed DEK costs no outage and no redeploy.</p>
+<p>Besides the store-less writers that step 1 of
+<a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a> waits for, two
+things keep using the old version after a rotation, and each sets when to disable it:</p>
+<ul>
+<li>every DEK cache serves the DEKs it holds, without a KMS call, until their entries expire. A value
+the sweep missed fails to decrypt in the application only once its entry has expired, see
+<a href="../dek-caching.html">DEK caching</a>. The check does not wait for that, since it never reads a cache;</li>
+<li>a process keeps the encrypted DEKs it read before the sweep. A keyring’s cached record holds the
+ones it had before <code>reencrypt_deks</code> until it is refreshed, at a change signal of the store or
+once it is older than <code>record_ttl</code>, 5 minutes by default, and Cloud Storage and S3 send no
+signal, see <a href="../keyring/record-cache.html#how-late-a-change-is-seen">Record cache</a>. A process whose
+revalidations fail keeps its record for as long as they fail, and logs “The keyring record could
+not be revalidated; the cached record stays in use” at <code>WARN</code> on each failure. An encrypted DEK
+the application read from its settings at startup, as in <a href="../envelope-encryption.html#one-fixed-key">One fixed key</a>, stays
+as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
+decrypts the old bytes again and fails under a disabled old version, with no reload. This is the
+wait of step 4 in <a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.</li>
+</ul>
+<p>A KMS whose changes take time to propagate, such as Cloud KMS, can keep encrypting under the old
+version for a while after the rotation and keep decrypting under it for a while after it is
+disabled. Wait before the sweep and again before trusting the check, see the page of each provider.</p>
+<h2 id="rolling-back-a-rotation"><a class="header" href="#rolling-back-a-rotation">Rolling back a rotation</a></h2>
+<p>A swept value’s DEK is under the new version only, so a rollback keeps the new version enabled:
+disabling it makes every swept value and every value written since the rotation unreadable, until
+it is enabled again. Three providers make the old version encrypt again:</p>
+<ul>
+<li>Cloud KMS: make the old version the primary version again;</li>
+<li>Azure Key Vault: pin the old version in <code>AzureKmsKeyRef</code>;</li>
+<li>the local KMS: point <code>with_encrypting_version</code> at the old version.</li>
+</ul>
+<p>Rolling back to the old version needs no new sweep. To retire the new version afterwards, run the
+procedure above with the old version as the current one.</p>
+<p>The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
+of the key, since the provider names no version in its request, and no older version becomes the
+latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS
+keeps every earlier key material decrypting and none can be disabled, so a rotation needs no
+rollback there.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../production/rotation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../production/sweeps.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../production/rotation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../production/sweeps.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

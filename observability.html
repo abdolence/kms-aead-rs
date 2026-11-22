@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -510,7 +510,7 @@ version destroyed and stops revalidating the keyring, see
 <a href="./keyring/record-cache.html#a-record-gone-from-the-store">A record gone from the store</a>. It is an
 <code>INFO</code>, “The keyring store no longer holds the keyring record of a shredded keyring; every
 version is destroyed in this process”, when the record the process held had every version
-destroyed already, which a <a href="./operations/runbook.html#shredding-a-keyring">shred</a> leaves before it
+destroyed already, which a <a href="./use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">shred</a> leaves before it
 deletes the record. The process that ran the shred logs nothing for it;</li>
 <li><code>ERROR</code>: a refreshed record refused because it moves a version backwards, with the first rule it
 breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
@@ -669,7 +669,7 @@ store-less envelope needs no alert on them: it renews its DEK at <code>max_uses<
 <code>kms_aead_plaintext_size_bytes_count</code> and <code>kms_aead_plaintext_size_bytes_sum</code>,
 <code>kms_aead_operation_duration_seconds</code>, and attributes such as <code>kms_aead_key_id</code>. For an alert on
 the values and bytes under one keyring version, see
-<a href="./operations/rotation.html#alerting-on-volume">Alerting on volume</a>.</p>
+<a href="./production/monitoring.html#alerting-on-volume">Alerting on volume</a>.</p>
 <p>The keyring’s plaintext size has one time series per keyring, purpose, key version and operation.
 With a keyring per tenant, that is a series per tenant and version. Under cumulative temporality,
 the default, the SDK keeps a series until the process restarts, also once its version is no longer

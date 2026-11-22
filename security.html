@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -285,7 +285,7 @@ backups included.</p>
 and the administration signs it where record signing is on, see
 <a href="./signing.html#signing-the-keyring-record">Signing the keyring record</a>; without it, its integrity
 rests on the keyring store’s access control. The two principals of a deployment and their rights
-are in <a href="./keyring/deployment.html">Applications and administration</a>.</p>
+are in <a href="./production/permissions.html">Permissions: applications and administration</a>.</p>
 <p>A writer of the keyring store can copy or relabel an encrypted DEK, between versions of one keyring
 or between keyrings under the same KEK: the KMS decrypts an encrypted DEK for any principal allowed
 to decrypt with the KEK, whatever version or keyring it is filed under. Such a writer can bring a
@@ -332,7 +332,7 @@ values through it. Keep it in the read path for the migration only;</li>
 <li><strong>a destroyed version’s DEK lives as long as the KEK version that encrypted it.</strong> A backup of the
 record holds encrypted DEKs the KMS still decrypts, and a keyset exported before the destroy holds
 the version’s key under the same KEK, see
-<a href="./operations/runbook.html#crypto-shredding">Crypto-shredding</a>;</li>
+<a href="./use-cases/erase-a-tenant.html#what-survives-a-shred">What survives a shred</a>;</li>
 <li><strong><code>dangerously_shred()</code> reaches the store’s API only.</strong> It deletes the record with the earlier
 versions the store keeps, and never calls the KMS. What the store keeps beyond its API stays until
 the operator deletes it: Firestore serves a deleted document to reads at an earlier time for one
@@ -356,7 +356,7 @@ BigQuery decrypts it with none. Treat it as a copy of the record’s readable ve
 again after every rotation and every <code>mark_compromised</code>;</li>
 <li><strong>a sweep re-encrypts forgeries as trusted values.</strong> Values read through a compromised version are
 decided per record before a sweep re-encrypts them, see
-<a href="./operations/sweeps.html#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a>;</li>
+<a href="./production/sweeps.html#the-trust-of-re-encrypted-values">The trust of re-encrypted values</a>;</li>
 <li><strong>deterministic fields leak equality and frequency</strong>, and an equality query across a rotation
 links a value’s history for whoever reads the query, see
 <a href="./keyring/deterministic.html#queries-across-rotations">Queries across rotations</a>;</li>

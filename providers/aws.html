@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -234,7 +234,7 @@ earlier key material for as long as the key exists. A DEK encrypted before a rot
 afterwards. An encryption’s response names no key material, so the <code>kek_version()</code> of the
 encrypted DEK it returns is <code>None</code>.</p>
 <p>Key material that AWS KMS generated cannot be disabled or deleted on its own. The sweep of
-<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>
 is optional for it: it moves each DEK to the current key material, and with nothing to disable,
 the check and the destruction do not apply.</p>
 <p>Imported key material is deleted in two ways: by <code>DeleteImportedKeyMaterial</code>, for the material a
@@ -248,7 +248,7 @@ keep a copy of every material to import again.</p>
 <code>kek_version</code> <code>None</code>, neither a keyring record nor a stored <code>kek_version</code> shows which DEKs are under
 which material. After a deletion or an expiry, import the material again and decrypt every stored
 DEK: each keyring’s with <code>reencrypt_deks</code>, the application’s own as in
-<a href="../envelope-encryption.html#the-check">The check</a>. An error means the key is still in
+<a href="../production/reencrypt-deks.html#the-check">The check</a>. An error means the key is still in
 <code>PendingImport</code>: <code>ListKeyRotations</code> lists each material with its import state, and the one still
 missing is imported again.</p>
 <h2 id="asymmetric-keys"><a class="header" href="#asymmetric-keys">Asymmetric keys</a></h2>

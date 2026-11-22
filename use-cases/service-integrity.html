@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -243,7 +243,7 @@ let job = keyring.verify_with_mac(&amp;with_mac).await?.0;
 own, such as the columns of a row, <code>Encryptor::mac</code> computes a detached <code>Mac&lt;T&gt;</code> to store beside it,
 and <code>Keyring::verify_mac</code> checks it against the payload as read.</p>
 <p>Both services build a <code>Keyring</code> for the same keyring id, with decrypt on the keyring’s KEK and read
-access to its record, see <a href="../production/deployment.html">Applications and administration apart</a>. Every service
+access to its record, see <a href="../production/permissions.html">Permissions: applications and administration</a>. Every service
 that holds the key can compute a valid tag, so a MAC protects the bytes from whoever writes the
 store, and says nothing about which service wrote them.</p>
 <h2 id="rotation"><a class="header" href="#rotation">Rotation</a></h2>

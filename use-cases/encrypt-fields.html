@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -201,8 +201,8 @@ see <a href="../intro.html#choosing-a-mode">Choosing a mode</a> and the keyring.
 <h2 id="the-path"><a class="header" href="#the-path">The path</a></h2>
 <ol>
 <li>A provider for the KMS, such as <code>GcpKmsProvider::new(&amp;key_ref)</code>, with the rights of
-<a href="../keyring/deployment.html#kms-rights">KMS rights</a>: decrypt for a reader, encrypt too for a
-writer, see <a href="../providers.html">KMS providers</a>;</li>
+<a href="../production/permissions.html#with-kms-aead-alone">KMS rights</a>: decrypt for a reader, encrypt
+too for a writer, see <a href="../providers.html">KMS providers</a>;</li>
 <li><code>KmsAeadEnvelope::new(provider)</code>, or <code>with_options</code> with a <code>DekReusePolicy</code> for store-less DEK
 reuse and a <code>DekCache</code> for repeated reads, see <a href="../dek-caching.html">DEK caching and reuse</a>;</li>
 <li>a newtype per field, such as <code>Email</code>, that implements <code>Plaintext</code>, and normalises the value if

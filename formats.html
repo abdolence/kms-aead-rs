@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -589,12 +589,12 @@ PostgreSQL and BigQuery compare them. <code>EncryptionMarker::ENVELOPE</code>, <
 marker of a record of envelope values. <code>EncryptionMarker::try_from</code> fails with
 <code>InvalidEncryptionMarker</code> on bytes of any other length or first byte. Serde stores a marker as bytes,
 an array of numbers in serde_json, and the <code>postgres</code> and <code>sqlx</code> features as <code>BYTEA</code>. See
-<a href="./operations/sweeps.html">Sweeps</a> for the query it serves.</p>
+<a href="./production/sweeps.html">Sweeps</a> for the query it serves.</p>
 <p>The record’s JSON members for the epoch and the ranges keep the names <code>seal_epoch</code> and
 <code>seal_epochs</code>. <code>KeyVersion::reencrypt_range()</code> returns the markers of a version’s <code>seal_epochs</code> as a
 <code>ReencryptRange</code>: <code>start()</code>, and <code>end()</code>, <code>None</code> while the range is open. A record whose fields were
 encrypted through one <code>Encryptor</code>, and which stores the marker of the encryptor’s record, lies in
-the range of every version its fields are under. See <a href="./operations/sweeps.html#records-under-a-version">Records under a
+the range of every version its fields are under. See <a href="./production/sweeps.html#records-under-a-version">Records under a
 version</a> for the query it serves.</p>
 <h2 id="deks-encrypted-with-a-public-key"><a class="header" href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a></h2>
 <p>An encrypted DEK that a public key encrypted has one layout for every KMS:</p>
@@ -965,7 +965,7 @@ one. A value in Tink’s framing needs the decryption to be told from the 32-bit
 The AEAD bytes stay as they are.</p>
 <p>An upgraded DEK is encrypted under the KEK’s current version, so the upgrade also does what
 <code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code> do for a value or a DEK already in Tink’s format, see
-<a href="./envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>.
+<a href="./production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.
 Those two refuse a layout of 0.29 or earlier with <code>LEGACY_FORMAT</code>, so a sweep after a KEK rotation
 upgrades a value in an old layout and re-encrypts the DEK of a value in Tink’s format.</p>
 <p>The envelope’s algorithm is the one the values were encrypted with: ChaCha20-Poly1305 for values

@@ -35,10 +35,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-c666288c.js"></script>
+        <script src="toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -498,7 +498,7 @@ since. A handle opened before stays on the destroyed record.</li>
 without. A record restored from a copy is refused by that process with <code>RecordRegressed</code>, because
 it revives versions the process holds destroyed, so the process restarts after a restore. The text of the <code>WARN</code> ended in “the cached record stays in use” in 0.30, so change a log alert that
 matches that ending. The runbook is
-<a href="./operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a>.</p>
+<a href="./production/runbook.html#the-keyring-record-was-deleted-or-corrupted">The keyring record was deleted or corrupted</a>.</p>
 <p>Under record signing, the deleted record stays the baseline of the id: the next record must be
 signed if the deleted one was, and a keyring created again opens, see
 <a href="./signing.html#signing-the-keyring-record">Signing the keyring record</a>.</p>
@@ -514,7 +514,7 @@ signed if the deleted one was, and a keyring created again opens, see
 <a href="./providers/local.html#kek-ids-and-versions">Local KMS</a>;</li>
 <li>signed keyring records, see <a href="./signing.html#signing-the-keyring-record">Signing the keyring record</a>;</li>
 <li><code>KeyringAdmin::dangerously_shred()</code>, which destroys every version of a keyring in one write and
-deletes its record from the store with the earlier versions the store keeps, see <a href="./operations/runbook.html#shredding-a-keyring">Shredding a
+deletes its record from the store with the earlier versions the store keeps, see <a href="./use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a
 keyring</a>.</li>
 </ul>
 

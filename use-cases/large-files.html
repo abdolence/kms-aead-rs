@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -191,7 +191,7 @@ does for any object. Feature <code>stream</code>, see <a href="../streaming.html
 </thead>
 <tbody>
 <tr><td>Key</td><td>the keyring’s active version, named by a 4-byte key id in the object’s header</td><td>a DEK of the object’s own, or a reused one under a <code>DekReusePolicy</code></td></tr>
-<tr><td>Stored beside the object</td><td>the encryption marker, see <a href="../operations/sweeps.html#the-encryption-marker">The encryption marker</a></td><td>the encrypted DEK, in the object’s metadata or in the row that names the object</td></tr>
+<tr><td>Stored beside the object</td><td>the encryption marker, see <a href="../production/sweeps.html#the-encryption-marker">The encryption marker</a></td><td>the encrypted DEK, in the object’s metadata or in the row that names the object</td></tr>
 <tr><td>KMS calls</td><td>one decryption per key version per DEK cache TTL</td><td>one encryption per new DEK, one decryption per object per DEK cache TTL</td></tr>
 <tr><td>Rotation</td><td>the keyring’s</td><td>the KEK’s, by re-encrypting the stored DEKs</td></tr>
 </tbody>

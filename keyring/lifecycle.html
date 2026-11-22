@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,10 +189,10 @@ without escaping. It is an identifier, not a secret, and appears in spans and er
 <li>the algorithms new versions use, one per purpose;</li>
 <li>the re-encryption epoch, which every write that makes a version active moves on by one, and which
 the application stores beside its records as an <code>EncryptionMarker</code>, see
-<a href="../operations/sweeps.html">Sweeps</a>;</li>
+<a href="../production/sweeps.html">Sweeps</a>;</li>
 <li>every key version ever created, in creation order, each with its encrypted DEK, its state and,
 once it was active, its re-encryption range: the markers of the records encrypted under it, see
-<a href="../operations/sweeps.html#records-under-a-version">Records under a version</a>.</li>
+<a href="../production/sweeps.html#records-under-a-version">Records under a version</a>.</li>
 </ul>
 <p>Every store keeps it as the same JSON document, see <a href="../formats.html#keyring-records">Keyring records</a>
 for the document and the rules every read checks. A record that breaks one fails with
@@ -241,7 +241,7 @@ it.</p>
 as pending, except the replacement <code>mark_compromised</code> adds for an active version, which is active
 at once.</p>
 <p>The calls, on a <code>KeyringAdmin</code>, with the <code>admin</code> feature, see
-<a href="./deployment.html">Applications and administration</a>:</p>
+<a href="../production/permissions.html">Permissions: applications and administration</a>:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -256,7 +256,7 @@ at once.</p>
 <tr><td><code>retire(key_id)</code></td><td><code>DecryptOnly</code> to <code>Retired</code>, once a sweep found no value left under it</td></tr>
 <tr><td><code>reinstate(key_id)</code></td><td><code>Retired</code> back to <code>DecryptOnly</code>, for a value that turned up after all; a compromised flag stays</td></tr>
 <tr><td><code>destroy(key_id)</code></td><td><code>Retired</code> or <code>Pending</code> to <code>Destroyed</code></td></tr>
-<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a keyring</a>, and the record stays in the store</td></tr>
+<tr><td><code>dangerously_destroy_all_versions()</code></td><td>every version of every purpose to <code>Destroyed</code>, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a>, and the record stays in the store</td></tr>
 <tr><td><code>dangerously_shred()</code></td><td>destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see <a href="#shredding-a-keyring">Shredding a keyring</a></td></tr>
 <tr><td><code>reencrypt_deks()</code></td><td>decrypts and encrypts again every DEK in the record, under the KEK’s current version; no value changes. Returns a <code>DekReencryption</code> per version, with the KEK version its DEK moved from and to</td></tr>
 </tbody>
@@ -366,14 +366,14 @@ pending version if the purpose has one: <code>promote</code> would refuse with <
 backup of the record still holds them, and a keyset exported while the version decrypted holds its
 key under the same KEK. The KMS decrypts both as long as the KEK version that encrypted them exists,
 see
-<a href="../operations/runbook.html#crypto-shredding">Crypto-shredding</a>.</p>
+<a href="../use-cases/erase-a-tenant.html#what-survives-a-shred">What survives a shred</a>.</p>
 <h2 id="shredding-a-keyring"><a class="header" href="#shredding-a-keyring">Shredding a keyring</a></h2>
 <p><code>dangerously_shred()</code> is the call for a keyring whose values must become unreadable under a KEK that
 other keyrings share. It destroys every version in one write, as <code>dangerously_destroy_all_versions</code>
 does, signed as every lifecycle write is, then deletes the record from the store at the revision
-that write left. The runbook has the rules of the two steps, the retry of a shred that failed, and
-the copies a store keeps beyond its API, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a
-keyring</a>.</p>
+that write left. The rules of the two steps, the retry of a shred that failed, and the copies a
+store keeps beyond its API are in <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with
+<code>dangerously_shred()</code></a>.</p>
 <pre><code class="language-rust no_run">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead_keyring::testing::MemoryKeyringStore;
@@ -411,7 +411,7 @@ version destroyed, and the registry’s <code>create</code> makes a new keyring 
 encrypted under the keyring stay where they are and decrypt under nothing. Every process that holds
 the keyring takes the deletion at its next revalidation, see <a href="./record-cache.html#a-record-gone-from-the-store">A record gone from the
 store</a>. A stream decryptor made before the shred
-keeps decrypting until it is dropped, so a service builds one per request, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a
+keeps decrypting until it is dropped, so a service builds one per request, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a
 keyring</a>.</p>
 <h2 id="reading-a-compromised-version"><a class="header" href="#reading-a-compromised-version">Reading a compromised version</a></h2>
 <p><code>KeyringOptions::compromised_reads</code> decides what <code>decrypt</code> does with a value under a compromised
@@ -425,14 +425,14 @@ that id meanwhile.</li>
 </ul>
 <p><code>decrypt_with_trust</code> decrypts the value whatever the policy, and returns a <code>Decrypted</code> with the
 value, the key id of the version that decrypted it and its <code>KeyTrust</code>, <code>Trusted</code> or
-<code>Compromised</code>. It is the call for a <a href="../operations/sweeps.html">sweep</a>. A compromised version’s DEK
+<code>Compromised</code>. It is the call for a <a href="../production/sweeps.html">sweep</a>. A compromised version’s DEK
 is decrypted by the provider for that call only and never returns to the DEK cache.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="../keyring/deployment.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="../keyring.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -446,7 +446,7 @@ is decrypted by the provider for that call only and never returns to the DEK cac
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="../keyring/deployment.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="../keyring.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

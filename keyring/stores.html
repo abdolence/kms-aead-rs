@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -198,9 +198,9 @@ optionally signals changes to it. The library provides:</p>
 read checks it. A store with push makes a change reach the other processes within seconds; without
 push, the record TTL bounds it, see <a href="./record-cache.html">Record cache</a>.</p>
 <p>The rights of the application and the administration on each store are in
-<a href="./deployment.html#store-rights">Store rights</a>.</p>
+<a href="../production/permissions.html#store-rights">Store rights</a>.</p>
 <p>Back the store up, or keep its history, since values cannot be read without the encrypted DEKs
-in the record, see <a href="../operations/runbook.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.
+in the record, see <a href="../production/runbook.html#the-keyring-record-was-deleted-or-corrupted">the runbook</a>.
 A backup is also a copy of the record that <code>KeyringAdmin::dangerously_shred()</code> does not reach, see
 <a href="#what-a-delete-removes">What a delete removes</a>.</p>
 <h2 id="memory"><a class="header" href="#memory">Memory</a></h2>
@@ -269,7 +269,7 @@ where the log leaves the administration’s reach.</p>
 </code></pre>
 <ul>
 <li>the rights of the application and the administration on the table are in
-<a href="./deployment.html#store-rights">Store rights</a>;</li>
+<a href="../production/permissions.html#store-rights">Store rights</a>;</li>
 <li>the table name is unqualified, so the connection’s <code>search_path</code> selects the schema;</li>
 <li>the <code>revision</code> of a row is the server’s clock in microseconds when the row is created, and the
 larger of that and the previous revision plus one at each write. A row deleted and created again
@@ -334,7 +334,7 @@ conditional on the generation the writer read, and a revalidation reads the obje
 generation changed.</p>
 <ul>
 <li>the rights of the application and the administration on the bucket are in
-<a href="./deployment.html#store-rights">Store rights</a>;</li>
+<a href="../production/permissions.html#store-rights">Store rights</a>;</li>
 <li>Cloud Storage has no change notification the store listens to, so a process sees a change once
 its record is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on object versioning on the bucket: every record written is then kept as a noncurrent
@@ -371,7 +371,7 @@ conditional on no object existing (<code>If-None-Match: *</code>), an update on 
 the read).</p>
 <ul>
 <li>the rights of the application and the administration on the objects are in
-<a href="./deployment.html#store-rights">Store rights</a>;</li>
+<a href="../production/permissions.html#store-rights">Store rights</a>;</li>
 <li>S3 has no change notification the store listens to, so a process sees a change once its record
 is older than <code>record_ttl</code>, 5 minutes by default;</li>
 <li>turn on versioning on the bucket: every record written is then kept as a noncurrent version, to
@@ -433,7 +433,7 @@ let store = S3KeyringStore::new(client, S3BucketName::try_from("my-keyrings".to_
 </span><span class="boring">}</span></code></pre>
 <h2 id="what-a-delete-removes"><a class="header" href="#what-a-delete-removes">What a delete removes</a></h2>
 <p><code>KeyringStore::delete</code> is the call <code>KeyringAdmin::dangerously_shred()</code> makes once every version of
-the record is destroyed, see <a href="../operations/runbook.html#shredding-a-keyring">Shredding a keyring</a>. It
+the record is destroyed, see <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a>. It
 removes the record with the copies the store itself keeps. A copy the store keeps outside the reach
 of its API is the operator’s to delete:</p>
 <div class="table-wrapper">
@@ -461,7 +461,7 @@ leaves the live records alone. The condition of the S3 delete holds only on a se
 <code>If-Match</code> on <code>DeleteObject</code>, as S3 does for general purpose buckets. Community MinIO releases
 ignore it; PGSTY’s Silo fork honours it from <code>RELEASE.2026-09-16</code>, within one server pool.</p>
 <p>A delete needs rights a write does not: the administration’s permissions per store are in
-<a href="./deployment.html#store-rights">Store rights</a>.</p>
+<a href="../production/permissions.html#store-rights">Store rights</a>.</p>
 <h2 id="your-own-store"><a class="header" href="#your-own-store">Your own store</a></h2>
 <p><code>KeyringStore</code> is a trait with five methods, <code>load</code>, <code>revalidate</code>, <code>compare_and_swap</code>, <code>delete</code> and
 <code>watch</code>, which returns <code>None</code> for a store without push, a <code>Revision</code> type and a <code>KIND</code>, such as

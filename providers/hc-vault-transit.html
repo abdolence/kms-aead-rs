@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -257,7 +257,7 @@ so does the <code>kek_version()</code> of the encrypted DEK an encryption return
 <p>The decrypt names the configured key in its URL, so Vault refuses a ciphertext of another key.</p>
 <p>A rotation is <code>&lt;mount&gt;/keys/&lt;key&gt;/rotate</code>, and the new version encrypts every DEK after it. Once
 the sweep has reached every value, see
-<a href="../envelope-encryption.html#re-encrypting-deks-after-a-kek-rotation">Re-encrypting DEKs after a KEK rotation</a>,
+<a href="../production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>,
 disable the old versions by setting <code>min_decryption_version</code> in the key’s configuration to the new
 version: Vault then refuses to decrypt under older versions, with <code>VAULT_STATUS_400</code>, and lowering
 it again restores them. Once

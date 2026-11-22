@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-1f3cb687.js";
+            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-c666288c.js"></script>
+        <script src="../toc-a4ca9268.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -296,7 +296,7 @@ of the record from before the deletion fails with <code>RecordRegressed</code>, 
 accidental deletion is taken by a new process, not by the one that took the deletion. See
 <a href="../signing.html#signing-the-keyring-record">Signing the keyring record</a>. The deletion is what
 <code>KeyringAdmin::dangerously_shred()</code> ends with, see
-<a href="../operations/runbook.html#shredding-a-keyring">Shredding a keyring</a>, and a deletion by anyone else
+<a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">Shredding a tenant with <code>dangerously_shred()</code></a>, and a deletion by anyone else
 has the same effect on the process.</p>
 <h2 id="dek-eviction"><a class="header" href="#dek-eviction">DEK eviction</a></h2>
 <p>Taking a refreshed record evicts from the DEK cache every key it takes out of use: versions
