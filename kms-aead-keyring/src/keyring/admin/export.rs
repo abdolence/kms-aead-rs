@@ -24,6 +24,7 @@ use crate::{Interop, KeyId, KeyVersionState, KeyringAdmin, KeyringRecord, Purpos
 
 /// The versions a keyset export holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeysetSelection {
     /// Every version of the purpose that decrypts and is not compromised, the pending one included,
     /// with the active version as the primary: the keyset of a query that reads a column. BigQuery

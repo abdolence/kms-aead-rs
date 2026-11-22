@@ -95,10 +95,10 @@ impl MemoryState {
 
 impl MemoryDocument {
     fn stored(&self, id: &KeyringId) -> KeyringResult<Stored<MemoryRevision>> {
-        Ok(Stored {
-            record: KeyringRecord::from_json(id, &self.json)?,
-            revision: self.revision,
-        })
+        Ok(Stored::new(
+            KeyringRecord::from_json(id, &self.json)?,
+            self.revision,
+        ))
     }
 }
 

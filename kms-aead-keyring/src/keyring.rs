@@ -501,6 +501,7 @@ impl KeyringOptions {
 /// What [`Keyring::decrypt`] does with a value whose version is compromised. A leaked key
 /// forges values under its id, so such a value is untrusted data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CompromisedReadPolicy {
     /// Fails with `KeyVersionCompromised`, decided on the cached record before any decryption, so
     /// that the key a compromised flag evicted does not come back into the [`DekCache`].

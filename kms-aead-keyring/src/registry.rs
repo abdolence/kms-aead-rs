@@ -489,7 +489,7 @@ where
         }
         Ok(
             match self.inner.store.compare_and_swap(&record, None).await? {
-                Swap::Written(revision) => Some(Stored { record, revision }),
+                Swap::Written(revision) => Some(Stored::new(record, revision)),
                 Swap::Conflict => None,
             },
         )

@@ -549,13 +549,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         let record = edit.finish()?.signed_by::<B, R>(signer).await?;
         match self.store.compare_and_swap(&record, Some(expected)).await? {
             Swap::Written(revision) => {
-                self.install(
-                    refresh,
-                    Stored {
-                        record,
-                        revision: revision.clone(),
-                    },
-                );
+                self.install(refresh, Stored::new(record, revision.clone()));
                 Ok(Some(revision))
             }
             Swap::Conflict => Ok(None),

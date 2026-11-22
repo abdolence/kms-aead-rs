@@ -303,10 +303,10 @@ impl GcsKeyringStore {
                 "The read returned no object metadata",
             )
         })?;
-        Ok(Revalidation::Changed(Stored {
-            record: KeyringRecord::from_json(id, &document)?,
+        Ok(Revalidation::Changed(Stored::new(
+            KeyringRecord::from_json(id, &document)?,
             revision,
-        }))
+        )))
     }
 }
 

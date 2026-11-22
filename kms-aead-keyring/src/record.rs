@@ -229,6 +229,7 @@ impl FromStr for KeyAlgorithm {
 /// `create`, and the replacement `mark_compromised` makes for an active version, are `Active` at
 /// once. Every state right of `Active` may also be compromised; `Pending` and `Active` never are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyVersionState {
     /// Staged by a rotation: decrypts, and never encrypts until it is promoted. At most one per
     /// purpose.

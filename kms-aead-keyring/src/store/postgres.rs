@@ -508,10 +508,10 @@ fn stored_record(
     document: &str,
     revision: i64,
 ) -> KeyringResult<Stored<PostgresRevision>> {
-    Ok(Stored {
-        record: KeyringRecord::from_json(id, document.as_bytes())?,
-        revision: PostgresRevision(revision),
-    })
+    Ok(Stored::new(
+        KeyringRecord::from_json(id, document.as_bytes())?,
+        PostgresRevision(revision),
+    ))
 }
 
 impl<T> KeyringStore for PostgresKeyringStore<T>

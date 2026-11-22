@@ -262,10 +262,10 @@ fn stored_record_from_document(
     ))
     .map_err(|_| KeyringError::malformed(id, None))?;
     let json = serde_json::to_vec(&fields).map_err(|_| KeyringError::malformed(id, None))?;
-    Ok(Stored {
-        record: KeyringRecord::from_json(id, &json)?,
-        revision: revision_of_document(document, operation)?,
-    })
+    Ok(Stored::new(
+        KeyringRecord::from_json(id, &json)?,
+        revision_of_document(document, operation)?,
+    ))
 }
 
 fn revision_of_document(
