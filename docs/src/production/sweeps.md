@@ -36,8 +36,8 @@ values, below the marker of every keyring.
 Each record of the application keeps the marker in one field beside its encrypted fields. A write
 that touches any encrypted field of a record takes one `Encryptor` from `keyring.encryptor()`,
 encrypts all of the record's encrypted fields again through it, computes its beacons again, and
-stores `encryptor.record().encryption_marker()` in the same write, as `write_user` does in [Running a
-sweep](#running-a-sweep). The encryptor keeps the record it took from the cache, so the marker names
+stores `encryptor.record().encryption_marker()` in the same write, as the `reencrypt` function of
+[Running a sweep](#running-a-sweep) does. The encryptor keeps the record it took from the cache, so the marker names
 the epoch whose active versions the fields are under, also when the cache refreshes during the
 write.
 
@@ -107,66 +107,10 @@ an unknown key id: `record.version(key_id)` is `None`. The queries:
 
 | Store | Query |
 |---|---|
-| Firestore | two range filters on `encryption_marker`, as below |
+| Firestore | two range filters on `encryption_marker`, see [Sweeps on Firestore](./sweeps/firestore.md#querying-behind-and-by-version) |
 | PostgreSQL | `WHERE encryption_marker >= $1 AND ($2::BYTEA IS NULL OR encryption_marker < $2)` with `&range.start()` and `&range.end()` |
 | BigQuery | `WHERE encryption_marker >= @start AND (@end IS NULL OR encryption_marker < @end)`, with `@end` a `NULL` of type `BYTES` for an open range |
 | Rust | `range.contains(row.encryption_marker)` |
-
-Firestore takes both bounds on the one field and serves them from its ascending index on
-`encryption_marker`, and an open range is one filter:
-
-```rust,no_run
-use firestore::{FirestoreDb, FirestoreResult};
-use futures_util::stream::{self, BoxStream, StreamExt};
-use kms_aead::backends::Ring;
-use kms_aead::providers::GcpKmsProvider;
-use kms_aead_keyring::store::FirestoreKeyringStore;
-use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
-use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-struct UserDoc {
-    #[serde(rename = "_firestore_id", skip_serializing)]
-    id: String,
-    #[serde(default)]
-    encryption_marker: EncryptionMarker,
-}
-
-/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
-async fn users_under<'a>(
-    db: &'a FirestoreDb,
-    keyring: &Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>,
-    key_id: KeyId,
-) -> Result<BoxStream<'a, FirestoreResult<UserDoc>>, Box<dyn std::error::Error>> {
-    // The store's record: a compromise or promotion in another process is in it
-    let range: Option<ReencryptRange> = keyring
-        .reload()
-        .await?
-        .version(key_id)
-        .and_then(KeyVersion::reencrypt_range);
-    let Some(range) = range else {
-        // Never active: no record holds a value under it
-        return Ok(stream::empty().boxed());
-    };
-    let users: BoxStream<'a, FirestoreResult<UserDoc>> = db
-        .fluent()
-        .select()
-        .from("users")
-        .filter(|q| {
-            q.for_all([
-                q.field("encryption_marker").greater_than_or_equal(range.start()),
-                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
-            ])
-        })
-        .obj()
-        .stream_query_with_errors()
-        .await?;
-    Ok(users)
-}
-#
-# fn main() {}
-```
 
 The range serves two decisions:
 

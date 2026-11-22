@@ -4,6 +4,8 @@ A sweep of a Firestore collection: the encryption marker as a field, the query f
 behind, and the conditional write back. The mechanism is in [Sweeps](../sweeps.md), and the example
 has the five properties of [Sweeps by store](../sweeps.md#sweeps-by-store).
 
+## Schema and indexing
+
 The marker is a `bytes` field, `encryption_marker`, and the query is one range filter on it.
 Firestore indexes a field ascending and descending by default, and the query needs the ascending
 index only, so a field override keeps just that one. firestore-rs declares it with its index
@@ -34,6 +36,69 @@ A project that manages its indexes outside Rust sets the same override with `gcl
 ```sh
 gcloud firestore indexes fields update encryption_marker --collection-group=users --index=order=ASCENDING
 ```
+
+## Querying behind and by version
+
+The documents behind are one filter, `encryption_marker < current`, as in the sweep below. The
+documents that can hold a value under a version, which the administrative job checks before `retire` and
+`destroy`, are the range of that version, see [Records under a
+version](../sweeps.md#records-under-a-version). Firestore takes both bounds on the one field and serves them from its ascending index on
+`encryption_marker`, and an open range is one filter:
+
+```rust,no_run
+use firestore::{FirestoreDb, FirestoreResult};
+use futures_util::stream::{self, BoxStream, StreamExt};
+use kms_aead::backends::Ring;
+use kms_aead::providers::GcpKmsProvider;
+use kms_aead_keyring::store::FirestoreKeyringStore;
+use kms_aead_keyring::sweep::{EncryptionMarker, ReencryptRange};
+use kms_aead_keyring::{KeyId, KeyVersion, Keyring};
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+struct UserDoc {
+    #[serde(rename = "_firestore_id", skip_serializing)]
+    id: String,
+    #[serde(default)]
+    encryption_marker: EncryptionMarker,
+}
+
+/// The users that can hold a value under `key_id`, as a stream: a range can hold millions.
+async fn users_under<'a>(
+    db: &'a FirestoreDb,
+    keyring: &Keyring<FirestoreKeyringStore, GcpKmsProvider, Ring>,
+    key_id: KeyId,
+) -> Result<BoxStream<'a, FirestoreResult<UserDoc>>, Box<dyn std::error::Error>> {
+    // The store's record: a compromise or promotion in another process is in it
+    let range: Option<ReencryptRange> = keyring
+        .reload()
+        .await?
+        .version(key_id)
+        .and_then(KeyVersion::reencrypt_range);
+    let Some(range) = range else {
+        // Never active: no record holds a value under it
+        return Ok(stream::empty().boxed());
+    };
+    let users: BoxStream<'a, FirestoreResult<UserDoc>> = db
+        .fluent()
+        .select()
+        .from("users")
+        .filter(|q| {
+            q.for_all([
+                q.field("encryption_marker").greater_than_or_equal(range.start()),
+                range.end().and_then(|end| q.field("encryption_marker").less_than(end)),
+            ])
+        })
+        .obj()
+        .stream_query_with_errors()
+        .await?;
+    Ok(users)
+}
+#
+# fn main() {}
+```
+
+## Re-encrypting in batches
 
 The query streams with `stream_query_with_errors()`, so that a document that does not read is a
 failed candidate, and the sweep never ends early on it. `sweep::reencrypt_records_batched` cuts the documents into
@@ -283,28 +348,30 @@ println!("{report:?}");
 # }
 ```
 
-The retry limit ends retries, and the request timeout ends a request that never gets an answer, the
-candidate query included.
+## Operational limits
 
-`CONCURRENCY` batches of 500 writes in flight are a high write rate for a collection that has seen
-little traffic. Firestore advises starting a new collection at 500 writes a second and raising the
-rate by 50% every 5 minutes, its 500/50/5 rule, so raise `CONCURRENCY` step by step on one.
+- the retry limit ends the batch writer's retries, and the request timeout ends a request that
+  never gets an answer, the candidate query included, so a sweep against a Firestore that refuses,
+  fails or stops answering its requests ends with an error;
+- `CONCURRENCY` batches of 500 writes in flight are a high write rate for a collection that has
+  seen little traffic. Firestore advises starting a new collection at 500 writes a second and
+  raising the rate by 50% every 5 minutes, its 500/50/5 rule, so raise `CONCURRENCY` step by step
+  on one;
+- a range filter never matches a document without the field, so a document written before the
+  marker needs the marker written first, see [Move envelope values to a
+  keyring](../envelope-to-keyring.md);
+- a partitioned query does not fit the sweep: `PartitionQuery` takes no filter, so its workers
+  would read every document, the current ones included.
 
-A range filter never matches a document without the field, so a document written before the marker
-needs the marker written first, see [Move envelope values to a
-keyring](../envelope-to-keyring.md).
+## Storage overhead
 
-A partitioned query does not fit the sweep: `PartitionQuery` takes no filter, so its workers would
-read every document, the current ones included.
+The marker takes 23 bytes of a document: the field name, `encryption_marker`, as an 18-byte string
+(17 bytes of UTF-8 and 1 more, by Firestore's storage size rules), and the 5 bytes of the value.
+Its entry in the ascending index takes the size of the document's name, of its parent's name and 23
+bytes for the field name and the value, plus 32 bytes. 10 million documents hold 0.23 GB of
+markers, and the index adds the names' size to every entry.
 
-The marker takes 10 bytes of a document: the field name as a 5-byte string and the 5 bytes of the
-value. Its entry in the ascending index takes the size of the document's name, of its parent's
-name, of the field name and of the value, plus 32 bytes, by Firestore's storage size rules: about
-70 bytes for a short document id in a top-level collection. 10 million documents hold about 0.1 GB
-of markers and 0.7 GB of index, about $0.13 a month at about $0.18 per GiB.
+## Runnable example
 
 The [`sweep_firestore` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_firestore.rs)
-runs this sweep end to end, from the writes to the report, on the Firestore emulator. Its memory
-holds the batches in flight only, so it runs the same over millions of documents. A stream that
-ends early, on a deadline or an error, leaves the documents it did not reach below the current
-marker, and the next run of the sweep finds them.
+runs this sweep end to end, from the writes to the report, on the Firestore emulator.

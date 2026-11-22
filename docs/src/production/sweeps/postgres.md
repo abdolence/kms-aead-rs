@@ -4,7 +4,11 @@ A sweep of a PostgreSQL table: the encryption marker as a column, the query for 
 and the conditional write back. The mechanism is in [Sweeps](../sweeps.md), and the example has the
 five properties of [Sweeps by store](../sweeps.md#sweeps-by-store).
 
-The marker is a `BYTEA` column with a btree index:
+## Schema and indexing
+
+The marker is a `BYTEA` column with a btree index. `EncryptionMarker` is a `BYTEA` parameter and
+column through tokio-postgres with the `postgres` feature, and through sqlx with the `sqlx`
+feature:
 
 ```sql
 CREATE TABLE users (
@@ -15,15 +19,23 @@ CREATE TABLE users (
 CREATE INDEX users_encryption_marker ON users (encryption_marker);
 ```
 
+## Querying behind and by version
+
 The candidates are one query, `encryption_marker < $1` with no `ORDER BY`, so the planner is free to
-read them from the index on `encryption_marker`, and `query_raw` streams its rows: memory holds the
-batches in flight only. The query holds its connection for as long as it streams, so the `UPDATE`s
-go through a second one. `sweep::reencrypt_records_batched` cuts the candidates into batches of 1000 rows, each
-re-encrypted through one encryptor and written back in one `UPDATE` over arrays of the ids, the new
-values and the values it read. The `UPDATE` is conditional on the bytes it read, which a write of
-any other process changes, since every randomised value has its own nonce. A process that has not
-seen the promotion yet still encrypts under the old version and stamps the old epoch, which the row
-holds already, so the marker alone does not detect its write:
+read them from the index on `encryption_marker`. The query for the rows that can hold a value under
+a version is in [Records under a version](../sweeps.md#records-under-a-version).
+
+## Re-encrypting in batches
+
+- `query_raw` streams the rows, and the query holds its connection for as long as it streams, so
+  the `UPDATE`s go through a second one;
+- `sweep::reencrypt_records_batched` cuts the candidates into batches of 1000 rows, each
+  re-encrypted through one encryptor and written back in one `UPDATE` over arrays of the ids, the
+  new values and the values it read;
+- the `UPDATE` is conditional on the bytes it read, which a write of any other process changes,
+  since every randomised value has its own nonce. A process that has not seen the promotion yet
+  still encrypts under the old version and stamps the old epoch, which the row holds already, so
+  the marker alone does not detect its write.
 
 ```rust,no_run
 use std::collections::HashSet;
@@ -238,19 +250,24 @@ println!("{report:?}");
 # }
 ```
 
-`CONCURRENCY` bounds the batches in flight, but one writing connection runs their `UPDATE`s one
-after another; a pool of connections runs them in parallel.
+## Operational limits
 
-`EncryptionMarker` is a `BYTEA` parameter and column through tokio-postgres with the `postgres`
-feature, and through sqlx with the `sqlx` feature. The query holds one snapshot for as long as it
-streams, and while it is open `VACUUM` cannot reclaim the old versions of the rows the sweep
-updates; a scheduled job that ends and runs again keeps each snapshot short, since the query of the
-markers below the current one returns exactly the rows the last run did not write.
+- `CONCURRENCY` bounds the batches in flight, but one writing connection runs their `UPDATE`s one
+  after another; a pool of connections runs them in parallel;
+- a row that does not read is a failed candidate. An error of the stream itself is one too, and
+  ends it: once the connection drops, the stream returns that error on every poll and never its
+  end, so the example stops it at the first error with `take_while`;
+- the query holds one snapshot for as long as it streams, and while it is open `VACUUM` cannot
+  reclaim the old versions of the rows the sweep updates; a scheduled job that ends and runs again
+  keeps each snapshot short.
+
+## Storage overhead
 
 The marker takes 6 bytes of a row: its 5 bytes and a 1-byte length header. A btree on a column of a
-few distinct epochs stores each one once per page with the list of its rows: measured on
-PostgreSQL 18 over 1 million rows of 7 epochs, the column took 6 bytes per row and its index about 7.
-10 million rows hold about 130 MB of markers and index.
+few distinct epochs stores each one once per page with the list of its rows, which takes about 7
+bytes per row of index. 10 million rows hold about 130 MB of markers and index.
+
+## Runnable example
 
 The [`sweep_postgres` example](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/sweep_postgres.rs)
 runs this sweep end to end, from the writes to the report, on a local PostgreSQL.
