@@ -22,9 +22,8 @@ jobs:
   # one backend never hides a missing feature gate in another. The rustcrypto and FIPS rows build
   # `stream` as well, so that its code compiles and passes on a backend that is not ring.
   # deterministic builds beside ring, never only beside the RustCrypto AEAD crates, so it cannot
-  # lean on their dependencies. The all-backends row runs the cross-backend contract tests and the
-  # legacy-format readers. `absent` lists the crates a row's normal dependency tree must not
-  # contain.
+  # lean on their dependencies. The all-backends row runs the cross-backend contract tests.
+  # `absent` lists the crates a row's normal dependency tree must not contain.
   build:
     name: ${{ matrix.name }}
     if: github.event_name != 'schedule'
@@ -39,8 +38,8 @@ jobs:
           - name: vault roots, aws-lc-rs TLS on aws-lc, opentelemetry
             features: gcp-kms-encryption,aws-kms-encryption,aws-lc,hashicorp-vault-transit-kms-encryption-tls-roots,hashicorp-vault-transit-kms-encryption-tls-aws-lc-rs,opentelemetry
             absent: ring opentelemetry_sdk
-          - name: vault webpki, ring TLS on ring, legacy formats
-            features: gcp-kms-encryption,aws-kms-encryption,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring,legacy-formats
+          - name: vault webpki, ring TLS on ring
+            features: gcp-kms-encryption,aws-kms-encryption,ring,hashicorp-vault-transit-kms-encryption-tls-webpki,hashicorp-vault-transit-kms-encryption-tls-ring
           - name: azure native-tls on aws-lc, opentelemetry
             features: gcp-kms-encryption,aws-kms-encryption,aws-lc,azure-kms-encryption-native-tls,opentelemetry
             absent: ring opentelemetry_sdk
@@ -56,8 +55,8 @@ jobs:
           - name: backend rustcrypto, stream
             features: rustcrypto,stream
             absent: ring aws-lc-rs
-          - name: all backends, legacy formats
-            features: ring,aws-lc,rustcrypto,deterministic,legacy-formats,stream
+          - name: all backends
+            features: ring,aws-lc,rustcrypto,deterministic,stream
           - name: 'fields: postgres, sqlx on ring'
             features: ring,postgres,sqlx
             absent: rustls native-tls
@@ -124,7 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
+      - run: cargo doc --no-deps --features "ring,aws-lc,rustcrypto,deterministic,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
       - name: cargo doc with minimal feature sets
         run: |
           cargo doc --no-deps
@@ -148,7 +147,7 @@ jobs:
       - uses: peaceiris/actions-mdbook@v2
         with:
           mdbook-version: '0.5.4'
-      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
+      - run: cargo test --doc --features "ring,aws-lc,rustcrypto,deterministic,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
       - run: cargo test --doc -p kms-aead-keyring --features "ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream"
       - run: cd docs && mdbook build
       # The browser verifier of docs/src/signing.md against the book's vectors, on WebCrypto.
@@ -164,7 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.99
-      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
+      - run: cargo +1.99 check --lib --features "ring,aws-lc,rustcrypto,deterministic,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream"
       - run: cargo +1.99 check -p kms-aead-keyring --lib --features "ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream"
   deny:
     name: cargo deny
@@ -415,7 +414,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       FEATURES: ring,admin,deterministic,firestore-tls-roots,postgres,sqlx,gcs-tls-roots,s3,bigquery-export,opentelemetry,stream
-      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,legacy-formats,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream
+      KMS_AEAD_FEATURES: ring,aws-lc,rustcrypto,deterministic,postgres,sqlx,gcp-kms-encryption,aws-kms-encryption,azure-kms-encryption,hashicorp-vault-transit-kms-encryption,opentelemetry,stream
       ABSENT: firestore sqlx tokio-postgres aws-sdk-s3
     steps:
       - uses: actions/checkout@v7

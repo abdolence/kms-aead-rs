@@ -71,8 +71,8 @@ let (email, outcome) = match StoredEmail::try_from(row)? {
 
 The keyring's provider decrypts the envelope values, so they must have been encrypted by the
 keyring's KEK. `decrypt_envelope_for_migration` reads Tink's KMS envelope, the layout `KmsAeadEnvelope` writes.
-Values in a legacy layout, which an old release wrote, are upgraded in place first, with
-`KmsAeadEnvelope::upgrade_legacy_value(aad, value)` under kms-aead's `legacy-formats` feature, see
+Values in a legacy layout, which kms-aead 0.29 and earlier wrote, fail with `LEGACY_FORMAT`: they
+are rewritten in place first with kms-aead 0.33, see
 [Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values). The layout of a value is always
 the marker's, never inferred from its bytes.
 

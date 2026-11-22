@@ -17,9 +17,7 @@ Every fallible call returns `KmsAeadResult<T>`, whose error is `kms_aead::errors
   call fails the same way again;
 - `UnsupportedAlgorithm`: the backend does not implement the algorithm, from constructors only;
 - `SignatureError`: a signature could not be made, read or verified, or a KMS refused a sign or
-  public-key request; never retried;
-- `LegacyFormat`: a stored value in a legacy layout, which only the
-  `legacy-formats` feature reads, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier).
+  public-key request; never retried.
 
 The enum is `#[non_exhaustive]`, so a `match` on it needs a `_` arm.
 
@@ -70,10 +68,9 @@ The library's codes, by area:
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `JsonEncoded` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
-| `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the legacy encrypted DEK layout v1 that cannot be read, with `legacy-formats` |
-| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a legacy layout |
+| `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
-| `LEGACY_FORMAT` | legacy format | a legacy layout without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the legacy envelope layouts in `separate` |
+| `LEGACY_FORMAT` | encryption | a layout of 0.29 or earlier, at `Encrypted::try_from` or at decryption, see [Values written by 0.29 and earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier) |
 | `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
 | `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
 

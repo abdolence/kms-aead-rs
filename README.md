@@ -97,9 +97,9 @@ needs a backend feature next to it, and most names changed. See the
 [migration guide](MIGRATION.md) and
 [Migrating from 0.29](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html).
 
-0.30 writes Tink's KMS envelope format for every provider, so values written by 0.29 and earlier
-read only with the deprecated `legacy-formats` feature, which also rewrites them in the new
-format, see [Formats](https://kms-aead-rust.abdolence.dev/formats.html).
+0.30 writes Tink's KMS envelope format for every provider. Values written by 0.29 and earlier are
+read, and rewritten in the new format, only by 0.30 to 0.33, and later releases refuse them, see
+[Old values](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html#old-values).
 
 The default algorithm is AES-256-GCM instead of ChaCha20-Poly1305, so an envelope that reads
 values written under the default of 0.29 needs ChaCha20-Poly1305 configured, see

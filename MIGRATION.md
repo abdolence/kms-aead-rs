@@ -6,6 +6,14 @@
   long as its plaintext plus a fixed overhead, so the length of an encrypted `bool` revealed it. An
   application that stores a flag defines a newtype with a `Plaintext` impl of its own. To read the
   values written before, its `from_plaintext` accepts the bytes `true` and `false`.
+- The `legacy-formats` feature is removed, with `KmsAeadEnvelope::upgrade_legacy_value`,
+  `upgrade_legacy_encrypted_dek`, `KmsAeadError::LegacyFormat`, `KmsAeadLegacyFormatError` and
+  `KmsAeadLegacyFormat`. A value or an encrypted DEK in a layout of 0.29 or earlier fails with
+  `KmsAeadError::EncryptionError` and the code `LEGACY_FORMAT`, as it did without the feature.
+  0.33 with `legacy-formats` is the last release that reads such values and rewrites them in
+  Tink's format: rewrite them on it before moving on, see
+  [Old values](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html#old-values). Delete
+  the feature from the dependency in your `Cargo.toml`, since Cargo refuses an unknown feature.
 
 ## 0.33
 

@@ -51,10 +51,8 @@ pub(crate) trait FormatLayout {
 /// ```
 ///
 /// [`KmsAeadEnvelope::encrypt`](crate::KmsAeadEnvelope::encrypt) and
-/// [`Encrypted::join`](crate::Encrypted::join) write it. With the deprecated `legacy-formats`
-/// feature, a value of this format also holds the envelope layouts written by 0.29 and earlier,
-/// which [`KmsAeadEnvelope::decrypt`](crate::KmsAeadEnvelope::decrypt) reads and
-/// [`Encrypted::separate`](crate::Encrypted::separate) refuses; without it, reading them fails.
+/// [`Encrypted::join`](crate::Encrypted::join) write it. Reading the envelope layouts that 0.29
+/// and earlier wrote fails with `LEGACY_FORMAT`.
 #[derive(Debug, Clone, Copy)]
 pub enum Envelope {}
 
@@ -100,8 +98,6 @@ impl private::Sealed for Envelope {}
 impl FormatLayout for Envelope {
     type FramedKeyId = ();
 
-    /// With `legacy-formats`, the envelope layouts of 0.29 and earlier pass too, so that a reader
-    /// keeps decoding stored rows into its final types until they are upgraded.
     fn check(value: &[u8]) -> KmsAeadResult<()> {
         Bare::check(Envelope::bare(value)?)
     }
@@ -116,15 +112,8 @@ impl FormatLayout for Envelope {
 impl Envelope {
     /// The part of `value` after its encrypted DEK.
     fn bare(value: &[u8]) -> KmsAeadResult<&[u8]> {
-        #[cfg(feature = "legacy-formats")]
-        {
-            Ok(super::legacy::StoredEnvelope::split(value)?.bare)
-        }
-        #[cfg(not(feature = "legacy-formats"))]
-        {
-            let (_, bare) = super::envelope::split_encrypted_dek_and_bare_value(value)?;
-            Ok(bare)
-        }
+        let (_, bare) = super::envelope::split_encrypted_dek_and_bare_value(value)?;
+        Ok(bare)
     }
 }
 

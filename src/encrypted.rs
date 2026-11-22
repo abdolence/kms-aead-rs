@@ -64,9 +64,7 @@ pub struct Encrypted<T, F: Format> {
 /// - for [`Envelope`](crate::formats::Envelope), `UNKNOWN_CIPHER_TEXT_LAYOUT` on an empty value or
 ///   a first byte that starts no layout, `INVALID_CIPHER_TEXT_FORMAT` on an encrypted DEK length
 ///   outside 1 to 4,096 bytes or past the end, or a cipher text after it shorter than a nonce and
-///   a tag, and [`KmsAeadError::LegacyFormat`] on the layouts written by 0.29 and earlier. With
-///   the deprecated `legacy-formats` feature those layouts are read, and a length in their header
-///   past the end fails with `INVALID_CIPHER_TEXT_FORMAT`.
+///   a tag, and `LEGACY_FORMAT` on the layouts written by 0.29 and earlier.
 ///
 /// The messages never quote the bytes.
 impl<T, F: Format> TryFrom<Vec<u8>> for Encrypted<T, F> {

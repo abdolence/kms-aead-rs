@@ -862,45 +862,4 @@ mod tests {
             std::env::var("KMS_KEY").expect("KMS_KEY is set"),
         )
     }
-
-    // Encrypted from `test-secret` with AAD `test-aad` by kms-aead 0.28.1 and 0.29, under their
-    // default ChaCha20-Poly1305 and the GCP key that the live tests configure. That key stays
-    // enabled while these exist.
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_28_1: &str = "00000000000000720a25006b8d8e5a0486811990a63e61e59cb77be2d4807ee94aa937eb475793b6ff9cd40f06ee1e124900eaf42f6345696c4e0bed89fb241b2478c8fd3f402e2e63ec5ca95764623f36b3f8f08fbb232c99d5cb0b589c08937f279791f80dd948e5b51869556073caba2d16e85c91ba683c373719274ce985c3799cc100de5f539b0b9983475ea80b45d76133cf1103dcec14f33fd2eb793f95";
-    #[cfg(feature = "legacy-formats")]
-    const ENVELOPE_FROM_0_29: &str = "0102313800720a25006b8d8e5a8e86a5a08f5e037793f8ef10fa761a405a1b7671502bde6bd99bd94c5bfdeea0124900eaf42f63f2b2bfd2be52a7ba228358efc9ce15c6b1add6c4425e405ef132335b8295daf42a74967f32aa8f02a314ce02c443548ea267bfa6edc17d7cfa69d90364fe040b71513c40a0234d736eb30b4b9de8963886967adda827b982dbe37531904f4b534269e8d548446a3ccd021a";
-
-    #[tokio::test]
-    #[cfg(feature = "legacy-formats")]
-    #[cfg_attr(not(feature = "ci-gcp"), ignore)]
-    #[expect(deprecated, reason = "tests the deprecated upgrade")]
-    async fn live_key_decrypts_and_upgrades_stored_envelopes() -> KmsAeadResult<()> {
-        let encryption = KmsAeadEnvelope::<_, TestBackend>::with_options(
-            GcpKmsProvider::new(&live_key_ref()).await?,
-            KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-        )?;
-        for stored in [ENVELOPE_FROM_0_28_1, ENVELOPE_FROM_0_29] {
-            let stored =
-                Encrypted::<SecretValue, Envelope>::try_from(hex::decode(stored).unwrap())?;
-
-            let decrypted = encryption.decrypt(b"test-aad", &stored).await?;
-            let upgraded = encryption
-                .upgrade_legacy_value(b"test-aad", &stored)
-                .await?;
-
-            assert_eq!(decrypted, SecretValue::from("test-secret"));
-            let upgraded = upgraded.expect("a legacy value is upgraded");
-            assert_eq!(upgraded.value()[0], 0x00);
-            assert_eq!(
-                encryption.decrypt(b"test-aad", &upgraded).await?,
-                SecretValue::from("test-secret")
-            );
-            assert!(encryption
-                .upgrade_legacy_value(b"test-aad", &upgraded)
-                .await?
-                .is_none());
-        }
-        Ok(())
-    }
 }

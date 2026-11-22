@@ -35,11 +35,6 @@ pub enum KmsAeadError {
     EncryptionError(KmsAeadEncryptionError),
     /// The backend does not implement the algorithm. Returned by constructors only.
     UnsupportedAlgorithm(KmsAeadUnsupportedAlgorithmError),
-    /// A stored value in a layout written by 0.29 or earlier, which only the `legacy-formats`
-    /// feature reads. The envelope's [`reencrypt_dek`](crate::KmsAeadEnvelope::reencrypt_dek) and
-    /// [`reencrypt_encrypted_dek`](crate::KmsAeadEnvelope::reencrypt_encrypted_dek) return it with
-    /// the feature too: the upgrades rewrite such a value.
-    LegacyFormat(KmsAeadLegacyFormatError),
     /// A signature could not be made, read or verified, a public key or a key set could not be
     /// read, or a KMS refused a sign or public-key request. The same call fails the same way
     /// again, so a caller should not retry it; a verifier's `SIGNING_KEY_UNKNOWN` clears once its
@@ -56,7 +51,6 @@ impl KmsAeadError {
             KmsAeadError::NetworkError(err) => &err.public.code,
             KmsAeadError::EncryptionError(err) => &err.public.code,
             KmsAeadError::UnsupportedAlgorithm(err) => &err.public.code,
-            KmsAeadError::LegacyFormat(err) => &err.public.code,
             KmsAeadError::SignatureError(err) => &err.public.code,
         }
     }
@@ -275,7 +269,6 @@ impl Display for KmsAeadError {
             KmsAeadError::NetworkError(err) => err.fmt(f),
             KmsAeadError::EncryptionError(err) => err.fmt(f),
             KmsAeadError::UnsupportedAlgorithm(err) => err.fmt(f),
-            KmsAeadError::LegacyFormat(err) => err.fmt(f),
             KmsAeadError::SignatureError(err) => err.fmt(f),
         }
     }
@@ -290,7 +283,6 @@ impl std::error::Error for KmsAeadError {
             KmsAeadError::NetworkError(err) => err.source(),
             KmsAeadError::EncryptionError(err) => err.source(),
             KmsAeadError::UnsupportedAlgorithm(err) => err.source(),
-            KmsAeadError::LegacyFormat(err) => err.source(),
             KmsAeadError::SignatureError(err) => err.source(),
         }
     }
@@ -446,6 +438,19 @@ impl KmsAeadEncryptionError {
     /// reading provider refuses before any KMS call, for `reason`, which never quotes the bytes.
     pub(crate) fn asymmetric_encrypted_dek_format(reason: &str) -> KmsAeadError {
         Self::create("ASYMMETRIC_ENCRYPTED_DEK_FORMAT", reason)
+    }
+
+    /// `LEGACY_FORMAT`: stored bytes in `layout`, which kms-aead 0.29 or earlier wrote. The
+    /// message names the release that rewrites them, never the bytes read.
+    pub(crate) fn legacy_format(layout: &str) -> KmsAeadError {
+        Self::create(
+            "LEGACY_FORMAT",
+            &format!(
+                "The stored value is in {layout}, which kms-aead 0.29 or earlier wrote and this \
+                 release does not read. upgrade_legacy_value and upgrade_legacy_encrypted_dek of \
+                 kms-aead 0.33, with its legacy-formats feature, rewrite it in Tink's format"
+            ),
+        )
     }
 
     /// `INVALID_PLAINTEXT`: a plaintext that does not convert to or from `T`, for `reason`, which
@@ -643,99 +648,6 @@ impl Display for KmsAeadUnsupportedAlgorithmError {
 }
 
 impl std::error::Error for KmsAeadUnsupportedAlgorithmError {}
-
-/// See [`KmsAeadError::LegacyFormat`]. Its code is `LEGACY_FORMAT`.
-#[derive(Debug, Clone, PartialEq, Eq, Builder)]
-#[non_exhaustive]
-pub struct KmsAeadLegacyFormatError {
-    /// The error code, `LEGACY_FORMAT`.
-    pub public: KmsAeadErrorPublicGenericDetails,
-    /// The layout of the stored value.
-    pub format: KmsAeadLegacyFormat,
-    /// Names the feature that reads the layout or, from a re-encryption, the calls that rewrite it.
-    pub message: String,
-}
-
-impl KmsAeadLegacyFormatError {
-    /// The message names the layout and the feature, never the bytes read.
-    pub(crate) fn create(format: KmsAeadLegacyFormat) -> KmsAeadError {
-        let message = match format {
-            KmsAeadLegacyFormat::EnvelopeV1 => {
-                "The cipher text is in the envelope layout v1 of kms-aead 0.29. It is read as an \
-                 Encrypted value and decrypted only with the deprecated legacy-formats feature, \
-                 and Encrypted::separate never reads it"
-            }
-            KmsAeadLegacyFormat::LengthPrefixedEnvelope => {
-                "The cipher text is in the length-prefixed layout written by kms-aead 0.28.1 and \
-                 earlier. It is read as an Encrypted value and decrypted only with the deprecated \
-                 legacy-formats feature, and Encrypted::separate never reads it"
-            }
-            KmsAeadLegacyFormat::EncryptedDekV1 => {
-                "The encrypted DEK is in the encrypted DEK layout v1 of kms-aead 0.29, which \
-                 only the deprecated legacy-formats feature reads"
-            }
-            KmsAeadLegacyFormat::RawEncryptedDek => {
-                "The encrypted DEK holds the raw key, as kms-aead 0.29 and earlier encrypted every \
-                 key, not a serialised Tink key. Only the deprecated legacy-formats feature reads \
-                 it"
-            }
-        };
-        Self::error(format, message)
-    }
-
-    /// The error of a re-encryption, which reads no layout of 0.29 or earlier, with or without
-    /// `legacy-formats`, so the message names the calls that rewrite the layout instead of the
-    /// feature.
-    pub(crate) fn refused_by_reencryption(format: KmsAeadLegacyFormat) -> KmsAeadError {
-        Self::error(
-            format,
-            "The value or its encrypted DEK is in a layout of kms-aead 0.29 or earlier, which \
-             re-encryption never reads, with or without the legacy-formats feature. \
-             upgrade_legacy_value and upgrade_legacy_encrypted_dek of that feature rewrite it in \
-             Tink's format, under the KEK's current version",
-        )
-    }
-
-    fn error(format: KmsAeadLegacyFormat, message: &str) -> KmsAeadError {
-        KmsAeadError::LegacyFormat(KmsAeadLegacyFormatError::new(
-            KmsAeadErrorPublicGenericDetails::new("LEGACY_FORMAT".to_string()),
-            format,
-            message.to_string(),
-        ))
-    }
-}
-
-impl Display for KmsAeadLegacyFormatError {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "KmsAead legacy format: {:?} / {}",
-            self.public, self.message
-        )
-    }
-}
-
-impl std::error::Error for KmsAeadLegacyFormatError {}
-
-/// A layout written by kms-aead 0.29 or earlier. The formats chapter of the book shows the bytes
-/// of each.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-pub enum KmsAeadLegacyFormat {
-    /// An [`Envelope`](crate::formats::Envelope) value in the envelope layout v1 of 0.29,
-    /// starting with `0x01`.
-    EnvelopeV1,
-    /// An [`Envelope`](crate::formats::Envelope) value with the length prefix written up to
-    /// 0.28.1, starting with four zero bytes.
-    LengthPrefixedEnvelope,
-    /// Stored `EncryptedDataEncryptionKey` bytes in the encrypted DEK layout v1 of 0.29, starting
-    /// with `0xFF 0x01`.
-    EncryptedDekV1,
-    /// An encrypted DEK that decrypts to the raw key, as 0.29 and earlier encrypted every key,
-    /// rather than to a serialised Tink key. The values of 32-bit targets before 0.24.0, whose
-    /// framing is Tink's, fail with it too.
-    RawEncryptedDek,
-}
 
 /// In what way a serde_json error of `category` failed, without serde_json's message, which quotes
 /// the input, and without its line and column, which are byte offsets into the input.

@@ -220,9 +220,8 @@ calls move a stored DEK to the version the provider encrypts with, without decry
   fields, and for a DEK that many values share.
 
 Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
-cache. A value or a DEK in a legacy layout fails with `LEGACY_FORMAT`: `upgrade_legacy_value` and
-`upgrade_legacy_encrypted_dek` rewrite it in Tink's format, see
-[Upgrading stored values](./migrating-from-0.29.md#upgrading-stored-values).
+cache. A value or a DEK in a legacy layout fails with `LEGACY_FORMAT`, see
+[Values written by 0.29 and earlier](./migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in [Re-encrypt DEKs after a KEK rotation](./production/reencrypt-deks.md).

@@ -439,10 +439,8 @@ impl DekCache {
     /// # Errors
     ///
     /// The provider's error, `INVALID_KEY_FORMAT` when the decrypted key is not a serialised Tink
-    /// key, and without the `legacy-formats` feature
-    /// [`KmsAeadError::LegacyFormat`](crate::errors::KmsAeadError::LegacyFormat) for a key
-    /// encrypted by 0.29 or earlier. Every caller waiting on the same decryption receives the
-    /// error, and nothing is cached. The errors of `use_dek` come back in its own return value.
+    /// key, and `LEGACY_FORMAT` for a key encrypted by 0.29 or earlier. Every caller waiting on the
+    /// same decryption receives the error, and nothing is cached. The errors of `use_dek` come back in its own return value.
     pub async fn with_dek<P, T>(
         &self,
         provider: &P,
@@ -454,11 +452,7 @@ impl DekCache {
     {
         // An encrypted value of the same KEK that is no data encryption key, such as an exported
         // keyset, decrypts too, and the decoding of the decrypted key keeps it out.
-        let decrypt_dek = || async {
-            crate::formats::decrypt_dek(encrypted_dek, provider)
-                .await
-                .map(|(dek, _)| dek)
-        };
+        let decrypt_dek = || crate::formats::decrypt_dek(encrypted_dek, provider);
         match &self.0 {
             Some(enabled) => {
                 enabled

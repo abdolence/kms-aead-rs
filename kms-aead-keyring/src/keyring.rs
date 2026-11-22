@@ -439,9 +439,9 @@ where
     ///
     /// The value's key is decrypted by this keyring's provider, so it must have been encrypted by
     /// the keyring's KEK, and through the keyring's [`DekCache`], where a store-less envelope's
-    /// values share one entry. It reads Tink's KMS envelope, the layout kms-aead 0.30 writes; a
-    /// value in a layout of kms-aead 0.29 or earlier is upgraded first, with kms-aead's
-    /// `KmsAeadEnvelope::upgrade_legacy_value`.
+    /// values share one entry. It reads Tink's KMS envelope, the layout kms-aead 0.30 and later
+    /// write; a value in a layout of kms-aead 0.29 or earlier fails with `LEGACY_FORMAT`, and is
+    /// rewritten first with `KmsAeadEnvelope::upgrade_legacy_value` of kms-aead 0.33.
     ///
     /// # Errors
     ///

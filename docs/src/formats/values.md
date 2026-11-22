@@ -22,13 +22,10 @@ A `Bare` value is Tink's AEAD output under a key with the output prefix RAW, and
 that decrypts it.
 
 The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With `legacy-formats`, an `Envelope` value also holds the legacy envelope layout v1 and
-the legacy length-prefixed envelope, checked by their lengths, so a column decodes its old rows into
-the same type until they are upgraded, see
-[Upgrading stored values](../migrating-from-0.29.md#upgrading-stored-values). Without the feature,
-`Encrypted::try_from` refuses them with `LEGACY_FORMAT`. `separate` refuses them in every build. A legacy layout that early releases wrote on 32-bit
-targets has Tink's framing, so it reads as an `Envelope` value in every build, and
-`KmsAeadEnvelope::decrypt` decrypts it with `legacy-formats`, see
+decrypted. `Encrypted::try_from` refuses the legacy envelope layout v1 and the legacy
+length-prefixed envelope with `LEGACY_FORMAT`. A legacy layout that early releases wrote on 32-bit
+targets has Tink's framing, so it reads as an `Envelope` value, and `KmsAeadEnvelope::decrypt`
+refuses it with `LEGACY_FORMAT` once its DEK decrypts to a raw key, see
 [Migrating from 0.29](../migrating-from-0.29.md#values-written-by-029-and-earlier).
 
 The plaintext inside is the encoding of the value's `Plaintext` type: UTF-8 for `String`, the

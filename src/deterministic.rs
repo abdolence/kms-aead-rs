@@ -364,7 +364,7 @@ mod aes_siv_cipher {
                 Measurement::start(Self::deterministic_call("decrypt_dek", algorithm));
             let span = spans::decrypt_dek(algorithm, self.dek_cache());
             let decrypted = spans::in_span(span, async {
-                let (dek, _) = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
+                let dek = crate::formats::decrypt_dek(encrypted_dek, &self.provider).await?;
                 checked_key_bytes(
                     dek.value().ref_sensitive_value(),
                     algorithm,

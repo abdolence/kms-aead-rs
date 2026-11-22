@@ -222,9 +222,6 @@ deterministic = [
     "dep:cmac",
     "cmac/zeroize",
 ]
-# Deprecated: reads the layouts written by 0.29 and earlier. Reading them will be removed in a
-# later breaking release.
-legacy-formats = []
 # Streamed values of any length, C2SP chunked encryption: the `stream` module, its sans-IO encryptor
 # and decryptor, their tokio adapters, which need `io-util`, and their adapters on `Stream`s of
 # `Bytes`.
@@ -268,7 +265,7 @@ hashicorp-vault-transit-kms-encryption = ["hashicorp-vault-transit-kms-encryptio
 
 [package.metadata.docs.rs]
 all-features = false
-features = ["ring", "aws-lc", "rustcrypto", "deterministic", "legacy-formats", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry", "stream"]
+features = ["ring", "aws-lc", "rustcrypto", "deterministic", "postgres", "sqlx", "gcp-kms-encryption", "aws-kms-encryption", "azure-kms-encryption", "hashicorp-vault-transit-kms-encryption", "opentelemetry", "stream"]
 
 [[example]]
 name = "aws_kms"
