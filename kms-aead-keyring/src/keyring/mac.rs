@@ -236,7 +236,7 @@ mod tests {
 
     use super::*;
     use crate::errors::KeyVersionError;
-    use crate::test_support::{TestAdmin, TestProvider, TestRegistry, TestResult, TENANT};
+    use crate::test_support::{TENANT, TestAdmin, TestProvider, TestRegistry, TestResult};
     use crate::testing::MemoryKeyringStore;
     use crate::{KeyAlgorithm, KeyringAlgorithms, KeyringRegistryOptions, MacAlgorithm};
 

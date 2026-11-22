@@ -26,8 +26,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_beacon_round_trips_through_serde_json_as_a_byte_array(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn a_beacon_round_trips_through_serde_json_as_a_byte_array()
+    -> Result<(), Box<dyn std::error::Error>> {
         let beacon = Beacon::<String>::try_from(vec![0x01, 0, 0, 0, 7, 0xAB, 0xCD])?;
 
         let json = serde_json::to_string(&beacon)?;

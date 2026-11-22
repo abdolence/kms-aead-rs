@@ -17,11 +17,11 @@
 //! identifiers only, as the library's own do.
 
 #[cfg(feature = "opentelemetry")]
-pub use instruments::{count_keyring_record_refusal, record_keyring_store_load, OperationOutcome};
+pub(crate) use instruments::{Measurement, record_kms_call};
 #[cfg(feature = "opentelemetry")]
-pub(crate) use instruments::{record_kms_call, Measurement};
+pub use instruments::{OperationOutcome, count_keyring_record_refusal, record_keyring_store_load};
 #[cfg(not(feature = "opentelemetry"))]
-pub(crate) use unrecorded::{record_kms_call, Measurement};
+pub(crate) use unrecorded::{Measurement, record_kms_call};
 
 /// The attributes every call of either crate carries: `kms_aead.operation`, `kms_aead.mode`,
 /// `kms_aead.backend` and, when the call knows it, `kms_aead.algorithm`.

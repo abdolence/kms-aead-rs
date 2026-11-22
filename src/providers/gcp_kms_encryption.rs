@@ -1,10 +1,10 @@
 use rsb_derive::*;
 
-use super::kms_key_version::read_kek_version;
 use super::KmsKeyVersion;
+use super::kms_key_version::read_kek_version;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::formats::PublicKeyFormat;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::spans::{self, kms};
 use crate::*;
 use gcloud_sdk::google::cloud::kms::v1::crypto_key_version::CryptoKeyVersionAlgorithm;
@@ -141,8 +141,8 @@ fn asymmetric_decrypt_request(
 }
 
 /// A Cloud KMS client authenticated with the application default credentials.
-pub(super) async fn cloud_kms_client(
-) -> KmsAeadResult<GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>> {
+pub(super) async fn cloud_kms_client()
+-> KmsAeadResult<GoogleApi<KeyManagementServiceClient<GoogleAuthMiddleware>>> {
     GoogleApi::from_function(
         KeyManagementServiceClient::new,
         "https://cloudkms.googleapis.com",
@@ -484,8 +484,8 @@ mod tests {
     }
 
     #[test]
-    fn an_asymmetric_decryption_names_the_crypto_key_version_of_the_encrypted_dek(
-    ) -> KmsAeadResult<()> {
+    fn an_asymmetric_decryption_names_the_crypto_key_version_of_the_encrypted_dek()
+    -> KmsAeadResult<()> {
         let version_name = format!("{KEY_NAME}/cryptoKeyVersions/3");
 
         let request = asymmetric_decrypt_request(
@@ -639,8 +639,8 @@ mod tests {
     }
 
     #[test]
-    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key(
-    ) -> KmsAeadResult<()> {
+    fn key_version_is_read_from_the_crypto_key_version_name_of_the_configured_key()
+    -> KmsAeadResult<()> {
         assert_eq!(
             crypto_key_version(
                 KEY_NAME,

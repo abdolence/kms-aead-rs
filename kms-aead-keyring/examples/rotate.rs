@@ -14,10 +14,10 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 
 use futures_util::stream;
+use kms_aead::KmsAeadResult;
 use kms_aead::backends::Ring;
 use kms_aead::formats::SymmetricKeyFormat;
 use kms_aead::providers::{KmsKeyVersion, LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::sweep::{self, EncryptionMarker, ReencryptOutcome, SweepReport};
 use kms_aead_keyring::testing::MemoryKeyringStore;

@@ -29,15 +29,15 @@ use std::time::{Duration, Instant};
 use firestore::errors::FirestoreError;
 use firestore::gcloud_sdk::google::rpc::Code;
 use firestore::{
-    paths, FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDbOptions,
+    FirestoreBatchWriteResponse, FirestoreCollectionId, FirestoreDb, FirestoreDbOptions,
     FirestoreSimpleBatchWriteOptions, FirestoreSimpleBatchWriter, FirestoreTimestamp,
-    FirestoreWritePrecondition,
+    FirestoreWritePrecondition, paths,
 };
 use futures_util::stream::TryChunksError;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, stream};
+use kms_aead::KmsAeadResult;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::FirestoreKeyringStore;
 use kms_aead_keyring::sweep::{

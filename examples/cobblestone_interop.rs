@@ -13,7 +13,7 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use kms_aead::backends::Ring;
 use kms_aead::cache::DekCache;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
@@ -22,7 +22,7 @@ use kms_aead::stream::{
 };
 use kms_aead::{AeadAlgorithm, AeadCipher, DataEncryptionKey, KeyId, KmsAeadEnvelope};
 use secret_vault_value::SecretValue;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 type Failure = Box<dyn std::error::Error + Send + Sync>;
 
@@ -47,7 +47,9 @@ async fn main() -> Result<(), Failure> {
     }
 }
 
-fn frames(bytes: &[u8]) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Unpin + use<> {
+fn frames(
+    bytes: &[u8],
+) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Unpin + use<> {
     stream::iter(
         bytes
             .chunks(FRAME_LEN)

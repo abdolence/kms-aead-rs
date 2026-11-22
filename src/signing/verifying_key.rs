@@ -224,16 +224,17 @@ impl VerifyingKey {
                 error.kind()
             ))
         })?;
-        let algorithm =
-            match spki.algorithm.oids() {
-                Ok((ID_ED25519, None)) => SigningAlgorithm::Ed25519,
-                Ok((ID_EC_PUBLIC_KEY, Some(PRIME256V1))) => SigningAlgorithm::EcdsaP256Sha256,
-                _ => return Err(KmsAeadSignatureError::create(
+        let algorithm = match spki.algorithm.oids() {
+            Ok((ID_ED25519, None)) => SigningAlgorithm::Ed25519,
+            Ok((ID_EC_PUBLIC_KEY, Some(PRIME256V1))) => SigningAlgorithm::EcdsaP256Sha256,
+            _ => {
+                return Err(KmsAeadSignatureError::create(
                     "SIGNING_ALGORITHM_MISMATCH",
                     "The SubjectPublicKeyInfo is not an id-Ed25519 key or an id-ecPublicKey key \
                      on prime256v1",
-                )),
-            };
+                ));
+            }
+        };
         let public_key = spki.subject_public_key.as_bytes().ok_or_else(|| {
             KmsAeadSignatureError::invalid_public_key(
                 "The public key of the SubjectPublicKeyInfo has unused bits",

@@ -1,7 +1,7 @@
-use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
-use crate::providers::kms_key_version::read_kek_version;
-use crate::providers::KmsKeyVersion;
 use crate::KmsAeadResult;
+use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
+use crate::providers::KmsKeyVersion;
+use crate::providers::kms_key_version::read_kek_version;
 
 /// The bytes the Azure provider returns from an encryption and takes to decrypt, kms-aead's own
 /// layout, since Key Vault decrypts only with the key version that encrypted and no Tink client

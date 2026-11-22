@@ -1,6 +1,6 @@
 use aws_sdk_kms::operation::get_public_key::GetPublicKeyOutput;
-use aws_sdk_kms::operation::sign::builders::SignFluentBuilder;
 use aws_sdk_kms::operation::sign::SignOutput;
+use aws_sdk_kms::operation::sign::builders::SignFluentBuilder;
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::{KeySpec, MessageType, SigningAlgorithmSpec};
 use rsb_derive::Builder;
@@ -276,10 +276,10 @@ impl KmsSigningProvider for AwsKmsSigningProvider {
 mod tests {
     use super::*;
     use crate::signing::{Signer, Verifier, VerifyingKeySet};
-    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_http::{ReceivedRequest, answer_with};
     use crate::test_provider::{
-        assert_code, verifying_key_of, Invoice, TestBackend, ED25519_PKCS8_DER, INVOICE_PAYLOAD,
-        P256_PKCS8_DER, P256_SIGNATURE, P256_SIGNATURE_DER,
+        ED25519_PKCS8_DER, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, P256_SIGNATURE,
+        P256_SIGNATURE_DER, TestBackend, assert_code, verifying_key_of,
     };
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};

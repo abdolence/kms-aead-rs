@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
+use crate::KmsAeadResult;
 use crate::errors::KmsAeadSystemError;
 use crate::providers::LocalKekVersion;
-use crate::KmsAeadResult;
 
 /// An encrypted DEK of the local KMS:
 ///

@@ -31,8 +31,8 @@ fn a_producer_pinned_to_the_fingerprint_of_the_key_accepts_it() -> TestResult {
 #[cfg(feature = "stream")]
 #[tokio::test]
 async fn a_producers_stream_decrypts_through_the_reader() -> TestResult {
-    use kms_aead::stream::{EnvelopeStreamHeader, STREAM_CHUNK_LEN};
     use kms_aead::KmsAeadEnvelope;
+    use kms_aead::stream::{EnvelopeStreamHeader, STREAM_CHUNK_LEN};
 
     const AAD: &[u8] = b"submissions/1042";
 

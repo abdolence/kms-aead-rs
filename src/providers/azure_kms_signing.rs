@@ -9,8 +9,8 @@ use azure_security_keyvault_keys::models::{
 use azure_security_keyvault_keys::{KeyClient, KeyClientOptions, ResourceExt, ResourceId};
 use rsb_derive::Builder;
 
-use super::azure_kms_encryption::{azure_key_client, invalid_vault_url};
 use super::KmsKeyVersion;
+use super::azure_kms_encryption::{azure_key_client, invalid_vault_url};
 use crate::errors::{KmsAeadError, KmsAeadSignatureError};
 use crate::formats::PublicKeyFormat;
 use crate::signing::{

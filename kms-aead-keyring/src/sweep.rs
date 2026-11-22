@@ -144,7 +144,7 @@ use rsb_derive::Builder;
 use tracing::Instrument;
 
 use crate::errors::{KeyringError, KeyringResult};
-use crate::{spans, KeyringId, Reencrypted};
+use crate::{KeyringId, Reencrypted, spans};
 
 #[cfg(feature = "postgres")]
 mod postgres;
@@ -422,17 +422,19 @@ where
     let span = spans::sweep(keyring_id);
     let report = async {
         let mut report = SweepReport::default();
-        let mut outcomes = pin!(candidates
-            .map(|candidate| {
-                // Formatted before `reencrypt` takes the candidate, for the log line of a failure.
-                let reencrypting =
-                    candidate.map(|candidate| (candidate.to_string(), reencrypt(candidate)));
-                async move {
-                    let (candidate, outcome) = reencrypting?;
-                    Ok::<_, E>((candidate, outcome.await))
-                }
-            })
-            .buffer_unordered(concurrency.get()));
+        let mut outcomes = pin!(
+            candidates
+                .map(|candidate| {
+                    // Formatted before `reencrypt` takes the candidate, for the log line of a failure.
+                    let reencrypting =
+                        candidate.map(|candidate| (candidate.to_string(), reencrypt(candidate)));
+                    async move {
+                        let (candidate, outcome) = reencrypting?;
+                        Ok::<_, E>((candidate, outcome.await))
+                    }
+                })
+                .buffer_unordered(concurrency.get())
+        );
         while let Some(reencrypted) = outcomes.next().await {
             match reencrypted {
                 Ok((candidate, outcome)) => {
@@ -489,22 +491,24 @@ where
     let span = spans::sweep(keyring_id);
     let report = async {
         let mut report = SweepReport::default();
-        let mut batches = pin!(candidates
-            .chunks(options.batch_size.get())
-            .map(|batch| {
-                let mut candidates: Vec<T> = Vec::with_capacity(batch.len());
-                let mut unread: Vec<E> = Vec::new();
-                for candidate in batch {
-                    match candidate {
-                        Ok(candidate) => candidates.push(candidate),
-                        Err(error) => unread.push(error),
+        let mut batches = pin!(
+            candidates
+                .chunks(options.batch_size.get())
+                .map(|batch| {
+                    let mut candidates: Vec<T> = Vec::with_capacity(batch.len());
+                    let mut unread: Vec<E> = Vec::new();
+                    for candidate in batch {
+                        match candidate {
+                            Ok(candidate) => candidates.push(candidate),
+                            Err(error) => unread.push(error),
+                        }
                     }
-                }
-                let given = candidates.len();
-                let reencrypting = (given > 0).then(|| reencrypt_batch(candidates));
-                async move { (unread, given, OptionFuture::from(reencrypting).await) }
-            })
-            .buffer_unordered(options.concurrency.get()));
+                    let given = candidates.len();
+                    let reencrypting = (given > 0).then(|| reencrypt_batch(candidates));
+                    async move { (unread, given, OptionFuture::from(reencrypting).await) }
+                })
+                .buffer_unordered(options.concurrency.get())
+        );
         while let Some((unread, given, outcomes)) = batches.next().await {
             for error in &unread {
                 report.count_unread(keyring_id, error);
@@ -549,12 +553,12 @@ mod tests {
 
     use futures_util::stream;
     use jiff::Timestamp;
-    use kms_aead::formats::Randomized;
     use kms_aead::KmsAeadResult;
+    use kms_aead::formats::Randomized;
     use proptest::prelude::*;
 
     use super::*;
-    use crate::test_support::{TestResult, TENANT};
+    use crate::test_support::{TENANT, TestResult};
     use crate::{Compromise, Encrypted, KeyTrust};
 
     /// Epochs on either side of every byte boundary of the big-endian layout.
@@ -668,8 +672,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_counts_scanned_reencrypted_skipped_failed_with_the_applications_errors(
-    ) {
+    async fn reencrypt_records_counts_scanned_reencrypted_skipped_failed_with_the_applications_errors()
+     {
         let report = reencrypt_records(
             &TENANT,
             stream::iter((1..=6).map(Ok)),
@@ -790,8 +794,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reencrypt_records_batched_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed(
-    ) {
+    async fn reencrypt_records_batched_counts_a_candidate_the_stream_failed_to_read_as_scanned_and_failed()
+     {
         let candidates = stream::iter([
             Ok(1),
             Err(io::Error::other("the users query failed")),
@@ -862,16 +866,16 @@ mod tests {
         use std::collections::BTreeMap;
         use std::sync::{Mutex, PoisonError};
 
-        use kms_aead::formats::Randomized;
         #[cfg(feature = "deterministic")]
         use kms_aead::DeterministicAlgorithm;
+        use kms_aead::formats::Randomized;
         use kms_aead::{
             AeadAlgorithm, BeaconAlgorithm, DekReusePolicy, KmsAeadEnvelope, KmsAeadEnvelopeOptions,
         };
 
         use super::*;
         use crate::test_support::{
-            email_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry,
+            TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, email_of,
         };
         use crate::testing::MemoryKeyringStore;
         use crate::{
@@ -986,8 +990,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn reencrypt_records_writes_the_marker_alone_when_a_beacon_rotation_leaves_the_value_current(
-        ) -> TestResult {
+        async fn reencrypt_records_writes_the_marker_alone_when_a_beacon_rotation_leaves_the_value_current()
+        -> TestResult {
             let admin = TestRegistry::new(
                 MemoryKeyringStore::new(),
                 KeyringRegistryOptions::new().with_watch(false),
@@ -1027,8 +1031,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn reencrypt_records_reencrypts_a_value_under_a_decrypt_only_version_above_the_active_one(
-        ) -> TestResult {
+        async fn reencrypt_records_reencrypts_a_value_under_a_decrypt_only_version_above_the_active_one()
+        -> TestResult {
             let admin = keyring_admin(TestProvider::new("tenant-42-kek")?).await?;
             let keyring = admin.keyring();
             let users = Users::default();
@@ -1250,12 +1254,14 @@ mod tests {
                 .await
                 .encrypt(&aad, &ALICE.to_string())
                 .await?;
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt(&aad, &old)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt(&aad, &old)
+                    .await?
+                    .is_none()
+            );
 
             let rotation = admin
                 .promote_now(admin.rotate(Purpose::Randomized).await?)
@@ -1270,12 +1276,14 @@ mod tests {
             assert_eq!(reencrypted.value.key_id(), rotation.current);
             assert_eq!(reencrypted.trust, KeyTrust::Trusted);
             assert_eq!(keyring.decrypt(&aad, &reencrypted.value).await?, ALICE);
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt(&aad, &reencrypted.value)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt(&aad, &reencrypted.value)
+                    .await?
+                    .is_none()
+            );
             Ok(())
         }
 
@@ -1327,12 +1335,14 @@ mod tests {
                 .await
                 .encrypt_deterministic(&aad, &ALICE.to_string())
                 .await?;
-            assert!(keyring
-                .encryptor()
-                .await
-                .reencrypt_deterministic(&aad, &old)
-                .await?
-                .is_none());
+            assert!(
+                keyring
+                    .encryptor()
+                    .await
+                    .reencrypt_deterministic(&aad, &old)
+                    .await?
+                    .is_none()
+            );
 
             let rotation = admin
                 .promote_now(admin.rotate(Purpose::Deterministic).await?)

@@ -24,10 +24,10 @@ use std::fmt::{self, Display, Formatter};
 use std::num::NonZeroUsize;
 use std::time::Instant;
 
-use futures_util::{future, stream, StreamExt, TryStreamExt};
+use futures_util::{StreamExt, TryStreamExt, future, stream};
+use kms_aead::KmsAeadResult;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-use kms_aead::KmsAeadResult;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::store::PostgresKeyringStore;
 use kms_aead_keyring::sweep::{

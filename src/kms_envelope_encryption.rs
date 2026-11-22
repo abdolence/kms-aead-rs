@@ -25,14 +25,13 @@ use crate::formats::{Bare, Envelope};
 use crate::metrics::{self, Measurement};
 #[cfg(feature = "stream")]
 use crate::stream::{
-    read_stream_header, CobblestoneHeader, DecryptingReader, DecryptingStream,
-    EnvelopeStreamHeader, KeyReference, StreamDecryptor, StreamEncryptor, StreamFormat,
-    StreamHeaderGatherer,
+    CobblestoneHeader, DecryptingReader, DecryptingStream, EnvelopeStreamHeader, KeyReference,
+    StreamDecryptor, StreamEncryptor, StreamFormat, StreamHeaderGatherer, read_stream_header,
 };
 use crate::{
-    spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
-    DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadDecryptionProvider,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+    AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac, DataEncryptionKey,
+    Encrypted, EncryptedDataEncryptionKey, KeyId, KmsAeadDecryptionProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext, spans,
 };
 
 /// The most encryptions a [`DekReusePolicy`] allows under one DEK. NIST SP 800-38D, section 8.3,
@@ -282,9 +281,10 @@ impl DekReuse {
             return Ok(ClaimedDek::Claimed(current));
         }
         if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival
-            && let Some(error) = &*last_failure {
-                return Err(error.clone());
-            }
+            && let Some(error) = &*last_failure
+        {
+            return Err(error.clone());
+        }
         let renewed = renew().await;
         self.ended_renewals.fetch_add(1, Ordering::Relaxed);
         match renewed {
@@ -1157,8 +1157,8 @@ mod tests {
     use crate::formats::{SymmetricKeyFormat, TinkKeyType};
     use crate::providers::{LocalKek, LocalKekId, LocalKekVersion, LocalKmsProvider};
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
-        TestKmsProvider, CONCURRENT_CALLS,
+        CONCURRENT_CALLS, CountingKmsProvider, TestBackend, TestKmsProvider,
+        encrypted_by_test_provider, let_spawned_tasks_wait,
     };
     use crate::{KekRef, KmsProvider};
 
@@ -1399,8 +1399,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_reencrypted_dek_decrypts_the_same_bytes_without_the_old_kek_version(
-    ) -> KmsAeadResult<()> {
+    async fn a_reencrypted_dek_decrypts_the_same_bytes_without_the_old_kek_version()
+    -> KmsAeadResult<()> {
         let [v1, v2] =
             [1, 2].map(|version| LocalKekVersion::from(NonZeroU32::new(version).unwrap()));
         let kek_id = LocalKekId::try_from(ORDERS_KEK.to_string())?;
@@ -2035,8 +2035,8 @@ mod tests {
         use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
         use super::*;
-        use crate::stream::tests::{pieces, PiecesSource, PIECE_LENS};
-        use crate::stream::{ChunkReadPlan, EnvelopeStreamHeader, BARE_HEADER_LEN};
+        use crate::stream::tests::{PIECE_LENS, PiecesSource, pieces};
+        use crate::stream::{BARE_HEADER_LEN, ChunkReadPlan, EnvelopeStreamHeader};
         use crate::test_provider::assert_code;
 
         /// Long enough for several chunks, and different from chunk to chunk.
@@ -2163,8 +2163,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_value_decrypts_from_its_first_byte_through_both_constructors(
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        async fn a_value_decrypts_from_its_first_byte_through_both_constructors()
+        -> Result<(), Box<dyn std::error::Error>> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let plaintext = plaintext();
             let stored = encrypted(&envelope, &plaintext).await?;
@@ -2187,8 +2187,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_value_followed_by_another_byte_fails_through_both_constructors(
-        ) -> KmsAeadResult<()> {
+        async fn a_value_followed_by_another_byte_fails_through_both_constructors()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
             let followed = [&stored[..], &[0]].concat();
@@ -2234,8 +2234,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_hostile_encrypted_dek_length_reaches_no_kms_through_the_constructors(
-        ) -> KmsAeadResult<()> {
+        async fn a_hostile_encrypted_dek_length_reaches_no_kms_through_the_constructors()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
 
@@ -2255,8 +2255,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn a_source_that_fails_before_the_header_is_whole_is_a_stream_io_error(
-        ) -> KmsAeadResult<()> {
+        async fn a_source_that_fails_before_the_header_is_whole_is_a_stream_io_error()
+        -> KmsAeadResult<()> {
             let envelope = counting_envelope(KmsAeadEnvelopeOptions::new())?;
             let stored = encrypted(&envelope, b"a streamed value").await?;
 
@@ -2416,8 +2416,8 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn an_envelope_of_another_algorithm_refuses_a_stream_before_the_kms(
-        ) -> KmsAeadResult<()> {
+        async fn an_envelope_of_another_algorithm_refuses_a_stream_before_the_kms()
+        -> KmsAeadResult<()> {
             let chacha =
                 KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305);
             let envelope = counting_envelope(chacha)?;

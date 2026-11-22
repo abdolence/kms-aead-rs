@@ -12,9 +12,9 @@ use kms_aead::AeadAlgorithm;
 use crate::{KeyId, KeyVersion, Purpose};
 
 #[cfg(feature = "opentelemetry")]
-pub(crate) use recorded::{record_refusal, record_store_load, KeyringAttribute};
+pub(crate) use recorded::{KeyringAttribute, record_refusal, record_store_load};
 #[cfg(not(feature = "opentelemetry"))]
-pub(crate) use unrecorded::{record_refusal, record_store_load, KeyringAttribute};
+pub(crate) use unrecorded::{KeyringAttribute, record_refusal, record_store_load};
 
 /// The backend of every deterministic call: AES-SIV runs on RustCrypto whatever the keyring's
 /// backend.
@@ -89,8 +89,8 @@ mod recorded {
 
     use kms_aead::formats::Format;
     use kms_aead::metrics::{
-        count_keyring_record_refusal, record_keyring_store_load, OperationAttributes,
-        OperationOutcome,
+        OperationAttributes, OperationOutcome, count_keyring_record_refusal,
+        record_keyring_store_load,
     };
     use opentelemetry::KeyValue;
 

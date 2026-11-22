@@ -7,7 +7,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSignatureError};
-use crate::formats::{split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::{TINK_OUTPUT_PREFIX_LEN, split_tink_output_prefix, tink_output_prefix};
 use crate::mac::MacAlgorithm;
 use crate::{KeyId, KmsAeadResult};
 

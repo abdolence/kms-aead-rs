@@ -8,7 +8,7 @@ use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use bytes::{Buf, Bytes};
 use futures_core::Stream;
@@ -17,9 +17,9 @@ use secret_vault_value::SecretValue;
 use super::adapters::inner_kms_aead_error;
 use super::gatherer::{ChunkGatherer, DecryptedChunk};
 use super::{StreamDecryptor, StreamEncryptor};
+use crate::KmsAeadResult;
 use crate::backends::AeadBackend;
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::KmsAeadResult;
 
 type BoxError = Box<dyn Error + Send + Sync>;
 
@@ -238,7 +238,7 @@ where
                     None => {
                         return Err(KmsAeadEncryptionError::stream_length(
                             "The source ended inside the header of the streamed value",
-                        ))
+                        ));
                     }
                 }
                 continue;

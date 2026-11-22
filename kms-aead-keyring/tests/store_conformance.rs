@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use kms_aead_keyring::store::{Deletion, KeyringStore, Revalidation, Stored, Swap, WatchEvent};
 use kms_aead_keyring::testing::MemoryKeyringStore;
 use kms_aead_keyring::{KeyringId, KeyringRecord, KeyringResult};
@@ -496,10 +496,12 @@ mod firestore_store {
     #[ignore = "needs a Firestore emulator or project, see the module docs"]
     async fn many_keyrings_share_one_listener() -> TestResult {
         let store = store().await?;
-        let mut watches = vec![store
-            .watch(&unique_keyring_id()?)
-            .await?
-            .ok_or("the store has no push")?];
+        let mut watches = vec![
+            store
+                .watch(&unique_keyring_id()?)
+                .await?
+                .ok_or("the store has no push")?,
+        ];
         let runtime = tokio::runtime::Handle::current().metrics();
         let first = runtime.num_alive_tasks();
         for _ in 0..20 {
@@ -705,13 +707,13 @@ mod postgres {
     use std::error::Error;
     use std::time::{Duration, Instant};
 
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::store::{
         KeyringStore, KeyringWatch, PostgresKeyringStore, PostgresTable, WatchEvent,
     };
-    use kms_aead_keyring::KeyringError;
     use tokio_postgres::{Client, Config, NoTls};
 
-    use super::{conformance, record, unique_keyring_id, written_revision, TestResult};
+    use super::{TestResult, conformance, record, unique_keyring_id, written_revision};
 
     fn config() -> Result<Config, Box<dyn Error>> {
         Ok(std::env::var("KMS_AEAD_KEYRING_POSTGRES_URL")?.parse()?)
@@ -1063,8 +1065,8 @@ mod postgres {
     /// The keyring over the PostgreSQL store, which the administrative API creates.
     #[cfg(all(feature = "ring", feature = "admin"))]
     mod keyring {
-        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
 
         use kms_aead::backends::Ring;
@@ -1081,7 +1083,7 @@ mod postgres {
         use tokio_postgres::NoTls;
 
         use super::{config, connect, create_table, drop_table};
-        use crate::{unique_keyring_id, TestResult};
+        use crate::{TestResult, unique_keyring_id};
 
         /// A store that counts the revalidations a keyring asks of it.
         struct CountingStore {
@@ -1202,14 +1204,14 @@ mod postgres {
 mod gcs {
     use gcloud_sdk::google::storage::v2::storage_client::StorageClient;
     use gcloud_sdk::google::storage::v2::{
-        write_object_request, ChecksummedData, Object, WriteObjectRequest, WriteObjectSpec,
+        ChecksummedData, Object, WriteObjectRequest, WriteObjectSpec, write_object_request,
     };
-    use gcloud_sdk::{tonic, GoogleApi};
+    use gcloud_sdk::{GoogleApi, tonic};
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
     use kms_aead_keyring::store::{GcsBucketName, GcsKeyringStore, KeyringStore, ObjectPrefix};
-    use kms_aead_keyring::KeyringError;
 
-    use super::{conformance, unique_keyring_id, TestResult};
+    use super::{TestResult, conformance, unique_keyring_id};
 
     async fn store() -> Result<GcsKeyringStore, Box<dyn std::error::Error>> {
         let bucket = GcsBucketName::try_from(std::env::var("KEYRING_GCS_BUCKET")?)?;
@@ -1383,11 +1385,11 @@ mod gcs {
 mod s3 {
     use aws_config::{BehaviorVersion, Region};
     use aws_sdk_s3::primitives::ByteStream;
+    use kms_aead_keyring::KeyringError;
     use kms_aead_keyring::errors::{RecordInvalidError, RecordInvalidReason};
     use kms_aead_keyring::store::{KeyringStore, ObjectPrefix, S3BucketName, S3KeyringStore};
-    use kms_aead_keyring::KeyringError;
 
-    use super::{conformance, unique_keyring_id, TestResult};
+    use super::{TestResult, conformance, unique_keyring_id};
 
     /// The client of the server `KEYRING_S3_ENDPOINT` names. Without the variable it fails,
     /// rather than sending the tests to AWS.

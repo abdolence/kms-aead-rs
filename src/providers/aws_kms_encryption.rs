@@ -1,8 +1,8 @@
 use rsb_derive::*;
 
 use crate::errors::*;
-use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::formats::PublicKeyFormat;
+use crate::formats::asymmetric::PublicKeyEncryptedDek;
 use crate::spans::{self, kms};
 use crate::*;
 use aws_sdk_kms::operation::decrypt::builders::DecryptFluentBuilder;
@@ -330,7 +330,7 @@ impl KmsAeadDecryptionProvider for AwsKmsProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_http::{answer_with, ReceivedRequest};
+    use crate::test_http::{ReceivedRequest, answer_with};
     use aws_sdk_kms::config::http::HttpResponse;
     use aws_sdk_kms::config::retry::RetryConfig;
     use aws_sdk_kms::config::{Credentials, Region};
@@ -343,7 +343,7 @@ mod tests {
 
     use crate::formats::Envelope;
     use crate::test_provider::{
-        public_key_encrypted_dek, RsaOaepSuite, TestBackend, TinkEnvelope, ENCRYPTED_BLOCK,
+        ENCRYPTED_BLOCK, RsaOaepSuite, TestBackend, TinkEnvelope, public_key_encrypted_dek,
     };
 
     const REGION: &str = "eu-west-1";
@@ -429,8 +429,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_decryption_names_the_key_the_algorithm_and_the_block(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_decryption_names_the_key_the_algorithm_and_the_block()
+    -> KmsAeadResult<()> {
         let (provider, requests) = provider_recording(
             200,
             &format!(
@@ -464,8 +464,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_asymmetric_header_that_names_a_kek_id_or_a_version_is_refused_before_any_request(
-    ) -> KmsAeadResult<()> {
+    async fn an_asymmetric_header_that_names_a_kek_id_or_a_version_is_refused_before_any_request()
+    -> KmsAeadResult<()> {
         for (kek_id, kek_version) in [(&b"orders"[..], None), (b"", Some("3"))] {
             let (provider, requests) = provider_recording(200, "{}").await;
 
@@ -665,9 +665,11 @@ mod tests {
             error.message
         );
         let root_cause = error.root_cause.expect("the service error is kept");
-        assert!(root_cause
-            .downcast_ref::<DecryptError>()
-            .is_some_and(DecryptError::is_incorrect_key_exception));
+        assert!(
+            root_cause
+                .downcast_ref::<DecryptError>()
+                .is_some_and(DecryptError::is_incorrect_key_exception)
+        );
     }
 
     #[tokio::test]

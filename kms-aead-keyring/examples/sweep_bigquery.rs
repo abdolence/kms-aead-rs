@@ -25,9 +25,9 @@ use bigquery::{
     BigQueryDatasetId, BigQueryDb, BigQueryFieldType, BigQueryLocation, BigQueryQueryOutcome,
     BigQueryResult, BigQueryTableId, BigQueryWriteSummary,
 };
+use kms_aead::KmsAeadResult;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::KmsAeadResult;
 use kms_aead_keyring::encodings::BigQuery;
 use kms_aead_keyring::formats::Randomized;
 use kms_aead_keyring::sweep::EncryptionMarker;

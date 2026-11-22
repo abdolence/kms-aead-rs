@@ -1,4 +1,4 @@
-use super::{split_tink_output_prefix, TINK_OUTPUT_PREFIX_LEN};
+use super::{TINK_OUTPUT_PREFIX_LEN, split_tink_output_prefix};
 use crate::errors::KmsAeadEncryptionError;
 use crate::{AeadAlgorithm, DeterministicAlgorithm, KeyId, KmsAeadResult};
 

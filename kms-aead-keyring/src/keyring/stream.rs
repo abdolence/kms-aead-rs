@@ -7,12 +7,12 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::Stream;
+use kms_aead::KmsAeadDecryptionProvider;
 use kms_aead::backends::AeadBackend;
 use kms_aead::stream::{
-    read_stream_header, DecryptingReader, DecryptingStream, PrefixedStreamHeader, StreamDecryptor,
-    StreamEncryptor, StreamFormat, StreamHeaderGatherer,
+    DecryptingReader, DecryptingStream, PrefixedStreamHeader, StreamDecryptor, StreamEncryptor,
+    StreamFormat, StreamHeaderGatherer, read_stream_header,
 };
-use kms_aead::KmsAeadDecryptionProvider;
 use tokio::io::AsyncRead;
 
 use crate::errors::{InteropRequirement, KeyringError, KeyringResult};
@@ -219,15 +219,15 @@ mod tests {
     use futures::TryStreamExt;
     use tokio::io::AsyncReadExt;
 
-    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-    use kms_aead::stream::{decrypt_stream, encrypt_stream, StreamFormat, STREAM_CHUNK_LEN};
     use kms_aead::AeadAlgorithm;
+    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+    use kms_aead::stream::{STREAM_CHUNK_LEN, StreamFormat, decrypt_stream, encrypt_stream};
 
     use super::*;
     use crate::errors::InteropError;
     use crate::test_support::{
-        email_of, error_code_of, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry,
-        TestResult, TestStore, EMAIL, TENANT,
+        EMAIL, TENANT, TestAdmin, TestBackend, TestKeyring, TestProvider, TestRegistry, TestResult,
+        TestStore, email_of, error_code_of,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{

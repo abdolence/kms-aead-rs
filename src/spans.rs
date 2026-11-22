@@ -8,7 +8,7 @@
 use std::fmt::Display;
 use std::future::Future;
 
-use tracing::{debug_span, field, Instrument, Span};
+use tracing::{Instrument, Span, debug_span, field};
 
 use crate::cache::{DekCache, DekCacheOutcome};
 use crate::errors::KmsAeadError;
@@ -37,7 +37,7 @@ pub(crate) mod kms {
     use std::pin::Pin;
     use std::time::Instant;
 
-    use tracing::{debug_span, field, Span};
+    use tracing::{Span, debug_span, field};
 
     use super::FIELD_ERROR_CODE;
     use crate::providers::KmsKeyVersion;

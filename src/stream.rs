@@ -87,13 +87,13 @@ pub(crate) mod tests;
 mod vectors;
 
 pub use adapters::{
-    decrypt_stream, encrypt_stream, read_stream_header, DecryptingReader, EncryptingWriter,
+    DecryptingReader, EncryptingWriter, decrypt_stream, encrypt_stream, read_stream_header,
 };
 pub use byte_streams::{DecryptingStream, EncryptingStream, StreamHeaderGatherer};
 pub use header::{EnvelopeStreamHeader, PrefixedStreamHeader};
 pub use layout::{ChunkReadPlan, StreamFormat};
 
-use cipher::{ChunkCipher, Salt, CHUNK_ALGORITHM, STREAM_SALT_LEN};
+use cipher::{CHUNK_ALGORITHM, ChunkCipher, STREAM_SALT_LEN, Salt};
 pub(crate) use header::CobblestoneHeader;
 
 /// The header of the prefixed form: the prefix and the Cobblestone header.
@@ -248,7 +248,7 @@ impl<B: AeadBackend> StreamEncryptor<B> {
                 return Err(KmsAeadEncryptionError::create(
                     "ENCRYPT",
                     "The encryptor has encrypted its final chunk",
-                ))
+                ));
             }
         };
         let full_chunks = held.saturating_add(plaintext.len()) / STREAM_CHUNK_LEN;

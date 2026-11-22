@@ -7,13 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use kms_aead::backends::AeadBackend;
-use kms_aead::cache::{DekCache, DekCacheOptions};
 #[cfg(feature = "admin")]
 use kms_aead::KmsAeadEncryptionProvider;
+use kms_aead::backends::AeadBackend;
+use kms_aead::cache::{DekCache, DekCacheOptions};
 use kms_aead::{KekRef, KmsAeadDecryptionProvider};
 use rsb_derive::Builder;
-use tokio::sync::{watch, OnceCell};
+use tokio::sync::{OnceCell, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -23,10 +23,10 @@ use crate::record_cache::RecordCache;
 use crate::record_signing::{MaybeRecordSigner, NoRecordSigner, RecordSigner};
 use crate::record_signing::{RecordSignaturePolicy, RecordVerifier};
 use crate::spans;
-use crate::store::{join_tasks_until, KeyringStore, Stored};
-#[cfg(feature = "admin")]
-use crate::{store::Swap, KeyringAdmin, KeyringAlgorithms};
+use crate::store::{KeyringStore, Stored, join_tasks_until};
 use crate::{Keyring, KeyringId, KeyringOptions, KeyringRecord};
+#[cfg(feature = "admin")]
+use crate::{KeyringAdmin, KeyringAlgorithms, store::Swap};
 
 /// The keyrings of one application on one store: the store, with its connections and its
 /// listener, one [`DekCache`], and every keyring opened through it, which is loaded and watched
@@ -716,7 +716,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        email_of, TestAdmin, TestProvider, TestRegistry, TestResult, TestStore, TENANT,
+        TENANT, TestAdmin, TestProvider, TestRegistry, TestResult, TestStore, email_of,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{KeyId, Purpose};
@@ -962,14 +962,16 @@ mod tests {
         fixture.registry.shutdown(Some(Duration::ZERO)).await;
 
         assert_eq!(started.elapsed(), Duration::ZERO);
-        assert!(fixture
-            .registry
-            .inner
-            .follow_tasks
-            .tasks
-            .lock()
-            .await
-            .is_empty());
+        assert!(
+            fixture
+                .registry
+                .inner
+                .follow_tasks
+                .tasks
+                .lock()
+                .await
+                .is_empty()
+        );
         assert!(!fixture.registry.inner.follow_tasks.owns_background_work());
         Ok(())
     }

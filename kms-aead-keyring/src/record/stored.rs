@@ -4,8 +4,8 @@
 use std::collections::HashSet;
 use std::str::FromStr;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use jiff::Timestamp;
 use kms_aead::providers::KmsKeyVersion;
 use kms_aead::signing::Signature;
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use super::canonical::{canonical_json, CanonicalError};
+use super::canonical::{CanonicalError, canonical_json};
 use super::{
     Compromise, KeyAlgorithm, KeyVersion, KeyVersionState, KeyringAlgorithms, KeyringId,
     KeyringRecord, RetainedDek, VersionState,
@@ -316,9 +316,10 @@ impl KeyringRecord {
             }
             *last = Some(key_id);
             if let Some(encrypted_dek) = version.encrypted_dek()
-                && !seen_deks.insert(encrypted_dek.value()) {
-                    return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
-                }
+                && !seen_deks.insert(encrypted_dek.value())
+            {
+                return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
+            }
         }
         for purpose in Purpose::ALL {
             let in_state = |state| {
@@ -406,7 +407,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
             }
             (encrypted_dek, None) => encrypted_dek,
             (None, Some(_)) if kind == KeyVersionState::Destroyed => {
-                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id));
             }
             (None, Some(_)) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
         };
@@ -425,11 +426,11 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 reencrypt_range,
             },
             (KeyVersionState::Destroyed, Some(_)) => {
-                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id))
+                return Err(RecordInvalidReason::DestroyedWithMaterial(key_id));
             }
             (_, None) => return Err(RecordInvalidReason::MissingMaterial(key_id)),
             (KeyVersionState::Active, Some(_)) if compromised.is_some() => {
-                return Err(RecordInvalidReason::CompromisedActive(key_id))
+                return Err(RecordInvalidReason::CompromisedActive(key_id));
             }
             (KeyVersionState::Active, Some(encrypted_dek)) => match reencrypt_range {
                 Some(range) if range.end().is_none() => VersionState::Active {
@@ -439,7 +440,7 @@ impl TryFrom<StoredVersion> for KeyVersion {
                 _ => return Err(RecordInvalidReason::ReencryptRangeInvalid(key_id)),
             },
             (KeyVersionState::Pending, Some(_)) if compromised.is_some() => {
-                return Err(RecordInvalidReason::CompromisedPending(key_id))
+                return Err(RecordInvalidReason::CompromisedPending(key_id));
             }
             (KeyVersionState::Pending, Some(encrypted_dek)) => match reencrypt_range {
                 None => VersionState::Pending(encrypted_dek),

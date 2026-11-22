@@ -22,7 +22,7 @@ use kms_aead::{
     KmsAeadResult, Plaintext,
 };
 use secret_vault_value::SecretValue;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// The text each side encrypts for the other, an application newtype stored as the UTF-8 bytes of
 /// its string, as Tink's side writes and reads it.

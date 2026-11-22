@@ -331,7 +331,7 @@ mod tests {
     use crate::encodings::BigQuery;
     use crate::errors::{InteropError, KeyVersionError};
     use crate::test_support::{
-        email_of, TestAdmin, TestKeyring, TestProvider, TestRegistry, TestResult, TENANT,
+        TENANT, TestAdmin, TestKeyring, TestProvider, TestRegistry, TestResult, email_of,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{

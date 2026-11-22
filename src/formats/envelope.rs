@@ -93,25 +93,25 @@ pub(crate) fn split_encrypted_dek_and_bare_value(value: &[u8]) -> KmsAeadResult<
         [0x00, 0x00, 0x00, 0x00, ..] => {
             return Err(KmsAeadEncryptionError::legacy_format(
                 "the length-prefixed envelope layout",
-            ))
+            ));
         }
         [0x00, ..] => {}
         [0x01, ..] => {
             return Err(KmsAeadEncryptionError::legacy_format(
                 "the envelope layout v1",
-            ))
+            ));
         }
         [_, ..] => {
             return Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_CIPHER_TEXT_LAYOUT",
                 "The cipher text starts with a byte that starts no layout",
-            ))
+            ));
         }
         [] => {
             return Err(KmsAeadEncryptionError::create(
                 "UNKNOWN_CIPHER_TEXT_LAYOUT",
                 "Empty cipher text has no layout",
-            ))
+            ));
         }
     }
     let invalid = || {

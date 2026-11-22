@@ -13,21 +13,21 @@
 //! ```
 
 use std::io;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
-use axum::{body::Body, Router};
+use axum::{Router, body::Body};
 use axum_streams::StreamBodyAs;
-use futures::{stream, TryStreamExt};
+use futures::{TryStreamExt, stream};
+use kms_aead::KmsAeadEnvelope;
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::stream::EncryptingStream;
-use kms_aead::KmsAeadEnvelope;
 use reqwest_streams::JsonStreamResponse;
 use serde::{Deserialize, Serialize};
 

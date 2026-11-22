@@ -12,7 +12,7 @@ use std::fmt::Display;
 use std::future::Future;
 
 use kms_aead::cache::DekCacheOutcome;
-use tracing::{debug_span, field, Instrument, Span};
+use tracing::{Instrument, Span, debug_span, field};
 
 use crate::errors::{KeyringResult, RegressionRule};
 use crate::metrics;

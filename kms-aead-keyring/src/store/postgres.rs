@@ -15,8 +15,8 @@ use tokio_postgres::types::ToSql;
 use tokio_postgres::{AsyncMessage, Client, Config, Connection, Socket};
 
 use super::{
-    join_tasks_until, Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind,
-    StoreOperation, Stored, Swap, WatchEvent,
+    Deletion, KeyringStore, KeyringWatch, Revalidation, StoreKind, StoreOperation, Stored, Swap,
+    WatchEvent, join_tasks_until,
 };
 use crate::errors::{Identifier, IdentifierRule, KeyringResult};
 use crate::{KeyringError, KeyringId, KeyringRecord};

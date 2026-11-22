@@ -25,9 +25,9 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use kms_aead::KekRef;
 use kms_aead::backends::AeadBackend;
 use kms_aead::cache::DekCache;
-use kms_aead::KekRef;
 use tokio::sync::watch;
 use tokio::time::Instant;
 
@@ -38,13 +38,13 @@ use crate::record_signing::MaybeRecordSigner;
 use crate::record_signing::RecordVerifier;
 use crate::spans::{self, LoadChanged, LoadReason, Reload};
 use crate::store::{KeyringStore, KeyringWatch, Revalidation, Stored, WatchEvent};
+use crate::{KeyId, KeyVersion, KeyVersionState, KeyringError, KeyringId, KeyringRecord, Purpose};
 #[cfg(feature = "admin")]
 use crate::{
     errors::RecordConflictError,
     record::RecordEdit,
     store::{Deletion, Swap},
 };
-use crate::{KeyId, KeyVersion, KeyVersionState, KeyringError, KeyringId, KeyringRecord, Purpose};
 
 /// The cached record of one keyring, and the store it came from.
 pub(crate) struct RecordCache<S: KeyringStore, B> {
@@ -137,12 +137,13 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// refreshing it.
     pub(crate) async fn current(&self) -> Arc<KeyringRecord> {
         if self.revalidation_due()
-            && let Ok(refresh) = self.refresh.try_lock() {
-                // Another call may have revalidated between the check and the lock.
-                if self.revalidation_due() {
-                    self.revalidate(&refresh, LoadReason::Ttl).await;
-                }
+            && let Ok(refresh) = self.refresh.try_lock()
+        {
+            // Another call may have revalidated between the check and the lock.
+            if self.revalidation_due() {
+                self.revalidate(&refresh, LoadReason::Ttl).await;
             }
+        }
         self.record()
     }
 
@@ -505,11 +506,12 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
                 self.swap(&refresh, signer, edit, &stored.revision).await?
             };
             if let Some(revision) = revision
-                && self.store.delete(&self.id, &revision).await? == Deletion::Deleted {
-                    self.take_deletion(&refresh, Found::Shredded)?;
-                    spans::record_cas_retries(conflicts);
-                    return Ok(());
-                }
+                && self.store.delete(&self.id, &revision).await? == Deletion::Deleted
+            {
+                self.take_deletion(&refresh, Found::Shredded)?;
+                spans::record_cas_retries(conflicts);
+                return Ok(());
+            }
             spans::write_conflict(&self.id, conflicts.saturating_add(1));
         }
         Err(self.conflict(cas_retries))

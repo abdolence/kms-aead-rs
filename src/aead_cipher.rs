@@ -5,7 +5,7 @@ use secret_vault_value::SecretValue;
 use crate::backends::AeadBackend;
 use crate::backends::{Failure, Nonce};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadUnsupportedAlgorithmError};
-use crate::formats::{tink_output_prefix, Bare, Randomized, TINK_OUTPUT_PREFIX_LEN};
+use crate::formats::{Bare, Randomized, TINK_OUTPUT_PREFIX_LEN, tink_output_prefix};
 use crate::types::checked_key_bytes;
 use crate::{
     AeadAlgorithm, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,

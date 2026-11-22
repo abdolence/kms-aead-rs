@@ -299,8 +299,7 @@ mod tests {
     const P256_SIGNATURE_S: &str =
         "f1da77f32ca85798256a744107f37ee99015734455067b3d7d3eb841142fbeb8";
     /// The P-256 signature of the book's test vectors, whose `s` takes a leading `0x00`.
-    const P256_SIGNATURE_DER: &str =
-        "304502204c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b\
+    const P256_SIGNATURE_DER: &str = "304502204c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b\
                        022100f1da77f32ca85798256a744107f37ee99015734455067b3d7d3eb841142fbeb8";
 
     #[test]
@@ -364,9 +363,11 @@ mod tests {
             matches!(&refused, Err(error) if error.code() == "SIGNING_ALGORITHM_MISMATCH"),
             "{refused:?}"
         );
-        assert!(ed25519
-            .ensure_algorithm(&signing_key, SigningAlgorithm::Ed25519)
-            .is_ok());
+        assert!(
+            ed25519
+                .ensure_algorithm(&signing_key, SigningAlgorithm::Ed25519)
+                .is_ok()
+        );
     }
 
     #[test]

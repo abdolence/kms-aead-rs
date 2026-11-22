@@ -6,8 +6,8 @@ use std::marker::PhantomData;
 
 use secret_vault_value::SecretValue;
 
-use crate::backends::{AeadBackend, Failure, HmacSha512, Nonce, Tag};
 use crate::AeadAlgorithm;
+use crate::backends::{AeadBackend, Failure, HmacSha512, Nonce, Tag};
 
 pub(crate) const STREAM_SALT_LEN: usize = 24;
 pub(crate) const STREAM_KEY_COMMITMENT_LEN: usize = 32;

@@ -157,7 +157,7 @@ mod tests {
 
     use super::*;
     use crate::test_support::{
-        TestAdmin, TestBackend, TestProvider, TestRegistry, TestResult, TENANT,
+        TENANT, TestAdmin, TestBackend, TestProvider, TestRegistry, TestResult,
     };
     use crate::testing::MemoryKeyringStore;
     use crate::{

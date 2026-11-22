@@ -2,8 +2,8 @@ use std::num::NonZeroU32;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use kms_aead::formats::PrivateKeyFormat;
 use kms_aead::mac::MacAlgorithm;
 use kms_aead::providers::{
@@ -17,7 +17,7 @@ use serde_json::Value;
 use super::*;
 use crate::store::{KeyringStore, Swap};
 use crate::test_support::{
-    error_code_of, TestBackend, TestProvider, TestResult, TestStore, TENANT,
+    TENANT, TestBackend, TestProvider, TestResult, TestStore, error_code_of,
 };
 use crate::testing::MemoryKeyringStore;
 use crate::{
@@ -430,11 +430,13 @@ async fn a_new_signed_keyring_under_the_id_of_a_shredded_one_opens() -> TestResu
         .open(TestProvider::new("tenant-42-kek")?, TENANT)
         .await?;
     assert!(reopened.record().signature().is_some());
-    assert!(reopened
-        .record()
-        .versions()
-        .iter()
-        .any(|version| version.state() != KeyVersionState::Destroyed));
+    assert!(
+        reopened
+            .record()
+            .versions()
+            .iter()
+            .any(|version| version.state() != KeyVersionState::Destroyed)
+    );
     Ok(())
 }
 

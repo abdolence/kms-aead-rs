@@ -463,7 +463,7 @@ impl RecordEdit {
                 return Err(KeyringError::record_invalid(
                     &self.record.id,
                     RecordInvalidReason::MissingMaterial(key_id),
-                ))
+                ));
             }
         }
         self.record.updated_at = now;

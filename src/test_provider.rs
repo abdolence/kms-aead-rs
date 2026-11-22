@@ -1,8 +1,8 @@
 //! A provider for unit tests that need no KMS, whose "encrypted" key is the plaintext it is given,
 //! the backend those tests run on, and the waits the concurrency tests share.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use secret_vault_value::SecretValue;
@@ -259,8 +259,7 @@ pub(crate) const OTHER_INVOICE_PAYLOAD: &[u8] =
 
 /// The PKCS#8 of the RFC 8032 section 7.1 test 1 key, whose key id is `0x90facafe`.
 #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
-pub(crate) const ED25519_PKCS8_DER: &str =
-    "302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+pub(crate) const ED25519_PKCS8_DER: &str = "302e020100300506032b6570042204209d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
 
 /// The RFC 8032 test 1 signature of the pre-image of [`INVOICE_PAYLOAD`].
 #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]

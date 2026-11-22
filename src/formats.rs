@@ -48,7 +48,7 @@ pub use keys::{PrivateKeyFormat, PublicKeyFormat, SymmetricKeyFormat};
 
 mod tink;
 pub(crate) use tink::{
-    serialize_tink_key, split_tink_output_prefix, tink_output_prefix, TINK_OUTPUT_PREFIX_LEN,
+    TINK_OUTPUT_PREFIX_LEN, serialize_tink_key, split_tink_output_prefix, tink_output_prefix,
 };
 pub use tink::{TinkKeyType, TinkKeyset};
 
@@ -217,9 +217,9 @@ fn split_u8_length_prefixed(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::KmsAeadError;
-    use crate::test_provider::{encrypted_by_test_provider, CountingKmsProvider, TestKmsProvider};
     use crate::KekRef;
+    use crate::errors::KmsAeadError;
+    use crate::test_provider::{CountingKmsProvider, TestKmsProvider, encrypted_by_test_provider};
     use secret_vault_value::SecretValue;
 
     const KEY: [u8; 32] = [0x42; 32];

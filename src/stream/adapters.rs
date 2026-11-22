@@ -7,15 +7,15 @@ use std::future::poll_fn;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 use super::gatherer::{ChunkError, ChunkGatherer};
 use super::{StreamDecryptor, StreamEncryptor};
+use crate::KmsAeadResult;
 use crate::backends::{AeadBackend, Failure};
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError, KmsAeadSystemError};
-use crate::KmsAeadResult;
 
 /// A failure inside an adapter: of the streamed value, or of the source or the sink the caller
 /// gave it. The wrappers return each as an `io::Error`, and the two functions as a
@@ -449,10 +449,10 @@ impl<B: AeadBackend, R: AsyncRead + Unpin> DecryptingReader<B, R> {
                     return Poll::Ready(Err(AdapterError::Stream {
                         kind,
                         error: error.clone(),
-                    }))
+                    }));
                 }
                 ReaderState::SourceFailed => {
-                    return Poll::Ready(Err(AdapterError::Source(AdapterError::broken_pipe())))
+                    return Poll::Ready(Err(AdapterError::Source(AdapterError::broken_pipe())));
                 }
                 ReaderState::Gathering => ready!(self.poll_gather(cx))?,
             }
@@ -584,7 +584,7 @@ pub async fn read_stream_header<R: AsyncRead + Unpin>(
             Ok(0) => {
                 return Err(KmsAeadEncryptionError::stream_length(
                     "The source ended inside the header of the streamed value",
-                ))
+                ));
             }
             Ok(read) => filled += read,
             Err(error) => return Err(AdapterError::Source(error).into_stream()),

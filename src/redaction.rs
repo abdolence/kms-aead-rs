@@ -99,7 +99,9 @@ impl FieldPaths {
         let mut index = 0;
         while index < paths.len() {
             if !Self::is_field_path(paths[index].as_bytes()) {
-                panic!("a field path is field names joined by `.`, with `[]` after a field for the items of its array");
+                panic!(
+                    "a field path is field names joined by `.`, with `[]` after a field for the items of its array"
+                );
             }
             index += 1;
         }
@@ -780,11 +782,7 @@ fn input_class(bytes: &[u8]) -> &'static str {
 }
 
 fn plural(count: usize, one: &'static str, many: &'static str) -> &'static str {
-    if count == 1 {
-        one
-    } else {
-        many
-    }
+    if count == 1 { one } else { many }
 }
 
 #[cfg(test)]
@@ -912,7 +910,11 @@ mod tests {
 
         assert_eq!(
             outline::<InvoiceSizes>(cut),
-            format!("{} bytes: {{<key, 6 chars>: <string, 8 chars>, <key, 8 chars>: <string, 17 chars>, <key, 8 chars>: <string, 3 chars>, <key, 5 chars>: [{{<key, 11 chars>: <string, 13 chars>, <key, 8 chars>: <number, 1 char>}}, {{<key, 11 chars>: <string, 10 chars>, <error: EOF while parsing a string at line 1 column {}>", cut.len(), cut.len())
+            format!(
+                "{} bytes: {{<key, 6 chars>: <string, 8 chars>, <key, 8 chars>: <string, 17 chars>, <key, 8 chars>: <string, 3 chars>, <key, 5 chars>: [{{<key, 11 chars>: <string, 13 chars>, <key, 8 chars>: <number, 1 char>}}, {{<key, 11 chars>: <string, 10 chars>, <error: EOF while parsing a string at line 1 column {}>",
+                cut.len(),
+                cut.len()
+            )
         );
     }
 

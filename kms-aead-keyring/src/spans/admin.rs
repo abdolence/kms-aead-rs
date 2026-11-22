@@ -1,10 +1,10 @@
 //! The spans and events of the administrative calls, which the `admin` feature adds.
 
-use tracing::{debug_span, field, Span};
+use tracing::{Span, debug_span, field};
 
 use super::{
-    DEK_CACHE_BYPASSED, FIELD_DEK_CACHE, FIELD_ERROR_CODE, FIELD_FROM_KEY_ID, FIELD_KEYRING,
-    FIELD_KEY_ID, FIELD_PURPOSE, FIELD_TO_KEY_ID,
+    DEK_CACHE_BYPASSED, FIELD_DEK_CACHE, FIELD_ERROR_CODE, FIELD_FROM_KEY_ID, FIELD_KEY_ID,
+    FIELD_KEYRING, FIELD_PURPOSE, FIELD_TO_KEY_ID,
 };
 use crate::{KeyId, KeyringError, KeyringId, Purpose};
 

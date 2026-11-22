@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use super::{LocalKekId, LocalKekVersion};
-use crate::errors::KmsAeadSystemError;
 use crate::KmsAeadResult;
+use crate::errors::KmsAeadSystemError;
 
 /// The versions of a local KEK, each with what it holds and where it was loaded from, and the
 /// version that encrypts: the highest unless set to another.

@@ -389,7 +389,7 @@ mod tests {
     use crate::providers::{
         KmsKeyVersion, LocalAsymmetricKek, LocalAsymmetricKmsProvider, LocalKekId, LocalKekVersion,
     };
-    use crate::test_provider::{assert_code, RsaOaepSuite, RsaTestBackend};
+    use crate::test_provider::{RsaOaepSuite, RsaTestBackend, assert_code};
     use crate::{AsymmetricKekAlgorithm, Encrypted, KmsAeadEnvelope};
 
     const AAD: &[u8] = b"orders/1042";
@@ -589,9 +589,9 @@ mod tests {
     #[cfg(feature = "ring")]
     #[test]
     fn ring_refuses_rsa_at_construction() -> KmsAeadResult<()> {
+        use crate::BackendAlgorithm;
         use crate::backends::Ring;
         use crate::errors::KmsAeadError;
-        use crate::BackendAlgorithm;
         let (reader, _) = reader_and_producer()?;
 
         let result = PublicKeyKekProvider::<Ring>::new(reader.public_key(None)?);

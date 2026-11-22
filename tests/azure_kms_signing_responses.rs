@@ -300,8 +300,8 @@ async fn a_key_that_is_not_ec_p256_or_is_another_version_is_refused() -> KmsAead
 }
 
 #[tokio::test]
-async fn a_refusal_is_a_signature_error_with_the_key_vault_code_and_throttling_a_network_error(
-) -> KmsAeadResult<()> {
+async fn a_refusal_is_a_signature_error_with_the_key_vault_code_and_throttling_a_network_error()
+-> KmsAeadResult<()> {
     let denied = p256_signer(answering(
         StatusCode::Forbidden,
         r#"{"error": {"code": "Forbidden", "message": "The user does not have keys sign permission"}}"#

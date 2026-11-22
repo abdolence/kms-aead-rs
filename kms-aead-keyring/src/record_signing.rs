@@ -4,19 +4,19 @@
 #[cfg(feature = "admin")]
 use std::future::Future;
 
+#[cfg(feature = "admin")]
+use kms_aead::KmsAeadResult;
+use kms_aead::KmsProvider;
 use kms_aead::backends::AeadBackend;
 #[cfg(feature = "admin")]
 use kms_aead::signing::{KmsSigningProvider, Signature, Signer, VerifyingKey};
 use kms_aead::signing::{Verifier, VerifyingKeySet};
-#[cfg(feature = "admin")]
-use kms_aead::KmsAeadResult;
-use kms_aead::KmsProvider;
 
-use crate::errors::{KeyringError, KeyringResult, RecordSignatureInvalidError};
-use crate::spans;
 #[cfg(feature = "admin")]
 use crate::KeyringId;
 use crate::KeyringRecord;
+use crate::errors::{KeyringError, KeyringResult, RecordSignatureInvalidError};
+use crate::spans;
 
 /// How a [`KeyringRegistry`](crate::KeyringRegistry) treats the signatures of the records it
 /// reads, at `open`, every revalidation, reload and watch signal, and before every administrative

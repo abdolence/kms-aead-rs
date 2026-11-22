@@ -5,8 +5,8 @@ use std::time::Duration;
 use ::firestore::errors::FirestoreError;
 use ::firestore::gcloud_sdk::google::firestore::v1::Document;
 use ::firestore::{
-    firestore_document_from_serializable, serialize_as_null, FirestoreCollectionId, FirestoreDb,
-    FirestoreTimestamp, FirestoreValue, FirestoreWritePrecondition,
+    FirestoreCollectionId, FirestoreDb, FirestoreTimestamp, FirestoreValue,
+    FirestoreWritePrecondition, firestore_document_from_serializable, serialize_as_null,
 };
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;

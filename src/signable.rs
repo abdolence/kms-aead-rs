@@ -283,11 +283,11 @@ mod json_tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
+    use crate::KeyId;
     use crate::mac::{Authenticator, MacAlgorithm};
     use crate::providers::{LocalSigningKeyName, LocalSigningProvider};
     use crate::signing::{Signer, SigningAlgorithm, Verifier, VerifyingKeySet};
-    use crate::test_provider::{renderings, TestBackend};
-    use crate::KeyId;
+    use crate::test_provider::{TestBackend, renderings};
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     struct Order {

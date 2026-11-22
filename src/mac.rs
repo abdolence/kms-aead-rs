@@ -333,7 +333,7 @@ impl<B: AeadBackend> Authenticator<B> {
 mod tests {
     use super::*;
     use crate::test_provider::{
-        error_code_of, Invoice, TestBackend, INVOICE_PAYLOAD, OTHER_INVOICE_PAYLOAD,
+        INVOICE_PAYLOAD, Invoice, OTHER_INVOICE_PAYLOAD, TestBackend, error_code_of,
     };
 
     const KEY_ID: KeyId = KeyId::new(3_221_225_473);

@@ -23,8 +23,8 @@ use kms_aead::signing::{Signer, Verifier, VerifyingKeySet};
 use kms_aead::*;
 use secret_vault_value::SecretValue;
 use std::error::Error;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 mod common;
 #[cfg(any(feature = "aws-lc-rs", feature = "rustcrypto"))]

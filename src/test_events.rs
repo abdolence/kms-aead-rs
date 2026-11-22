@@ -6,9 +6,9 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use tracing::field::{Field, Visit};
 use tracing::subscriber::{DefaultGuard, NoSubscriber};
 use tracing::{Dispatch, Event, Level, Subscriber};
+use tracing_subscriber::Layer;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::layer::{Context, SubscriberExt};
-use tracing_subscriber::Layer;
 
 /// One captured event: its level, its target and its fields by name, strings as they are and other
 /// values as `Debug` writes them.

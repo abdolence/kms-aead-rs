@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
-use prost::encoding::{self, WireType};
 use prost::Message;
+use prost::encoding::{self, WireType};
 use secret_vault_value::SecretValue;
 
 use crate::errors::KmsAeadEncryptionError;

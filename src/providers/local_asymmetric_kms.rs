@@ -451,7 +451,7 @@ impl<B: AeadBackend> KmsAeadDecryptionProvider for LocalAsymmetricKmsProvider<B>
 mod tests {
     use super::*;
     use crate::test_provider::{
-        assert_code, renderings, RsaOaepSuite, RsaTestBackend, RSA_1024_PKCS8_DER,
+        RSA_1024_PKCS8_DER, RsaOaepSuite, RsaTestBackend, assert_code, renderings,
     };
 
     const ORDERS: &str = "orders";
@@ -782,9 +782,9 @@ mod tests {
     #[cfg(feature = "ring")]
     #[test]
     fn ring_refuses_rsa_at_construction() {
+        use crate::BackendAlgorithm;
         use crate::backends::Ring;
         use crate::errors::KmsAeadError;
-        use crate::BackendAlgorithm;
         let unsupported = |result: KmsAeadResult<LocalAsymmetricKmsProvider<Ring>>| {
             matches!(result, Err(KmsAeadError::UnsupportedAlgorithm(error))
                 if error.algorithm

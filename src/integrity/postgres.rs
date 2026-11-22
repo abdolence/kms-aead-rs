@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use bytes::BytesMut;
-use postgres_types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 
 use super::{Mac, Signature, Signed, WithMac};
 

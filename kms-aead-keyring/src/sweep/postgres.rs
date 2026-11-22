@@ -1,7 +1,7 @@
 use std::error::Error;
 
 use bytes::BytesMut;
-use tokio_postgres::types::{to_sql_checked, FromSql, IsNull, ToSql, Type};
+use tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 
 use super::EncryptionMarker;
 
@@ -38,12 +38,12 @@ mod tests {
     use tokio_postgres::NoTls;
 
     use super::*;
-    use crate::test_support::TestResult;
     use crate::KeyringError;
+    use crate::test_support::TestResult;
 
     #[test]
-    fn bytea_holds_the_marker_bytes_and_is_read_through_the_marker_check(
-    ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    fn bytea_holds_the_marker_bytes_and_is_read_through_the_marker_check()
+    -> Result<(), Box<dyn Error + Sync + Send>> {
         let marker = EncryptionMarker::of_epoch(258);
         let mut written = BytesMut::new();
 

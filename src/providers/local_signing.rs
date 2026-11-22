@@ -190,7 +190,7 @@ impl LocalSigningKey {
                 derived
             }
             (SigningAlgorithm::EcdsaP256Sha256, None) => {
-                return Err(invalid("holds a P-256 key without its public point"))
+                return Err(invalid("holds a P-256 key without its public point"));
             }
         };
         let verifying_key = VerifyingKey::from_raw(key.algorithm, public_key)
@@ -482,7 +482,7 @@ mod tests {
     use super::*;
     use crate::signing::{Signer, Verifier};
     use crate::test_provider::{
-        renderings, Invoice, TestBackend, ED25519_PKCS8_DER, INVOICE_PAYLOAD, P256_PKCS8_DER,
+        ED25519_PKCS8_DER, INVOICE_PAYLOAD, Invoice, P256_PKCS8_DER, TestBackend, renderings,
     };
 
     const INVOICES: &str = "invoices";
@@ -546,10 +546,12 @@ mod tests {
             let variable = format!("KMS_AEAD_LOCAL_SIGNING_TEST_{}", &pkcs8_der[..8]);
             // SAFETY: test-only. No other test uses this variable; the exposure left is a concurrent
             // read of a different one by another test thread.
-            unsafe { std::env::set_var(
-                &variable,
-                SecretValue::new(hex::decode(pkcs8_der).unwrap()).as_sensitive_base64_str(),
-            ) };
+            unsafe {
+                std::env::set_var(
+                    &variable,
+                    SecretValue::new(hex::decode(pkcs8_der).unwrap()).as_sensitive_base64_str(),
+                )
+            };
             let keys = [
                 LocalSigningKey::from_secret(
                     local_signing_key_version(1),

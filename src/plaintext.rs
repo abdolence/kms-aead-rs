@@ -5,7 +5,7 @@ use secret_vault_value::SecretValue;
 
 use crate::errors::{KmsAeadEncryptionError, KmsAeadError};
 use crate::redaction::{JsonRedaction, RedactedJson, ShapeOnly};
-use crate::{spans, KmsAeadResult, SignedPayloadType};
+use crate::{KmsAeadResult, SignedPayloadType, spans};
 
 /// A type an [`Encrypted`](crate::Encrypted) value decrypts to, and the bytes it is encrypted as.
 ///

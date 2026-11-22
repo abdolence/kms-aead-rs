@@ -878,7 +878,7 @@ impl KeyVersion {
         match (self.compromised(), version.compromised()) {
             (Some(_), None) => return Err(RegressionRule::CompromiseCleared(key_id)),
             (Some(held), Some(compromise)) if held.at != compromise.at => {
-                return Err(RegressionRule::CompromiseAltered(key_id))
+                return Err(RegressionRule::CompromiseAltered(key_id));
             }
             _ => {}
         }

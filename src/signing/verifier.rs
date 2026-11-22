@@ -203,7 +203,7 @@ mod tests {
         KmsSigningProvider, RawSignature, Signer, SigningAlgorithm, SigningInput, SigningKeyRef,
     };
     use crate::test_provider::{
-        error_code_of, Invoice, TestBackend, INVOICE_PAYLOAD, OTHER_INVOICE_PAYLOAD,
+        INVOICE_PAYLOAD, Invoice, OTHER_INVOICE_PAYLOAD, TestBackend, error_code_of,
     };
 
     /// Another document type with the same bytes as an [`Invoice`].
@@ -255,7 +255,7 @@ mod tests {
                 verifier.verify(&test_invoice(), &detached)?,
                 signer.verifying_key()
             );
-            assert_eq!(verifier.verify_signed(&attached)?.0 .0, INVOICE_PAYLOAD);
+            assert_eq!(verifier.verify_signed(&attached)?.0.0, INVOICE_PAYLOAD);
             assert_eq!(
                 verifier.verify_digest(&digest, &by_digest)?,
                 signer.verifying_key()

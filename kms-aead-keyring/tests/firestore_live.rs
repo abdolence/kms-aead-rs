@@ -9,7 +9,7 @@ use firestore::{FirestoreCollectionId, FirestoreDb};
 use futures_util::future::try_join_all;
 use kms_aead_keyring::store::{FirestoreKeyringStore, KeyringStore, WatchEvent};
 use kms_aead_keyring::{KeyringId, KeyringResult};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -40,9 +40,11 @@ async fn hundreds_of_keyrings_share_one_stream() -> TestResult {
                 .map(|watch| tokio::time::timeout(Duration::from_secs(60), watch.next())),
         )
         .await?;
-        assert!(first_states
-            .iter()
-            .all(|event| *event == Some(WatchEvent::Changed)));
+        assert!(
+            first_states
+                .iter()
+                .all(|event| *event == Some(WatchEvent::Changed))
+        );
 
         let document = json!({ "written": true });
         try_join_all(ids.iter().map(|id| {

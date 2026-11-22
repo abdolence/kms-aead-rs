@@ -6,8 +6,8 @@
 
 use std::collections::BTreeMap;
 
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 #[cfg(feature = "aws-lc-rs")]
 use super::AwsLc;

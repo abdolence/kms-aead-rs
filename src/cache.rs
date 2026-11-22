@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(test)]
 use std::sync::Weak;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::{Duration, Instant};
 
@@ -338,9 +338,10 @@ impl Snapshot {
         let mut slots = self.slots.clone();
         slots.remove(&encrypted_dek);
         if let Some(oldest) = self.oldest.as_ref()
-            && slots.len() >= max_entries.get() {
-                slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
-            }
+            && slots.len() >= max_entries.get()
+        {
+            slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
+        }
         slots.insert(encrypted_dek, slot);
         slots.into()
     }
@@ -542,13 +543,13 @@ mod tests {
     use futures::executor::block_on;
 
     use super::*;
+    use crate::KmsAeadEncryptionProvider;
     use crate::errors::KmsAeadError;
     use crate::formats::TinkKeyType;
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider,
-        CONCURRENT_CALLS,
+        CONCURRENT_CALLS, CountingKmsProvider, TestKmsProvider, encrypted_by_test_provider,
+        let_spawned_tasks_wait,
     };
-    use crate::KmsAeadEncryptionProvider;
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
@@ -670,8 +671,8 @@ mod tests {
 
     #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     #[tokio::test]
-    async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry(
-    ) -> KmsAeadResult<()> {
+    async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry()
+    -> KmsAeadResult<()> {
         use crate::providers::{LocalKekId, LocalKmsProvider};
         use crate::test_provider::TestBackend;
         use crate::{AeadAlgorithm, AeadCipher};
