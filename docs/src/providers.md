@@ -146,7 +146,6 @@ impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for Counted<P> {
     }
 }
 
-// Decryption is a trait of its own, implemented where the wrapped provider decrypts.
 impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for Counted<P> {
     async fn decrypt_data_encryption_key(
         &self,
