@@ -71,6 +71,9 @@ impl AwsKmsSigningKeyRef {
 /// encryption errors.
 ///
 /// The principal needs `kms:Sign` and `kms:GetPublicKey` on the key.
+///
+/// A clone shares the SDK client and its connection pool.
+#[derive(Clone)]
 pub struct AwsKmsSigningProvider {
     client: aws_sdk_kms::Client,
     signing_key: SigningKeyRef,

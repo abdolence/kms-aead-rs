@@ -80,6 +80,9 @@ impl AwsKmsProviderOptions {
 ///
 /// With an `RSA_*` key of usage `ENCRYPT_DECRYPT` it also decrypts an encrypted DEK that a
 /// producer encrypted with the key's public half, which [`public_key`](Self::public_key) returns.
+///
+/// A clone shares the SDK client and its connection pool.
+#[derive(Clone)]
 pub struct AwsKmsProvider {
     client: aws_sdk_kms::Client,
     options: AwsKmsProviderOptions,

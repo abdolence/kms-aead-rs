@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::future::Future;
+use std::sync::Arc;
 
 use der::asn1::UintRef;
 use der::{Decode, Sequence};
@@ -13,6 +14,8 @@ use crate::{KmsAeadResult, KmsProvider};
 /// [`KmsAeadEncryptionProvider`](crate::KmsAeadEncryptionProvider): write each method that
 /// returns a future as an `async fn` whose future is `Send`, and put no key material or signature
 /// bytes in its errors. Signers are generic over their provider: the trait has no `dyn` form.
+/// `Arc<P>` and `&P` implement it for every `P` that does, so that one provider serves many
+/// signers.
 ///
 /// The name carries no `KmsAead` prefix, since the prefix names the crate's AEAD facade and its
 /// errors, and a signing provider is not an AEAD.
@@ -48,6 +51,50 @@ pub trait KmsSigningProvider: Send + Sync {
     /// The KMS's error, `INVALID_PUBLIC_KEY` when the key does not parse,
     /// `SIGNING_ALGORITHM_MISMATCH` when it is not of [`algorithm`](Self::algorithm).
     fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send;
+}
+
+/// A provider shared behind an `Arc` is `P`: every method is `P`'s.
+impl<P: KmsSigningProvider> KmsSigningProvider for Arc<P> {
+    fn signing_key(&self) -> &SigningKeyRef {
+        (**self).signing_key()
+    }
+
+    fn algorithm(&self) -> SigningAlgorithm {
+        (**self).algorithm()
+    }
+
+    fn sign(
+        &self,
+        input: SigningInput<'_>,
+    ) -> impl Future<Output = KmsAeadResult<RawSignature>> + Send {
+        (**self).sign(input)
+    }
+
+    fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send {
+        (**self).verifying_key()
+    }
+}
+
+/// A provider borrowed by a signer that does not own it is `P`: every method is `P`'s.
+impl<P: KmsSigningProvider> KmsSigningProvider for &P {
+    fn signing_key(&self) -> &SigningKeyRef {
+        (**self).signing_key()
+    }
+
+    fn algorithm(&self) -> SigningAlgorithm {
+        (**self).algorithm()
+    }
+
+    fn sign(
+        &self,
+        input: SigningInput<'_>,
+    ) -> impl Future<Output = KmsAeadResult<RawSignature>> + Send {
+        (**self).sign(input)
+    }
+
+    fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send {
+        (**self).verifying_key()
+    }
 }
 
 /// What a signing provider is asked to sign, per algorithm.
@@ -248,6 +295,36 @@ impl Display for SigningKeyRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
+    #[tokio::test]
+    async fn signers_over_an_arc_and_a_reference_share_one_provider() -> KmsAeadResult<()> {
+        use std::sync::Arc;
+
+        use crate::providers::{LocalSigningKeyName, LocalSigningProvider};
+        use crate::signing::{Signer, Verifier};
+        use crate::test_provider::{Invoice, TestBackend, INVOICE_PAYLOAD};
+
+        let provider = Arc::new(LocalSigningProvider::<TestBackend>::ephemeral(
+            LocalSigningKeyName::try_from("invoices".to_string())?,
+            SigningAlgorithm::Ed25519,
+        )?);
+        let verifier = Verifier::<TestBackend>::new(provider.verifying_keys())?;
+        let over_arc = Signer::<_, TestBackend>::new(Arc::clone(&provider)).await?;
+        let over_reference = Signer::<_, TestBackend>::new(provider.as_ref()).await?;
+        let invoice = Invoice(INVOICE_PAYLOAD.to_vec());
+
+        for signature in [
+            over_arc.sign(&invoice).await?,
+            over_reference.sign(&invoice).await?,
+        ] {
+            assert_eq!(
+                verifier.verify(&invoice, &signature)?,
+                over_arc.verifying_key()
+            );
+        }
+        Ok(())
+    }
 
     const P256_SIGNATURE_R: &str =
         "4c3ea9da3b6bddbbd0baec3c94f0cb50e295d017c25b444a97a10dc3119a2e1b";

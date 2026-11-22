@@ -46,6 +46,12 @@
   `with_options(key_ref, options, credential)`. `options` is the new
   `AzureKmsSigningProviderOptions`, `#[non_exhaustive]` and built as `AzureKmsProviderOptions` is:
   `AzureKmsSigningProviderOptions::new().with_client_options(client_options)`.
+- `KmsAeadEncryptionProvider`, `KmsAeadDecryptionProvider` and `KmsSigningProvider` are implemented
+  for `Arc<P>` and `&P` of every provider `P` that implements them, every method forwarded, so that
+  one provider serves many keyrings, envelopes or signers. An application's own impl of one of
+  these traits for a reference to its provider, such as `impl KmsAeadEncryptionProvider for
+  &MyProvider`, conflicts with them and is deleted. `AwsKmsProvider` and `AwsKmsSigningProvider`
+  are `Clone`, and a clone shares the SDK client.
 - An administrative write refuses a keyring record that holds a member this release does not know,
   at any depth, with `KeyringError::RecordInvalid` and the reason
   `RecordInvalidReason::UnknownMembers`, before the compare-and-swap. An earlier release rewrote

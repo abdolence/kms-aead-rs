@@ -443,6 +443,20 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_producer_encrypts_with_a_public_key() -> KmsAeadResult<()> {
+        let (_, producer) = reader_and_producer()?;
+        let producer = std::sync::Arc::new(producer);
+
+        assert!(KmsAeadEncryptionProvider::encrypts_with_public_key(
+            &std::sync::Arc::clone(&producer)
+        ));
+        assert!(KmsAeadEncryptionProvider::encrypts_with_public_key(
+            &producer.as_ref()
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn a_pinned_producer_refuses_a_key_of_another_fingerprint() -> KmsAeadResult<()> {
         let (reader, producer) = reader_and_producer()?;
         let public_key = reader.public_key(None)?;
