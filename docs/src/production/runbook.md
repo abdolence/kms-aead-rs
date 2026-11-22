@@ -81,7 +81,7 @@ reuse of every value the writer encrypted until it renewed the DEK.
 
 Harmless by itself, since decrypting needs the KMS. If the attacker may also gain `Decrypt` on the
 KEK, follow the IAM over-grant steps. If the attacker may also write the keyring store, see
-[the next case](#a-version-the-administrative-job-did-not-create) and the store-writer threat in
+[A version the administrative job did not create](#a-version-the-administrative-job-did-not-create) and the store-writer threat in
 [Keyring deployment](../security.md#keyring-deployment).
 
 ## A version the administrative job did not create
@@ -107,8 +107,8 @@ This case starts from the `ERROR` event of a refused record that moves backwards
 in the record that the administrative job's log does not show. The event's `rule` names the version
 that moved backwards, except `the re-encryption epoch moved back`, which names none: compare the
 versions of the record in the store with the job's log to find the one it did not create. Either
-means that something other than the job wrote the record: a restore, which [the next
-case](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the store.
+means that something other than the job wrote the record: a restore, which [The keyring record was deleted or
+corrupted](#the-keyring-record-was-deleted-or-corrupted) covers, or a writer of the store.
 
 ## The keyring record was deleted or corrupted
 
@@ -135,19 +135,22 @@ A running process takes a record gone from the store as a shredded keyring, see
 [Record cache](../keyring/record-cache.md#when-the-store-fails-or-misbehaves). At its next
 revalidation, forced `reload` or administrative call it destroys every version of its cached record
 in memory, evicts the keyring's keys from the DEK cache and logs a `WARN`, "The keyring store no
-longer holds the keyring record; every version is destroyed in this process". A
-[shred](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred) writes the record
-with every version destroyed before it deletes it: a process that read that record logs an `INFO` for the deletion instead, and the process that ran
-the shred logs nothing. A process that first reads the store after the delete, such as one without
-push, logs the `WARN` for a shred too, so the `WARN` does not tell an accidental deletion from an
-erasure by itself. Its handles then
+longer holds the keyring record; every version is destroyed in this process". Its handles then
 fail: `encrypt` with `NoActiveVersion`, `decrypt` with `KeyVersionDestroyed`, and `reload` with
 `RecordMissing`. Within the bound of
 [how late a change is seen](../keyring/record-cache.md#how-late-a-change-is-seen), an accidental
 deletion stops every process that holds the keyring. New processes fail at `open` with
-`RecordMissing`. A record that fails to parse or validate is a failed read instead: a running
-process keeps its cached record and logs the `WARN` of a failed revalidation, and new processes
-fail at `open` with `RecordInvalid`.
+`RecordMissing`.
+
+A [shred](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred) writes the
+record with every version destroyed before it deletes it. A process that read that record logs an
+`INFO` for the deletion instead, and the process that ran the shred logs nothing. A process that
+first reads the store after the delete, such as one without push, logs the `WARN` for a shred too,
+so the `WARN` does not tell an accidental deletion from an erasure by itself.
+
+A record that fails to parse or validate is a failed read instead: a running process keeps its
+cached record and logs the `WARN` of a failed revalidation, and new processes fail at `open` with
+`RecordInvalid`.
 
 ## A KMS outage
 
