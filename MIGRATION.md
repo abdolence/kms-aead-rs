@@ -22,6 +22,9 @@
   from `OperationOutcome::value`. In `kms_aead::stream`, `__HeaderGatherer` is
   `StreamHeaderGatherer`, `__read_header` is `read_stream_header`, and
   `__check_stream_algorithm(&cipher)` is `cipher.check_stream_algorithm()`.
+- `KmsAeadNetworkError` does not implement `PartialEq` and `Eq`, as the other error structs do not,
+  so that a later release can give it a root cause. Code that compared two network errors compares
+  their `public.code`.
 
 ## 0.33
 

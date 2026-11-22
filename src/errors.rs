@@ -370,7 +370,7 @@ impl std::error::Error for KmsAeadSystemError {
 }
 
 /// See [`KmsAeadError::NetworkError`].
-#[derive(Debug, Eq, PartialEq, Clone, Builder)]
+#[derive(Debug, Clone, Builder)]
 #[non_exhaustive]
 pub struct KmsAeadNetworkError {
     /// The error code.
