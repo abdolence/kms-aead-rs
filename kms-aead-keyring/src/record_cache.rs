@@ -450,7 +450,8 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// record's signature: a signing admin's write re-signs a signed record and refuses an
     /// unsigned one, except `sign_record`, and an unsigned admin's write refuses a signed record,
     /// except `dangerously_unsign_record`. Each refusal comes before any store write, and a new
-    /// signature is verified under the signer's own key before the compare-and-swap.
+    /// signature is verified under the signer's own key before the compare-and-swap. Under
+    /// `Required`, an unsigned admin's write is refused before any store call.
     pub(crate) async fn write<T, R: MaybeRecordSigner>(
         &self,
         cas_retries: u32,
@@ -458,6 +459,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         write: SignedWrite,
         mut change: impl AsyncFnMut(&mut RecordEdit) -> KeyringResult<T>,
     ) -> KeyringResult<T> {
+        self.verifier.check_writer(signer, &self.id)?;
         let refresh = self.refresh.lock().await;
         for conflicts in 0..=cas_retries {
             let stored = self.read_for_write(&refresh).await?;
@@ -481,12 +483,14 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// lifecycle change, then deletes the record at the revision written, and takes the
     /// deletion. A record whose every version is destroyed already is deleted without a write,
     /// and a record already gone is taken as deleted. A conflict of the write or of the delete
-    /// starts again from a new read, up to `cas_retries` times.
+    /// starts again from a new read, up to `cas_retries` times. The refusals are those of
+    /// [`write`](Self::write).
     pub(crate) async fn shred<R: MaybeRecordSigner>(
         &self,
         cas_retries: u32,
         signer: &R,
     ) -> KeyringResult<()> {
+        self.verifier.check_writer(signer, &self.id)?;
         let refresh = self.refresh.lock().await;
         for conflicts in 0..=cas_retries {
             let stored = match self.read_for_write(&refresh).await {

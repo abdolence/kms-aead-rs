@@ -14,6 +14,8 @@ use kms_aead::KmsProvider;
 
 use crate::errors::{KeyringError, KeyringResult, RecordSignatureInvalidError};
 use crate::spans;
+#[cfg(feature = "admin")]
+use crate::KeyringId;
 use crate::KeyringRecord;
 
 /// How a [`KeyringRegistry`](crate::KeyringRegistry) treats the signatures of the records it
@@ -96,6 +98,26 @@ impl<B: AeadBackend> RecordVerifier<B> {
                 ),
             )
             .into())
+        }
+    }
+
+    /// Refuses a write of the record of `keyring` by `signer` that this verification would refuse
+    /// to read: under `Required`, a record written without a signer, so that a registry never
+    /// creates, changes, caches or unsigns a record that every reader under the policy refuses.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::RecordSignerMissing`] under `Required` for [`NoRecordSigner`].
+    #[cfg(feature = "admin")]
+    pub(crate) fn check_writer<R: MaybeRecordSigner>(
+        &self,
+        signer: &R,
+        keyring: &KeyringId,
+    ) -> KeyringResult<()> {
+        if self.required && signer.signer_key().is_none() {
+            Err(KeyringError::RecordSignerMissing(keyring.clone()))
+        } else {
+            Ok(())
         }
     }
 

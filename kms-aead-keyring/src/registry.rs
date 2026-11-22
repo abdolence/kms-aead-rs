@@ -299,7 +299,11 @@ where
     ///
     /// The provider's and the store's errors; [`KeyringError::RecordExists`] when the store
     /// already holds a record, and when the keyring is open, before any call to the store or the
-    /// KMS; `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement an algorithm of
+    /// KMS; [`KeyringError::RecordSignerMissing`] under
+    /// [`RecordSignaturePolicy::Required`], whose readers refuse an unsigned record, before any
+    /// call to the store or the KMS; [`KeyringError::RecordSignatureRemoved`], before the record
+    /// is written, when this process took the deletion of a signed record of `id`;
+    /// `UNSUPPORTED_ALGORITHM` from kms-aead when `B` does not implement an algorithm of
     /// `algorithms`; and [`KeyringError::DeterministicDisabled`] for a deterministic algorithm
     /// without the `deterministic` feature.
     pub async fn create<P>(
@@ -320,9 +324,9 @@ where
     ///
     /// # Errors
     ///
-    /// As [`create`](Self::create), the signer's errors,
-    /// [`KeyringError::RecordSignatureInvalid`] when its signature does not verify under its own
-    /// key, before the record is written, and `SIGNING_KEY_UNKNOWN` when
+    /// As [`create`](Self::create), without `RecordSignerMissing` and `RecordSignatureRemoved`,
+    /// the signer's errors, [`KeyringError::RecordSignatureInvalid`] when its signature does not
+    /// verify under its own key, before the record is written, and `SIGNING_KEY_UNKNOWN` when
     /// `options.record_signatures` does not hold the signer's
     /// [`verifying_key`](RecordSigner::verifying_key), before any call to the KMS or the store.
     pub async fn create_signed<P, R>(
@@ -347,7 +351,9 @@ where
     /// # Errors
     ///
     /// The errors of [`open`](Self::open) and [`create`](Self::create), but not
-    /// `RecordMissing` or `RecordExists`.
+    /// `RecordMissing` or `RecordExists`. Under [`RecordSignaturePolicy::Required`] it opens a
+    /// signed record, and fails with `RecordSignerMissing` where it would create one, after the
+    /// read that finds none and before any KMS call.
     pub async fn open_or_create<P>(
         &self,
         provider: P,
@@ -396,21 +402,16 @@ where
         P: KmsAeadDecryptionProvider + 'static,
         R: MaybeRecordSigner,
     {
-        let store = &*self.inner.store;
         let mut created = false;
         let cache = self
             .inner
             .cache(&id, provider.kek(), async || {
-                let record = self
-                    .new_record(&provider, &signer, &id, &algorithms)
-                    .await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => {
-                        created = true;
-                        Ok(Stored { record, revision })
-                    }
-                    Swap::Conflict => Err(KeyringError::RecordExists(id.clone())),
-                }
+                let stored = self
+                    .create_record(&provider, &signer, &id, &algorithms)
+                    .await?
+                    .ok_or_else(|| KeyringError::RecordExists(id.clone()))?;
+                created = true;
+                Ok(stored)
             })
             .await?;
         if !created {
@@ -442,12 +443,12 @@ where
                 if let Some(stored) = RecordCache::read(store, verifier, &id).await? {
                     return Ok(stored);
                 }
-                let record = self
-                    .new_record(&provider, &signer, &id, &algorithms)
-                    .await?;
-                match store.compare_and_swap(&record, None).await? {
-                    Swap::Written(revision) => Ok(Stored { record, revision }),
-                    Swap::Conflict => RecordCache::read(store, verifier, &id)
+                match self
+                    .create_record(&provider, &signer, &id, &algorithms)
+                    .await?
+                {
+                    Some(stored) => Ok(stored),
+                    None => RecordCache::read(store, verifier, &id)
                         .await?
                         .ok_or_else(|| KeyringError::RecordMissing(id.clone())),
                 }
@@ -459,24 +460,39 @@ where
         ))
     }
 
-    /// The record of a new keyring, signed by `signer` unless it is [`NoRecordSigner`], the
-    /// signature verified under the signer's own key.
-    async fn new_record<P, R>(
+    /// Writes the record of a new keyring `id` where the store holds none, signed by `signer`
+    /// unless it is [`NoRecordSigner`], the signature verified under the signer's own key, and
+    /// returns it, or `None` when the store holds a record already. A record the registry would
+    /// refuse to read is refused before the write: an unsigned one under `Required`, before any
+    /// KMS call, and, when this process took the deletion of a record of `id`, one that the
+    /// deleted record refuses, as the open after the write would.
+    async fn create_record<P, R>(
         &self,
         provider: &P,
         signer: &R,
         id: &KeyringId,
         algorithms: &KeyringAlgorithms,
-    ) -> KeyringResult<KeyringRecord>
+    ) -> KeyringResult<Option<Stored<S::Revision>>>
     where
         P: KmsAeadEncryptionProvider,
         R: MaybeRecordSigner,
     {
-        algorithms
+        let verifier = &self.inner.verifier;
+        verifier.check_writer(signer, id)?;
+        let record = algorithms
             .new_record::<P, B>(id.clone(), provider)
             .await?
             .signed_by::<B, R>(signer)
-            .await
+            .await?;
+        if let Some(deleted) = self.inner.keyrings.deleted_record(id) {
+            RecordCache::<S, B>::check_recreated(verifier, &deleted, &record)?;
+        }
+        Ok(
+            match self.inner.store.compare_and_swap(&record, None).await? {
+                Swap::Written(revision) => Some(Stored { record, revision }),
+                Swap::Conflict => None,
+            },
+        )
     }
 }
 

@@ -123,7 +123,11 @@ pub enum KeyringError {
     /// signature that does not verify under its signer's own key before the write.
     RecordSignatureInvalid(RecordSignatureInvalidError),
     /// A write by a `KeyringAdmin` without a record signer over a signed record, `sign_record`
-    /// included, other than `dangerously_unsign_record`. Refused before any store write.
+    /// included, other than `dangerously_unsign_record`, refused before any store write. Or,
+    /// under [`RecordSignaturePolicy::Required`](crate::RecordSignaturePolicy::Required), any
+    /// write without one, refused before any KMS or store call: `KeyringRegistry::create`,
+    /// `open_or_create` where it would create the record, and every write of such an admin,
+    /// `dangerously_unsign_record` included.
     RecordSignerMissing(KeyringId),
     /// An unsigned record read under
     /// [`RecordSignaturePolicy::VerifyIfSigned`](crate::RecordSignaturePolicy::VerifyIfSigned) by a
@@ -427,8 +431,8 @@ impl Display for KeyringError {
             ),
             KeyringError::RecordSignerMissing(keyring) => write!(
                 f,
-                "The keyring record of {keyring} is signed, and this administrative handle has no \
-                 record signer to sign what it writes"
+                "The keyring record of {keyring} must be signed, and this write has no record \
+                 signer"
             ),
             KeyringError::RecordSignatureRemoved(keyring) => write!(
                 f,

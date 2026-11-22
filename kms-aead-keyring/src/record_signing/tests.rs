@@ -1,4 +1,6 @@
 use std::num::NonZeroU32;
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -14,7 +16,9 @@ use serde_json::Value;
 
 use super::*;
 use crate::store::{KeyringStore, Swap};
-use crate::test_support::{error_code_of, TestBackend, TestProvider, TestResult, TENANT};
+use crate::test_support::{
+    error_code_of, TestBackend, TestProvider, TestResult, TestStore, TENANT,
+};
 use crate::testing::MemoryKeyringStore;
 use crate::{
     Compromise, KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId,
@@ -67,7 +71,6 @@ const CANONICAL_DOCUMENT: &str = concat!(
 
 type TestSigner = Signer<LocalSigningProvider<TestBackend>, TestBackend>;
 type SigningAdmin = KeyringAdmin<MemoryKeyringStore, TestProvider, TestBackend, TestSigner>;
-type TestRegistry = KeyringRegistry<MemoryKeyringStore, TestBackend>;
 
 /// A signer on the Ed25519 key of the book's test vectors.
 async fn test_vector_signer() -> KmsAeadResult<TestSigner> {
@@ -91,10 +94,10 @@ async fn new_signer() -> KmsAeadResult<TestSigner> {
     .await
 }
 
-fn registry_with_policy(
-    store: &MemoryKeyringStore,
+fn registry_with_policy<S: KeyringStore + Clone>(
+    store: &S,
     verification: RecordSignaturePolicy,
-) -> TestRegistry {
+) -> KeyringRegistry<S, TestBackend> {
     KeyringRegistry::new(
         store.clone(),
         KeyringRegistryOptions::new()
@@ -485,6 +488,120 @@ async fn a_signer_the_registry_does_not_trust_is_refused_before_any_write() -> T
     assert_eq!(error_code_of(created), "SIGNING_KEY_UNKNOWN");
     assert_eq!(error_code_of(opened_or_created), "SIGNING_KEY_UNKNOWN");
     assert!(store.load(&other).await?.is_none());
+    Ok(())
+}
+
+/// Under `Required`, a registry creates no record without a signer, which every reader under the
+/// policy would refuse.
+#[tokio::test]
+async fn an_unsigned_create_under_required_is_refused_before_any_kms_call_or_write() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let store = TestStore::new(&memory, Duration::ZERO);
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let registry = registry_with_policy(
+        &store,
+        RecordSignaturePolicy::Required(verifying_key_set_of(&new_signer().await?)),
+    );
+
+    let created = registry
+        .create(provider.clone(), TENANT, KeyringAlgorithms::new())
+        .await;
+    let opened_or_created = registry
+        .open_or_create(provider.clone(), TENANT, KeyringAlgorithms::new())
+        .await;
+
+    assert_eq!(
+        (
+            error_code_of(created),
+            error_code_of(opened_or_created),
+            provider.calls.encryptions.load(Ordering::SeqCst),
+            store.calls.loads.load(Ordering::SeqCst),
+        ),
+        (
+            "RECORD_SIGNER_MISSING".to_string(),
+            "RECORD_SIGNER_MISSING".to_string(),
+            0,
+            1
+        )
+    );
+    assert!(memory.load(&TENANT).await?.is_none());
+    Ok(())
+}
+
+/// Under `Required`, an administration without a signer writes nothing, not even the unsigned
+/// record of `dangerously_unsign_record`.
+#[tokio::test]
+async fn an_unsigned_admin_under_required_is_refused_before_any_kms_or_store_call() -> TestResult {
+    let memory = MemoryKeyringStore::new();
+    let store = TestStore::new(&memory, Duration::ZERO);
+    let provider = TestProvider::new("tenant-42-kek")?;
+    let signer = new_signer().await?;
+    let registry = registry_with_policy(
+        &store,
+        RecordSignaturePolicy::Required(verifying_key_set_of(&signer)),
+    );
+    registry
+        .create_signed(provider.clone(), signer, TENANT, KeyringAlgorithms::new())
+        .await?;
+    let unsigned_admin = registry.admin(provider.clone(), TENANT).await?;
+    let encryptions = provider.calls.encryptions.load(Ordering::SeqCst);
+    let loads = store.calls.loads.load(Ordering::SeqCst);
+
+    let rotated = unsigned_admin.rotate(Purpose::Randomized).await;
+    let unsigned = unsigned_admin.dangerously_unsign_record().await;
+
+    assert_eq!(
+        (
+            error_code_of(rotated),
+            error_code_of(unsigned),
+            provider.calls.encryptions.load(Ordering::SeqCst) - encryptions,
+            store.calls.loads.load(Ordering::SeqCst) - loads,
+        ),
+        (
+            "RECORD_SIGNER_MISSING".to_string(),
+            "RECORD_SIGNER_MISSING".to_string(),
+            0,
+            0
+        )
+    );
+    let stored = memory.load(&TENANT).await?.ok_or("no record")?;
+    assert!(stored.record.signature().is_some());
+    Ok(())
+}
+
+/// A create under the id of a signed record this process took the deletion of is checked against
+/// that record before the write, so that a record the process refuses never reaches the store.
+#[tokio::test]
+async fn a_create_the_deleted_record_refuses_is_never_written() -> TestResult {
+    let store = MemoryKeyringStore::new();
+    let signer = test_vector_signer().await?;
+    let registry = registry_with_policy(
+        &store,
+        RecordSignaturePolicy::VerifyIfSigned(verifying_key_set_of(&signer)),
+    );
+    registry
+        .create_signed(
+            TestProvider::new("tenant-42-kek")?,
+            signer,
+            TENANT,
+            KeyringAlgorithms::new(),
+        )
+        .await?
+        .dangerously_shred()
+        .await?;
+
+    let created = registry
+        .create(
+            TestProvider::new("tenant-42-kek")?,
+            TENANT,
+            KeyringAlgorithms::new(),
+        )
+        .await;
+
+    assert_eq!(
+        (error_code_of(created), store.load(&TENANT).await?.is_none()),
+        ("RECORD_SIGNATURE_REMOVED".to_string(), true)
+    );
     Ok(())
 }
 

@@ -52,7 +52,9 @@ Rotations and sweeps run per keyring: the administrative job loops over the tena
 An application that creates a keyring on a tenant's first request builds with the `admin` feature
 and runs with the administrative rights, so it is trusted as the administration is, see
 [Permissions: applications and administration](../production/permissions.md) and
-[Keyring limits](../security.md#keyring-limits).
+[Keyring limits](../security.md#keyring-limits). Under `RecordSignaturePolicy::Required` it holds
+the record signer too and calls `open_or_create_signed`: `open_or_create` fails with
+`RECORD_SIGNER_MISSING` where it would create the record.
 
 ### What many keyrings cost
 
