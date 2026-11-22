@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-af349c54.js";
+            window.path_to_searchindex_js = "../searchindex-11fe4803.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -198,10 +198,10 @@ value: one encryption per new DEK, one decryption per response per DEK cache TTL
 <a href="../dek-caching.html">DEK caching and reuse</a>.</li>
 </ul>
 <h2 id="the-server"><a class="header" href="#the-server">The server</a></h2>
-<p>The handler reads the <code>Content-Type</code> of the <code>StreamBodyAs</code> response, which names the format, and
-takes its body, the encoded bytes. The handler replaces the content type with an opaque one, since
-the body is ciphertext, and keeps the format’s in a header of its own. The AAD names the export, so
-that a body of another export does not decrypt under it:</p>
+<p>The handler takes the body of the <code>StreamBodyAs</code> response, the encoded bytes, and sends it with an
+opaque content type, since the body is ciphertext. The format is part of the endpoint’s contract,
+so the response does not name it. The AAD names the export, so that a body of another export does
+not decrypt under it:</p>
 <pre><code class="language-rust">use std::sync::Arc;
 
 use axum::body::Body;
@@ -229,18 +229,16 @@ async fn export_orders(
     State(envelope): State&lt;Arc&lt;Envelope&gt;&gt;,
 ) -&gt; Result&lt;impl IntoResponse, (StatusCode, String)&gt; {
     let orders = stream::iter((0..50_000).map(|id| Order { id }));
-    let encoded = StreamBodyAs::json_nl(orders).into_response();
-    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
+    let encoded = StreamBodyAs::json_nl(orders).into_response().into_body();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_data_stream());
 
     Ok((
         [(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
-        inner_content_type.map(|value| [("x-inner-content-type", value)]),
         Body::from_stream(ciphertext),
     ))
 }</code></pre>
@@ -249,12 +247,11 @@ async fn export_orders(
 a boxed error, and <code>Body::from_stream</code> takes the encrypted chunks the same way, so no error is
 mapped by hand. An error in the items ends the body with an error, never with a clean end.</p>
 <h2 id="the-client"><a class="header" href="#the-client">The client</a></h2>
-<p>reqwest-streams decodes a <code>reqwest::Response</code>, so the decrypted bytes are wrapped in one that
-carries the format’s content type, which the decoder reads. The source of <code>decrypting_stream</code> is
+<p>reqwest-streams decodes a <code>reqwest::Response</code>, so the decrypted bytes are wrapped in one. The
+decoder reads the body only, in the format the client asks for. The source of <code>decrypting_stream</code> is
 <code>Unpin</code>, so the byte stream of the response goes through <code>Box::pin</code>. The decoder takes the longest
 record it accepts, which bounds what a server can make the client buffer:</p>
-<pre><code class="language-rust">use axum::http::header::CONTENT_TYPE;
-use axum::http::Response;
+<pre><code class="language-rust">use axum::http::Response;
 use futures::TryStreamExt;
 use kms_aead::backends::Ring;
 use kms_aead::providers::LocalKmsProvider;
@@ -274,19 +271,12 @@ async fn download_orders(
     url: &amp;str,
 ) -&gt; Result&lt;u64, Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
     let response = reqwest::get(url).await?.error_for_status()?;
-    let inner_content_type = response
-        .headers()
-        .get("x-inner-content-type")
-        .cloned()
-        .ok_or("the response names no inner content type")?;
 
     let plaintext = envelope
         .decrypting_stream(EXPORT_AAD, Box::pin(response.bytes_stream()))
         .await?
         .map_err(std::io::Error::other);
-    let decrypted = Response::builder()
-        .header(CONTENT_TYPE, inner_content_type)
-        .body(reqwest::Body::wrap_stream(plaintext))?;
+    let decrypted = Response::new(reqwest::Body::wrap_stream(plaintext));
 
     let mut orders = reqwest::Response::from(decrypted).json_nl_stream::&lt;Order&gt;(MAX_ORDER_LEN);
     let mut total_cents = 0;
