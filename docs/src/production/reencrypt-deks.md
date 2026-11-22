@@ -342,18 +342,15 @@ disabled. Wait before the sweep and again before trusting the check, see the pag
 
 A swept value's DEK is under the new version only, so a rollback keeps the new version enabled:
 disabling it makes every swept value and every value written since the rotation unreadable, until
-it is enabled again. Three providers make the old version encrypt again:
+it is enabled again. Where the provider makes the old version encrypt again, rolling back to it
+needs no new sweep. To retire the new version afterwards, run the procedure above with the old
+version as the current one.
 
-- Cloud KMS: make the old version the primary version again;
-- Azure Key Vault: pin the old version in `AzureKmsKeyRef`;
-- the local KMS: point `with_encrypting_version` at the old version.
+The rule per provider:
 
-Rolling back to the old version needs no new sweep. To retire the new version afterwards, run the
-procedure above with the old version as the current one.
-
-The other two always encrypt under the latest key. Vault Transit encrypts under the latest version
-of the key, since the provider names no version in its request, and no older version becomes the
-latest again: a rotation is undone by rotating once more and sweeping to that third version. AWS KMS
-keeps every earlier key material decrypting and none can be disabled, so a rotation needs no
-rollback there.
+- [Google Cloud KMS](../providers/gcp.md#rolling-back-a-rotation);
+- [AWS KMS](../providers/aws.md#rolling-back-a-rotation);
+- [Azure Key Vault](../providers/azure.md#rolling-back-a-rotation);
+- [HashiCorp Vault Transit](../providers/hc-vault-transit.md#rolling-back-a-rotation);
+- [the local KMS](../providers/local.md#rolling-back-a-rotation).
 
