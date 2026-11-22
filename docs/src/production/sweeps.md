@@ -8,6 +8,12 @@ shows nothing scanned. A run that stops part-way or fails on some records needs 
 next run's marker query returns exactly the records it did not write. Retiring the old version is
 a separate step of the administrative job, see [Retiring the old version](#retiring-the-old-version).
 
+This page covers the mechanism every store shares: the encryption marker, the queries for the
+records behind and under a version, re-encrypting a value, running the job, retiring the old
+version and the trust of re-encrypted values. Read it before the page of your store, which holds
+that store's schema, queries and example; the rotation procedure that calls a sweep is
+[Rotate keys and re-encrypt values](./rotation.md).
+
 ## The encryption marker
 
 A keyring record counts a re-encryption epoch, which moves on by one with every administrative write
@@ -23,15 +29,12 @@ that makes a version active:
 | `retire`, `reinstate`, `destroy`, `reencrypt_deks`, `dangerously_destroy_all_versions` | unchanged |
 
 A write moves the epoch once, however many versions it makes active.
-`KeyringRecord::encryption_marker()` returns it as an `EncryptionMarker`:
-
-```text
-[0x01][re-encryption epoch: u32 BE]
-```
+`KeyringRecord::encryption_marker()` returns it as an `EncryptionMarker`, which holds the epoch.
 
 Markers compare as their epochs do, and so do their bytes, in Firestore, PostgreSQL and BigQuery
-alike. `EncryptionMarker::ENVELOPE` is epoch 0, `01 00 00 00 00`, the marker of a record of envelope
-values, below the marker of every keyring.
+alike, see [Encryption markers](../formats/keyring-records.md#encryption-markers) for the bytes.
+`EncryptionMarker::ENVELOPE` is epoch 0, the marker of a record of envelope values, below the
+marker of every keyring.
 
 Each record of the application keeps the marker in one field beside its encrypted fields. A write
 that touches any encrypted field of a record takes one `Encryptor` from `keyring.encryptor()`,
@@ -60,7 +63,7 @@ column that a range query can use, and the column answers two questions:
   in the `ReencryptRange` of the version. A query that returns nothing makes the destroy safe.
 
 The marker is an epoch and not a key version because the fields of a row are under different
-purposes, randomised, deterministic and beacon, and the versions of each purpose rotate
+purposes, such as randomised, deterministic and beacon, and the versions of each purpose rotate
 independently. A version marker would need a column per purpose. The epoch is one counter that the
 keyring moves on whenever any version becomes active. An `Encryptor` is a snapshot of all active
 versions at one epoch, and each version records the epochs it was active in, so both questions are
@@ -152,14 +155,18 @@ record, and an encryptor taken before a `mark_compromised` would otherwise move 
 compromised version. The re-encryption fails with `KeyringError::EncryptorOutdated`, after reloading
 the cached record when it lacks the version or holds it as pending, under the same rate limit as
 `decrypt`'s reload for a key id it lacks. The encryptor keeps its own record, so that its marker
-still names every version the write encrypts under. The write is safe to retry: it takes a new
-encryptor and runs again, and the new encryptor, taken from the reloaded record, finds the value
-current or encrypts it under its active version. Inside `reload_min_interval` of another such reload
-the cached record may not have moved yet, and the retry fails the same way until it does. When the
-store's record itself holds the version as pending, as for a value from another keyring whose key id
-is pending here or after a restore from an older backup, every retry fails with
-`ENCRYPTOR_OUTDATED`, at no more than one store read per `reload_min_interval`. A key id the
-reloaded record lacks too fails with `KeyVersionUnknown`.
+still names every version the write encrypts under.
+
+How such a failure ends:
+
+- the write is safe to retry: it takes a new encryptor from the reloaded record, which finds the
+  value current or encrypts it under its active version;
+- inside `reload_min_interval` of another such reload the cached record may not have moved yet,
+  and the retry fails the same way until it does;
+- when the store's record itself holds the version as pending, as for a value from another keyring
+  whose key id is pending here or after a restore from an older backup, every retry fails with
+  `ENCRYPTOR_OUTDATED`, at no more than one store read per `reload_min_interval`;
+- a key id the reloaded record lacks too fails with `KeyVersionUnknown`.
 
 A beacon cannot be re-encrypted: it is a MAC of the plaintext.
 `encryptor.is_current(beacon.key_id())` applies the same rule to it: `true` under the active beacon
@@ -311,18 +318,26 @@ println!("{report:?}");
 # }
 ```
 
-The `SweepReport` counts every candidate once in `scanned`, and once in `reencrypted`, `skipped` or
-`failed`. A candidate the stream returns as an error is counted in `scanned` and `failed`, and
-logged at `WARN` with the error's `Display`; a stream whose query cannot go on returns its error and
-ends. A re-encryption that fails does not stop the sweep either: it is counted in `failed` and
-logged at `WARN` with the candidate's `Display` and the error's `Display`. A re-encryption that
-fails with `EncryptorOutdated` is one of them: a process with a newer record rewrote the record
-after the query returned it. The record is counted as failed, and the next run's query no longer
+The `SweepReport` counts every candidate once in `scanned`, and once more in `reencrypted`,
+`skipped` or `failed`:
+
+| Outcome | Counted in | Logged |
+|---|---|---|
+| The re-encryption wrote the record | `reencrypted`, and `reencrypted_from_compromised` when the value was under a compromised version | not logged |
+| The record needed nothing, or changed after it was read | `skipped` | not logged |
+| The re-encryption failed | `failed` | `WARN` with the candidate's `Display` and the error's `Display` |
+| The stream returned the candidate as an error | `failed` | `WARN` with the error's `Display` |
+
+A failure does not stop the sweep. A stream whose query cannot go on returns its error and ends. A
+re-encryption that fails with `EncryptorOutdated` is a failure of the second row: a process with a
+newer record rewrote the record after the query returned it, and the next run's query no longer
 returns it, because the process that encrypted it stamped a newer marker. A value under a version
-the store's record itself holds as pending, such as a value from another keyring whose key id is
-pending here, fails in every run instead. A candidate is the application's own type, such as a
-record id, a struct of key columns or the record itself, and its `Display` names the record and
-nothing else. A record id is often an entity id, so read the sweep's log as an administrative log.
+the store's record itself holds as pending fails in every run instead, see above. The events are in
+[Keyring events](../observability/spans-and-events.md#keyring-events).
+
+A candidate is the application's own type, such as a record id, a struct of key columns or the
+record itself, and its `Display` names the record and nothing else. A record id is often an entity
+id, so read the sweep's log as an administrative log.
 
 The stream returns `Result<T, E>` and the re-encryption `Result<ReencryptOutcome, E>`, with the
 application's own error type, any type that implements `Display`. The keyring's calls inside it
@@ -341,7 +356,8 @@ destroys it, on its `KeyringAdmin`:
 
 1. wait, from the promotion, the longest time any process may run without a successful refresh of
    its record, see [Staged rotation](../keyring/lifecycle.md#staged-rotation), and check that no
-   process logged "The keyring record could not be revalidated" meanwhile. Until then a process
+   process logged a failed revalidation meanwhile, see
+   [Keyring events](../observability/spans-and-events.md#keyring-events). Until then a process
    on the old record encrypts under the old version and stamps the old epoch, see
    [Finding records behind](#finding-records-behind);
 2. run the sweep until a run reports nothing scanned and nothing failed;

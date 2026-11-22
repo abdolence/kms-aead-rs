@@ -96,7 +96,8 @@ WHEN MATCHED THEN UPDATE SET email = p.email, encryption_marker = @encryption_ma
 ```
 
 The rows stream from the application's BigQuery client, one query of
-`SELECT id, email, encryption_marker FROM users WHERE encryption_marker < @current`, and `sweep::reencrypt_records_batched` cuts them into batches. Each batch is re-encrypted through one
+`SELECT id, email, encryption_marker FROM users WHERE encryption_marker < @current`, and
+`sweep::reencrypt_records_batched` cuts them into batches. Each batch is re-encrypted through one
 encryptor, and the client runs the `MERGE` with `@encryption_marker` bound to the marker of the
 encryptor's record. Every row of a batch goes into `@rows`, the current ones with their bytes as
 they are, so that each gets the marker:
