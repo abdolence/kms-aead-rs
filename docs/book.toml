@@ -16,6 +16,7 @@ create-missing = false
 default-theme = "navy"
 git-repository-url = "https://github.com/abdolence/kms-aead-rs"
 cname = "kms-aead-rust.abdolence.dev"
+additional-css = ["theme/tables.css"]
 
 [output.html.playground]
 runnable = false
