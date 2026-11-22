@@ -22,7 +22,8 @@ use axum::http::{HeaderValue, Response, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::{body::Body, Router};
-use futures::{stream, StreamExt, TryStreamExt};
+use axum_streams::StreamBodyAs;
+use futures::{stream, TryStreamExt};
 use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::stream::EncryptingStream;
@@ -63,30 +64,24 @@ impl Order {
 async fn export_orders(
     State(envelope): State<Arc<Envelope>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let orders = stream::iter((0..ORDERS).map(Order::sample)).map(Ok::<_, axum::Error>);
-    let encoded =
-        axum_streams::StreamBodyAs::new(axum_streams::JsonNewLineStreamFormat::new(), orders)
-            .into_response();
-    let (mut parts, encoded_body) = encoded.into_parts();
-    let inner_content_type = parts.headers.remove(CONTENT_TYPE);
+    let orders = stream::iter((0..ORDERS).map(Order::sample));
+    let encoded = StreamBodyAs::json_nl(orders).into_response();
+    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded_body.into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
 
-    let mut response = Response::new(Body::from_stream(ciphertext));
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/octet-stream"),
-    );
-    if let Some(inner_content_type) = inner_content_type {
-        response
-            .headers_mut()
-            .insert(INNER_CONTENT_TYPE, inner_content_type);
-    }
-    Ok(response)
+    Ok((
+        [(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        )],
+        inner_content_type.map(|value| [(INNER_CONTENT_TYPE, value)]),
+        Body::from_stream(ciphertext),
+    ))
 }
 
 #[tokio::main]

@@ -20,8 +20,8 @@ The encryption sits on the bytes of the body, between the format and the socket:
 
 ## The server
 
-The response of `StreamBodyAs` is taken apart: its body is the encoded bytes, and its
-`Content-Type` names the format. The handler replaces the content type with an opaque one, since
+The handler reads the `Content-Type` of the `StreamBodyAs` response, which names the format, and
+takes its body, the encoded bytes. The handler replaces the content type with an opaque one, since
 the body is ciphertext, and keeps the format's in a header of its own. The AAD names the export, so
 that a body of another export does not decrypt under it:
 
@@ -31,12 +31,11 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;
-use axum::http::{HeaderValue, Response, StatusCode};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum_streams::{JsonNewLineStreamFormat, StreamBodyAs};
+use axum_streams::StreamBodyAs;
 use futures::stream;
 use kms_aead::stream::EncryptingStream;
-# use futures::StreamExt;
 # use kms_aead::backends::Ring;
 # use kms_aead::providers::LocalKmsProvider;
 # use kms_aead::KmsAeadEnvelope;
@@ -52,26 +51,22 @@ const EXPORT_AAD: &[u8] = b"exports/orders/2026-10";
 
 async fn export_orders(
     State(envelope): State<Arc<Envelope>>,
-) -> Result<Response<Body>, (StatusCode, String)> {
-    let orders = stream::iter((0..50_000).map(|id| Order { id })).map(Ok::<_, axum::Error>);
-    let (mut parts, encoded) =
-        StreamBodyAs::new(JsonNewLineStreamFormat::new(), orders).into_response().into_parts();
-    let inner_content_type = parts.headers.remove(CONTENT_TYPE);
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let orders = stream::iter((0..50_000).map(|id| Order { id }));
+    let encoded = StreamBodyAs::json_nl(orders).into_response();
+    let inner_content_type = encoded.headers().get(CONTENT_TYPE).cloned();
 
     let encryptor = envelope
         .stream_encryptor(EXPORT_AAD)
         .await
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.code().to_string()))?;
-    let ciphertext = EncryptingStream::new(encryptor, encoded.into_data_stream());
+    let ciphertext = EncryptingStream::new(encryptor, encoded.into_body().into_data_stream());
 
-    let mut response = Response::new(Body::from_stream(ciphertext));
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-    if let Some(inner_content_type) = inner_content_type {
-        response.headers_mut().insert("x-inner-content-type", inner_content_type);
-    }
-    Ok(response)
+    Ok((
+        [(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
+        inner_content_type.map(|value| [("x-inner-content-type", value)]),
+        Body::from_stream(ciphertext),
+    ))
 }
 ```
 
