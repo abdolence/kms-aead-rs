@@ -31,6 +31,9 @@
 - `Signable::from_payload` takes the payload as `&[u8]`, borrowed from the attached value, so that
   `verify_signed` and `verify_with_mac` do not copy it. An application's own `Signable` impl takes
   `payload: &[u8]`, and copies the bytes where it keeps them, as in `Ok(Invoice(payload.to_vec()))`.
+- `AsymmetricKekProvider<B, P>` is `AsymmetricKekProvider<P, B>`: the provider first and the
+  backend second, as in `KmsAeadEnvelope<P, B>` and `Signer<P, B>`. Code that names the type swaps
+  its two parameters; `AsymmetricKekProvider::new` takes the same arguments.
 
 ## 0.33
 

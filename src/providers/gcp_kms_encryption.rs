@@ -796,8 +796,8 @@ mod tests {
         let (key_ref, kek_version) = live_rsa_key_ref();
         let reader = GcpKmsProvider::new(&key_ref).await?;
         let administration = KmsAeadEnvelope::<_, RsaTestBackend>::new(AsymmetricKekProvider::<
-            RsaTestBackend,
             _,
+            RsaTestBackend,
         >::new(
             reader.public_key(&kek_version).await?,
             reader.clone(),
