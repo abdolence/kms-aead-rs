@@ -544,12 +544,11 @@ mod tests {
     use super::*;
     use crate::errors::KmsAeadError;
     use crate::formats::TinkKeyType;
-    use crate::providers::{LocalKekId, LocalKmsProvider};
     use crate::test_provider::{
-        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestBackend,
-        TestKmsProvider, CONCURRENT_CALLS,
+        encrypted_by_test_provider, let_spawned_tasks_wait, CountingKmsProvider, TestKmsProvider,
+        CONCURRENT_CALLS,
     };
-    use crate::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider};
+    use crate::KmsAeadEncryptionProvider;
 
     const ORDERS_KEK: &str = "orders";
     const BILLING_KEK: &str = "billing";
@@ -669,9 +668,14 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(any(feature = "ring", feature = "aws-lc-rs", feature = "rustcrypto"))]
     #[tokio::test]
     async fn an_encrypted_dek_read_back_without_its_kek_version_hits_the_same_entry(
     ) -> KmsAeadResult<()> {
+        use crate::providers::{LocalKekId, LocalKmsProvider};
+        use crate::test_provider::TestBackend;
+        use crate::{AeadAlgorithm, AeadCipher};
+
         let provider = LocalKmsProvider::<TestBackend>::ephemeral(LocalKekId::try_from(
             ORDERS_KEK.to_string(),
         )?)?;
