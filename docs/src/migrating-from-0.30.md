@@ -216,55 +216,8 @@ that decrypts:
   `decrypt_data_encryption_key`, with the signature of 0.30.
 
 A provider of 0.30 fails to compile until its `decrypt_data_encryption_key` moves into an impl of
-the new trait. A wrapper implements each trait where the provider it wraps does:
-
-```rust
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use kms_aead::{
-    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadDecryptionProvider,
-    KmsAeadEncryptionProvider, KmsAeadResult,
-};
-use secret_vault_value::SecretValue;
-
-/// The provider `P`, with a count of its decryptions.
-struct Counted<P> {
-    inner: P,
-    decryptions: AtomicU64,
-}
-
-impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for Counted<P> {
-    fn kek(&self) -> &KekRef {
-        self.inner.kek()
-    }
-
-    async fn encrypt_data_encryption_key(
-        &self,
-        dek: &DataEncryptionKey,
-    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
-        self.inner.encrypt_data_encryption_key(dek).await
-    }
-
-    async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
-        self.inner.generate_key_material(len).await
-    }
-
-    fn encrypts_with_public_key(&self) -> bool {
-        self.inner.encrypts_with_public_key()
-    }
-}
-
-// The method of 0.30's impl, in an impl of its own.
-impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for Counted<P> {
-    async fn decrypt_data_encryption_key(
-        &self,
-        encrypted_dek: &EncryptedDataEncryptionKey,
-    ) -> KmsAeadResult<DataEncryptionKey> {
-        self.decryptions.fetch_add(1, Ordering::Relaxed);
-        self.inner.decrypt_data_encryption_key(encrypted_dek).await
-    }
-}
-```
+the new trait. A wrapper implements each trait where the provider it wraps does, see the example in
+[Your own provider](./providers.md#your-own-provider).
 
 Code generic over a provider names the trait its calls need. `KmsAeadDecryptionProvider` covers
 both, so code that encrypts and decrypts names it alone:

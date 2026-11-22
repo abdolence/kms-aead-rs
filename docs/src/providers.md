@@ -7,15 +7,20 @@ a type in `kms_aead::providers`, enabled by its feature:
 |---|---|---|
 | [Google Cloud KMS](./providers/gcp.md) | `GcpKmsProvider` | `gcp-kms-encryption` |
 | [AWS KMS](./providers/aws.md) | `AwsKmsProvider` | `aws-kms-encryption` |
-| [Azure Key Vault and Managed HSM](./providers/azure.md) | `AzureKmsProvider` | `azure-kms-encryption` |
+| [Azure Key Vault](./providers/azure.md), and Managed HSM | `AzureKmsProvider` | `azure-kms-encryption` |
 | [HashiCorp Vault Transit](./providers/hc-vault-transit.md) | `HcVaultTransitProvider` | `hashicorp-vault-transit-kms-encryption` |
-| [A KEK the process holds](./providers/local.md) | `LocalKmsProvider` | none, in every build |
-| [An RSA KEK the process holds](./providers/local.md#asymmetric-keks) | `LocalAsymmetricKmsProvider` | none, in every build |
+| [Local KMS](./providers/local.md), a KEK the process holds | `LocalKmsProvider` | none, in every build |
+| [Local KMS](./providers/local.md#asymmetric-keks), an RSA KEK the process holds | `LocalAsymmetricKmsProvider` | none, in every build |
 
 Every provider has a page with the same sections, in this order: configuration, authentication and
 permissions; key versions and rotation; asymmetric KEKs; signing; limits; and errors. A section
-that a provider does not support says so. How the providers compare is in
-[Choose a provider and a backend](./getting-started/choosing.md#kms-providers).
+that a provider does not support says so.
+
+This page specifies what the providers share. To pick one, read [Choose a provider and a
+backend](./getting-started/choosing.md#kms-providers). For the rights the applications and the
+administration need, read [Permissions: applications and
+administration](./production/permissions.md). For rotating the KEK, read [Rotate keys and re-encrypt
+values](./production/rotation.md).
 
 Every KMS provider above implements the two provider traits, `KmsAeadEncryptionProvider`, which
 encrypts DEKs, and `KmsAeadDecryptionProvider`, which decrypts them, and `KmsAeadEnvelope` takes
@@ -42,8 +47,9 @@ let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 
 Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
 fails at the KMS and never decrypts a value. `provider.kek()` returns that KEK as a `KekRef`: the
-KMS and the key name. It is also the `provider` and `key` field of the [KMS
-spans](./observability/spans-and-events.md) and the key of the [DEK cache](./dek-caching.md). Nothing else is
+KMS and the key name. It is also the `provider` and `key` field of the KMS spans, see [Spans and
+events](./observability/spans-and-events.md), and the key of the DEK cache, see [DEK caching and
+reuse](./dek-caching.md). Nothing else is
 checked: an encrypted DEK carries no context that the KMS authenticates, see [Security
 considerations](./security.md#threat-model).
 
@@ -54,7 +60,8 @@ padding), in the process of whoever holds the public key, and its private half d
 provider above reads the `0x02` encrypted DEK of such an encryption beside its own bytes, and
 fetches the public key for the administration with a `public_key` call. No side needs the KMS
 encrypt right: the encryption is a local operation, and the KMS only decrypts. The layout, the
-choices and the limits are in [Asymmetric KEKs](./asymmetric-kek.md).
+choices and the limits are in [Asymmetric KEKs](./asymmetric-kek.md). To build a deployment on them,
+read [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md).
 
 Two further providers are in every build and hold the public key:
 
@@ -97,8 +104,57 @@ another provider: `KmsAeadEncryptionProvider`, with `kek`, `encrypt_data_encrypt
 defaulted `generate_key_material` and `encrypts_with_public_key`, and `KmsAeadDecryptionProvider`,
 with `decrypt_data_encryption_key`. A provider that only encrypts implements the first alone, and
 the calls that decrypt do not compile over it. A wrapper implements each trait where the provider it
-wraps does, as the example in [Migrating from 0.30](./migrating-from-0.30.md#your-own-provider)
-shows. The implementation:
+wraps does, as this one, which counts decryptions, does:
+
+```rust
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use kms_aead::{
+    DataEncryptionKey, EncryptedDataEncryptionKey, KekRef, KmsAeadDecryptionProvider,
+    KmsAeadEncryptionProvider, KmsAeadResult,
+};
+use secret_vault_value::SecretValue;
+
+/// The provider `P`, with a count of its decryptions.
+struct Counted<P> {
+    inner: P,
+    decryptions: AtomicU64,
+}
+
+impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for Counted<P> {
+    fn kek(&self) -> &KekRef {
+        self.inner.kek()
+    }
+
+    async fn encrypt_data_encryption_key(
+        &self,
+        dek: &DataEncryptionKey,
+    ) -> KmsAeadResult<EncryptedDataEncryptionKey> {
+        self.inner.encrypt_data_encryption_key(dek).await
+    }
+
+    async fn generate_key_material(&self, len: usize) -> KmsAeadResult<Option<SecretValue>> {
+        self.inner.generate_key_material(len).await
+    }
+
+    fn encrypts_with_public_key(&self) -> bool {
+        self.inner.encrypts_with_public_key()
+    }
+}
+
+// Decryption is a trait of its own, implemented where the wrapped provider decrypts.
+impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for Counted<P> {
+    async fn decrypt_data_encryption_key(
+        &self,
+        encrypted_dek: &EncryptedDataEncryptionKey,
+    ) -> KmsAeadResult<DataEncryptionKey> {
+        self.decryptions.fetch_add(1, Ordering::Relaxed);
+        self.inner.decrypt_data_encryption_key(encrypted_dek).await
+    }
+}
+```
+
+The implementation:
 
 - is `Send` and `Sync`, and writes `encrypt_data_encryption_key`, `decrypt_data_encryption_key`
   and `generate_key_material` as `async fn`, whose futures must be `Send`. The traits have no
