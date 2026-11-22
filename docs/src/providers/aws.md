@@ -3,8 +3,13 @@
 Feature `aws-kms-encryption`, see [Cargo features](../features.md).
 
 `AwsKmsKeyRef` names the key by the AWS account and the key id, which is anything AWS KMS
-accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias ARN. How the KMS
-providers compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
+accepts: a key id, a key ARN, an alias name such as `alias/orders`, or an alias ARN.
+
+This page specifies `AwsKmsProvider`. To compare it with the other KMS providers, read [Choose a
+provider and a backend](../getting-started/choosing.md#kms-providers). For the rights the
+applications and the administration need, read [Permissions: applications and
+administration](../production/permissions.md). For rotating the KEK, read [Rotate keys and
+re-encrypt values](../production/rotation.md).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
@@ -81,13 +86,17 @@ Key material that AWS KMS generated cannot be disabled or deleted on its own. Th
 is optional for it: it moves each DEK to the current key material, and with nothing to disable,
 the check and the destruction do not apply.
 
-Imported key material is deleted in two ways: by `DeleteImportedKeyMaterial`, for the material a
-`KeyMaterialId` names or the current one without it, and at its expiry. `ExpirationModel` defaults
-to `KEY_MATERIAL_EXPIRES`, and at its `ValidTo`, at most 365 days after the import, AWS KMS deletes
-the material without any call. Either way the key moves to `PendingImport`, and AWS KMS refuses
-every operation with it, whichever material a DEK is under, until the same material is imported
-again. Import with `KEY_MATERIAL_DOES_NOT_EXPIRE`, or import again before `ValidTo`, and
-keep a copy of every material to import again.
+Imported key material is deleted in two ways:
+
+- `DeleteImportedKeyMaterial`, for the material a `KeyMaterialId` names or the current one without
+  it;
+- its expiry: `ExpirationModel` defaults to `KEY_MATERIAL_EXPIRES`, and at its `ValidTo`, at most
+  365 days after the import, AWS KMS deletes the material without any call.
+
+Either way the key moves to `PendingImport`, and AWS KMS refuses every operation with it, whichever
+material a DEK is under, until the same material is imported again. Import with
+`KEY_MATERIAL_DOES_NOT_EXPIRE`, or import again before `ValidTo`, and keep a copy of every material
+to import again.
 
 A sweep therefore retires no imported key material from a key in use, and with every
 `kek_version` `None`, neither a keyring record nor a stored `kek_version` shows which DEKs are under
@@ -166,7 +175,8 @@ the signature does not name. An alias name, `alias/…`, or an alias ARN fails a
 
 - `sign` sends `Sign` with `MessageType` `RAW` and `ED25519_SHA_512` for Ed25519, and with `DIGEST`
   and `ECDSA_SHA_256` for P-256, where the message is the SHA-256 of the pre-image. The pre-image
-  is at most 302 bytes, within the 4,096-byte limit of `Message`;
+  is within the 4,096-byte limit of `Message`, see
+  [Signature and MAC formats](../formats/signatures-and-macs.md);
 - a response whose `KeyId` is not the configured key fails with `SIGNING_KEY_MISMATCH`, and one
   whose `SigningAlgorithm` is not the requested one with `SIGNING_ALGORITHM_MISMATCH`. A P-256
   signature is DER, converted to `r || s`; one that is not strict DER, or an Ed25519 signature

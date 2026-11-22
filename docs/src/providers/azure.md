@@ -5,9 +5,13 @@ Feature `azure-kms-encryption`, or one of the TLS variants in
 
 `AzureKmsKeyRef` names the key by the vault URL and the key name. Without a key version, the
 latest version encrypts new DEKs. Each encrypted DEK records the version that encrypted it, and the
-decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards. How the
-KMS providers compare is in
-[Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
+decryption uses that version, so DEKs encrypted before a rotation still decrypt afterwards.
+
+This page specifies `AzureKmsProvider`. To compare it with the other KMS providers, read [Choose a
+provider and a backend](../getting-started/choosing.md#kms-providers). For the rights the
+applications and the administration need, read [Permissions: applications and
+administration](../production/permissions.md). For rotating the KEK, read [Rotate keys and
+re-encrypt values](../production/rotation.md).
 
 The provider takes any Azure credential, for example one from `azure_identity`:
 
@@ -106,9 +110,9 @@ disabled rather than destroyed.
 
 Key Vault decrypts only with the key version that encrypted, so the provider's encrypted DEK carries
 it before Key Vault's encrypted DEK, in the library's own layout, see
-[Formats](../formats/values.md#encrypted-deks). No Tink client exists for Azure, so Tink does not read the
-values of this provider, and the plaintext Key Vault encrypts is the raw DEK of 16, 32 or 64 bytes,
-as in 0.29, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
+[Encrypted DEKs](../formats/values.md#encrypted-deks). No Tink client exists for Azure, so Tink
+does not read the values of this provider, and the plaintext Key Vault encrypts is the raw DEK of
+16, 32 or 64 bytes, rather than the DEK as Tink serialises it. Every algorithm takes it, `Aes256KeyWrap`
 too, which takes only multiples of 8 bytes. Store the encrypted DEK as it is, see
 [Envelope encryption](../envelope-encryption.md#storing-encrypted-deks).
 
@@ -122,9 +126,8 @@ unreadable until it is enabled again. See
 ## Asymmetric KEKs
 
 An RSA key of 2048, 3072 or 4096 bits, `RSA` or `RSA-HSM`, is an asymmetric KEK, see [Asymmetric
-KEKs](../asymmetric-kek.md). The provider has always encrypted with it through `wrapKey`; a `0x02`
-encrypted DEK moves the encryption into the producer, and the provider still decrypts through
-`unwrapKey`:
+KEKs](../asymmetric-kek.md). The provider encrypts with it through `wrapKey`; a `0x02` encrypted
+DEK moves the encryption into the producer, and the provider decrypts through `unwrapKey`:
 
 - `AzureKmsProvider::public_key(None)` sends `GetKey` for the latest version, or
   `public_key(Some(&version))` for one, and returns the JSON Web Key's `n` and `e` as the public key

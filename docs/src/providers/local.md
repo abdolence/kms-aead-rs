@@ -10,9 +10,13 @@ the backend it is built with. It is for:
 
 kms-aead builds one only when the application calls one of its constructors; no provider falls
 back to it. Each constructor logs one `INFO` event naming the KEK id, its versions and where
-each version came from (`ephemeral`, `file`, `env` or `secret`), never the key. How the KMS
-providers compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers),
-and the first example is in [Tests and development](#tests-and-development).
+each version came from (`ephemeral`, `file`, `env` or `secret`), never the key.
+
+This page specifies `LocalKmsProvider` and the local signing and asymmetric providers. To compare
+them with the cloud KMS providers, read [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
+To run an application and its tests without a cloud account, read [Develop and test without a
+cloud](../getting-started/local-development.md). The first example is in [Tests and
+development](#tests-and-development).
 
 ## Configuration, authentication and permissions
 
@@ -23,7 +27,7 @@ operator's job, see [Limits](#limits).
 
 A `LocalKekId` names the KEK: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and `.`. Every
 encrypted DEK records it, and a decryption refuses a DEK encrypted under another id. The id is also
-the key of the [DEK cache](../dek-caching.md), so one id must name one set of KEK material: two
+the key of the DEK cache, see [DEK caching and reuse](../dek-caching.md), so one id must name one set of KEK material: two
 providers with the same id and different keys share cache entries.
 
 A provider holds one or more `LocalKek` versions of 32 bytes each. The highest version encrypts new
@@ -76,9 +80,8 @@ let kek = LocalKek::from_secret(
 # }
 ```
 
-0.30 took the raw bytes in `from_secret` and base64 in `from_file` and `from_env`, see
-[Migrating from 0.30](../migrating-from-0.30.md#loading-a-local-kek). Errors name the file or the
-variable, never its content.
+Errors name the file or the variable, never its content. For the format an older release assumed
+in each loader, see [Loading a local KEK](../migrating-from-0.30.md#loading-a-local-kek).
 
 ### Tests and development
 
@@ -256,8 +259,8 @@ let public_key = provider.public_key(None)?;
   `DECRYPT`;
 - `LocalAsymmetricKmsProvider::ephemeral` has one generated version-1 key of 2048 bits, for tests;
 - it needs a backend with RSA: aws-lc-rs or RustCrypto. On ring it fails at construction with
-  `UNSUPPORTED_ALGORITHM`. On RustCrypto the private half decrypts DEKs from trusted sources only, see
-  [Asymmetric KEKs](../asymmetric-kek.md#what-each-backend-does).
+  `UNSUPPORTED_ALGORITHM`. On RustCrypto the private half decrypts DEKs from trusted sources only,
+  see [RustCrypto](../crypto-backends.md#rustcrypto).
 
 ## Signing
 
@@ -265,10 +268,8 @@ let public_key = provider.public_key(None)?;
 as `LocalKmsProvider` does for KEKs, see [Signatures and MACs](../signing.md). `LocalSigningKeyName`
 names the key: 1 to 255 bytes of ASCII alphanumerics, `-`, `_` and `.`. A `LocalSigningKey` is one
 version of it, numbered by a `LocalSigningKeyVersion`: a PKCS#8 private key, either an Ed25519 key or
-a P-256 key, and the PKCS#8 names the algorithm. The loaders are `from_secret`, `from_file` and
-`from_env`, each taking a `PrivateKeyFormat`, `Pkcs8Der` or `Pkcs8Pem`. A file is a regular file of at
-most 32 KiB, and `from_env` reads the PEM text for `Pkcs8Pem` and the standard base64 of the DER for
-`Pkcs8Der`, as for an asymmetric KEK above.
+a P-256 key, and the PKCS#8 names the algorithm. The loaders are those of an asymmetric KEK above,
+with the same `PrivateKeyFormat`, see [Key formats](../signing.md#key-formats).
 
 ```rust,no_run
 use std::num::NonZeroU32;
@@ -314,9 +315,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 - No IAM, no audit log and no HSM. Protecting the KEK, at rest and in backups, is the
   operator's job;
 - Every DEK encryption is one AES-256-GCM encryption with a random 96-bit nonce, so a KEK version is
-  safe for about 2^32 encryptions. With the per-call envelope every value costs one encryption: a
+  safe for about 2^32 encryptions, see [Nonces](../security.md#nonces). With the per-call envelope every value costs one encryption: a
   host encrypting 1,000 values per second spends 2^32 encryptions in 50 days. Use [DEK
-  reuse](../dek-caching.md) so that one encryption serves many values, and add a new KEK version
+  caching and reuse](../dek-caching.md) so that one encryption serves many values, and add a new KEK version
   before the budget is spent;
 - Crypto-shredding means destroying every copy of the KEK, backups included;
 - DEKs encrypted by a local KEK cannot be exported to BigQuery, which decrypts with Cloud KMS;
@@ -326,7 +327,8 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 
 ## Errors
 
-An encryption fails with `RANDOM_GENERATOR` when the backend's CSPRNG fails. A decryption fails with
+An encryption fails with `RANDOM_GENERATOR` when the backend's CSPRNG (its cryptographically secure
+random number generator) fails. A decryption fails with
 `LOCAL_ENCRYPTED_DEK_FORMAT` when the encrypted DEK is not in the local layout,
 `LOCAL_KEK_ID_MISMATCH` when it was encrypted under another KEK id, `LOCAL_KEK_UNKNOWN_VERSION`
 when the provider does not hold its version, and `DECRYPT` when it is not authentic under that

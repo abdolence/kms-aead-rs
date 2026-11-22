@@ -4,8 +4,13 @@ Feature `hashicorp-vault-transit-kms-encryption`, or one root store and one cryp
 variant, see [Cargo features](../features.md).
 
 The provider encrypts DEKs with a key of the Vault Transit secrets engine. `HcVaultTransitKeyRef`
-names the key, and the mount is `transit` unless set with `with_mount`. How the KMS providers
-compare is in [Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
+names the key, and the mount is `transit` unless set with `with_mount`.
+
+This page specifies `HcVaultTransitProvider`. To compare it with the other KMS providers, read
+[Choose a provider and a backend](../getting-started/choosing.md#kms-providers). For the rights the
+applications and the administration need, read [Permissions: applications and
+administration](../production/permissions.md). For rotating the KEK, read [Rotate keys and
+re-encrypt values](../production/rotation.md).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;

@@ -5,8 +5,13 @@ Feature `gcp-kms-encryption`, or `gcp-kms-encryption-webpki` for the bundled Web
 
 `GcpKmsKeyRef` names a CryptoKey by its project, location, key ring and key. The provider encrypts
 under the primary version of the key, and each encrypted DEK records the version that encrypted it,
-so DEKs encrypted before a rotation still decrypt afterwards. How the KMS providers compare is in
-[Choose a provider and a backend](../getting-started/choosing.md#kms-providers).
+so DEKs encrypted before a rotation still decrypt afterwards.
+
+This page specifies `GcpKmsProvider`. To compare it with the other KMS providers, read [Choose a
+provider and a backend](../getting-started/choosing.md#kms-providers). For the rights the
+applications and the administration need, read [Permissions: applications and
+administration](../production/permissions.md). For rotating the KEK, read [Rotate keys and
+re-encrypt values](../production/rotation.md).
 
 ```rust,no_run
 use kms_aead::backends::AwsLc;
@@ -84,14 +89,14 @@ destruction, 30 days later by default, and until then the version can be restore
 
 Changing the primary version and disabling a version are eventually consistent in Cloud KMS, see
 [Cloud KMS resource consistency](https://docs.cloud.google.com/kms/docs/consistency). Until a new
-primary version has propagated, `Encrypt` may still use the previous one, and a disabled version
+primary version has propagated, `Encrypt` may still use the previous one. A disabled version
 "typically remains usable for encrypting and decrypting data for up to 1 minute after it is
-disabled", for several hours in exceptional cases. So:
+disabled", and for several hours in exceptional cases. So:
 
 - start the sweep only once the new primary version has propagated. The `kek_version()` of the
   encrypted DEK an encryption returns, and the `kek_version` field of the `KMS encrypt DEK` span,
   name the version Cloud KMS encrypted with, the `N` of `cryptoKeyVersions/N`, see
-  [Observability](../observability/spans-and-events.md). A keyring whose `reencrypt_deks` ran before the new
+  [Spans and events](../observability/spans-and-events.md). A keyring whose `reencrypt_deks` ran before the new
   primary version had propagated still lists the old version among its `kek_versions_in_use`:
   run `reencrypt_deks` again, see [Re-encrypting a keyring's DEKs](../production/rotation.md#re-encrypting-a-keyrings-deks);
 - run the check only once the disable has propagated, and run it again before destroying the
@@ -122,8 +127,9 @@ Asymmetric keys have no primary version and no automatic rotation, so a version 
   `RSA_DECRYPT_OAEP_2048_SHA256`, `RSA_DECRYPT_OAEP_3072_SHA256` or `RSA_DECRYPT_OAEP_4096_SHA256`;
 - a decryption of a `0x02` encrypted DEK sends `AsymmetricDecrypt` on
   `<key>/cryptoKeyVersions/<version>`, with the RSA block as `ciphertext`. The encrypted DEK names
-  the version, as a symmetric ciphertext does. The request carries no CRC32C checksum fields: a
-  corrupted DEK fails the value's AEAD;
+  the version, as a symmetric ciphertext does. The request carries no CRC32C checksum fields (CRC32C is the 32-bit
+  checksum with which Cloud KMS detects corruption in transit): a corrupted DEK fails the value's
+  AEAD;
 - the principal of a reader needs `cloudkms.cryptoKeyVersions.useToDecrypt`, as in
   `roles/cloudkms.cryptoKeyDecrypter`, and the administration also
   `cloudkms.cryptoKeyVersions.viewPublicKey`, as in `roles/cloudkms.publicKeyViewer`. Nobody needs
