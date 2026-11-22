@@ -1,0 +1,10 @@
+# Replaces the version snippets of this crate's README, see the release.toml of the repository root.
+[[pre-release-replacements]]
+file = "README.md"
+search = '(kms-aead(?:-keyring)? = \{ version = ")[0-9]+\.[0-9]+(?:\.[0-9]+)?"'
+replace = '${1}{{version}}"'
+
+[[pre-release-replacements]]
+file = "README.md"
+search = '(kms-aead(?:-keyring)? = \{ version = "[0-9]+\.[0-9]+)\.[0-9]+"'
+replace = '${1}"'

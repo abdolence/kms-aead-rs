@@ -5,3 +5,50 @@ consolidate-commits = true
 tag-name = "v{{version}}"
 pre-release-commit-message = "chore: Release kms-aead and kms-aead-keyring version {{version}}"
 tag-message = "chore: Release kms-aead and kms-aead-keyring version {{version}}"
+
+# The `version = "0.x"` snippets of the README and the book follow the release, in the form the
+# snippets use, the minor version. cargo-release has no placeholder for the minor version alone, so
+# the first replacement writes the full version and the second drops the patch number. The pattern
+# names the two crates, which leaves the other dependencies of the same files alone. File paths are
+# relative to the package that runs them, and only kms-aead sits at the repository root; the
+# keyring's own README is in kms-aead-keyring/release.toml.
+
+[[pre-release-replacements]]
+file = "README.md"
+search = '(kms-aead(?:-keyring)? = \{ version = ")[0-9]+\.[0-9]+(?:\.[0-9]+)?"'
+replace = '${1}{{version}}"'
+
+[[pre-release-replacements]]
+file = "README.md"
+search = '(kms-aead(?:-keyring)? = \{ version = "[0-9]+\.[0-9]+)\.[0-9]+"'
+replace = '${1}"'
+
+[[pre-release-replacements]]
+file = "docs/src/getting-started.md"
+search = '(kms-aead(?:-keyring)? = \{ version = ")[0-9]+\.[0-9]+(?:\.[0-9]+)?"'
+replace = '${1}{{version}}"'
+
+[[pre-release-replacements]]
+file = "docs/src/getting-started.md"
+search = '(kms-aead(?:-keyring)? = \{ version = "[0-9]+\.[0-9]+)\.[0-9]+"'
+replace = '${1}"'
+
+[[pre-release-replacements]]
+file = "docs/src/getting-started/with-a-keyring.md"
+search = '(kms-aead(?:-keyring)? = \{ version = ")[0-9]+\.[0-9]+(?:\.[0-9]+)?"'
+replace = '${1}{{version}}"'
+
+[[pre-release-replacements]]
+file = "docs/src/getting-started/with-a-keyring.md"
+search = '(kms-aead(?:-keyring)? = \{ version = "[0-9]+\.[0-9]+)\.[0-9]+"'
+replace = '${1}"'
+
+[[pre-release-replacements]]
+file = "docs/src/production/permissions.md"
+search = '(kms-aead(?:-keyring)? = \{ version = ")[0-9]+\.[0-9]+(?:\.[0-9]+)?"'
+replace = '${1}{{version}}"'
+
+[[pre-release-replacements]]
+file = "docs/src/production/permissions.md"
+search = '(kms-aead(?:-keyring)? = \{ version = "[0-9]+\.[0-9]+)\.[0-9]+"'
+replace = '${1}"'
