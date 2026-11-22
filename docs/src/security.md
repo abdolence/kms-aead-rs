@@ -215,19 +215,12 @@ version.
   reloads its record, and fails the read when it cannot reach the store. So the wait beyond the
   record TTL is the operator's, see [Staged rotation](./keyring/lifecycle.md#staged-rotation).
 
-## OSS
+## Supply chain
 
-Open source code is created through voluntary collaboration of software developers. The original
-authors license the code so that anyone can see it, modify it, and distribute new versions of it.
-You should manage all OSS using the same procedures and tools that you use for commercial
-products. As always, train your employees on cyber security best practices that can help them
-securely use and manage software products. You should not solely rely on individuals, especially
-on the projects like this reading sensitive information.
-
-## Versioning
-
-Please don't use broad version dependency management not to include a new version of dependency
-automatically without auditing the changes.
+kms-aead and kms-aead-keyring read sensitive data, so manage them and their dependencies with the
+procedures you use for commercial products. Pin versions in a lockfile, and audit the changes of an
+upgrade before you take it: a broad version requirement pulls in a new release of a dependency
+without that audit.
 
 ## Reporting a vulnerability
 

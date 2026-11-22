@@ -6,19 +6,12 @@ Please follow the general guidelines of the [OWASP Vulnerability Disclosure Chea
 
 ## Security considerations and risks
 
-### OSS
+### Supply chain
 
-Open source code is created through voluntary collaboration of software developers.
-The original authors license the code so that anyone can see it, modify it and distribute new versions of it.
-
-Manage all OSS with the same procedures and tools that you use for commercial products.
-Train your employees on cyber security best practices that help them use and manage software products securely.
-
-Do not rely solely on individuals who read sensitive information, especially in projects like this one.
-
-### Versioning
-
-Do not use broad dependency version ranges. They pull in new versions of a dependency automatically, before you have audited the changes.
+kms-aead and kms-aead-keyring read sensitive data, so manage them and their dependencies with the
+procedures you use for commercial products. Pin versions in a lockfile, and audit the changes of an
+upgrade before you take it: a broad version requirement pulls in a new release of a dependency
+without that audit.
 
 ## Contacts
 
