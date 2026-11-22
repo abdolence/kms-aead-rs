@@ -378,6 +378,32 @@ async fn shutdown_twice_is_a_no_op(store: impl KeyringStore) -> TestResult {
     Ok(())
 }
 
+/// A record the store returns takes an administrative write, which refuses a record holding a
+/// member that the document the store was given lacks.
+#[cfg(all(feature = "ring", feature = "admin"))]
+async fn a_record_it_returns_takes_an_administrative_write<S: KeyringStore>(
+    store: S,
+) -> TestResult {
+    use kms_aead::backends::Ring;
+    use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+    use kms_aead_keyring::{KeyringAlgorithms, KeyringRegistry, KeyringRegistryOptions, Purpose};
+
+    let registry =
+        KeyringRegistry::<S, Ring>::new(store, KeyringRegistryOptions::new().with_watch(false))?;
+    let admin = registry
+        .create(
+            LocalKmsProvider::<Ring>::ephemeral(LocalKekId::try_from(
+                "conformance-kek".to_string(),
+            )?)?,
+            unique_keyring_id()?,
+            KeyringAlgorithms::new(),
+        )
+        .await?;
+    admin.rotate(Purpose::Randomized).await?;
+    registry.shutdown(None).await;
+    Ok(())
+}
+
 /// Runs every check, each against a store `new_store` returns.
 async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     an_absent_record_loads_as_none(new_store()).await?;
@@ -394,7 +420,10 @@ async fn conformance<S: KeyringStore>(new_store: impl Fn() -> S) -> TestResult {
     a_delete_at_a_stale_revision_conflicts(new_store()).await?;
     a_deleted_record_is_created_again(new_store()).await?;
     a_write_signals_the_watch_of_its_record(new_store()).await?;
-    a_delete_signals_the_watch_of_its_record(new_store()).await
+    a_delete_signals_the_watch_of_its_record(new_store()).await?;
+    #[cfg(all(feature = "ring", feature = "admin"))]
+    a_record_it_returns_takes_an_administrative_write(new_store()).await?;
+    Ok(())
 }
 
 #[tokio::test]

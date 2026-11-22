@@ -200,6 +200,14 @@ A reader fails with `RecordInvalid` on a document that breaks any of:
 - `seal_epochs` on every active, decrypt-only and retired version and on no pending one, open on
   the active version, starting at 1 or more and below its end, and within the `seal_epoch`.
 
+A reader reads past a member it does not know, at any depth, and keeps it in the canonical digest
+that a signature covers. An administrative write refuses a record that holds one, with
+`RecordInvalid` and the reason `UnknownMembers`, before it writes anything: the record it writes
+holds only the members its release knows, so the others would be lost, and a signing
+administration would sign what is left. Once a later release writes a member into a record, an
+administrative binary of an earlier release still reads the record and no longer writes it, until
+it moves to that release.
+
 ## Encryption markers
 
 An encryption marker is the re-encryption epoch of the keyring record a write encrypted a

@@ -15,7 +15,8 @@ use serde_json::Value;
 
 use super::*;
 use crate::errors::{
-    PromotionTooEarlyError, RecordConflictError, RecordRegressedError, RegressionRule,
+    PromotionTooEarlyError, RecordConflictError, RecordInvalidError, RecordInvalidReason,
+    RecordRegressedError, RegressionRule,
 };
 use crate::store::KeyringStore;
 use crate::sweep::EncryptionMarker;
@@ -1795,6 +1796,62 @@ async fn a_regressed_record_is_refused() -> TestResult {
         Err(KeyringError::RecordRegressed(RecordRegressedError { rule: refused, .. })) if refused == rule
     ));
     assert_eq!(fixture.keyring.record().to_json()?, held);
+    Ok(())
+}
+
+/// A record that holds a member this release does not know, in the record or in a version, as one a
+/// later release wrote can: a reader takes it, and an administrative write leaves it as it is.
+#[tokio::test]
+async fn an_admin_write_over_a_record_with_unknown_members_is_refused() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let mut outcomes = Vec::new();
+    for object in ["", "/versions/0"] {
+        let stored = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+        let mut document: Value = serde_json::from_slice(&stored.record.to_json()?)?;
+        document
+            .pointer_mut(object)
+            .and_then(Value::as_object_mut)
+            .ok_or("no such object")?
+            .insert("added_later".to_string(), Value::Bool(true));
+        fixture
+            .memory
+            .write_document(&TENANT, serde_json::to_vec(&document)?);
+        let written = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+
+        fixture.keyring.reload().await?;
+        let reason = match fixture.admin.reencrypt_deks().await {
+            Err(KeyringError::RecordInvalid(RecordInvalidError { reason, .. })) => Some(reason),
+            _ => None,
+        };
+        let after = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+
+        outcomes.push((reason, after.revision == written.revision));
+    }
+
+    let refused = (Some(RecordInvalidReason::UnknownMembers), true);
+    assert_eq!(outcomes, [refused.clone(), refused]);
+    Ok(())
+}
+
+/// A record 0.30 wrote, with no `mac` algorithm and no signature, holds no member this release
+/// does not know, and an administrative write over it goes through.
+#[tokio::test]
+async fn an_admin_write_over_a_record_without_the_later_members_goes_through() -> TestResult {
+    let fixture = Fixture::new(KeyringRegistryOptions::new().with_watch(false)).await?;
+    let stored = fixture.memory.load(&TENANT).await?.ok_or("no record")?;
+    let mut document: Value = serde_json::from_slice(&stored.record.to_json()?)?;
+    document["algorithms"]
+        .as_object_mut()
+        .ok_or("no algorithms")?
+        .remove("mac");
+    fixture
+        .memory
+        .write_document(&TENANT, serde_json::to_vec(&document)?);
+
+    fixture.keyring.reload().await?;
+    let staged = fixture.admin.rotate(Purpose::Randomized).await?;
+
+    assert_eq!(staged, KeyId::new(2));
     Ok(())
 }
 

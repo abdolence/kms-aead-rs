@@ -3,11 +3,12 @@ use std::num::NonZeroU32;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use kms_aead::formats::PrivateKeyFormat;
+use kms_aead::mac::MacAlgorithm;
 use kms_aead::providers::{
     LocalSigningKey, LocalSigningKeyName, LocalSigningKeyVersion, LocalSigningProvider,
 };
 use kms_aead::signing::SigningAlgorithm;
-use kms_aead::KmsAeadResult;
+use kms_aead::{BeaconAlgorithm, KmsAeadResult};
 use secret_vault_value::SecretValue;
 use serde_json::Value;
 
@@ -16,8 +17,8 @@ use crate::store::{KeyringStore, Swap};
 use crate::test_support::{error_code_of, TestBackend, TestProvider, TestResult, TENANT};
 use crate::testing::MemoryKeyringStore;
 use crate::{
-    KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId, KeyringRegistry,
-    KeyringRegistryOptions, Purpose,
+    Compromise, KeyId, KeyVersionState, KeyringAdmin, KeyringAlgorithms, KeyringId,
+    KeyringRegistry, KeyringRegistryOptions, Purpose,
 };
 
 // redacter:allow-begin
@@ -484,5 +485,47 @@ async fn a_signer_the_registry_does_not_trust_is_refused_before_any_write() -> T
     assert_eq!(error_code_of(created), "SIGNING_KEY_UNKNOWN");
     assert_eq!(error_code_of(opened_or_created), "SIGNING_KEY_UNKNOWN");
     assert!(store.load(&other).await?.is_none());
+    Ok(())
+}
+
+/// Every record this release writes takes the next administrative write: unsigned and signed,
+/// with MAC and beacon versions, a pending version, a closed re-encryption range and a destroyed
+/// version that keeps its compromised flag and its note.
+#[tokio::test]
+async fn every_record_this_release_writes_takes_the_next_administrative_write() -> TestResult {
+    let store = MemoryKeyringStore::new();
+    let signer = new_signer().await?;
+    let registry = registry_with_policy(
+        &store,
+        RecordSignaturePolicy::VerifyIfSigned(verifying_key_set_of(&signer)),
+    );
+    let algorithms = KeyringAlgorithms::new()
+        .with_beacon(BeaconAlgorithm::HmacSha256)
+        .with_mac(MacAlgorithm::HmacSha256);
+
+    let admin = registry
+        .create(TestProvider::new("tenant-42-kek")?, TENANT, algorithms)
+        .await?;
+    let staged = admin.rotate(Purpose::Randomized).await?;
+    admin.promote_now(staged).await?;
+    admin
+        .mark_compromised(KeyId::new(1), Some("laptop lost".to_string()))
+        .await?;
+    admin.retire(KeyId::new(1)).await?;
+    admin.destroy(KeyId::new(1)).await?;
+    admin.rotate(Purpose::Mac).await?;
+    let admin = admin.with_record_signer(signer)?;
+    admin.sign_record().await?;
+    admin.reencrypt_deks().await?;
+
+    let stored = store.load(&TENANT).await?.ok_or("no record")?;
+    let destroyed = stored.record.version(KeyId::new(1)).ok_or("no version 1")?;
+    assert!(stored.record.signature().is_some());
+    assert!(stored.record.pending(Purpose::Mac).is_some());
+    assert_eq!(destroyed.state(), KeyVersionState::Destroyed);
+    assert_eq!(
+        destroyed.compromised().and_then(Compromise::note),
+        Some("laptop lost")
+    );
     Ok(())
 }

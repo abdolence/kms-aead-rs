@@ -560,6 +560,9 @@ pub struct KeyringRecord {
     /// left out. A record a write is changing keeps the digest of the document it was read from
     /// until `RecordEdit::finish` parses the changed one.
     canonical_digest: [u8; 32],
+    /// Whether the document the record was parsed from holds a member that the document of
+    /// [`to_json`](Self::to_json) leaves out, so that writing the record back would drop it.
+    unknown_members: bool,
 }
 
 /// A record is signed and verified through its canonical digest, never through payload bytes it
@@ -714,6 +717,26 @@ impl KeyringRecord {
         Self {
             signature: None,
             ..self
+        }
+    }
+
+    /// Refuses an administrative write over this record when the document it was parsed from
+    /// holds members this release does not know: the record the write builds holds only the
+    /// members of [`to_json`](Self::to_json), so the others would be lost, and a signing write
+    /// would sign what is left.
+    ///
+    /// # Errors
+    ///
+    /// [`KeyringError::RecordInvalid`] with `UnknownMembers`.
+    #[cfg(feature = "admin")]
+    pub(crate) fn check_writable(&self) -> KeyringResult<()> {
+        if self.unknown_members {
+            Err(KeyringError::record_invalid(
+                &self.id,
+                crate::errors::RecordInvalidReason::UnknownMembers,
+            ))
+        } else {
+            Ok(())
         }
     }
 

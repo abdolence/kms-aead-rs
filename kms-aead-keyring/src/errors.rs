@@ -611,6 +611,11 @@ pub enum RecordInvalidReason {
     /// Two versions, the one named and an earlier one, hold the same encrypted DEK bytes: a key
     /// filed under a second id, such as a MAC key copied into a beacon version.
     DuplicateEncryptedDek(KeyId),
+    /// The stored document holds a member this release does not know, at any depth, which a later
+    /// release can write. A reader reads such a record. An administrative write refuses it before
+    /// the compare-and-swap, since the record it writes holds only the members this release knows
+    /// and would drop the others.
+    UnknownMembers,
 }
 
 impl Display for RecordInvalidReason {
@@ -732,6 +737,9 @@ impl Display for RecordInvalidReason {
                 f,
                 "key version {key_id} holds the encrypted DEK of an earlier version",
                 key_id = key_id.as_u32()
+            ),
+            RecordInvalidReason::UnknownMembers => f.write_str(
+                "the document holds members this release does not know, which a write would drop",
             ),
         }
     }

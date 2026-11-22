@@ -565,10 +565,10 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
         })
     }
 
-    /// The store's record, refused when it moves backwards from the cached one, for a write to
-    /// build on. A record gone from the store is taken as deleted, and is `RecordMissing`, also
-    /// when the cache took the deletion before: the store is then not read, as another record
-    /// may hold the id.
+    /// The store's record, refused when it moves backwards from the cached one, or when it holds
+    /// members this release does not know, for a write to build on. A record gone from the store
+    /// is taken as deleted, and is `RecordMissing`, also when the cache took the deletion before:
+    /// the store is then not read, as another record may hold the id.
     async fn read_for_write(
         &self,
         refresh: &RefreshGuard<'_>,
@@ -598,6 +598,7 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
             match held.check_successor(&stored.record) {
                 Ok(()) => {
                     spans::record_load(LoadChanged::Unchanged, Some(&stored.revision));
+                    stored.record.check_writable()?;
                     Ok(stored)
                 }
                 Err(rule) => {

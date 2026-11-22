@@ -173,7 +173,9 @@ impl KeyringRecord {
     /// Parses the JSON document a store holds for the keyring `id`, and checks it: at most
     /// 1 MiB, the record of `id`, and every invariant of [`KeyringRecord`]. It verifies nothing:
     /// it keeps the record's signature and the SHA-256 of its canonical document, which the
-    /// registry verifies before it uses the record. Every store calls it.
+    /// registry verifies before it uses the record. A member this release does not know is read
+    /// past and kept in that digest, and an administrative write refuses the record, see
+    /// [`RecordInvalidReason::UnknownMembers`]. Every store calls it.
     ///
     /// # Errors
     ///
@@ -205,7 +207,10 @@ impl KeyringRecord {
         };
         let canonical_digest =
             canonical_digest(&parsed).map_err(|_| KeyringError::malformed(id, None))?;
-        let stored: StoredRecord = serde_json::from_value(parsed)
+        let stored = StoredRecord::deserialize(&parsed)
+            .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
+        let unknown_members = serde_json::to_value(&stored)
+            .map(|known| holds_unknown_members(&parsed, &known))
             .map_err(|error| KeyringError::malformed(id, Some(&error)))?;
         if stored.schema != RECORD_SCHEMA_VERSION {
             return Err(invalid(RecordInvalidReason::UnsupportedSchema(
@@ -273,6 +278,7 @@ impl KeyringRecord {
             updated_at: stored.updated_at,
             signature,
             canonical_digest,
+            unknown_members,
         };
         record.check_versions().map_err(invalid)?;
         Ok(record)
@@ -336,6 +342,25 @@ impl KeyringRecord {
 /// The SHA-256 of RFC 8785's canonical form of `document`.
 fn canonical_digest(document: &Value) -> Result<[u8; 32], CanonicalError> {
     canonical_json(document).map(|canonical| Sha256::digest(canonical).into())
+}
+
+/// Whether `document` holds a member, at any depth, that `known` lacks: `known` is the document
+/// this release writes for the same values, which holds every member it knows, `null` ones
+/// included, so a member that a document of an earlier release lacks is no difference.
+fn holds_unknown_members(document: &Value, known: &Value) -> bool {
+    match document {
+        Value::Object(members) => members.iter().any(|(name, member)| {
+            known
+                .get(name)
+                .is_none_or(|known| holds_unknown_members(member, known))
+        }),
+        Value::Array(items) => items.iter().enumerate().any(|(index, item)| {
+            known
+                .get(index)
+                .is_none_or(|known| holds_unknown_members(item, known))
+        }),
+        _ => false,
+    }
 }
 
 impl TryFrom<StoredVersion> for KeyVersion {

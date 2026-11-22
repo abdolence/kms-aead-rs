@@ -56,6 +56,12 @@ pub use export::{EncryptedKeyset, KeysetSelection};
 /// [`KeyringError::RecordSignerMissing`](crate::KeyringError::RecordSignerMissing), except
 /// through [`dangerously_unsign_record`](Self::dangerously_unsign_record). Every refusal comes
 /// before any store write.
+///
+/// Every write refuses a record that holds members this release does not know, which a later
+/// release can write, with [`KeyringError::RecordInvalid`](crate::KeyringError::RecordInvalid)
+/// and the reason
+/// [`UnknownMembers`](crate::errors::RecordInvalidReason::UnknownMembers), before the
+/// compare-and-swap: the record it writes would drop them.
 pub struct KeyringAdmin<S: KeyringStore, P, B, R = NoRecordSigner> {
     keyring: Keyring<S, P, B>,
     signer: R,
@@ -175,7 +181,9 @@ where
     /// [`Transition::Rotate`](crate::Transition::Rotate) naming the pending version when the
     /// purpose has one already,
     /// [`KeyringError::RecordRegressed`](crate::KeyringError::RecordRegressed) when the stored
-    /// record moves backwards from the cached one, and
+    /// record moves backwards from the cached one,
+    /// [`KeyringError::RecordInvalid`](crate::KeyringError::RecordInvalid) with
+    /// `UnknownMembers` when it holds members this release does not know, and
     /// [`KeyringError::RecordConflict`](crate::KeyringError::RecordConflict) after
     /// [`cas_retries`](crate::KeyringOptions::cas_retries) conflicts.
     pub async fn rotate(&self, purpose: Purpose) -> KeyringResult<KeyId> {

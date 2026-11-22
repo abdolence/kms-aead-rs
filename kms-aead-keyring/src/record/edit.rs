@@ -117,6 +117,7 @@ impl KeyringRecord {
             updated_at: now,
             signature: None,
             canonical_digest: [0; 32],
+            unknown_members: false,
         }
     }
 
