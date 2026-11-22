@@ -82,7 +82,7 @@ assert_eq!(decrypted, SecretValue::from("user@example.com"));
 An `Encrypted<T, Deterministic>` is `[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]`: Tink's
 5-byte TINK prefix that names the key by its `KeyId`, then the output of RFC 5297, so Tink and
 BigQuery read it with a keyset of that key, see
-[One fixed key](./envelope-encryption.md#one-fixed-key). Its equality compares in constant time,
+[One fixed key](./one-fixed-key.md). Its equality compares in constant time,
 and its `Debug` prints only the length, since the bytes tell which values are equal.
 
 ## Keys encrypted by a KMS

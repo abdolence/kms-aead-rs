@@ -66,3 +66,5 @@ runnable = false
 "/formats.html#values-written-by-029-and-earlier" = "/migrating-from-0.29.html#values-written-by-029-and-earlier"
 "/formats.html#upgrading-stored-values" = "/migrating-from-0.29.html#upgrading-stored-values"
 "/formats.html#deprecation" = "/migrating-from-0.29.html#deprecation"
+"/envelope-encryption.html#one-fixed-key" = "/one-fixed-key.html"
+"/envelope-encryption.html#beacons" = "/beacons.html"

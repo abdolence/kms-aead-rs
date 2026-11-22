@@ -61,7 +61,7 @@ reuse of every value the writer encrypted until it renewed the DEK.
 2. read each value under it with `decrypt` and encrypt it again with `encrypt`, which takes a new
    DEK, and write it back only where the stored bytes are still the ones read;
 3. a DEK the application keeps itself, such as the key of
-   [One fixed key](../envelope-encryption.md#one-fixed-key) or a beacon key, is replaced by a key
+   [One fixed key](../one-fixed-key.md) or a beacon key, is replaced by a key
    under a new key id, and the values or beacons under the old one are encrypted or computed again;
 4. treat backups, point-in-time recovery and data exports as exposed: they still hold the values
    the leaked DEK decrypts, see

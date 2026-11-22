@@ -172,7 +172,7 @@ Two items describe the TINK-prefixed values:
 - `kms_aead::formats::TinkKeyset`: a serialised `google.crypto.tink.Keyset` of enabled, symmetric,
   TINK-prefixed keys, the bytes `tinkey` writes for the same keys. Encrypted by a Cloud KMS key, it
   is the keyset of BigQuery's `KEYS.KEYSET_CHAIN`: an application writes it for its one key, see
-  [One fixed key](./envelope-encryption.md#one-fixed-key), and a keyring exports it for its
+  [One fixed key](./one-fixed-key.md), and a keyring exports it for its
   versions.
 
 `TinkKeyset::into_encrypted_bytes` writes the keyset encrypted by a KMS key, as Tink writes an

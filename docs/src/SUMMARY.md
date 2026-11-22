@@ -44,6 +44,7 @@
 
 - [Stored values](./stored-values.md)
 - [Envelope encryption](./envelope-encryption.md)
+- [One fixed key](./one-fixed-key.md)
 - [DEK caching and reuse](./dek-caching.md)
 - [Deterministic encryption](./deterministic.md)
 - [Beacons](./beacons.md)

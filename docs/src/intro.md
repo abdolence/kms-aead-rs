@@ -72,7 +72,7 @@ stored value holds:
   the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink's wire
   format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
   it for a column that BigQuery reads, with no key rotation. See
-  [One fixed key](./envelope-encryption.md#one-fixed-key);
+  [One fixed key](./one-fixed-key.md);
 - **Keyring**, the `kms-aead-keyring` crate: a keyring record per scope holds the encrypted DEK
   versions, and values carry a 4-byte key id in Tink's wire format instead of an encrypted DEK. The
   record is the place for central rotation and retirement of keys, and for values that BigQuery

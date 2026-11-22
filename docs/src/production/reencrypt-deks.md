@@ -172,7 +172,7 @@ query or a reader that decrypts one fails once the old version is disabled:
   column or a setting that holds the keyset, and the file or the setting a
   Tink reader decrypts. See [BigQuery](../keyring/bigquery.md#exporting-a-keyset-to-bigquery);
 - the application's own encrypted keyset, such as `first_level_keyset` in
-  [One fixed key](../envelope-encryption.md#one-fixed-key): the provider decrypts it and encrypts it again, and the new bytes
+  [One fixed key](../one-fixed-key.md): the provider decrypts it and encrypts it again, and the new bytes
   replace the old ones wherever they are kept:
 
 ```rust
@@ -329,7 +329,7 @@ things keep using the old version after a rotation, and each sets when to disabl
   signal, see [Record cache](../keyring/record-cache.md#how-late-a-change-is-seen). A process whose
   revalidations fail keeps its record for as long as they fail, and logs "The keyring record could
   not be revalidated; the cached record stays in use" at `WARN` on each failure. An encrypted DEK
-  the application read from its settings at startup, as in [One fixed key](../envelope-encryption.md#one-fixed-key), stays
+  the application read from its settings at startup, as in [One fixed key](../one-fixed-key.md), stays
   as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
   decrypts the old bytes again and fails under a disabled old version, with no reload. This is the
   wait of step 4 in [Re-encrypt DEKs after a KEK rotation](#re-encrypt-deks-after-a-kek-rotation).

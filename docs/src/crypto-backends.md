@@ -122,7 +122,7 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 Full example available [here](https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs).
 
 `encrypt` writes an `Encrypted<T, Randomized>`: the same output after Tink's TINK prefix, which
-names the key by a `KeyId`, see [One fixed key](./envelope-encryption.md#one-fixed-key).
+names the key by a `KeyId`, see [One fixed key](./one-fixed-key.md).
 
 `generate_dek` makes a DEK without a KMS. `generate_encrypted_dek` makes a DEK and encrypts it with
 a provider in one call, for an application that stores the encrypted DEK itself. The other calls

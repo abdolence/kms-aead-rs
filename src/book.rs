@@ -32,6 +32,9 @@ mod provider_local {}
 #[doc = include_str!("../docs/src/envelope-encryption.md")]
 mod envelope_encryption {}
 
+#[doc = include_str!("../docs/src/one-fixed-key.md")]
+mod one_fixed_key {}
+
 #[doc = include_str!("../docs/src/production/reencrypt-deks.md")]
 mod reencrypt_deks {}
 

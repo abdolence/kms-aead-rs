@@ -274,7 +274,7 @@ Without a keyring there is no version to stage, and the DEK rotates with the mod
   and needs no sweep, see [Store-less DEK reuse](../dek-caching.md#store-less-dek-reuse);
 - **one fixed key**, a deterministic key or a beacon key the application keeps: a second key under
   a second key id, both kept for reads, and a re-index of the values or beacons under the old one,
-  see [One fixed key](../envelope-encryption.md#one-fixed-key) and
+  see [One fixed key](../one-fixed-key.md) and
   [Rotating a beacon key](../beacons.md#rotating-a-beacon-key).
 
 A DEK that leaked keeps decrypting every value encrypted under it, whatever the KEK, so it is
