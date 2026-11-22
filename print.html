@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-52083058.js";
+            window.path_to_searchindex_js = "searchindex-af349c54.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -11907,16 +11907,11 @@ keeps an older record for longer: when it meets a value under a version it has n
 reloads its record, and fails the read when it cannot reach the store. So the wait beyond the
 record TTL is the operator’s, see <a href="#staged-rotation">Staged rotation</a>.</li>
 </ul>
-<h2 id="oss"><a class="header" href="#oss">OSS</a></h2>
-<p>Open source code is created through voluntary collaboration of software developers. The original
-authors license the code so that anyone can see it, modify it, and distribute new versions of it.
-You should manage all OSS using the same procedures and tools that you use for commercial
-products. As always, train your employees on cyber security best practices that can help them
-securely use and manage software products. You should not solely rely on individuals, especially
-on the projects like this reading sensitive information.</p>
-<h2 id="versioning"><a class="header" href="#versioning">Versioning</a></h2>
-<p>Please don’t use broad version dependency management not to include a new version of dependency
-automatically without auditing the changes.</p>
+<h2 id="supply-chain"><a class="header" href="#supply-chain">Supply chain</a></h2>
+<p>kms-aead and kms-aead-keyring read sensitive data, so manage them and their dependencies with the
+procedures you use for commercial products. Pin versions in a lockfile, and audit the changes of an
+upgrade before you take it: a broad version requirement pulls in a new release of a dependency
+without that audit.</p>
 <h2 id="reporting-a-vulnerability"><a class="header" href="#reporting-a-vulnerability">Reporting a vulnerability</a></h2>
 <p>See <a href="https://github.com/abdolence/kms-aead-rs/blob/master/SECURITY.md">SECURITY.md</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
