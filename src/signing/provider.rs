@@ -53,7 +53,6 @@ pub trait KmsSigningProvider: Send + Sync {
     fn verifying_key(&self) -> impl Future<Output = KmsAeadResult<VerifyingKey>> + Send;
 }
 
-/// A provider shared behind an `Arc` is `P`: every method is `P`'s.
 impl<P: KmsSigningProvider> KmsSigningProvider for Arc<P> {
     fn signing_key(&self) -> &SigningKeyRef {
         (**self).signing_key()
@@ -75,7 +74,6 @@ impl<P: KmsSigningProvider> KmsSigningProvider for Arc<P> {
     }
 }
 
-/// A provider borrowed by a signer that does not own it is `P`: every method is `P`'s.
 impl<P: KmsSigningProvider> KmsSigningProvider for &P {
     fn signing_key(&self) -> &SigningKeyRef {
         (**self).signing_key()

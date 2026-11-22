@@ -94,8 +94,8 @@ pub trait KmsAeadDecryptionProvider: KmsAeadEncryptionProvider {
     ) -> impl Future<Output = KmsAeadResult<DataEncryptionKey>> + Send;
 }
 
-/// A provider shared behind an `Arc`, such as one KEK's provider under many keyrings, is `P`: every
-/// method is `P`'s, the defaulted ones included.
+/// Forwards every method to `P`, the defaulted ones included, so that a provider shared behind an
+/// `Arc`, such as one KEK's provider under many keyrings, behaves as `P` does.
 impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for Arc<P> {
     fn kek(&self) -> &KekRef {
         (**self).kek()
@@ -129,8 +129,8 @@ impl<P: KmsAeadDecryptionProvider> KmsAeadDecryptionProvider for Arc<P> {
     }
 }
 
-/// A provider borrowed by an envelope that does not own it is `P`: every method is `P`'s, the
-/// defaulted ones included.
+/// Forwards every method to `P`, the defaulted ones included, so that a borrowed provider behaves
+/// as `P` does.
 impl<P: KmsAeadEncryptionProvider> KmsAeadEncryptionProvider for &P {
     fn kek(&self) -> &KekRef {
         (**self).kek()
