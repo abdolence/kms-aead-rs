@@ -75,7 +75,9 @@ The crate has no default features.
 | `firestore-tls-roots` | `firestore` with the system's native roots, firestore-rs's `tls-roots`, which brings native-tls and so OpenSSL on Linux, and firestore-rs's `auth-default-crypto` |
 | `firestore-tls-webpki` | `firestore` on rustls, with the bundled WebPKI roots for the gRPC connection to Firestore and no native TLS, and firestore-rs's `auth-default-crypto` |
 | `postgres` | the PostgreSQL keyring store, and `Encrypted` and `EncryptionMarker` in tokio-postgres, as `BYTEA` |
-| `gcs` | the Cloud Storage keyring store, with the TLS variants listed in [Keyring stores](./keyring/stores.md#cloud-storage) |
+| `gcs` | the Cloud Storage keyring store, on gcloud-sdk without a TLS root store or crypto provider. The application enables a gcloud-sdk root store feature, or uses one of the two below, see [Keyring stores](./keyring/stores.md#cloud-storage) |
+| `gcs-tls-roots` | `gcs` with the system's native roots, gcloud-sdk's `tls-roots`, which brings native-tls and so OpenSSL on Linux, and gcloud-sdk's `auth-default-crypto` |
+| `gcs-tls-webpki` | `gcs` on rustls, with the bundled WebPKI roots for the gRPC connection to Cloud Storage and no native TLS, and gcloud-sdk's `auth-default-crypto` |
 | `s3` | the S3 keyring store |
 | `sqlx` | `Encrypted` and `EncryptionMarker` in sqlx on PostgreSQL, as `BYTEA` |
 | `stream` | kms-aead's `stream`, `Encryptor::stream_encryptor`, `Keyring::stream_decryptor`, `decrypting_stream` and `decrypting_reader`, and the `stream` module re-exported. Needs a backend feature, see [Streaming encryption](./streaming.md) |
