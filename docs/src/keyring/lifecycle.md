@@ -86,9 +86,13 @@ The calls, on a `KeyringAdmin`, with the `admin` feature, see
 | `retire(key_id)` | `DecryptOnly` to `Retired`, once a sweep found no value left under it |
 | `reinstate(key_id)` | `Retired` back to `DecryptOnly`, for a value that turned up after all; a compromised flag stays |
 | `destroy(key_id)` | `Retired` or `Pending` to `Destroyed` |
-| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write: the keyring encrypts and decrypts nothing from then on, except through a stream encryptor or decryptor already made, see [Shredding a tenant with `dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred), and the record stays in the store |
+| `dangerously_destroy_all_versions()` | every version of every purpose to `Destroyed`, in any state, in one write; the record stays in the store, see below the table |
 | `dangerously_shred()` | destroys every version in one write, as the call above, then deletes the record from the store with the earlier versions the store keeps, see [Shredding a keyring](#shredding-a-keyring) |
 | `reencrypt_deks()` | decrypts and encrypts again every DEK in the record, under the KEK's current version; no value changes. Returns a `DekReencryption` per version, with the KEK version its DEK moved from and to |
+
+After `dangerously_destroy_all_versions()` the keyring encrypts and decrypts nothing, except through a
+stream encryptor or decryptor already made, see [Shredding a tenant with
+`dangerously_shred()`](../use-cases/erase-a-tenant.md#shredding-a-tenant-with-dangerously_shred).
 
 A call that does not apply to the version's state fails with `InvalidTransition`, which names the
 version, its state and the `Transition`:

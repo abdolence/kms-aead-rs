@@ -49,36 +49,98 @@ assert!(matches!(&too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORMAT")
 # }
 ```
 
-The library's codes:
+The library's codes, by area:
+
+### Values, keys and formats
 
 | Code | Variant | Meaning |
 |---|---|---|
 | `ENCRYPT`, `DECRYPT` | encryption | encrypting failed, or a value, or a chunk of a streamed value, is not authentic under the key and the AAD, among them a final chunk that a sequential read finds cut or followed by more bytes |
 | `ENCRYPT_KEY`, `DECRYPT_KEY` | encryption | the backend refused a key, or a KMS request could not be built |
-| `SIGN_KEY`, `GET_PUBLIC_KEY` | signature | a Cloud KMS signing request, or its public key request, whose routing header could not be built |
 | `RANDOM_GENERATOR` | encryption | the CSPRNG failed, for a nonce or a key |
 | `INVALID_KEY_LENGTH` | encryption | a key that does not fit the algorithm, such as a MAC key of another length than 32 or 64 bytes, a KMS generator that returned another length, or a DEK longer than the OAEP limit of the public key it is encrypted with |
 | `UNSUPPORTED_ALGORITHM` | unsupported algorithm | the backend does not implement the algorithm, an AEAD algorithm or an asymmetric KEK algorithm such as RSA-OAEP on ring. `algorithm` is a `BackendAlgorithm` |
 | `UNKNOWN_ALGORITHM` | encryption | `FromStr` of an algorithm name it does not know, a signing or MAC algorithm included |
-| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a value too short, a length past its end, a `Randomized` or `Deterministic` value without Tink's output prefix, a stream header that is not 61 bytes (56 bare) or does not start with `0x01`, or an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not `60 + w` bytes |
+| `INVALID_CIPHER_TEXT_FORMAT` | encryption | a stored value whose layout does not parse, see the cases below the table |
 | `UNKNOWN_CIPHER_TEXT_LAYOUT` | encryption | an empty envelope value, or a first byte that starts no layout |
 | `INVALID_PLAINTEXT` | encryption | a decrypted value that is not an encoding of its type, or a `JsonEncoded` value that does not serialise |
 | `INVALID_KEY_FORMAT` | encryption | a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset |
 | `INVALID_ENCRYPTED_KEY_FORMAT` | encryption | the encrypted DEK layout v1 of 0.29 that cannot be read, with `legacy-formats` |
 | `INVALID_KEY_VERSION` | encryption | a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a layout of 0.29 |
 | `INVALID_HEX` | encryption | `try_from_hex_string` of text that is not hex |
+| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
+| `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
+| `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
+
+`INVALID_CIPHER_TEXT_FORMAT` is returned for:
+
+- a value too short, or a length past its end;
+- a `Randomized` or `Deterministic` value without Tink's output prefix;
+- a stream header that is not 61 bytes (56 bare) or does not start with `0x01`;
+- an envelope stream header whose encrypted DEK length is not 1 to 4,096 or that is not `60 + w`
+  bytes.
+
+### Beacons, MACs and digests
+
+| Code | Variant | Meaning |
+|---|---|---|
 | `INVALID_BEACON_FORMAT` | encryption | stored bytes that are not `[0x01][key id: u32 BE]` and 1 to 32 bytes of HMAC, at `Beacon::try_from` |
 | `INVALID_BEACON_CONTEXT` | encryption | a beacon context longer than 2^32 - 1 bytes |
 | `BEACON` | encryption | the backend failed to calculate a beacon's HMAC |
+| `INVALID_PAYLOAD` | encryption | `to_payload` or `from_payload` failed, from a signing or a MAC call, such as a payload that is not the JSON of a `JsonEncoded` type |
+| `MAC_INVALID` | encryption | the tag does not match, or is not the length of the key's algorithm |
+| `INVALID_MAC_FORMAT` | encryption | bytes that are not a `Mac` or `WithMac` layout |
+| `MAC` | encryption | the backend failed to compute an HMAC |
+| `DIGEST` | encryption | the backend failed to compute a SHA-256, of a payload or a pre-image |
+
+### Streams
+
+| Code | Variant | Meaning |
+|---|---|---|
 | `STREAM_ALGORITHM` | encryption | a cipher or key version whose algorithm is not AES-256-GCM asked to encrypt or decrypt a streamed value |
-| `STREAM_LENGTH` | encryption | a stored length that the length rules refuse, given to `StreamFormat::plan_chunk_read` or `plan_final_chunk_read`; bytes given to `decrypt_chunk_read` of another length than the plan's `ciphertext()`; a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk, where no value ends, or holds more chunks than a value can; a source that ends inside the header that `decrypting_stream` or `decrypting_reader` read |
+| `STREAM_LENGTH` | encryption | a length or a source that the length rules of the stream format refuse, see the cases below the table |
 | `STREAM_KEY_COMMITMENT` | encryption | the header's commitment is not the one the DEK, the salt and the AAD derive: a wrong key, a wrong AAD, or a modified salt or commitment |
 | `STREAM_RANGE` | encryption | a plaintext range past the value's length or with `start > end`, or a chunk read plan of a value in another form |
-| `STREAM_IO` | system | the source or the sink of `encrypt_stream` or `decrypt_stream`, or the source of an `EncryptingStream` or a `DecryptingStream`, or the source of `decrypting_stream` or `decrypting_reader` while they read the header, failed; the source's or sink's error is the root cause. The retry is the whole stream again |
+| `STREAM_IO` | system | the source or the sink of a stream call failed, see the cases below the table. The source's or sink's error is the root cause. The retry is the whole stream again |
+
+`STREAM_LENGTH` is returned for:
+
+- a stored length that the length rules refuse, given to `StreamFormat::plan_chunk_read` or
+  `plan_final_chunk_read`;
+- bytes given to `decrypt_chunk_read` of another length than the plan's `ciphertext()`;
+- a source of a sequential read that ends at a chunk boundary or less than a tag into a chunk,
+  where no value ends, or holds more chunks than a value can;
+- a source that ends inside the header that `decrypting_stream` or `decrypting_reader` read.
+
+`STREAM_IO` is returned when:
+
+- the source or the sink of `encrypt_stream` or `decrypt_stream` failed;
+- the source of an `EncryptingStream` or a `DecryptingStream` failed;
+- the source of `decrypting_stream` or `decrypting_reader` failed while they read the header.
+
+### Asymmetric KEKs
+
+| Code | Variant | Meaning |
+|---|---|---|
 | `ASYMMETRIC_ENCRYPTED_DEK_FORMAT` | encryption | a `0x02` encrypted DEK with an unknown algorithm byte, a header past the end, an `i` or `k` of another shape than the reading provider's, or a block of another length than its key's, before any KMS call |
-| `ASYMMETRIC_KEK_PUBLIC_KEY` | system | public key bytes that are not in the named `PublicKeyFormat`, or not an RSA key of 2048, 3072 or 4096 bits, a key the backend refuses, a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal version for a local KEK, or a KMS key the fetch describes as another kind |
+| `ASYMMETRIC_KEK_PUBLIC_KEY` | system | a public key or a KEK version that cannot be used, see the cases below the table |
 | `ASYMMETRIC_KEK_PRIVATE_KEY` | system | local private key bytes that are not in the named `PrivateKeyFormat`, or not an RSA key of 2048, 3072 or 4096 bits |
 | `ASYMMETRIC_KEK_MISMATCH` | system | an `AsymmetricKekProvider` whose public key names another KEK than its KMS provider, or a `pinned` producer whose key has another fingerprint |
+
+`ASYMMETRIC_KEK_PUBLIC_KEY` is returned for:
+
+- public key bytes that are not in the named `PublicKeyFormat`;
+- a key that is not an RSA key of 2048, 3072 or 4096 bits;
+- a key the backend refuses;
+- a KEK version missing where the KMS decrypts with one, present under AWS, or not a decimal
+  version for a local KEK;
+- a KMS key the fetch describes as another kind.
+
+### Signatures
+
+| Code | Variant | Meaning |
+|---|---|---|
+| `SIGN_KEY`, `GET_PUBLIC_KEY` | signature | a Cloud KMS signing request, or its public key request, whose routing header could not be built |
 | `SIGNATURE_INVALID` | signature | no key with the signature's key id verifies it |
 | `SIGNING_KEY_UNKNOWN` | signature | no key in the set has the signature's key id: the set is stale, or the signer is not trusted; also `with_record_signer`, `create_signed` and `open_or_create_signed` with a signer the registry's record verification does not hold |
 | `INVALID_SIGNATURE_FORMAT` | signature | bytes that are not a `Signature` or `Signed` layout, at `TryFrom` |
@@ -88,20 +150,20 @@ The library's codes:
 | `INVALID_PUBLIC_KEY` | signature | a public key, JWK or JWK Set that does not parse, is of another algorithm, is not on the curve, or is an Ed25519 point of order 8 or less |
 | `EMPTY_KEY_SET` | signature | `Verifier::new` with no key, and `KeyringRegistry::new` with `RecordSignaturePolicy::Required` and no key |
 | `DUPLICATE_KEY_ID` | signature | two different keys under one key id, at `VerifyingKeySet::new`, `insert` or `from_jwks`, or two local versions sharing one |
-| `INVALID_PAYLOAD` | encryption | `to_payload` or `from_payload` failed, from a signing or a MAC call, such as a payload that is not the JSON of a `JsonEncoded` type |
-| `MAC_INVALID` | encryption | the tag does not match, or is not the length of the key's algorithm |
-| `INVALID_MAC_FORMAT` | encryption | bytes that are not a `Mac` or `WithMac` layout |
-| `MAC` | encryption | the backend failed to compute an HMAC |
-| `DIGEST` | encryption | the backend failed to compute a SHA-256, of a payload or a pre-image |
 | `SIGN` | signature | the backend failed to sign with a local signing key |
-| `LEGACY_FORMAT` | legacy format | a layout of 0.29 or earlier without `legacy-formats`, at `Encrypted::try_from` or at decryption, and the envelope layouts of 0.29 and earlier in `separate` |
-| `INVALID_DEK_CACHE_TTL` | system | a DEK cache TTL of zero |
-| `INVALID_DEK_REUSE_POLICY` | system | a reuse policy out of range, or beside a disabled cache |
+| `INVALID_LOCAL_SIGNING_KEY_NAME` | system | a local signing key name that is empty, longer than 255 bytes or holds another character than the name allows |
+| `LOCAL_SIGNING_KEY_SOURCE` | system | a key file that cannot be read, is not a regular file or is too large, or an environment variable that is unset, too large or not base64 where base64 is expected |
+| `LOCAL_SIGNING_KEY_FORMAT` | system | key bytes that are not the format, another algorithm, an encrypted PKCS#8 or a P-256 key without its public point, or a key the backend refuses |
+| `LOCAL_SIGNING_KEY_VERSIONS` | system | a local signing provider with no keys, or with a version listed twice |
+| `AWS_SIGNING_KEY_ALIAS` | system | an AWS signing key named by an alias, which a rotation could point at another key |
+
+### Providers
+
+| Code | Variant | Meaning |
+|---|---|---|
 | `AWS_ERROR` | encryption | an AWS KMS response without the encrypted DEK, the plaintext DEK or the random bytes it was asked for, see [AWS KMS](./providers/aws.md#errors) |
 | `INVALID_LOCAL_KEK_ID`, `LOCAL_*` | system, encryption | the [local KMS](./providers/local.md#errors) |
 | `AZURE_*` | system, encryption | the [Azure provider](./providers/azure.md#errors) |
-| `INVALID_LOCAL_SIGNING_KEY_NAME`, `LOCAL_SIGNING_KEY_SOURCE`, `LOCAL_SIGNING_KEY_FORMAT`, `LOCAL_SIGNING_KEY_VERSIONS` | system | the local signing provider's configuration |
-| `AWS_SIGNING_KEY_ALIAS` | system | an AWS signing key named by an alias, which a rotation could point at another key |
 | `VAULT_*` | system, network, encryption | the [Vault Transit provider](./providers/hc-vault-transit.md#errors) |
 
 The KMS codes are the gRPC status codes of Google Cloud KMS, such as `PermissionDenied`, the AWS
@@ -117,14 +179,36 @@ the Azure provider takes in `client_options`.
 A `NetworkError` may be retried, with a backoff. An `EncryptionError` or a `SignatureError` should
 not be: a revoked permission, a missing key or an encrypted DEK of another key fails the same way on
 every retry.
+
 The variant per provider:
 
-| Provider | `NetworkError` | `EncryptionError` |
-|---|---|---|
-| Google Cloud KMS | gRPC `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`, `Internal`, `Unknown`, `Cancelled` | any other gRPC code, such as `PermissionDenied`, `Unauthenticated`, `NotFound`, `InvalidArgument`, `FailedPrecondition` |
-| AWS KMS | `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException`, `KeyUnavailableException`, a 5xx or 429 status, a timeout, a connection failure, a response the SDK could not read | any other AWS error code, such as `AccessDeniedException`, `NotFoundException`, `IncorrectKeyException`, `InvalidCiphertextException`, `DisabledException`, `KMSInvalidStateException`, a request that could not be built or signed, and `AWS_ERROR` |
-| Azure Key Vault | a 5xx or 429 status, a connection or I/O failure | any other status, such as `Forbidden` or `KeyNotFound`, and a response that does not parse |
-| Vault Transit | `VAULT_STATUS_5xx`, `VAULT_STATUS_429`, `VAULT_HTTP`, `VAULT_TIMEOUT` | any other `VAULT_STATUS_<status>`, `VAULT_RESPONSE`, `VAULT_RESPONSE_TOO_LARGE`, `VAULT_CIPHERTEXT` |
+**Google Cloud KMS**
+
+- `NetworkError`: gRPC `Unavailable`, `DeadlineExceeded`, `ResourceExhausted`, `Aborted`,
+  `Internal`, `Unknown`, `Cancelled`;
+- `EncryptionError`: any other gRPC code, such as `PermissionDenied`, `Unauthenticated`,
+  `NotFound`, `InvalidArgument`, `FailedPrecondition`.
+
+**AWS KMS**
+
+- `NetworkError`: `ThrottlingException`, `KMSInternalException`, `DependencyTimeoutException`,
+  `KeyUnavailableException`, a 5xx or 429 status, a timeout, a connection failure, a response the
+  SDK could not read;
+- `EncryptionError`: any other AWS error code, such as `AccessDeniedException`,
+  `NotFoundException`, `IncorrectKeyException`, `InvalidCiphertextException`, `DisabledException`,
+  `KMSInvalidStateException`, a request that could not be built or signed, and `AWS_ERROR`.
+
+**Azure Key Vault**
+
+- `NetworkError`: a 5xx or 429 status, a connection or I/O failure;
+- `EncryptionError`: any other status, such as `Forbidden` or `KeyNotFound`, and a response that
+  does not parse.
+
+**Vault Transit**
+
+- `NetworkError`: `VAULT_STATUS_5xx`, `VAULT_STATUS_429`, `VAULT_HTTP`, `VAULT_TIMEOUT`;
+- `EncryptionError`: any other `VAULT_STATUS_<status>`, `VAULT_RESPONSE`,
+  `VAULT_RESPONSE_TOO_LARGE`, `VAULT_CIPHERTEXT`.
 
 Google's client libraries retry the Cloud KMS `Encrypt` and `Decrypt` calls on `Unavailable` and
 `DeadlineExceeded` only. Keep a retry on the other Google Cloud KMS network codes to a few
@@ -143,6 +227,8 @@ Every fallible call of kms-aead-keyring returns `KeyringResult<T>`, whose error 
 `error.type` of its metrics. Match on the variant and its fields, or on the code: the `Display`
 text may change in any release.
 
+### Records and the store
+
 | Variant | Code | Meaning |
 |---|---|---|
 | `KmsAead` | kms-aead's | a KMS call, a decryption or an encoding failed, see [Codes](#codes) |
@@ -158,6 +244,11 @@ text may change in any release.
 | `RecordRegressed` | `RECORD_REGRESSED` | a record that moves a version backwards from the one this process holds, from `reload` and before an administrative write |
 | `RecordConflict` | `RECORD_CONFLICT` | an administrative write lost every compare-and-swap, `attempts` of them |
 | `KekMismatch` | `KEK_MISMATCH` | the provider's KEK is not the one the record names |
+
+### Key versions
+
+| Variant | Code | Meaning |
+|---|---|---|
 | `NoActiveVersion` | `NO_ACTIVE_VERSION` | no active version of the purpose, so nothing new is encrypted under it |
 | `NoAlgorithm` | `NO_ALGORITHM` | the record names no algorithm for the purpose, so no version of it is created: `change_algorithm` sets one |
 | `KeyVersionUnknown` | `KEY_VERSION_UNKNOWN` | no version with the value's key id, also after a reload |
@@ -170,12 +261,19 @@ text may change in any release.
 | `InvalidTransition` | `INVALID_TRANSITION` | a lifecycle call that does not apply to the version's state, see [States](./keyring/lifecycle.md#states) |
 | `PromotionTooEarly` | `PROMOTION_TOO_EARLY` | a promotion before `record_ttl` has passed since the version was staged |
 | `ReservedKeyId` | `RESERVED_KEY_ID` | a key id no version has: ordinal zero |
+| `UnknownKeyVersionState` | `UNKNOWN_KEY_VERSION_STATE` | `FromStr` of a name that is no `KeyVersionState` |
+
+### Other calls
+
+| Variant | Code | Meaning |
+|---|---|---|
 | `DeterministicDisabled` | `DETERMINISTIC_DISABLED` | a deterministic version created without the `deterministic` feature |
 | `Interop` | `INTEROP` | an encryption or a keyset export that a field's `Interop` reader would not read |
 | `CustomAadUnsupported` | `CUSTOM_AAD_UNSUPPORTED` | `custom_aad` on a field BigQuery decrypts |
 | `ExportAlgorithmUnsupported` | `EXPORT_ALGORITHM_UNSUPPORTED` | a version in an export whose algorithm the keyset's reader does not read |
-| `UnknownKeyVersionState` | `UNKNOWN_KEY_VERSION_STATE` | `FromStr` of a name that is no `KeyVersionState` |
 | `InvalidEncryptionMarker` | `INVALID_ENCRYPTION_MARKER` | stored bytes that are not an `EncryptionMarker` |
+
+### What a caller may run again
 
 Besides the retry policies of the store clients, such as aws-sdk-s3's, the keyring retries only an
 administrative write's compare-and-swap, up to `cas_retries` times. What a caller may run again:

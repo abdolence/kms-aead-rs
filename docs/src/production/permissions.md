@@ -21,8 +21,8 @@ its row only:
 
 | Side | Handle | KMS | Keyring store |
 |---|---|---|---|
-| Application | `Keyring` | decrypt: GCP `roles/cloudkms.cryptoKeyDecrypter`, AWS `kms:Decrypt`, Azure Key Vault `keys/unwrap/action`, Vault Transit decrypt | read, and listen or watch: Firestore read, PostgreSQL `SELECT` and `LISTEN`, Cloud Storage object read, S3 `GetObject` |
-| Administration | `KeyringAdmin` | encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key | read, write and delete: Firestore write, PostgreSQL `INSERT`, `UPDATE` and `DELETE`, which also send the `NOTIFY`, Cloud Storage and S3 object write and delete |
+| Application | `Keyring` | decrypt | read, and listen or watch |
+| Administration | `KeyringAdmin` | encrypt and decrypt, or under an asymmetric KEK decrypt and read of the public key | read, write and delete |
 
 Sweeps run on the application's side: re-encrypting a value encrypts it under a DEK the record
 already holds, and never asks the KMS to encrypt a DEK. Every call that encrypts a DEK, writes
@@ -136,10 +136,16 @@ administration needs the read of the public key beside the applications' decrypt
 
 | KMS | Application | Administration |
 |---|---|---|
-| GCP | `cloudkms.cryptoKeyVersions.useToDecrypt`, as in `roles/cloudkms.cryptoKeyDecrypter` | decrypt, and `cloudkms.cryptoKeyVersions.viewPublicKey`, as in `roles/cloudkms.publicKeyViewer`. `roles/cloudkms.cryptoKeyDecrypter` does not carry it |
+| GCP | `cloudkms.cryptoKeyVersions.useToDecrypt`, as in `roles/cloudkms.cryptoKeyDecrypter` | decrypt, and `cloudkms.cryptoKeyVersions.viewPublicKey`, as in `roles/cloudkms.publicKeyViewer` |
 | AWS | `kms:Decrypt` on the key | `kms:Decrypt` and `kms:GetPublicKey` on the key |
-| Azure Key Vault | `keys/unwrap/action` | `keys/unwrap/action` and `keys/get`. "Key Vault Crypto Service Encryption User" carries read, `wrap` and `unwrap` and no decrypt |
+| Azure Key Vault | `keys/unwrap/action` | `keys/unwrap/action` and `keys/get` |
 | Vault Transit | `update` on `transit/decrypt/<key>` | `update` on `transit/decrypt/<key>`, and `read` on `transit/keys/<key>` or `transit/export/public-key/<key>` |
+
+Two built-in roles fall short of what the administration needs:
+
+- `roles/cloudkms.cryptoKeyDecrypter` does not carry `viewPublicKey`;
+- Azure's "Key Vault Crypto Service Encryption User" carries read, `wrap` and `unwrap` and no
+  decrypt.
 
 The KMS audit log no longer shows who encrypted a DEK, since the encryption is local, and anyone
 holding the public key can encrypt one: a keyring under an asymmetric KEK runs with
@@ -158,8 +164,15 @@ only the administration writes the record, and the applications read it and list
 |---|---|---|
 | Firestore | read of the keyring documents, which the listener uses too, such as `roles/datastore.viewer` | read, write and delete of the keyring documents, such as `roles/datastore.user` |
 | PostgreSQL | `SELECT` on the table, and `LISTEN`, which needs no grant | `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the table; each write and delete also sends the `NOTIFY` |
-| Cloud Storage | `storage.objects.get` | `storage.objects.get`, `storage.objects.create`, `storage.objects.delete`, since a write replaces the object, and `storage.objects.list`, which `dangerously_shred()` needs to find the object's generations |
-| S3 | `s3:GetObject` | `s3:GetObject` and `s3:PutObject`, and for `dangerously_shred()` also `s3:ListBucketVersions`, `s3:DeleteObject` and `s3:DeleteObjectVersion` |
+| Cloud Storage | `storage.objects.get` | `storage.objects.get`, `storage.objects.create` and `storage.objects.delete`, since a write replaces the object |
+| S3 | `s3:GetObject` | `s3:GetObject` and `s3:PutObject` |
+
+`dangerously_shred()` needs more of the administration on the object stores:
+
+| Store | Also needed |
+|---|---|
+| Cloud Storage | `storage.objects.list`, to find the object's generations |
+| S3 | `s3:ListBucketVersions`, `s3:DeleteObject` and `s3:DeleteObjectVersion` |
 
 ## What to alert on
 
