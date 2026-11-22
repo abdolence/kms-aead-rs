@@ -315,10 +315,10 @@ pub use signable::{Signable, SignableType, SignedPayloadType};
 
 pub mod signing;
 
-mod metrics;
 #[cfg(feature = "opentelemetry")]
-#[doc(hidden)]
-pub use metrics::instruments as __instruments;
+pub mod metrics;
+#[cfg(not(feature = "opentelemetry"))]
+mod metrics;
 
 mod spans;
 

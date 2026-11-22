@@ -331,8 +331,8 @@ mod aes_siv_cipher {
         fn deterministic_call(
             operation: &'static str,
             algorithm: DeterministicAlgorithm,
-        ) -> metrics::Call {
-            metrics::Call {
+        ) -> metrics::OperationAttributes {
+            metrics::OperationAttributes {
                 operation,
                 mode: "caller_dek",
                 backend: B::NAME,

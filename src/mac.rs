@@ -261,7 +261,7 @@ impl<B: AeadBackend> Authenticator<B> {
         payload_type: SignedPayloadType,
         operation: impl FnOnce() -> KmsAeadResult<R>,
     ) -> KmsAeadResult<R> {
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: operation_name,
             mode: "caller_dek",
             backend: B::NAME,

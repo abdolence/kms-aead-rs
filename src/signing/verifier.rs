@@ -135,7 +135,7 @@ impl<B: AeadBackend> Verifier<B> {
             .keys
             .key_with_id(key_id)
             .map(|key| key.algorithm().as_str());
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: "verify",
             mode: "signature",
             backend: B::NAME,

@@ -87,8 +87,11 @@ mod recorded {
     use std::future::Future;
     use std::time::{Duration, Instant};
 
-    use kms_aead::__instruments::{record_operation, Call, Outcome};
     use kms_aead::formats::Format;
+    use kms_aead::metrics::{
+        record_keyring_record_refusal, record_keyring_store_load, record_operation,
+        OperationAttributes, OperationOutcome,
+    };
     use opentelemetry::KeyValue;
 
     use super::KeyringCall;
@@ -126,7 +129,7 @@ mod recorded {
             let started = Instant::now();
             let encrypted = encrypt.await;
             self.record(started.elapsed(), &encrypted, |encrypted| {
-                Outcome::value(encrypted, self.key_id.get().copied())
+                OperationOutcome::value(encrypted, self.key_id.get().copied())
             });
             encrypted
         }
@@ -141,7 +144,7 @@ mod recorded {
             let started = Instant::now();
             let decrypted = decrypt.await;
             self.record(started.elapsed(), &decrypted, |_| {
-                Outcome::value(value, self.key_id.get().copied())
+                OperationOutcome::value(value, self.key_id.get().copied())
             });
             decrypted
         }
@@ -153,7 +156,7 @@ mod recorded {
         ) -> KeyringResult<R> {
             let started = Instant::now();
             let result = operation.await;
-            self.record(started.elapsed(), &result, |_| Outcome::Succeeded);
+            self.record(started.elapsed(), &result, |_| OperationOutcome::Succeeded);
             result
         }
 
@@ -161,15 +164,15 @@ mod recorded {
             &self,
             elapsed: Duration,
             result: &'a KeyringResult<R>,
-            succeeded: impl FnOnce(&'a R) -> Outcome<'a>,
+            succeeded: impl FnOnce(&'a R) -> OperationOutcome<'a>,
         ) {
             let outcome = match result {
                 Ok(value) => succeeded(value),
-                Err(error) => Outcome::Failed {
+                Err(error) => OperationOutcome::Failed {
                     error_type: error.code(),
                 },
             };
-            let call = Call {
+            let call = OperationAttributes {
                 operation: self.operation,
                 mode: MODE,
                 backend: self.backend,
@@ -190,7 +193,7 @@ mod recorded {
     /// Counts one record of `keyring` refused because of its signature, with the refusal's
     /// `code`.
     pub(crate) fn record_refusal(keyring: &KeyringAttribute, code: &str) {
-        kms_aead::__instruments::record_refusal([keyring.0.clone()], code);
+        record_keyring_record_refusal([keyring.0.clone()], code);
     }
 
     /// Records one read of `keyring`'s record from `store` for `reason` that took `elapsed`.
@@ -201,7 +204,7 @@ mod recorded {
         elapsed: Duration,
         result: &KeyringResult<T>,
     ) {
-        kms_aead::__instruments::record_store_load(
+        record_keyring_store_load(
             [
                 keyring.0.clone(),
                 KeyValue::new(STORE, store.to_string()),

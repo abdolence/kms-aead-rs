@@ -25,8 +25,9 @@ use crate::formats::{Bare, Envelope};
 use crate::metrics::{self, Measurement};
 #[cfg(feature = "stream")]
 use crate::stream::{
-    __HeaderGatherer, __read_header, CobblestoneHeader, DecryptingReader, DecryptingStream,
+    read_stream_header, CobblestoneHeader, DecryptingReader, DecryptingStream,
     EnvelopeStreamHeader, KeyReference, StreamDecryptor, StreamEncryptor, StreamFormat,
+    StreamHeaderGatherer,
 };
 use crate::{
     spans, AeadAlgorithm, AeadCipher, Beacon, BeaconAlgorithm, BeaconBits, BeaconMac,
@@ -652,8 +653,8 @@ where
     }
 
     /// The metric attributes of a call of `operation` in `mode` under the envelope's algorithm.
-    fn call(&self, operation: &'static str, mode: &'static str) -> metrics::Call {
-        metrics::Call {
+    fn call(&self, operation: &'static str, mode: &'static str) -> metrics::OperationAttributes {
+        metrics::OperationAttributes {
             operation,
             mode,
             backend: B::NAME,
@@ -786,7 +787,7 @@ where
         encrypted_dek: &EncryptedDataEncryptionKey,
     ) -> KmsAeadResult<Beacon<T>> {
         let mac = BeaconMac::<B>::new(BeaconAlgorithm::HmacSha256)?;
-        let measurement = Measurement::start(metrics::Call {
+        let measurement = Measurement::start(metrics::OperationAttributes {
             operation: "beacon",
             mode: "caller_dek",
             backend: B::NAME,
@@ -1010,7 +1011,7 @@ where
         S: Stream<Item = Result<Bytes, E>> + Unpin,
         E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
-        let mut stored = __HeaderGatherer::new(stored);
+        let mut stored = StreamHeaderGatherer::new(stored);
         let header_len =
             EnvelopeStreamHeader::header_len(stored.read(ENCRYPTED_DEK_LEN_FIELD_SIZE).await?)?;
         let header = EnvelopeStreamHeader::try_from(stored.read(header_len).await?)?;
@@ -1063,9 +1064,9 @@ where
         R: AsyncRead + Unpin,
     {
         let mut header = Vec::new();
-        __read_header(&mut stored, &mut header, ENCRYPTED_DEK_LEN_FIELD_SIZE).await?;
+        read_stream_header(&mut stored, &mut header, ENCRYPTED_DEK_LEN_FIELD_SIZE).await?;
         let header_len = EnvelopeStreamHeader::header_len(&header)?;
-        __read_header(&mut stored, &mut header, header_len).await?;
+        read_stream_header(&mut stored, &mut header, header_len).await?;
         let header = EnvelopeStreamHeader::try_from(&header[..])?;
         let decryptor = self.stream_decryptor(aad, &header).await?;
         Ok(DecryptingReader::new(Arc::new(decryptor), stored))
@@ -1136,8 +1137,8 @@ where
     }
 
     /// The metric attributes of a re-encryption in `mode`, in which the algorithm plays no part.
-    pub(crate) fn reencrypt_call(&self, mode: &'static str) -> metrics::Call {
-        metrics::Call {
+    pub(crate) fn reencrypt_call(&self, mode: &'static str) -> metrics::OperationAttributes {
+        metrics::OperationAttributes {
             operation: "reencrypt_dek",
             mode,
             backend: B::NAME,

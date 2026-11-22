@@ -14,6 +14,14 @@
   Tink's format: rewrite them on it before moving on, see
   [Old values](https://kms-aead-rust.abdolence.dev/migrating-from-0.29.html#old-values). Delete
   the feature from the dependency in your `Cargo.toml`, since Cargo refuses an unknown feature.
+- The hidden items that kms-aead-keyring calls are public API under new names. `__instruments` is
+  the `kms_aead::metrics` module of the `opentelemetry` feature, where `Call` is
+  `OperationAttributes`, `Outcome` is `OperationOutcome`, `record_store_load` is
+  `record_keyring_store_load` and `record_refusal` is `record_keyring_record_refusal`.
+  `OperationOutcome` and its `Value` variant are `#[non_exhaustive]`, so a value's outcome comes
+  from `OperationOutcome::value`. In `kms_aead::stream`, `__HeaderGatherer` is
+  `StreamHeaderGatherer`, `__read_header` is `read_stream_header`, and
+  `__check_stream_algorithm(&cipher)` is `cipher.check_stream_algorithm()`.
 
 ## 0.33
 

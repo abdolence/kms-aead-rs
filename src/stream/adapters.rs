@@ -558,22 +558,27 @@ pub(super) fn inner_kms_aead_error(error: &io::Error) -> Option<&KmsAeadError> {
         .and_then(|inner| inner.downcast_ref::<KmsAeadError>())
 }
 
-/// Reads from `source` until `header` holds `len` bytes, the header of a streamed value, and no
-/// further, so that the source stays positioned after it. Not part of the API, as
-/// [`__HeaderGatherer`](super::__HeaderGatherer).
+/// Reads the header of a streamed value from the front of `source` into `header`, for a
+/// [`DecryptingReader`] that starts after it: it reads until `header` holds at least `len` bytes,
+/// and no byte past them, so that `source` stays positioned at the first chunk. The bytes already
+/// in `header` count, so a caller that learns the header's length from its first bytes, as the
+/// envelope form's `w`, reads those, then calls again with the whole length.
+///
+/// [`KmsAeadEnvelope::decrypting_reader`](crate::KmsAeadEnvelope::decrypting_reader) reads the
+/// envelope form with it; a caller that picks the DEK by the header itself reads the header with
+/// it, makes the decryptor and passes `source` to [`DecryptingReader::new`].
 ///
 /// # Errors
 ///
 /// `STREAM_LENGTH` when the source ends first, and `STREAM_IO` for an error of the source, as
 /// [`DecryptingReader`] returns them.
-#[doc(hidden)]
-pub async fn __read_header<R: AsyncRead + Unpin>(
+pub async fn read_stream_header<R: AsyncRead + Unpin>(
     source: &mut R,
     header: &mut Vec<u8>,
     len: usize,
 ) -> KmsAeadResult<()> {
     let mut filled = header.len();
-    header.resize(len, 0);
+    header.resize(len.max(filled), 0);
     while filled < len {
         match source.read(&mut header[filled..]).await {
             Ok(0) => {

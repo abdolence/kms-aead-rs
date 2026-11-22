@@ -9,8 +9,8 @@ use bytes::Bytes;
 use futures_util::Stream;
 use kms_aead::backends::AeadBackend;
 use kms_aead::stream::{
-    __HeaderGatherer, __read_header, DecryptingReader, DecryptingStream, PrefixedStreamHeader,
-    StreamDecryptor, StreamEncryptor, StreamFormat,
+    read_stream_header, DecryptingReader, DecryptingStream, PrefixedStreamHeader, StreamDecryptor,
+    StreamEncryptor, StreamFormat, StreamHeaderGatherer,
 };
 use kms_aead::KmsAeadDecryptionProvider;
 use tokio::io::AsyncRead;
@@ -67,7 +67,7 @@ where
                 ));
             }
             let cipher = keyring.cipher(version)?;
-            kms_aead::stream::__check_stream_algorithm(&cipher)?;
+            cipher.check_stream_algorithm()?;
             let (encryptor, outcome) = keyring
                 .with_cached_dek(&self.record, version.id(), encrypted_dek, |dek| {
                     cipher.stream_encryptor(version.id(), &aad.bytes, dek)
@@ -131,7 +131,7 @@ where
                     call.version(version);
                     self.apply_read_policy(version, compromise)?;
                     let cipher = self.cipher(version)?;
-                    kms_aead::stream::__check_stream_algorithm(&cipher)?;
+                    cipher.check_stream_algorithm()?;
                     let (decryptor, outcome) = self
                         .with_cached_dek(&record, version.id(), encrypted_dek, |dek| {
                             cipher.stream_decryptor(&aad.bytes, header, dek)
@@ -169,7 +169,7 @@ where
         Src: Stream<Item = Result<Bytes, E>> + Unpin,
         E: Into<Box<dyn Error + Send + Sync>>,
     {
-        let mut stored = __HeaderGatherer::new(stored);
+        let mut stored = StreamHeaderGatherer::new(stored);
         let header = PrefixedStreamHeader::try_from(
             stored.read(StreamFormat::Prefixed.header_len()).await?,
         )?;
@@ -194,7 +194,7 @@ where
         R: AsyncRead + Unpin,
     {
         let mut header = Vec::new();
-        __read_header(
+        read_stream_header(
             &mut stored,
             &mut header,
             StreamFormat::Prefixed.header_len(),
