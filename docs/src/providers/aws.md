@@ -174,12 +174,12 @@ the signature does not name. An alias name, `alias/…`, or an alias ARN fails a
 `AWS_SIGNING_KEY_ALIAS`, a `SystemError`.
 
 - `sign` sends `Sign` with `MessageType` `RAW` and `ED25519_SHA_512` for Ed25519, and with `DIGEST`
-  and `ECDSA_SHA_256` for P-256, where the message is the SHA-256 of the pre-image. The pre-image
+  and `ECDSA_SHA_256` for P-256, where the message is the SHA-256 of the pre-image (the exact bytes a signature covers, see [Signature and MAC formats](../formats/signatures-and-macs.md)). The pre-image
   is within the 4,096-byte limit of `Message`, see
   [Signature and MAC formats](../formats/signatures-and-macs.md);
 - a response whose `KeyId` is not the configured key fails with `SIGNING_KEY_MISMATCH`, and one
   whose `SigningAlgorithm` is not the requested one with `SIGNING_ALGORITHM_MISMATCH`. A P-256
-  signature is DER, converted to `r || s`; one that is not strict DER, or an Ed25519 signature
+  signature is DER, converted to `r || s` (the two 32-byte integers of an ECDSA signature, one after the other); one that is not strict DER, or an Ed25519 signature
   that is not 64 bytes, fails with `SIGNATURE_ENCODING`;
 - `verifying_key` sends `GetPublicKey` and parses the DER `PublicKey`. A `KeySpec` other than the
   configured one fails with `SIGNING_ALGORITHM_MISMATCH`;

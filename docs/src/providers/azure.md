@@ -183,8 +183,8 @@ custom HTTP transport or retry policy. Creating the provider sends no request an
 `AZURE_KEY_NAME` or `AZURE_VAULT_URL` as `AzureKmsProvider` does; `Signer::new` sends the first
 request.
 
-- `sign` calls the sign operation with `ES256`, the SHA-256 of the pre-image as `value` and the
-  version in the request path. The `result` is `r || s` as RFC 7518 defines it, 64 bytes; another
+- `sign` calls the sign operation with `ES256`, the SHA-256 of the pre-image (the exact bytes a signature covers, see [Signature and MAC formats](../formats/signatures-and-macs.md)) as `value` and the
+  version in the request path. The `result` is `r || s` (the two 32-byte integers of an ECDSA signature, one after the other) as RFC 7518 defines it, 64 bytes; another
   length fails with `SIGNATURE_ENCODING`;
 - a response whose `kid` is not the configured vault, key and version, or has none, fails with
   `SIGNING_KEY_MISMATCH`;

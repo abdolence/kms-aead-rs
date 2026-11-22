@@ -179,12 +179,12 @@ a client the application built itself. Creating the provider sends no request; `
 the first one. Cloud KMS lists `EC_SIGN_ED25519` under the software protection level only, so a key
 at the HSM protection level signs with P-256.
 
-- `sign` sends `AsymmetricSign` with the pre-image as `data` for Ed25519, and the SHA-256 of the
+- `sign` sends `AsymmetricSign` with the pre-image (the exact bytes a signature covers, see [Signature and MAC formats](../formats/signatures-and-macs.md)) as `data` for Ed25519, and the SHA-256 of the
   pre-image as `digest.sha256` for P-256. Each carries its CRC32C checksum, `dataCrc32c` or
   `digestCrc32c`;
 - a response fails with `SIGNATURE_ENCODING` when `verifiedDataCrc32c` or `verifiedDigestCrc32c` is
   false, when `signatureCrc32c` is missing or does not match the signature, or when the signature
-  is not 64 bytes (Ed25519) or strict DER (P-256), which is converted to `r || s`. A `name` other
+  is not 64 bytes (Ed25519) or strict DER (P-256), which is converted to `r || s` (the two 32-byte integers of an ECDSA signature, one after the other). A `name` other
   than the configured version fails with `SIGNING_KEY_MISMATCH`;
 - `verifying_key` sends `GetPublicKey` and parses `pem`. A key of another `algorithm` than the
   configured one fails with `SIGNING_ALGORITHM_MISMATCH`, and a `pem` that does not parse with

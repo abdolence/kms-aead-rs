@@ -176,9 +176,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 sends the first one.
 
 - `sign` posts to `<mount>/sign/<key>` with `input`, `key_version`, `hash_algorithm` `sha2-256` and
-  `marshaling_algorithm` `jws`. The `input` is the base64 of the pre-image for Ed25519, and for
+  `marshaling_algorithm` `jws`. The `input` is the base64 of the pre-image (the exact bytes a signature covers, see [Signature and MAC formats](../formats/signatures-and-macs.md)) for Ed25519, and for
   P-256 the base64 of its SHA-256 with `prehashed` set;
-- Vault answers `vault:vN:<base64url>` with the 64-byte Ed25519 signature, or `r || s` for P-256. An `N` other than the configured version
+- Vault answers `vault:vN:<base64url>` with the 64-byte Ed25519 signature, or `r || s` (the two 32-byte integers of an ECDSA signature, one after the other) for P-256. An `N` other than the configured version
   fails with `SIGNING_KEY_MISMATCH`, and a signature that is not base64url without padding or not
   64 bytes with `SIGNATURE_ENCODING`;
 - `verifying_key` reads `<mount>/keys/<key>` and takes the `public_key` of the configured version:
