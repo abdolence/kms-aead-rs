@@ -17,7 +17,7 @@
 - The hidden items that kms-aead-keyring calls are public API under new names. `__instruments` is
   the `kms_aead::metrics` module of the `opentelemetry` feature, where `Call` is
   `OperationAttributes`, `Outcome` is `OperationOutcome`, `record_store_load` is
-  `record_keyring_store_load` and `record_refusal` is `record_keyring_record_refusal`.
+  `record_keyring_store_load` and `record_refusal` is `count_keyring_record_refusal`.
   `OperationOutcome` and its `Value` variant are `#[non_exhaustive]`, so a value's outcome comes
   from `OperationOutcome::value`. In `kms_aead::stream`, `__HeaderGatherer` is
   `StreamHeaderGatherer`, `__read_header` is `read_stream_header`, and
@@ -65,7 +65,8 @@
 - Under `RecordSignaturePolicy::Required`, `KeyringRegistry::create`, `open_or_create` where it
   would create the record, and every write of a `KeyringAdmin` without a record signer,
   `dangerously_unsign_record` included, fail with `KeyringError::RecordSignerMissing` before any
-  KMS or store call. They wrote and cached an unsigned record, which every reader under the policy
+  KMS call or store write; `open_or_create` reads the store once first and refuses only when that
+  read finds no record. They wrote and cached an unsigned record, which every reader under the policy
   refused. Create keyrings with `create_signed` or `open_or_create_signed`, give an admin a signer
   with `with_record_signer`, and move the admin's registry to `VerifyIfSigned` before
   `dangerously_unsign_record`.

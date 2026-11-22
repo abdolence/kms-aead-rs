@@ -82,7 +82,8 @@ administration re-signs the record on every write it makes: `rotate`, `promote`,
 `dangerously_shred()` and the rest need the signer's KMS right, `cloudkms.cryptoKeyVersions.useToSign` on Cloud KMS.
 Under `Required`, a registry writes no record without a signer: `create`, `open_or_create` where it
 would create the record, and every write of an administration without a signer fail with
-`RECORD_SIGNER_MISSING` before any KMS or store call.
+`RECORD_SIGNER_MISSING` before any KMS call or store write. `open_or_create` reads the store once
+first, and refuses only when that read finds no record.
 
 ## Rotate the signing key
 

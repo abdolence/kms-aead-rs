@@ -126,9 +126,9 @@ pub enum KeyringError {
     /// A write by a `KeyringAdmin` without a record signer over a signed record, `sign_record`
     /// included, other than `dangerously_unsign_record`, refused before any store write. Or,
     /// under [`RecordSignaturePolicy::Required`](crate::RecordSignaturePolicy::Required), any
-    /// write without one, refused before any KMS or store call: `KeyringRegistry::create`,
-    /// `open_or_create` where it would create the record, and every write of such an admin,
-    /// `dangerously_unsign_record` included.
+    /// write without one, refused before any KMS call or store write: `KeyringRegistry::create`,
+    /// `open_or_create` where it would create the record, after the one read that finds none, and
+    /// every write of such an admin, `dangerously_unsign_record` included.
     RecordSignerMissing(KeyringId),
     /// An unsigned record read under
     /// [`RecordSignaturePolicy::VerifyIfSigned`](crate::RecordSignaturePolicy::VerifyIfSigned) by a
