@@ -85,6 +85,7 @@ impl HcVaultTransitToken {
 
 /// A key of the HashiCorp Vault Transit secrets engine.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitKeyRef {
     /// The name of the Transit key.
     pub key_name: String,

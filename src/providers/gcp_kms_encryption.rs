@@ -19,6 +19,7 @@ use tonic::metadata::MetadataValue;
 
 /// A Google Cloud KMS CryptoKey that encrypts data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct GcpKmsKeyRef {
     /// The project that holds the key ring.
     pub google_project_id: String,

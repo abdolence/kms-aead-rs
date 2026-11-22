@@ -28,6 +28,7 @@ const MARSHALING_ALGORITHM: &str = "jws";
 
 /// One version of a Transit key of HashiCorp Vault that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct HcVaultTransitSigningKeyRef {
     /// The name of the Transit key.
     pub key_name: String,

@@ -34,6 +34,14 @@
 - `AsymmetricKekProvider<B, P>` is `AsymmetricKekProvider<P, B>`: the provider first and the
   backend second, as in `KmsAeadEnvelope<P, B>` and `Signer<P, B>`. Code that names the type swaps
   its two parameters; `AsymmetricKekProvider::new` takes the same arguments.
+- The eight key references, `GcpKmsKeyRef`, `AwsKmsKeyRef`, `AzureKmsKeyRef`,
+  `HcVaultTransitKeyRef`, `GcpKmsSigningKeyRef`, `AwsKmsSigningKeyRef`, `AzureKmsSigningKeyRef`
+  and `HcVaultTransitSigningKeyRef`, are `#[non_exhaustive]`, so that a minor release can add a
+  field. Build them with `new` and the `with_*` setters instead of a struct literal.
+- The variants of `SigningInput` are `#[non_exhaustive]`. Only the library builds an input, so its
+  digest is always the SHA-256 of its pre-image, and an application's own `KmsSigningProvider`
+  matches a variant with `..`, as in `SigningInput::Ed25519 { pre_image, .. }`. A test of such a
+  provider signs through a `Signer`.
 
 ## 0.33
 

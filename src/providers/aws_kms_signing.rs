@@ -15,6 +15,7 @@ use crate::{KmsAeadResult, KmsProvider};
 
 /// An AWS KMS asymmetric key that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct AwsKmsSigningKeyRef {
     /// The AWS account that owns the key, used to build its ARN.
     pub account_id: String,

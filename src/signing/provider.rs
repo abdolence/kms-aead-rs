@@ -55,6 +55,7 @@ pub trait KmsSigningProvider: Send + Sync {
 #[non_exhaustive]
 pub enum SigningInput<'a> {
     /// Ed25519 signs the pre-image as it is.
+    #[non_exhaustive]
     Ed25519 {
         /// The pre-image, 46 to 302 bytes.
         pre_image: &'a [u8],
@@ -62,6 +63,7 @@ pub enum SigningInput<'a> {
     /// ECDSA P-256 with SHA-256: the pre-image and its SHA-256. A KMS takes `digest`. A key pair on
     /// ring or aws-lc-rs takes `pre_image`, since their `sign` hashes its input and would hash a
     /// digest a second time; p256 takes `digest` through `sign_prehash`.
+    #[non_exhaustive]
     EcdsaP256Sha256 {
         /// The pre-image, 46 to 302 bytes.
         pre_image: &'a [u8],

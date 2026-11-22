@@ -21,6 +21,7 @@ use crate::{KmsAeadResult, KmsProvider};
 
 /// One version of a Key Vault or Managed HSM EC `P-256` key that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct AzureKmsSigningKeyRef {
     /// Vault URL, such as `https://my-vault.vault.azure.net`.
     pub vault_url: String,

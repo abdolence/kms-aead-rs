@@ -19,6 +19,7 @@ use crate::{KmsAeadResult, KmsProvider};
 
 /// A Google Cloud KMS CryptoKeyVersion that signs.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct GcpKmsSigningKeyRef {
     /// The project that holds the key ring.
     pub google_project_id: String,

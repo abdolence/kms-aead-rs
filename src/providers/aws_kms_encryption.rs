@@ -15,6 +15,7 @@ use secret_vault_value::SecretValue;
 
 /// An AWS KMS key that encrypts data encryption keys.
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
+#[non_exhaustive]
 pub struct AwsKmsKeyRef {
     /// The AWS account that owns the key, used to build its ARN.
     pub account_id: String,
