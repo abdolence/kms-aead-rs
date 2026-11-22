@@ -12,7 +12,9 @@ application refuses a record that no key it trusts has signed. See
 
 An existing deployment moves in this order, and each step is safe to deploy before the next:
 
-1. **Administrative binaries on 0.31.** A 0.30 administrative write removes the signature;
+1. **Administrative binaries that know record signatures.** An administrative write by a version
+   without them rewrites the record from its own fields and removes the signature, see [Readers
+   before producers](../migrating-from-0.30.md#readers-before-producers);
 2. **the signing key's public half to every registry**, as `VerifyIfSigned(keys)`. Records without a
    signature still read, and a signed one verifies from its first write;
 3. **a signing administration**, and `sign_record` on every keyring;
@@ -40,7 +42,7 @@ const TENANT: KeyringId = KeyringId::from_static("tenant-42");
 # let store = MemoryKeyringStore::new();
 # let before = KeyringRegistry::<_, Ring>::new(store.clone(), KeyringRegistryOptions::new())?;
 # before.create(local_kek()?, TENANT, KeyringAlgorithms::new()).await?;
-// A KMS signing provider in production, see "Publish content anyone can verify"
+// A KMS signing provider in production, see "Publish a rate sheet or a release anyone can verify"
 let signer = Signer::<_, Ring>::new(LocalSigningProvider::<Ring>::ephemeral(
     LocalSigningKeyName::try_from("records".to_string())?,
     SigningAlgorithm::Ed25519,
@@ -76,14 +78,14 @@ application.open(local_kek()?, TENANT).await?;
 ```
 
 A new keyring is signed from its first write with `create_signed` or `open_or_create_signed`. The
-administration re-signs the record on every write it makes: `rotate`, `promote`, `shred` and the
-rest need the signer's KMS right, `cloudkms.cryptoKeyVersions.useToSign` on Cloud KMS.
+administration re-signs the record on every write it makes: `rotate`, `promote`,
+`dangerously_shred()` and the rest need the signer's KMS right, `cloudkms.cryptoKeyVersions.useToSign` on Cloud KMS.
 
 ## Rotate the signing key
 
 Add the new public key to every registry's set first, then run `sign_record` on every keyring with
 the new signer. Remove the old key from the sets once every keyring is signed by the new one. The
-rotation of the key itself is that of [Publish content anyone can verify](../use-cases/publish-verifiable.md#rotate-signing-keys).
+rotation of the key itself is that of [Publish a rate sheet or a release anyone can verify](../use-cases/publish-verifiable.md#rotate-signing-keys).
 
 ## What a signature closes
 
@@ -93,11 +95,11 @@ rotation of the key itself is that of [Publish content anyone can verify](../use
 - under `Required`, an unsigned record fails with `RECORD_UNSIGNED`, so a keyring that was never
   signed, or whose signature a writer stripped, is not read.
 
-## The sticky refusal and what only `Required` closes
+## What only `Required` closes
 
 Under `VerifyIfSigned`, a running process that holds a signed record refuses a later unsigned one
-with `RECORD_SIGNATURE_REMOVED`, keeps the record it holds and logs an `ERROR`. The refusal lasts
-as long as the process, and a process that starts after a writer stripped the signature has no
+with `RECORD_SIGNATURE_REMOVED`, keeps the record it holds and logs an `ERROR`. The refusal is
+sticky: it lasts as long as the process, and a process that starts after a writer stripped the signature has no
 record to compare with and reads whatever the store holds. Only `Required` protects those
 processes, and the keyring whose record was never signed. Run `Required` on every application
 once step 3 is done.
@@ -119,7 +121,7 @@ running ones refuse the unsigned record until they do.
 - Whoever may sign records and write the store may write any record. Give the signing right to the
   administration only, and read its audit log;
 - a keyring under an asymmetric KEK runs with `Required` on every application before the first DEK
-  a public key encrypts, see [Writers that can never read](../use-cases/write-only-producers.md);
+  a public key encrypts, see [Accept data from partners and devices that cannot read it back](../use-cases/write-only-producers.md);
 - an administration without a signer is refused over a signed record with `RECORD_SIGNER_MISSING`.
 
 Full example available
