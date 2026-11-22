@@ -1,0 +1,529 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Spans and events - KMS envelope encryption for Rust</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-e96d0476.css">
+        <link rel="stylesheet" href="../css/chrome-d279d366.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-add654e4.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">KMS envelope encryption for Rust</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/abdolence/kms-aead-rs" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="spans-and-events"><a class="header" href="#spans-and-events">Spans and events</a></h1>
+<p>The spans and events of kms-aead and kms-aead-keyring, and the fields of each span. What they never
+carry is on <a href="../observability.html#what-is-never-logged">Observability</a>.</p>
+<h2 id="spans"><a class="header" href="#spans">Spans</a></h2>
+<p>The library uses <a href="https://github.com/tokio-rs/tracing">tracing</a>. Every envelope call and every KMS
+call opens one span at the <code>DEBUG</code> level, and the spans carry what a call used besides how long it
+took: the mode, the algorithm and backend, whether the DEK came from the cache, the KMS key and its
+version, and the error code.</p>
+<p>The spans are:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KMS AEAD encrypt</code></td><td>the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code>, <code>encrypt_with_encrypted_dek</code>, <code>stream_encryptor</code> and <code>stream_encryptor_bare</code></td><td><code>mode</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD decrypt</code></td><td>the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code>, <code>decrypt_with_encrypted_dek</code>, <code>stream_decryptor</code> and <code>stream_decryptor_bare</code></td><td><code>mode</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD generate DEK</code></td><td><code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code></td><td><code>purpose</code>, <code>algorithm</code>, <code>backend</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD decrypt DEK</code></td><td><code>decrypt_deterministic_dek</code></td><td><code>purpose</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD re-encrypt DEK</code></td><td><code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code></td><td><code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD beacon</code></td><td>the envelope’s <code>beacon</code></td><td><code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS encrypt DEK</code></td><td>each provider’s encryption of a DEK, or its encryption with a public key</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS decrypt DEK</code></td><td>each provider’s decryption of a DEK</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS random</code></td><td>a call to the GCP or AWS KMS generator, when the provider uses it</td><td><code>provider</code>, <code>key</code>, <code>len</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Signature sign</code></td><td>a <code>Signer</code>’s <code>sign</code>, <code>sign_attached</code> and <code>sign_digest</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>Signature verify</code></td><td>a <code>Verifier</code>’s <code>verify</code>, <code>verify_signed</code> and <code>verify_digest</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>MAC compute</code></td><td>an <code>Authenticator</code>’s <code>mac</code> and <code>mac_attached</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>MAC verify</code></td><td>an <code>Authenticator</code>’s <code>verify</code> and <code>verify_with_mac</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS sign</code></td><td>each signing provider’s sign request</td><td><code>provider</code>, <code>key</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS public key</code></td><td>each signing provider’s request for the public key of its key, and each KMS provider’s <code>public_key</code> of an asymmetric KEK</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+</tbody>
+</table>
+</div>
+<p>The KMS spans nest inside the envelope span, so a DEK the envelope had to decrypt shows its KMS call
+as a child, and a DEK served by the cache shows none. <code>AeadCipher</code> and <code>DeterministicCipher</code> open
+no spans: they run once per value inside the caller’s span.</p>
+<h2 id="showing-the-spans"><a class="header" href="#showing-the-spans">Showing the spans</a></h2>
+<p>Any tracing subscriber works. With <code>tracing-subscriber</code>, an <code>EnvFilter</code> that enables <code>DEBUG</code> for
+the library and span close events, every span is printed with its fields when it ends:</p>
+<pre><code class="language-rust">use kms_aead::backends::Ring;
+use kms_aead::formats::Envelope;
+use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+use kms_aead::{Encrypted, KmsAeadEnvelope};
+use secret_vault_value::SecretValue;
+use tracing_subscriber::fmt::format::FmtSpan;
+
+<span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; Result&lt;(), Box&lt;dyn std::error::Error + Send + Sync&gt;&gt; {
+</span>let subscriber = tracing_subscriber::fmt()
+    .with_env_filter("kms_aead=debug")
+    .with_span_events(FmtSpan::CLOSE)
+    .finish();
+tracing::subscriber::set_global_default(subscriber)?;
+
+let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(provider)?;
+
+let aad = b"orders/1042";
+let encrypted: Encrypted&lt;SecretValue, Envelope&gt; =
+    envelope.encrypt(aad, &amp;SecretValue::from("secret")).await?;
+let decrypted: SecretValue = envelope.decrypt(aad, &amp;encrypted).await?;
+<span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>The decrypt prints, without timestamps:</p>
+<pre><code class="language-text">DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}:KMS decrypt DEK{/kms_aead/provider=local /kms_aead/key="example" /kms_aead/kek_version="1" /kms_aead/response_time=0}: kms_aead::spans::kms: close time.busy=16.4µs time.idle=6.95µs
+DEBUG KMS AEAD decrypt{/kms_aead/mode="per_call" /kms_aead/algorithm=aes-256-gcm /kms_aead/backend=ring /kms_aead/dek_cache=disabled}: kms_aead::spans: close time.busy=62.0µs time.idle=12.3µs
+</code></pre>
+<p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/tracing.rs">here</a>,
+run it with <code>cargo run --example tracing --features ring</code>.</p>
+<h2 id="opentelemetry"><a class="header" href="#opentelemetry">OpenTelemetry</a></h2>
+<p>With <a href="https://github.com/tokio-rs/tracing-opentelemetry">tracing-opentelemetry</a> every span field
+becomes a span attribute with the same name, such as <code>/kms_aead/kek_version</code>, so the KMS calls and
+cache hits show up next to the latency of a request in Cloud Trace, Jaeger, etc.</p>
+<p>The fields are declared empty when the span opens and recorded once their value is known, which
+<code>tracing-opentelemetry</code> exports the same way as fields given at the start. Add its layer to the
+subscriber as usual:</p>
+<pre><code class="language-rust ignore">use opentelemetry::trace::TracerProvider;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+    .with_batch_exporter(exporter) // any exporter, e.g. opentelemetry-otlp
+    .build();
+
+tracing_subscriber::registry()
+    .with(tracing_subscriber::EnvFilter::new("info,kms_aead=debug"))
+    .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("my-service")))
+    .init();</code></pre>
+<p>Be aware the library spans are <code>DEBUG</code>, so the filter has to enable that level for <code>kms_aead</code>.</p>
+<h2 id="fields"><a class="header" href="#fields">Fields</a></h2>
+<p>Every field name has the <code>/kms_aead/</code> prefix, such as <code>/kms_aead/mode</code>. A value nobody reported is
+left unrecorded, never recorded as <code>0</code> or an empty string.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>mode</code></td><td>on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>: <code>per_call</code> for <code>encrypt</code>, <code>decrypt</code> and the stream calls, <code>store_less</code> for them on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
+<tr><td><code>algorithm</code></td><td><code>chacha20-poly1305</code>, <code>aes-128-gcm</code>, <code>aes-256-gcm</code> or <code>aes-256-gcm-siv</code> on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>; the algorithm of the key on <code>KMS AEAD generate DEK</code> and <code>KMS AEAD decrypt DEK</code>, <code>aes-256-siv</code> for deterministic keys; <code>hmac-sha256</code> on <code>KMS AEAD beacon</code>; <code>ed25519</code> or <code>ecdsa-p256-sha256</code> on a signature span, <code>mac-hmac-sha256</code> or <code>mac-hmac-sha512</code> on a MAC span</td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>; on <code>KMS AEAD generate DEK</code> the envelope’s backend</td></tr>
+<tr><td><code>dek_cache</code></td><td>on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>: <code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> for a call that decrypts through an enabled cache, a failed decryption recording <code>miss</code>; unrecorded for a call that looks nothing up. On <code>KMS AEAD decrypt DEK</code> and <code>KMS AEAD re-encrypt DEK</code>: <code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise. On <code>KMS AEAD beacon</code>: <code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> with one, a failed decryption of the beacon key recording <code>miss</code></td></tr>
+<tr><td><code>purpose</code></td><td><code>randomized</code> or <code>deterministic</code></td></tr>
+<tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
+<tr><td><code>key</code></td><td>on <code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code> the KEK, see below; on <code>KMS random</code> the GCP location, and unrecorded on AWS; on <code>KMS sign</code> and <code>KMS public key</code> the signing key, see <code>SigningKeyRef::key</code>, or the KEK of an asymmetric KEK’s public key</td></tr>
+<tr><td><code>kek_version</code></td><td>on <code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, and the public key’s version on an encryption with a public key; from the encrypted DEK’s bytes on decryption for Azure, Vault Transit, the local KMS and every DEK a public key encrypted; unrecorded when neither has one, as for AWS and a GCP decryption of a symmetric key. On <code>KMS public key</code>, the public key of an asymmetric KEK only: the version asked for, or the one the response names when none was</td></tr>
+<tr><td><code>len</code></td><td>on <code>KMS random</code>: the bytes requested from the KMS generator</td></tr>
+<tr><td><code>key_id</code></td><td>the decimal key id the signature or MAC names</td></tr>
+<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of the signed type</td></tr>
+<tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
+<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>KMS AEAD re-encrypt DEK</code> has a <code>KMS decrypt DEK</code> as a child under the version that encrypted the
+DEK and a <code>KMS encrypt DEK</code> under the current one. A beacon key the cache did not hold shows its
+<code>KMS decrypt DEK</code> as a child of <code>KMS AEAD beacon</code>.</p>
+<p>The <code>key</code> of each provider:</p>
+<ul>
+<li>GCP: the CryptoKey name, <code>projects/&lt;project&gt;/locations/&lt;location&gt;/keyRings/&lt;ring&gt;/cryptoKeys/&lt;key&gt;</code>;</li>
+<li>AWS: the key or alias ARN, or the configured key id when no region is known;</li>
+<li>Azure: <code>&lt;vault URL&gt;/keys/&lt;name&gt;</code>;</li>
+<li>Vault Transit: <code>&lt;vault address&gt;/&lt;namespace&gt;/&lt;mount&gt;/keys/&lt;name&gt;</code>, without the namespace segment
+when none is set;</li>
+<li>local: the KEK id.</li>
+</ul>
+<p>With the <code>opentelemetry</code> feature the signing and MAC calls record their duration as the envelope
+calls do. The spans carry no payload, signature, tag or key bytes.</p>
+<h2 id="events"><a class="header" href="#events">Events</a></h2>
+<p>Besides the spans, the library logs:</p>
+<ul>
+<li><code>WARN</code>, inside the KMS span: a GCP or Vault Transit response without a key version;</li>
+<li><code>WARN</code>, once per process and layout: the first read of a layout of 0.29 or earlier with
+<code>legacy-formats</code>;</li>
+<li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
+CA certificate that cannot be loaded;</li>
+<li><code>WARN</code>, on the <code>kms_aead::json</code> target: a <code>JsonEncoded</code> value that does not decode, see
+<a href="#json-that-does-not-decode">JSON that does not decode</a>;</li>
+<li><code>INFO</code>, when a provider that holds the public key of an asymmetric KEK is created
+(<code>PublicKeyKekProvider</code>, <code>AsymmetricKekProvider</code> and <code>LocalAsymmetricKmsProvider</code>): the KEK, its
+version and the public key’s fingerprint, the SHA-256 of its SubjectPublicKeyInfo in hex, so that
+an operator compares the producer’s and the administration’s;</li>
+<li><code>INFO</code>, when a local KMS provider is created: its KEK id and versions, each with where it came
+from, in the <code>key</code> and <code>kek_versions</code> fields;</li>
+<li><code>INFO</code>, when a local signing provider is created: its key id and versions, each with its
+algorithm, key id and where it came from, in the <code>key</code> and <code>key_versions</code> fields.</li>
+</ul>
+<p>The library retries nothing itself, so there is no retry field.</p>
+<h2 id="json-that-does-not-decode"><a class="header" href="#json-that-does-not-decode">JSON that does not decode</a></h2>
+<p>A <code>JsonEncoded</code> value whose bytes are not the JSON of its type, a decrypted plaintext or the
+payload of an attached signature or MAC after it verified, fails with <code>INVALID_PLAINTEXT</code> or
+<code>INVALID_PAYLOAD</code>. The error never quotes the bytes, and names serde_json’s category of failure
+(<code>Syntax</code>, <code>Data</code> or <code>Eof</code>) without the line and column, which are byte offsets that give
+away the length of the values before them. The library logs one <code>WARN</code> event on the
+<code>kms_aead::json</code> target beside it, with an outline of the JSON.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>error_code</code></td><td><code>INVALID_PLAINTEXT</code> or <code>INVALID_PAYLOAD</code></td></tr>
+<tr><td><code>decoded_type</code></td><td>the Rust type the JSON does not decode to</td></tr>
+<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of a signed type; unrecorded for a plaintext</td></tr>
+<tr><td><code>json_error</code></td><td>serde_json’s error: the message of a syntax error, such as <code>EOF while parsing a string</code>, or <code>Data error</code> for JSON of another shape than the type, with the line and column under <code>SIZES</code></td></tr>
+<tr><td><code>outline</code></td><td>the outline of the JSON</td></tr>
+</tbody>
+</table>
+</div>
+<p>By default the outline shows the shape of the JSON: the type of every value, <code>&lt;key&gt;</code> for every
+key, the nesting, and where serde_json stopped reading it, with serde_json’s message for a syntax
+error. That message is fixed text, and it can state a property of a value the outline hides, such
+as <code>number out of range</code>, <code>invalid unicode code point</code> or <code>unexpected end of hex escape</code>. The
+default shows no length and no position, since <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">a length gives away a hidden
+boolean</a>.</p>
+<p>A type opts into more with a policy, the second type parameter of <code>JsonEncoded</code>.
+A signed payload is often public, so its policy may show more than an encrypted plaintext’s. See
+<a href="../stored-values.html#json-that-does-not-decode">JSON that does not decode</a> for a policy and the
+outlines it produces.
+<code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off.</p>
+<p>An application outlines JSON of its own with <code>RedactedJson</code>, with no encryption involved, see
+<a href="../use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
+<h2 id="keyring-spans"><a class="header" href="#keyring-spans">Keyring spans</a></h2>
+<p>The <code>kms-aead-keyring</code> crate follows the same rules: one <code>DEBUG</code> span per call, field names with
+the <code>/kms_aead_keyring/</code> prefix, and nothing recorded for a value nobody reported. kms-aead’s spans
+nest inside them, so a <code>KMS decrypt DEK</code> under a <code>Keyring decrypt</code> is a DEK cache miss, and a
+<code>KMS encrypt DEK</code> under a <code>Keyring rotate</code> is the new version’s DEK. Enable <code>kms_aead_keyring=debug</code>
+in the filter beside <code>kms_aead=debug</code>. The spans from <code>Keyring rotate</code> to <code>Keyring export</code> are
+those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Keyring encrypt</code></td><td>an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>deterministic_probes</code>, and <code>stream_encryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code>, and <code>stream_decryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code>, including a <code>dangerously_shred</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring beacon</code></td><td>an encryptor’s <code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring mac</code></td><td>an encryptor’s <code>mac</code> and <code>mac_attached</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring verify mac</code></td><td><code>verify_mac</code>, <code>verify_mac_with_trust</code> and <code>verify_with_mac</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring rotate</code></td><td><code>rotate</code>, <code>change_algorithm</code></td><td><code>keyring</code>, <code>purpose</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring promote</code></td><td><code>promote</code></td><td><code>keyring</code>, <code>key_id</code>, <code>from_key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring mark compromised</code></td><td><code>mark_compromised</code></td><td><code>keyring</code>, <code>key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring retire</code>, <code>Keyring reinstate</code>, <code>Keyring destroy</code></td><td>the call of that name</td><td><code>keyring</code>, <code>key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring shred</code></td><td><code>dangerously_shred</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring sign record</code></td><td>each write of a signed record by the administration</td><td><code>keyring</code>, <code>key_id</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring sweep</code></td><td><code>sweep::reencrypt_records</code>, <code>sweep::reencrypt_records_batched</code></td><td><code>keyring</code>, <code>scanned</code>, <code>reencrypted</code>, <code>reencrypted_from_compromised</code>, <code>skipped</code>, <code>failed</code></td></tr>
+</tbody>
+</table>
+</div>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Value</th></tr>
+</thead>
+<tbody>
+<tr><td><code>keyring</code></td><td>the keyring id, which can name a tenant</td></tr>
+<tr><td><code>purpose</code></td><td><code>randomized</code>, <code>deterministic</code>, <code>beacon</code> or <code>mac</code></td></tr>
+<tr><td><code>key_id</code></td><td>the decimal key id; unrecorded for an envelope value, which names no version, and for <code>deterministic_probes</code> and <code>beacon_probes</code>, which run under several</td></tr>
+<tr><td><code>algorithm</code></td><td>the version’s algorithm, such as <code>aes-256-gcm</code>, <code>hmac-sha256</code> or <code>mac-hmac-sha256</code>; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>; unrecorded for deterministic calls, since AES-SIV runs on RustCrypto whatever the keyring’s backend</td></tr>
+<tr><td><code>key_state</code></td><td><code>pending</code>, <code>active</code>, <code>decrypt_only</code>, <code>retired</code>, <code>destroyed</code>, <code>compromised</code>, or <code>unknown</code> for a key id the record does not have</td></tr>
+<tr><td><code>reload</code></td><td>what an unknown key id caused: <code>none</code>, <code>reloaded</code> or <code>rate_limited</code></td></tr>
+<tr><td><code>dek_cache</code></td><td><code>hit</code>, <code>miss</code> or <code>disabled</code>; <code>bypassed</code> for <code>reencrypt_deks</code>, the export, and a compromised version read past the cache; unrecorded for <code>deterministic_probes</code> and <code>beacon_probes</code></td></tr>
+<tr><td><code>store</code></td><td><code>memory</code>, <code>firestore</code>, <code>postgres</code>, <code>gcs</code>, <code>s3</code>, or an application store’s name</td></tr>
+<tr><td><code>reason</code></td><td><code>open</code>, <code>ttl</code>, <code>watch</code>, <code>unknown_key_id</code>, <code>pending_key_id</code> for a re-encryption under a version the cached record holds as pending, <code>forced</code> for <code>Keyring::reload</code>, <code>export</code> for the read a keyset export selects its versions from, <code>admin</code> for the read before a write</td></tr>
+<tr><td><code>changed</code></td><td><code>true</code> for a new record taken, <code>false</code>, <code>regressed</code> for one refused because it moves a version backwards, <code>refused</code> for one refused by record verification, or <code>deleted</code> for a read that found the store holds no record, which the process takes as a shredded keyring</td></tr>
+<tr><td><code>revision</code></td><td>the store’s revision of the record read, as text</td></tr>
+<tr><td><code>response_time</code></td><td>milliseconds the store call took</td></tr>
+<tr><td><code>from_key_id</code>, <code>to_key_id</code></td><td>the version a promotion or a compromise replaced, and the new active one; for <code>rotate</code>, <code>to_key_id</code> is the staged version</td></tr>
+<tr><td><code>cas_retries</code></td><td>the compare-and-swap conflicts before the write landed</td></tr>
+<tr><td><code>versions</code></td><td>the versions <code>reencrypt_deks</code> encrypted again, or an export put in the keyset</td></tr>
+<tr><td><code>scanned</code>, <code>reencrypted</code>, <code>reencrypted_from_compromised</code>, <code>skipped</code>, <code>failed</code></td><td>the counts of the <code>SweepReport</code></td></tr>
+<tr><td><code>error_code</code></td><td><code>KeyringError::code()</code> of the error returned: kms-aead’s code for a KMS or AEAD error, such as <code>DECRYPT</code>, and the variant’s name in upper snake case otherwise, such as <code>KEY_VERSION_COMPROMISED</code></td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="keyring-events"><a class="header" href="#keyring-events">Keyring events</a></h3>
+<ul>
+<li><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy, with the key id;</li>
+<li><code>WARN</code>: a read refused because its version is retired or destroyed, for an operator watching a
+sweep;</li>
+<li><code>WARN</code>: a record that holds a DEK encrypted with a public key, loaded under any record
+verification mode but <code>Required</code>, with the keyring id, once per record loaded. Under an asymmetric
+KEK anyone holding the public key can plant a version, see <a href="../asymmetric-kek.html#keyrings-under-an-asymmetric-kek">Keyrings under an asymmetric
+KEK</a>;</li>
+<li><code>WARN</code>: a <code>KeyringAdmin</code> without a record signer built over a provider whose
+<code>encrypts_with_public_key()</code> is <code>true</code>;</li>
+<li><code>WARN</code>: a failed revalidation, the cached record staying in use;</li>
+<li><code>WARN</code>: “The keyring store no longer holds the keyring record; every version is destroyed in this
+process”, when a read finds the record gone: the process then holds the record with every
+version destroyed and stops revalidating the keyring, see
+<a href="../keyring/record-cache.html#a-record-gone-from-the-store">A record gone from the store</a>. It is an
+<code>INFO</code>, “The keyring store no longer holds the keyring record of a shredded keyring; every
+version is destroyed in this process”, when the record the process held had every version
+destroyed already, which a <a href="../use-cases/erase-a-tenant.html#shredding-a-tenant-with-dangerously_shred">shred</a> leaves before it
+deletes the record. The process that ran the shred logs nothing for it;</li>
+<li><code>ERROR</code>: a refreshed record refused because it moves a version backwards, with the first rule it
+breaks. Alert on it: it is the detection of a rewritten or restored record;</li>
+<li><code>ERROR</code>: a refreshed record refused by record verification, with its code,
+<code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or <code>RECORD_SIGNATURE_REMOVED</code>; the process keeps
+the record it holds, and the <code>Keyring load</code> span records the code. Alert on it as on the previous
+one;</li>
+<li><code>WARN</code>: a compromised flag written without a rotation because the new DEK could not be encrypted;</li>
+<li><code>INFO</code>: the active version of a purpose changed, with the old and new key ids;</li>
+<li><code>WARN</code>: the store’s listener disconnected, reconnected, or did not start, and a keyring
+opened with no tokio runtime to follow the store’s signals;</li>
+<li><code>WARN</code>: a <code>KeyringRegistry</code> dropped while its background tasks run, which aborts them, with the
+count of open keyrings, and a <code>shutdown</code> whose timeout aborted the tasks still running, with
+their count;</li>
+<li><code>WARN</code>: a record a sweep could not re-encrypt, with the <code>Display</code> of the application’s candidate
+in <code>record</code> and of its error in <code>error</code>. Both are the application’s own text, so it keeps
+values, secrets and personal data out of them. A record id is often an entity id, so the
+sweep’s log is an administrative log;</li>
+<li><code>WARN</code>: a candidate the sweep’s stream returned as an error, with the <code>Display</code> of the error in
+<code>error</code>;</li>
+<li><code>WARN</code>: a batch of <code>sweep::reencrypt_records_batched</code> whose re-encryption failed as a whole, with its number of
+candidates in <code>candidates</code> and the <code>Display</code> of the error in <code>error</code>, and a batch that returned
+a different number of outcomes from it was given candidates, with both counts in <code>candidates</code> and
+<code>outcomes</code>;</li>
+<li><code>DEBUG</code>: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
+retried.</li>
+</ul>
+<p>The keyring’s spans, events and errors leave out everything kms-aead’s do, see
+<a href="../observability.html#what-is-never-logged">What is never logged</a>. The AAD rule matters most there,
+since the default AAD holds the entity id: neither the AAD nor an <code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../observability.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../observability/metrics.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../observability.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../observability/metrics.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-09f2665d.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-609e4cb8.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

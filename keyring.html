@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -186,7 +187,7 @@ data encryption key (DEK) encrypted by a KEK in the KMS, with a lifecycle state.
 <li>no KMS encryption on write, and one KMS decryption per key version per DEK cache TTL, on write
 and read;</li>
 <li>33 bytes of overhead per value, 21 for deterministic values, see
-<a href="./formats.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>;</li>
+<a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>;</li>
 <li>central staged rotation, retirement, destruction and a compromised flag, for every process
 that uses the keyring;</li>
 <li>deterministic fields that a data store finds by equality, across rotations;</li>

@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -383,7 +384,7 @@ the new version alone.</p>
 <p>A <code>None</code> among the versions in use stands for the DEKs whose KMS reported no version: every DEK
 under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application’s
 own provider that returns none. A Cloud KMS or Vault Transit response without a key version is
-logged at <code>WARN</code>, see <a href="../observability.html#events">Events</a>. <code>reencrypt_deks</code> keeps such a DEK at
+logged at <code>WARN</code>, see <a href="../observability/spans-and-events.html#events">Events</a>. <code>reencrypt_deks</code> keeps such a DEK at
 <code>None</code>, so the check before the disable never passes. The procedure in
 <a href="./reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>
 then goes from step 2 to step 4, and the check after the disable, step 6, is the only one.</p>
@@ -426,7 +427,7 @@ imported material is deleted or expires, see <a href="../providers/aws.html#key-
 and needs no sweep, see <a href="../dek-caching.html#store-less-dek-reuse">Store-less DEK reuse</a>;</li>
 <li><strong>one fixed key</strong>, a deterministic key or a beacon key the application keeps: a second key under
 a second key id, both kept for reads, and a re-index of the values or beacons under the old one,
-see <a href="../envelope-encryption.html#one-fixed-key">One fixed key</a> and
+see <a href="../one-fixed-key.html">One fixed key</a> and
 <a href="../beacons.html#rotating-a-beacon-key">Rotating a beacon key</a>.</li>
 </ul>
 <p>A DEK that leaked keeps decrypting every value encrypted under it, whatever the KEK, so it is

@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -571,7 +572,7 @@ pyca/cryptography, decrypts a prefixed value from offset 5 and an envelope-form 
 <code>4 + w</code>, with the DEK. The Go package
 <a href="https://pkg.go.dev/filippo.io/cobblestone">filippo.io/cobblestone</a> implements Cobblestone-128
 only, on AES-128-GCM, and reads none of these values. The bytes, the length rules and the seeking
-rules are in <a href="./formats.html#streamed-values">Formats</a>.</p>
+rules are in <a href="./formats/streamed-values.html#streamed-values">Formats</a>.</p>
 <p>The library runs the 35 vectors of Project Wycheproof for the specification, in every form, on
 every backend, see
 <a href="https://github.com/C2SP/wycheproof/blob/b61843a9a5115bb758134b6a1f5d5e502d445342/testvectors_v1/c2sp_chunked_encryption_aes_256_gcm_test.json"><code>c2sp_chunked_encryption_aes_256_gcm_test.json</code></a>.</p>

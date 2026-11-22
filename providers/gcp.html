@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -248,7 +249,7 @@ disabled”, for several hours in exceptional cases. So:</p>
 <li>start the sweep only once the new primary version has propagated. The <code>kek_version()</code> of the
 encrypted DEK an encryption returns, and the <code>kek_version</code> field of the <code>KMS encrypt DEK</code> span,
 name the version Cloud KMS encrypted with, the <code>N</code> of <code>cryptoKeyVersions/N</code>, see
-<a href="../observability.html">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
+<a href="../observability/spans-and-events.html">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
 primary version had propagated still lists the old version among its <code>kek_versions_in_use</code>:
 run <code>reencrypt_deks</code> again, see <a href="../production/rotation.html#re-encrypting-a-keyrings-deks">Re-encrypting a keyring’s DEKs</a>;</li>
 <li>run the check only once the disable has propagated, and run it again before destroying the

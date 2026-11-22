@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -235,7 +236,7 @@ outcome. An envelope value names no key version, so its outcome has <code>from_c
 keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout kms-aead 0.30 writes.
 Values written by kms-aead 0.29 or earlier are upgraded in place first, with
 <code>KmsAeadEnvelope::upgrade_legacy_value(aad, value)</code> under kms-aead’s <code>legacy-formats</code> feature, see
-<a href="../formats.html#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
+<a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
 the marker’s, never inferred from its bytes.</p>
 <p><code>decrypt_envelope_for_migration</code> decrypts whatever encrypted DEK an envelope value carries, under the
 keyring’s KEK. It knows no key version, and so no compromised flag and no destroyed state: keep its

@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -240,7 +241,7 @@ cache that holds it, see <a href="../dek-caching.html#the-dek-lives-in-the-cache
 <li>read each value under it with <code>decrypt</code> and encrypt it again with <code>encrypt</code>, which takes a new
 DEK, and write it back only where the stored bytes are still the ones read;</li>
 <li>a DEK the application keeps itself, such as the key of
-<a href="../envelope-encryption.html#one-fixed-key">One fixed key</a> or a beacon key, is replaced by a key
+<a href="../one-fixed-key.html">One fixed key</a> or a beacon key, is replaced by a key
 under a new key id, and the values or beacons under the old one are encrypted or computed again;</li>
 <li>treat backups, point-in-time recovery and data exports as exposed: they still hold the values
 the leaked DEK decrypts, see

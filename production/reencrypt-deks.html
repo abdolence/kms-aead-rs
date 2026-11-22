@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -319,7 +320,7 @@ each on a cache miss afterwards. The same <code>reencrypt_encrypted_dek</code> r
 apart from their values, such as those of the <code>*_with_encrypted_dek</code> calls, of beacons and of
 deterministic fields. A value or a DEK in a layout of 0.29 or earlier fails with <code>LEGACY_FORMAT</code>:
 <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, with its DEK
-under the current version, see <a href="../formats.html#upgrading-stored-values">Upgrading stored values</a>.</p>
+under the current version, see <a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>.</p>
 <p>The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
 current version. The sweep needs KMS encrypt and decrypt on the KEK.</p>
@@ -339,7 +340,7 @@ its bytes wherever the old ones are kept: the query parameter of each <code>KEYS
 column or a setting that holds the keyset, and the file or the setting a
 Tink reader decrypts. See <a href="../keyring/bigquery.html#exporting-a-keyset-to-bigquery">BigQuery</a>;</li>
 <li>the application’s own encrypted keyset, such as <code>first_level_keyset</code> in
-<a href="../envelope-encryption.html#one-fixed-key">One fixed key</a>: the provider decrypts it and encrypts it again, and the new bytes
+<a href="../one-fixed-key.html">One fixed key</a>: the provider decrypts it and encrypts it again, and the new bytes
 replace the old ones wherever they are kept:</li>
 </ul>
 <pre><code class="language-rust">use kms_aead::{EncryptedDataEncryptionKey, KmsAeadDecryptionProvider, KmsAeadResult};
@@ -483,7 +484,7 @@ once it is older than <code>record_ttl</code>, 5 minutes by default, and Cloud S
 signal, see <a href="../keyring/record-cache.html#how-late-a-change-is-seen">Record cache</a>. A process whose
 revalidations fail keeps its record for as long as they fail, and logs “The keyring record could
 not be revalidated; the cached record stays in use” at <code>WARN</code> on each failure. An encrypted DEK
-the application read from its settings at startup, as in <a href="../envelope-encryption.html#one-fixed-key">One fixed key</a>, stays
+the application read from its settings at startup, as in <a href="../one-fixed-key.html">One fixed key</a>, stays
 as it was read. The DEK cache keys its entries by those bytes, so once an entry expires, the KMS
 decrypts the old bytes again and fails under a disabled old version, with no reload. This is the
 wait of step 4 in <a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.</li>

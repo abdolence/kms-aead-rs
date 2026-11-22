@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -246,7 +247,7 @@ assert_eq!(decrypted, SecretValue::from("user@example.com"));
 <p>An <code>Encrypted&lt;T, Deterministic&gt;</code> is <code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code>: Tink’s
 5-byte TINK prefix that names the key by its <code>KeyId</code>, then the output of RFC 5297, so Tink and
 BigQuery read it with a keyset of that key, see
-<a href="./envelope-encryption.html#one-fixed-key">One fixed key</a>. Its equality compares in constant time,
+<a href="./one-fixed-key.html">One fixed key</a>. Its equality compares in constant time,
 and its <code>Debug</code> prints only the length, since the bytes tell which values are equal.</p>
 <h2 id="keys-encrypted-by-a-kms"><a class="header" href="#keys-encrypted-by-a-kms">Keys encrypted by a KMS</a></h2>
 <p>The envelope generates and decrypts deterministic keys with its provider:</p>

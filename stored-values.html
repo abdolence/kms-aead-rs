@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -196,7 +197,7 @@ to store.</p>
 <tr><th>Format</th><th>Layout</th><th>Written by</th><th>Read by</th><th><code>key_id()</code></th><th>Equality</th></tr>
 </thead>
 <tbody>
-<tr><td><code>Envelope</code></td><td><a href="./formats.html#tinks-kms-envelope">Tink’s KMS envelope</a>, the encrypted DEK inside</td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
+<tr><td><code>Envelope</code></td><td><a href="./formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>, the encrypted DEK inside</td><td><code>KmsAeadEnvelope::encrypt</code></td><td><code>KmsAeadEnvelope::decrypt</code></td><td>no</td><td>none</td></tr>
 <tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td><code>KmsAeadEnvelope::encrypt_with_dek</code>, <code>AeadCipher::encrypt_bare</code></td><td><code>KmsAeadEnvelope::decrypt_with_dek</code>, <code>AeadCipher::decrypt_bare</code></td><td>no</td><td>none</td></tr>
 <tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td><code>AeadCipher::encrypt</code>, <code>Encryptor::encrypt</code></td><td><code>AeadCipher::decrypt</code>, <code>Keyring::decrypt</code></td><td>yes</td><td>none</td></tr>
 <tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td><code>DeterministicCipher::encrypt</code>, <code>Encryptor::encrypt_deterministic</code></td><td><code>DeterministicCipher::decrypt</code>, <code>Keyring::decrypt_deterministic</code></td><td>yes</td><td><code>==</code> and <code>Hash</code>, in constant time</td></tr>
@@ -214,7 +215,7 @@ Compare <code>value()</code> to tell whether two values are the same stored byte
 what a lookup by the encrypted value needs, see <a href="./deterministic.html">Deterministic encryption</a>;</li>
 <li><code>Debug</code> shows the length only.</li>
 </ul>
-<p>See <a href="./formats.html#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the shortest value of each
+<p>See <a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the shortest value of each
 layout and the layouts of 0.29 and earlier.</p>
 <h3 id="bytes-in-and-out"><a class="header" href="#bytes-in-and-out">Bytes in and out</a></h3>
 <p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
@@ -593,7 +594,7 @@ policy:</p>
 nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
 identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
 personal data. <code>kms_aead::json=off</code> in an <code>EnvFilter</code> turns the event off. The event’s fields are
-in <a href="./observability.html#json-that-does-not-decode">Observability</a>. <code>RedactedJson</code> outlines any JSON
+in <a href="./observability/spans-and-events.html#json-that-does-not-decode">Observability</a>. <code>RedactedJson</code> outlines any JSON
 the same way, with no encryption, see
 <a href="./use-cases/log-json-payloads.html">Log JSON payloads without leaking data</a>.</p>
 <p>Full example available

@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -247,7 +248,7 @@ the DEK cache. Use it for high write rates where a KMS call per value costs too 
 the KMS encrypts once and the DEK cache decrypts: values carry a 4-byte key id in Tink’s wire
 format instead of an encrypted DEK, and BigQuery and Tink read them with a keyset of that key. Use
 it for a column that BigQuery reads, with no key rotation. See
-<a href="./envelope-encryption.html#one-fixed-key">One fixed key</a>;</li>
+<a href="./one-fixed-key.html">One fixed key</a>;</li>
 <li><strong>Keyring</strong>, the <code>kms-aead-keyring</code> crate: a keyring record per scope holds the encrypted DEK
 versions, and values carry a 4-byte key id in Tink’s wire format instead of an encrypted DEK. The
 record is the place for central rotation and retirement of keys, and for values that BigQuery

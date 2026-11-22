@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -294,7 +295,7 @@ calls that make no KMS call are not <code>async</code>:</p>
 </tbody>
 </table>
 </div>
-<p>Every cipher text is an <code>Encrypted&lt;T, F&gt;</code>, see <a href="./formats.html#formats-of-encrypted">Formats</a>. It
+<p>Every cipher text is an <code>Encrypted&lt;T, F&gt;</code>, see <a href="./formats/values.html#formats-of-encrypted">Formats</a>. It
 has its own <code>value()</code> and <code>into_value()</code>, and so has <code>EncryptedDataEncryptionKey</code>.
 <code>DataEncryptionKey</code> no longer implements <code>ValueStruct</code>, and has its own <code>value()</code>.</p>
 <h2 id="your-own-provider"><a class="header" href="#your-own-provider">Your own provider</a></h2>
@@ -312,7 +313,7 @@ KEK version the KMS reported added by <code>with_kek_version</code>. A KMS that 
 decrypt gets it from those bytes, as the Azure provider’s do.</li>
 </ul>
 <p>The plaintext the provider encrypts is the DEK serialised as a Tink key, see
-<a href="./formats.html#serialised-deks">Formats</a>. The library never inspects the provider’s own bytes.</p>
+<a href="./formats/values.html#serialised-deks">Formats</a>. The library never inspects the provider’s own bytes.</p>
 <p>The trait has no <code>dyn</code> form, so a <code>Box&lt;dyn KmsAeadRingEncryptionProvider&gt;</code> becomes a type
 parameter <code>P: KmsAeadEncryptionProvider</code>, or an enum of the providers the application uses. The
 trait requires <code>Send</code> and <code>Sync</code>, so <code>P: KmsAeadEncryptionProvider</code> needs no <code>+ Send + Sync</code>.</p>
@@ -393,7 +394,7 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 wrote envelope layout v1 and the encrypted DEK layout v1 <code>[0xFF][0x01]…</code>, and 0.28.1 and earlier a
 length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
 <code>legacy-formats</code> feature, and fails with <code>LEGACY_FORMAT</code> without it, see
-<a href="./formats.html#values-written-by-029-and-earlier">Formats</a>.</p>
+<a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
 <p>To move stored values to the new format:</p>
@@ -402,13 +403,124 @@ length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only w
 cannot read Tink’s format, so no process writes it before every reader has the upgrade;</li>
 <li>rewrite the stored values with <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> of
 <code>KmsAeadEnvelope</code>, one or two KMS calls per value, see
-<a href="./formats.html#upgrading-stored-values">Upgrading stored values</a>. <code>upgrade_legacy_value</code> takes
+<a href="#upgrading-stored-values">Upgrading stored values</a>. <code>upgrade_legacy_value</code> takes
 the value’s AAD, and fails with <code>DECRYPT</code> on a value that does not decrypt under the envelope’s
 algorithm and that AAD;</li>
 <li>turn the feature off.</li>
 </ol>
 <p><code>Encrypted::&lt;T, Envelope&gt;::separate</code> reads Tink’s format only, with or without the feature, so
 code that separated stored 0.29 values runs after the sweep.</p>
+<h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
+<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
+<ul>
+<li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
+holds with the feature;</li>
+<li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
+raw encrypted DEKs.</li>
+</ul>
+<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
+hold needs the provider to become its bytes.</p>
+<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
+<code>LEGACY_FORMAT</code>, and one of:</p>
+<ul>
+<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
+<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
+values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
+</ul>
+<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
+process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
+spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="./observability/spans-and-events.html">Observability</a>.</p>
+<h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
+<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
+and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
+<ul>
+<li><code>upgrade_legacy_value</code>, for envelope values;</li>
+<li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
+<code>to_bytes</code>.</li>
+</ul>
+<p>Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
+serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
+one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
+The AEAD bytes stay as they are.</p>
+<p>An upgraded DEK is encrypted under the KEK’s current version, so the upgrade also does what
+<code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code> do for a value or a DEK already in Tink’s format, see
+<a href="./production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.
+Those two refuse a layout of 0.29 or earlier with <code>LEGACY_FORMAT</code>, so a sweep after a KEK rotation
+upgrades a value in an old layout and re-encrypts the DEK of a value in Tink’s format.</p>
+<p>The envelope’s algorithm is the one the values were encrypted with: ChaCha20-Poly1305 for values
+that 0.29 and earlier encrypted under their default. A raw DEK does not record its algorithm, and
+the encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the
+value’s AAD and decrypts the value before it writes anything. Under another algorithm or another AAD
+it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> has no value to decrypt, so it records the
+envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
+another algorithm than its values were encrypted with: use <code>upgrade_legacy_value</code> wherever the
+values are at hand.</p>
+<p>A sweep over stored rows:</p>
+<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
+use secret_vault_value::SecretValue;
+
+/// A stored envelope value and the AAD it was encrypted under.
+struct Row {
+    aad: Vec&lt;u8&gt;,
+    value: Vec&lt;u8&gt;,
+}
+
+/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
+#[allow(deprecated)]
+async fn upgrade_values&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;mut [Row],
+) -&gt; KmsAeadResult&lt;usize&gt;
+where
+    P: KmsAeadDecryptionProvider,
+    B: AeadBackend,
+{
+    let mut upgraded = 0;
+    for row in rows.iter_mut() {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.value.clone())?;
+        if let Some(value) = envelope.upgrade_legacy_value(&amp;row.aad, &amp;stored).await? {
+            row.value = value.into_value();
+            upgraded += 1;
+        }
+    }
+    Ok(upgraded)
+}
+<span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
+</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
+</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
+</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
+</span><span class="boring">legacy.extend_from_slice(bare.value());
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+</span><span class="boring">    provider,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+</span><span class="boring">)?;
+</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
+</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
+</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
+</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
+<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
+<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
+breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
+<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
+older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
 
                     </main>
 

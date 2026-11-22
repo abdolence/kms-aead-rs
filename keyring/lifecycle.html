@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -194,7 +195,7 @@ the application stores beside its records as an <code>EncryptionMarker</code>, s
 once it was active, its re-encryption range: the markers of the records encrypted under it, see
 <a href="../production/sweeps.html#records-under-a-version">Records under a version</a>.</li>
 </ul>
-<p>Every store keeps it as the same JSON document, see <a href="../formats.html#keyring-records">Keyring records</a>
+<p>Every store keeps it as the same JSON document, see <a href="../formats/keyring-records.html#keyring-records">Keyring records</a>
 for the document and the rules every read checks. A record that breaks one fails with
 <code>RecordInvalid</code>, naming the rule and never the bytes.</p>
 <p>The <code>kek</code> field is informational: it catches a keyring opened with the wrong provider, with
@@ -208,7 +209,7 @@ reads it as <code>admin.keyring().record()</code>.</p>
 <p>Every value carries the key id of the version that encrypted it, and the id names the version’s
 purpose: randomised, deterministic or beacon. So a value of one purpose never decrypts under a
 version of another, and the purpose of a value is known from its bytes, see
-<a href="../formats.html#keyring-key-ids">Keyring key ids</a>. The keyring numbers the versions of each purpose
+<a href="../formats/keyring-records.html#keyring-key-ids">Keyring key ids</a>. The keyring numbers the versions of each purpose
 from its first id: randomised versions are <code>1</code>, <code>2</code>, <code>3</code>, …, deterministic ones <code>2147483649</code>,
 <code>2147483650</code>, … and beacon ones <code>1073741825</code>, <code>1073741826</code>, …. Ids are never reused: a destroyed
 version keeps its id in the record.</p>

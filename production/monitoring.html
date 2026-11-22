@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -181,9 +182,9 @@
 <p>The catalogue of what to alert on in production, then the alerts for the volume of values under a
 key version and for the two rotations.</p>
 <h2 id="what-to-alert-on"><a class="header" href="#what-to-alert-on">What to alert on</a></h2>
-<p>The events are logged through tracing, see <a href="../observability.html#keyring-events">Keyring events</a>
-and <a href="../observability.html#events">Events</a>, and the metrics need the <code>opentelemetry</code> feature, see
-<a href="../observability.html#metrics">Metrics</a>.</p>
+<p>The events are logged through tracing, see <a href="../observability/spans-and-events.html#keyring-events">Keyring events</a>
+and <a href="../observability/spans-and-events.html#events">Events</a>, and the metrics need the <code>opentelemetry</code> feature, see
+<a href="../observability/metrics.html#metrics">Metrics</a>.</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -207,7 +208,7 @@ and <a href="../observability.html#events">Events</a>, and the metrics need the 
 <tr><td>an <code>Encrypt</code> in the KMS audit log by a principal other than the administration</td><td>an IAM over-grant, or a version the job did not create. Cloud KMS logs <code>Encrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="./runbook.html#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
 <tr><td>a <code>Decrypt</code> in the KMS audit log by a principal other than the application, the administration and the keyset readers: every <code>KEYS.KEYSET_CHAIN</code> query decrypts its keyset as the principal that runs it, and so does a Tink reader through its own KMS client, see <a href="../keyring/bigquery.html#queries">Queries</a> and <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a></td><td>an IAM over-grant, or an encrypted DEK or a keyset decrypted outside the deployment. Cloud KMS logs <code>Decrypt</code> as <code>DATA_READ</code> in its Data Access audit logs, which are off by default and must be turned on, see <a href="https://docs.cloud.google.com/kms/docs/audit-logging">Cloud KMS audit logging</a> and <a href="https://docs.cloud.google.com/logging/docs/audit/configure-data-access">Enable Data Access audit logs</a></td><td><a href="./runbook.html#a-kms-iam-over-grant">A KMS IAM over-grant</a></td></tr>
 <tr><td><code>WARN</code>, inside the KMS span: a Cloud KMS or Vault Transit response without a key version</td><td>the KMS reported no version, so <code>kek_versions_in_use</code> lists a <code>None</code> and the check before a KEK disable never passes</td><td><a href="./rotation.html#a-kek-version-the-kms-did-not-report">A KEK version the KMS did not report</a></td></tr>
-<tr><td><code>WARN</code>, once per process: the first read of a layout of 0.29 or earlier</td><td>values not yet upgraded</td><td><a href="../formats.html#upgrading-stored-values">Upgrading stored values</a></td></tr>
+<tr><td><code>WARN</code>, once per process: the first read of a layout of 0.29 or earlier</td><td>values not yet upgraded</td><td><a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -215,7 +216,7 @@ and <a href="../observability.html#events">Events</a>, and the metrics need the 
 <code>kms_aead.kms.duration</code>, the KMS audit log, and the <code>WARN</code> of old layouts.</p>
 <h2 id="alerting-on-volume"><a class="header" href="#alerting-on-volume">Alerting on volume</a></h2>
 <p>With the <code>opentelemetry</code> feature, the keyring records the plaintext size of each value it encrypts
-under each version, see <a href="../observability.html#metrics">Metrics</a>: the histogram’s count is the
+under each version, see <a href="../observability/metrics.html#metrics">Metrics</a>: the histogram’s count is the
 values, and its sum their bytes. Each process records its own, and the alert sums them across the
 fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
 export, with the range covering the version’s life:</p>
@@ -248,7 +249,7 @@ its process could not load, and <code>KEY_VERSION_RETIRED</code> once the old ve
 <li>the values and bytes per version, which say when the next rotation is due, see
 <a href="#alerting-on-volume">Alerting on volume</a>.</li>
 </ul>
-<p>The metrics need the <code>opentelemetry</code> feature, see <a href="../observability.html#metrics">Metrics</a>.</p>
+<p>The metrics need the <code>opentelemetry</code> feature, see <a href="../observability/metrics.html#metrics">Metrics</a>.</p>
 <h2 id="during-a-kek-rotation"><a class="header" href="#during-a-kek-rotation">During a KEK rotation</a></h2>
 <ul>
 <li>“The keyring record could not be revalidated”, from the re-encryption until the disable: a

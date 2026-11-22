@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -256,7 +257,7 @@ beacon so that a column can hold beacons of two keys at once;</li>
 </ul>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with serde and the <code>postgres</code> and <code>sqlx</code> features, and
 read back through <code>TryFrom</code>, which checks its layout, see <a href="./stored-values.html#beacont">Stored values</a>.
-See <a href="./formats.html#beacons">Formats</a> for its bytes.</p>
+See <a href="./formats/values.html#beacons">Formats</a> for its bytes.</p>
 <p>A message authentication code (MAC) over a value’s bytes, which is not truncated and never serves
 a lookup, is in <a href="./signing.html#beacons-and-macs">Beacons and MACs</a>.</p>
 <h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>

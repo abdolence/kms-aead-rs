@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -291,7 +292,7 @@ assert_eq!(decrypted, SecretValue::from("secret"));
 </span><span class="boring">}</span></code></pre>
 <p>Full example available <a href="https://github.com/abdolence/kms-aead-rs/blob/master/examples/only_aead.rs">here</a>.</p>
 <p><code>encrypt</code> writes an <code>Encrypted&lt;T, Randomized&gt;</code>: the same output after Tink’s TINK prefix, which
-names the key by a <code>KeyId</code>, see <a href="./envelope-encryption.html#one-fixed-key">One fixed key</a>.</p>
+names the key by a <code>KeyId</code>, see <a href="./one-fixed-key.html">One fixed key</a>.</p>
 <p><code>generate_dek</code> makes a DEK without a KMS. <code>generate_encrypted_dek</code> makes a DEK and encrypts it with
 a provider in one call, for an application that stores the encrypted DEK itself. The other calls
 of <code>AeadCipher</code> make no KMS call and open no span.</p>

@@ -29,6 +29,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -36,10 +37,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -908,7 +909,7 @@ settings, and rotates it by hand:</p>
 <ul>
 <li>a deterministic field: <code>DeterministicCipher</code> with a key the KMS encrypts once, see
 <a href="#keys-encrypted-by-a-kms">Deterministic encryption</a>;</li>
-<li>a beacon: <code>KmsAeadEnvelope::beacon</code> or <code>BeaconMac</code>, see <a href="#beacons-1">Beacons</a>. A rotation
+<li>a beacon: <code>KmsAeadEnvelope::beacon</code> or <code>BeaconMac</code>, see <a href="#beacons">Beacons</a>. A rotation
 keeps both keys and queries with a beacon under each until a re-index, see
 <a href="#rotating-a-beacon-key">Rotating a beacon key</a>.</li>
 </ul>
@@ -920,7 +921,7 @@ still decrypts:</p>
 <code>Keyring::deterministic_probes</code> for a lookup, under the <code>deterministic</code> feature, see
 <a href="#deterministic-fields">Deterministic fields</a>;</li>
 <li>a beacon: an encryptor’s <code>encrypt</code> and <code>beacon</code> in the same write, and <code>Keyring::beacon_probes</code>
-for a lookup, see <a href="#beacons-2">Beacons</a>.</li>
+for a lookup, see <a href="#beacons-1">Beacons</a>.</li>
 </ul>
 <p>Each rotation of a deterministic or beacon version adds a probe to every lookup until a sweep, see
 <a href="#rotation-cadence">Rotation cadence</a>.</p>
@@ -937,7 +938,7 @@ alone one, or two during a rotation by hand until the re-index; with a keyring o
 equal beacon never proves an equal value.</li>
 </ol>
 <p>A deterministic field in BigQuery is queried in SQL, with one <code>DETERMINISTIC_ENCRYPT</code> per version,
-see <a href="#queries">Queries</a>.</p>
+see <a href="#query-keyring-values-in-bigquery">Query keyring values in BigQuery</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="erase-one-customers-data-for-good"><a class="header" href="#erase-one-customers-data-for-good">Erase one customer’s data for good</a></h1>
 <p>A customer closes its account and asks for its data to be erased, or a retention rule requires it.
@@ -1133,6 +1134,49 @@ and of a BigQuery sweep in SQL
 record’s readable versions, see <a href="#keyring-limits">Keyring limits</a>. BigQuery cannot
 calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
 <a href="#bigquery">BigQuery</a>.</p>
+<h2 id="query-keyring-values-in-bigquery"><a class="header" href="#query-keyring-values-in-bigquery">Query keyring values in BigQuery</a></h2>
+<p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
+keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for. The
+requirements of a query are in <a href="#queries">Queries</a>:</p>
+<pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
+FROM users u;
+
+-- Deterministic values, with a Readable(Deterministic) or Single keyset
+SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
+FROM users u;
+
+-- An equality query: one probe per deterministic version, each with its Single keyset
+SELECT u.id
+FROM users u
+WHERE u.email_det IN (
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
+);
+</code></pre>
+<h2 id="read-a-keyring-export-with-tink-for-python"><a class="header" href="#read-a-keyring-export-with-tink-for-python">Read a keyring export with Tink for Python</a></h2>
+<p>Tink for Python reads the keyset that <code>export_tink_keyset</code> wrote, such as <code>tenant-42.keyset</code> of
+<a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>, with the KMS
+client of the key URI the export returned, and decrypts a randomised value with the value’s default
+AAD as UTF-8:</p>
+<pre><code class="language-python">import tink
+from tink import aead
+from tink.integration import gcpkms
+
+aead.register()
+key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
+with open('tenant-42.keyset', 'rb') as keyset_file:
+  keyset_handle = tink.read_keyset_handle(
+      tink.BinaryKeysetReader(keyset_file.read()),
+      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
+  )
+email_aead = keyset_handle.primitive(aead.Aead)
+
+
+def decrypt_email(value: bytes, user_id: str) -&gt; str:
+  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
+</code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="accept-data-from-partners-and-devices-that-cannot-read-it-back"><a class="header" href="#accept-data-from-partners-and-devices-that-cannot-read-it-back">Accept data from partners and devices that cannot read it back</a></h1>
 <p>A partner posts documents, a device reports readings, an upload client sends files. Each encrypts
@@ -4551,8 +4595,8 @@ async fn candidates(
         .await?;
     rows.iter().map(|row| row.try_get("email")).collect()
 }</code></pre>
-<p>See <a href="#beacons-1">Beacons</a> for calculating beacons with a KMS-encrypted beacon key, the context,
-normalisation and key rotation, and <a href="#beacons-2">Beacons</a> in kms-aead-keyring for
+<p>See <a href="#beacons">Beacons</a> for calculating beacons with a KMS-encrypted beacon key, the context,
+normalisation and key rotation, and <a href="#beacons-1">Beacons</a> in kms-aead-keyring for
 beacons under key versions.</p>
 <h2 id="plaintext"><a class="header" href="#plaintext"><code>Plaintext</code></a></h2>
 <p><code>Plaintext</code> maps a type to the bytes it is encrypted as, and back. Every <code>T</code> of <code>Encrypted&lt;T, F&gt;</code>
@@ -4635,7 +4679,7 @@ error never quotes the bytes;</li>
 <li>the decrypted value belongs to the application, which protects it. Only <code>SecretValue</code> as <code>T</code> is
 zeroised on drop; <code>String</code> and <code>Vec&lt;u8&gt;</code> take over the decrypted buffer without a copy;</li>
 <li>a beacon is the HMAC of the encoded bytes, so normalisation, such as lowercasing an email, is
-the newtype’s job, see <a href="#beacons-1">Beacons</a>.</li>
+the newtype’s job, see <a href="#beacons">Beacons</a>.</li>
 </ul>
 <p><code>JsonEncoded&lt;T&gt;</code> encrypts a structured value of any serde type as its compact JSON, which BigQuery reads
 with <code>AEAD.DECRYPT_STRING</code> and its JSON functions:</p>
@@ -4727,7 +4771,7 @@ the same way, with no encryption, see
 <h1 id="envelope-encryption-1"><a class="header" href="#envelope-encryption-1">Envelope encryption</a></h1>
 <p><code>KmsAeadEnvelope</code> encrypts values under data encryption keys (DEKs) on the crypto backend it is
 built with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
-<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="#observability">Observability</a>.</p>
+<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="#spans-and-events">Observability</a>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
@@ -4799,105 +4843,6 @@ application’s <code>Email</code> newtype, and the result is an <code>Encrypted
 The calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt through
 the envelope’s DEK cache, whatever the type. <code>Plaintext</code>, the bytes of an <code>Encrypted</code> and how
 serde, tokio-postgres and sqlx store it are in <a href="#stored-values">Stored values</a>.</p>
-<h2 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h2>
-<p><code>AeadCipher::encrypt</code> encrypts a field under a key the application holds, in Tink’s layout of a key
-whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
-<code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
-<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant, and Tink
-and BigQuery read the values with a keyset of the one key under that id:</p>
-<pre><code class="language-rust no_run">use kms_aead::backends::Ring;
-use kms_aead::cache::{DekCache, DekCacheOptions};
-use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{
-    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
-};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-// The id of the one key, in every value and in the keyset
-const EMAIL_KEY: KeyId = KeyId::new(1);
-
-<span class="boring">async fn example() -&gt; KmsAeadResult&lt;()&gt; {
-</span>let key_ref = GcpKmsKeyRef::new(
-    "my-project".to_string(),
-    "europe-north1".to_string(),
-    "my-key-ring".to_string(),
-    "my-key".to_string(),
-);
-let provider = GcpKmsProvider::new(&amp;key_ref).await?;
-let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
-let cache = DekCache::new(DekCacheOptions::new())?;
-
-// Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
-let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
-    cipher.generate_encrypted_dek(&amp;provider).await?;
-
-// On every write and read: the key decrypted through the cache, no KMS call while it is cached
-let email = Email("alice@example.com".to_string());
-let (encrypted, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        cipher.encrypt(EMAIL_KEY, b"users/1042/email", &amp;email, dek)
-    })
-    .await?;
-let encrypted: Encrypted&lt;Email, Randomized&gt; = encrypted?;
-
-let (decrypted, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        cipher.decrypt(b"users/1042/email", &amp;encrypted, dek)
-    })
-    .await?;
-let decrypted: Email = decrypted?;
-assert_eq!(decrypted, email);
-
-// Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
-let mut keyset = TinkKeyset::new(EMAIL_KEY);
-let (added, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), dek)
-    })
-    .await?;
-added?;
-let first_level_keyset: EncryptedDataEncryptionKey = provider
-    .encrypt_data_encryption_key(&amp;DataEncryptionKey::from(keyset.to_bytes()))
-    .await?;
-<span class="boring">let _ = first_level_keyset;
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
-query parameter, beside the key’s Tink URI as a <code>STRING</code> one,
-<code>gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key</code>:</p>
-<pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
-  u.email,
-  CONCAT('users/', CAST(u.id AS STRING), '/email'))
-FROM users u;
-</code></pre>
-<ul>
-<li>BigQuery reads AES-256-GCM values with <code>AEAD.DECRYPT_STRING</code> and <code>AEAD.DECRYPT_BYTES</code>, and
-the AES-SIV values of <code>DeterministicCipher</code> with <code>DETERMINISTIC_DECRYPT_STRING</code> and
-<code>DETERMINISTIC_DECRYPT_BYTES</code>. <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only;</li>
-<li><code>AeadCipher::decrypt</code> reads the values Tink and BigQuery write under the same key and id. The
-caller picks the key by <code>key_id()</code>, which the prefix names without authenticating it;</li>
-<li>a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
-kms-aead-keyring keeps those versions.</li>
-</ul>
-<h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
-<p>A beacon, or blind index, finds rows by a field’s value without decrypting the column, see
-<a href="#beacons-1">Beacons</a>.</p>
 <h2 id="aad"><a class="header" href="#aad">AAD</a></h2>
 <p>The AAD is authenticated but not encrypted: a value decrypts only with the AAD it was encrypted
 with, and a wrong AAD fails with <code>DECRYPT</code>. Use it to bind a value to its place, such as
@@ -5009,6 +4954,103 @@ cache. A value or a DEK in a layout of 0.29 or earlier fails with <code>LEGACY_F
 <a href="#upgrading-stored-values">Upgrading stored values</a>.</p>
 <p>The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in <a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h1>
+<p><code>AeadCipher::encrypt</code> encrypts a field under a key the application holds, in Tink’s layout of a key
+whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
+<code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
+<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant, and Tink
+and BigQuery read the values with a keyset of the one key under that id:</p>
+<pre><code class="language-rust no_run">use kms_aead::backends::Ring;
+use kms_aead::cache::{DekCache, DekCacheOptions};
+use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
+use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
+use kms_aead::{
+    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
+    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
+};
+use secret_vault_value::SecretValue;
+
+#[derive(Debug, Clone, PartialEq)]
+struct Email(String);
+
+impl Plaintext for Email {
+    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
+        self.0.to_plaintext()
+    }
+
+    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
+        String::from_plaintext(plaintext).map(Email)
+    }
+}
+
+// The id of the one key, in every value and in the keyset
+const EMAIL_KEY: KeyId = KeyId::new(1);
+
+<span class="boring">async fn example() -&gt; KmsAeadResult&lt;()&gt; {
+</span>let key_ref = GcpKmsKeyRef::new(
+    "my-project".to_string(),
+    "europe-north1".to_string(),
+    "my-key-ring".to_string(),
+    "my-key".to_string(),
+);
+let provider = GcpKmsProvider::new(&amp;key_ref).await?;
+let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
+let cache = DekCache::new(DekCacheOptions::new())?;
+
+// Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
+let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
+    cipher.generate_encrypted_dek(&amp;provider).await?;
+
+// On every write and read: the key decrypted through the cache, no KMS call while it is cached
+let email = Email("alice@example.com".to_string());
+let (encrypted, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        cipher.encrypt(EMAIL_KEY, b"users/1042/email", &amp;email, dek)
+    })
+    .await?;
+let encrypted: Encrypted&lt;Email, Randomized&gt; = encrypted?;
+
+let (decrypted, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        cipher.decrypt(b"users/1042/email", &amp;encrypted, dek)
+    })
+    .await?;
+let decrypted: Email = decrypted?;
+assert_eq!(decrypted, email);
+
+// Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
+let mut keyset = TinkKeyset::new(EMAIL_KEY);
+let (added, _) = cache
+    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
+        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), dek)
+    })
+    .await?;
+added?;
+let first_level_keyset: EncryptedDataEncryptionKey = provider
+    .encrypt_data_encryption_key(&amp;DataEncryptionKey::from(keyset.to_bytes()))
+    .await?;
+<span class="boring">let _ = first_level_keyset;
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
+query parameter, beside the key’s Tink URI as a <code>STRING</code> one,
+<code>gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key</code>:</p>
+<pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
+  u.email,
+  CONCAT('users/', CAST(u.id AS STRING), '/email'))
+FROM users u;
+</code></pre>
+<ul>
+<li>BigQuery reads AES-256-GCM values with <code>AEAD.DECRYPT_STRING</code> and <code>AEAD.DECRYPT_BYTES</code>, and
+the AES-SIV values of <code>DeterministicCipher</code> with <code>DETERMINISTIC_DECRYPT_STRING</code> and
+<code>DETERMINISTIC_DECRYPT_BYTES</code>. <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only;</li>
+<li><code>AeadCipher::decrypt</code> reads the values Tink and BigQuery write under the same key and id. The
+caller picks the key by <code>key_id()</code>, which the prefix names without authenticating it;</li>
+<li>a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
+kms-aead-keyring keeps those versions.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="dek-caching-and-reuse"><a class="header" href="#dek-caching-and-reuse">DEK caching and reuse</a></h1>
 <p>Without a cache, every read of a value decrypts its DEK with one KMS call, and every
@@ -5315,7 +5357,7 @@ DEK cache. To cache deterministic keys, use <code>DekCache::with_dek</code>, whi
 kinds of algorithm.</p>
 <p><code>DeterministicCipher::generate_encrypted_dek</code> does the same with any provider.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="beacons-1"><a class="header" href="#beacons-1">Beacons</a></h1>
+<h1 id="beacons"><a class="header" href="#beacons">Beacons</a></h1>
 <p>A beacon, or blind index, finds rows by a field’s value without decrypting the column: an
 HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
 query calculates the beacon of the value it looks for and matches it by equality. <code>Beacon&lt;T&gt;</code> holds
@@ -5394,7 +5436,7 @@ beacon so that a column can hold beacons of two keys at once;</li>
 </ul>
 <p><code>Beacon&lt;T&gt;</code> is stored as <code>Encrypted</code> is, with serde and the <code>postgres</code> and <code>sqlx</code> features, and
 read back through <code>TryFrom</code>, which checks its layout, see <a href="#beacont">Stored values</a>.
-See <a href="#beacons-3">Formats</a> for its bytes.</p>
+See <a href="#beacons-2">Formats</a> for its bytes.</p>
 <p>A message authentication code (MAC) over a value’s bytes, which is not truncated and never serves
 a lookup, is in <a href="#beacons-and-macs">Beacons and MACs</a>.</p>
 <h2 id="what-a-beacon-leaks"><a class="header" href="#what-a-beacon-leaks">What a beacon leaks</a></h2>
@@ -5434,7 +5476,7 @@ a beacon. It matches beacons the application calculated and passed in as query p
 <p>Rotating a beacon key in store-less mode is manual. Generate the new key and keep both, write
 beacons under the new one, query with a beacon under each key until a re-index has rewritten
 every stored beacon, then drop the old key. <code>Beacon::key_id</code> tells which key wrote a stored
-beacon. kms-aead-keyring does this with key versions, see <a href="#beacons-2">Beacons</a>.</p>
+beacon. kms-aead-keyring does this with key versions, see <a href="#beacons-1">Beacons</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="streaming-encryption"><a class="header" href="#streaming-encryption">Streaming encryption</a></h1>
 <p>Feature <code>stream</code>.</p>
@@ -5940,7 +5982,7 @@ then decodes and returns its payload. MACs have the same pair: a detached <code>
 <code>verify_mac</code> on a keyring, and an attached <code>WithMac&lt;T&gt;</code>, which <code>mac_attached</code> computes and
 <code>verify_with_mac</code> checks before it returns the payload. The four types are stored as <code>Encrypted</code>
 is, with serde, <code>postgres</code> and <code>sqlx</code>, and none implements <code>PartialEq</code>. The bytes are in
-<a href="#signatures-and-macs-1">Formats</a>.</p>
+<a href="#signature-and-mac-formats">Formats</a>.</p>
 <h2 id="another-encoding"><a class="header" href="#another-encoding">Another encoding</a></h2>
 <p>A type whose payload is not JSON implements <code>Signable</code> itself: <code>to_payload</code> returns the bytes that
 are signed, and <code>from_payload</code> decodes the bytes of an attached value after they verified. Both
@@ -6158,7 +6200,7 @@ a record with a MAC version. <code>Authenticator</code> computes and verifies MA
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/mac.rs">here</a>.</p>
 <h3 id="beacons-and-macs"><a class="header" href="#beacons-and-macs">Beacons and MACs</a></h3>
-<p>Both are HMACs under a keyring version, and they serve different ends, see <a href="#beacons-1">Beacons</a>:</p>
+<p>Both are HMACs under a keyring version, and they serve different ends, see <a href="#beacons">Beacons</a>:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -6472,7 +6514,7 @@ let envelope = KmsAeadEnvelope::&lt;GcpKmsProvider, AwsLc&gt;::new(provider)?;
 </span><span class="boring">}</span></code></pre>
 <p>Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
 fails at the KMS and never decrypts a value. <code>provider.kek()</code> returns that KEK as a <code>KekRef</code>: the
-KMS and the key name. It is also the <code>provider</code> and <code>key</code> field of the <a href="#observability">KMS
+KMS and the key name. It is also the <code>provider</code> and <code>key</code> field of the <a href="#spans-and-events">KMS
 spans</a> and the key of the <a href="#dek-caching-and-reuse">DEK cache</a>. Nothing else is
 checked: an encrypted DEK carries no context that the KMS authenticates, see <a href="#threat-model">Security
 considerations</a>.</p>
@@ -6616,7 +6658,7 @@ disabled”, for several hours in exceptional cases. So:</p>
 <li>start the sweep only once the new primary version has propagated. The <code>kek_version()</code> of the
 encrypted DEK an encryption returns, and the <code>kek_version</code> field of the <code>KMS encrypt DEK</code> span,
 name the version Cloud KMS encrypted with, the <code>N</code> of <code>cryptoKeyVersions/N</code>, see
-<a href="#observability">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
+<a href="#spans-and-events">Observability</a>. A keyring whose <code>reencrypt_deks</code> ran before the new
 primary version had propagated still lists the old version among its <code>kek_versions_in_use</code>:
 run <code>reencrypt_deks</code> again, see <a href="#re-encrypting-a-keyrings-deks">Re-encrypting a keyring’s DEKs</a>;</li>
 <li>run the check only once the disable has propagated, and run it again before destroying the
@@ -8573,7 +8615,7 @@ physical one, a value moves between tables and data stores without being encrypt
 <p>An <code>EntityId</code> can be personal data, so no span, event or error of the crate carries it.</p>
 <p>Deterministic fields have an AAD without the entity id, see
 <a href="#aad-2">Deterministic fields</a>, and beacons a context without it, see
-<a href="#beacons-2">Beacons</a>.</p>
+<a href="#beacons-1">Beacons</a>.</p>
 <h2 id="why-the-aad-is-structured"><a class="header" href="#why-the-aad-is-structured">Why the AAD is structured</a></h2>
 <p>kms-aead’s <code>AeadCipher</code> and <code>KmsAeadEnvelope</code> take the AAD as any <code>impl AsRef&lt;[u8]&gt;</code>: the
 application chooses the bytes and rebuilds them itself on every read. The keyring’s <code>encrypt</code> and
@@ -8684,7 +8726,7 @@ assert!(matches!(
 every build, so values pass through a process without the feature.</p>
 <p>Deterministic fields fit exact-match lookups where the leak of equality is acceptable. When a
 field only needs lookups and its stored value should stay randomised, a
-<a href="#beacons-2">beacon</a> fits instead.</p>
+<a href="#beacons-1">beacon</a> fits instead.</p>
 <h2 id="what-they-leak"><a class="header" href="#what-they-leak">What they leak</a></h2>
 <p>A deterministic column leaks equality and frequency to anyone who reads it, and a leaked
 deterministic DEK lets its holder test candidate values offline, see
@@ -8846,13 +8888,13 @@ a full sweep, see <a href="#rotation-cadence">Rotation cadence</a>.</p>
 <p>Be aware a query with several probes puts the values of one plaintext under each version side by
 side, so a reader of the query log links a value’s history across a rotation.</p>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="beacons-2"><a class="header" href="#beacons-2">Beacons</a></h1>
+<h1 id="beacons-1"><a class="header" href="#beacons-1">Beacons</a></h1>
 <p>A beacon, or blind index, finds rows by a field’s value without decrypting the column: a
 truncated HMAC-SHA256 of the value, stored beside the field’s randomised value, which a data store
 matches by equality. The keyring computes beacons under its beacon versions, of the purpose
 <code>Purpose::Beacon</code>, which rotate like any other.</p>
-<p>kms-aead’s <a href="#beacons-1">Beacons</a> describes the primitive, <code>Beacon&lt;T&gt;</code>
-and <code>BeaconBits</code>, with keys the application keeps itself, and <a href="#beacons-3">Formats</a> its
+<p>kms-aead’s <a href="#beacons">Beacons</a> describes the primitive, <code>Beacon&lt;T&gt;</code>
+and <code>BeaconBits</code>, with keys the application keeps itself, and <a href="#beacons-2">Formats</a> its
 bytes.</p>
 <p>A <a href="#deterministic-fields">deterministic field</a> also finds rows by equality, by its encrypted value,
 see <a href="#find-a-user-by-an-encrypted-email">Find rows by an encrypted value</a>.</p>
@@ -9333,25 +9375,9 @@ every keyset again after <code>reencrypt_deks</code>, once the new primary versi
 the old bytes in every query and column that holds them before the old version is disabled, see
 <a href="#encrypted-keysets">Encrypted keysets</a>.</p>
 <h3 id="queries"><a class="header" href="#queries">Queries</a></h3>
-<p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
-keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for:</p>
-<pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
-FROM users u;
-
--- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
-FROM users u;
-
--- An equality query: one probe per deterministic version, each with its Single keyset
-SELECT u.id
-FROM users u
-WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
-);
-</code></pre>
+<p>Every value reaches a query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code> and each keyset
+parameter its <code>value()</code>. The queries are in
+<a href="#query-keyring-values-in-bigquery">Query keyring values in BigQuery</a>.</p>
 <p>The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
 no <code>Single</code> keyset, and no value is encrypted under it before its promotion.</p>
 <p>The requirements:</p>
@@ -9430,25 +9456,8 @@ println!("{}", keyset.key_uri());
 registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>Tink for Python reads the keyset with the KMS client of that URI, and decrypts a randomised value
-with the value’s default AAD as UTF-8:</p>
-<pre><code class="language-python">import tink
-from tink import aead
-from tink.integration import gcpkms
-
-aead.register()
-key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
-with open('tenant-42.keyset', 'rb') as keyset_file:
-  keyset_handle = tink.read_keyset_handle(
-      tink.BinaryKeysetReader(keyset_file.read()),
-      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
-  )
-email_aead = keyset_handle.primitive(aead.Aead)
-
-
-def decrypt_email(value: bytes, user_id: str) -&gt; str:
-  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
-</code></pre>
+<p>A Tink reader decrypts a randomised value with the value’s default AAD as UTF-8, see
+<a href="#read-a-keyring-export-with-tink-for-python">Read a keyring export with Tink for Python</a>.</p>
 <p>The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of <a href="#fields-tink-reads">Fields Tink reads</a>: a selected ChaCha20-Poly1305 or
 beacon version fails with <code>ExportAlgorithmUnsupported</code>, before any KMS call.</p>
@@ -9487,7 +9496,7 @@ decrypts a value encrypted before the rotation with it, through
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds <code>p256</code> and <code>ed25519-dalek</code> for signatures, and <code>rsa</code> for RSA-OAEP, see <a href="#what-each-backend-does">Asymmetric KEKs</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="#deterministic-encryption">Deterministic encryption</a></td></tr>
 <tr><td><code>stream</code></td><td>streaming encryption of values of any length: <code>StreamEncryptor</code>, <code>StreamDecryptor</code>, the tokio adapters <code>EncryptingWriter</code> and <code>DecryptingReader</code>, the <code>Stream</code> adapters <code>EncryptingStream</code> and <code>DecryptingStream</code>, the <code>stream_encryptor</code> and <code>stream_decryptor</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code>, with their bare forms, and <code>KmsAeadEnvelope::decrypting_stream</code> and <code>decrypting_reader</code>, which read the header from the whole stored value. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
-<tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="#formats">Formats</a></td></tr>
+<tr><td><code>legacy-formats</code></td><td>reads the layouts written by 0.29 and earlier. Deprecated, see <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
 <tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value encrypted and decrypted, and the time each call, KMS request and keyring store read takes, see <a href="#metrics">Metrics</a></td></tr>
@@ -9551,7 +9560,19 @@ kms-aead and its provider features, and secret-vault-value’s <code>SecretValue
 type’s <code>Plaintext</code> encodes to.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="formats"><a class="header" href="#formats">Formats</a></h1>
-<p>Every byte layout the library reads or writes is on this page.</p>
+<p>Every byte layout the library reads or writes is listed on this page and described on the pages
+below it:</p>
+<ul>
+<li><a href="#values-and-deks">Values and DEKs</a>: <code>Encrypted&lt;T, F&gt;</code> and its formats, Tink’s KMS envelope,
+encrypted DEKs and the serialised DEKs inside them, DEKs encrypted with a public key, and
+beacons;</li>
+<li><a href="#streamed-values">Streamed values</a>: the header and chunks of streamed values, in the
+prefixed, bare and envelope forms, and how a range read maps to chunks;</li>
+<li><a href="#signature-and-mac-formats">Signature and MAC formats</a>: detached and attached signatures
+and MACs, what they are computed over, the key ids of signing keys and the test vectors;</li>
+<li><a href="#keyring-records-and-keysets">Keyring records and keysets</a>: the key ids of a keyring, the JSON
+record every store keeps, encryption markers, and Tink keysets.</li>
+</ul>
 <p>The library writes one envelope format for every provider, Tink’s KMS envelope. A value encrypted
 by <code>KmsAeadEnvelope::encrypt</code> decrypts with Tink’s <code>KmsEnvelopeAead</code> on the same KMS key and
 algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decrypt</code>.</p>
@@ -9561,20 +9582,20 @@ algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decryp
 <tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Read by</th><th>Written by</th></tr>
 </thead>
 <tbody>
-<tr><td>Tink KMS envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
-<tr><td>Bare value</td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>every release</td></tr>
-<tr><td>Encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes, see <a href="#encrypted-deks-1">Encrypted DEKs</a></td><td>kms-aead, Tink for GCP and AWS keys</td><td>0.30.0 and later</td></tr>
-<tr><td>Serialised DEK</td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message, see <a href="#serialised-deks">Serialised DEKs</a></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
-<tr><td>TINK-prefixed value</td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td>Streamed value</td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>AeadCipher::stream_encryptor</code> and <code>stream_decryptor</code>, and of the keyring’s <code>Encryptor::stream_encryptor</code> and <code>Keyring::stream_decryptor</code></td><td>see <a href="#streamed-values">Streamed values</a></td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte 5</td><td>0.31.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td>Envelope streamed value</td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>KmsAeadEnvelope::stream_encryptor</code> and <code>stream_decryptor</code></td><td>see <a href="#streamed-values">Streamed values</a></td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte <code>4 + w</code></td><td>0.31.0 and later</td></tr>
-<tr><td>Bare streamed value</td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of the <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code></td><td>see <a href="#streamed-values">Streamed values</a></td><td>kms-aead with <code>stream</code>, any C2SP chunked-encryption reader</td><td>0.31.0 and later</td></tr>
-<tr><td>Detached signature</td><td><code>Signature&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
-<tr><td>Attached signature</td><td><code>Signed&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
-<tr><td>Detached MAC</td><td><code>Mac&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
-<tr><td>Attached MAC</td><td><code>WithMac&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
-<tr><td>Tink keyset</td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
-<tr><td>Tink encrypted keyset</td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td><a href="#tinks-kms-envelope">Tink KMS envelope</a></td><td><code>Encrypted&lt;T, Envelope&gt;</code></td><td><code>[w: u32 BE][encrypted DEK: w][nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td><a href="#formats-of-encrypted">Bare value</a></td><td><code>Encrypted&lt;T, Bare&gt;</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>kms-aead, Tink</td><td>every release</td></tr>
+<tr><td><a href="#encrypted-deks-1">Encrypted DEK</a></td><td><code>EncryptedDataEncryptionKey</code></td><td>the provider’s bytes</td><td>kms-aead, Tink for GCP and AWS keys</td><td>0.30.0 and later</td></tr>
+<tr><td><a href="#serialised-deks">Serialised DEK</a></td><td>the plaintext of an encrypted DEK, but Azure’s</td><td>Tink’s key message</td><td>kms-aead, Tink</td><td>0.30.0 and later</td></tr>
+<tr><td><a href="#formats-of-encrypted">TINK-prefixed value</a></td><td><code>Encrypted&lt;T, Randomized&gt;</code>, <code>Encrypted&lt;T, Deterministic&gt;</code>, named by a <code>KeyId</code></td><td><code>[0x01][key id: u32 BE][value]</code></td><td>kms-aead, Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td><a href="#streamed-values">Streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>AeadCipher::stream_encryptor</code> and <code>stream_decryptor</code>, and of the keyring’s <code>Encryptor::stream_encryptor</code> and <code>Keyring::stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte 5</td><td>0.31.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td><a href="#streamed-values">Envelope streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of <code>KmsAeadEnvelope::stream_encryptor</code> and <code>stream_decryptor</code></td><td>see its page</td><td>kms-aead with <code>stream</code>; a C2SP chunked-encryption reader from byte <code>4 + w</code></td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#streamed-values">Bare streamed value</a></td><td><code>StreamEncryptor</code> and <code>StreamDecryptor</code> of the <code>stream_encryptor_bare</code> and <code>stream_decryptor_bare</code> calls of <code>AeadCipher</code> and <code>KmsAeadEnvelope</code></td><td>see its page</td><td>kms-aead with <code>stream</code>, any C2SP chunked-encryption reader</td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#signature-and-mac-formats">Detached signature</a></td><td><code>Signature&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][signature]</code></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#signature-and-mac-formats">Attached signature</a></td><td><code>Signed&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][signature: w][payload]</code></td><td>kms-aead</td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#signature-and-mac-formats">Detached MAC</a></td><td><code>Mac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][tag]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#signature-and-mac-formats">Attached MAC</a></td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>0.31.0 and later</td></tr>
+<tr><td><a href="#tink-keysets-and-the-tink-prefix">Tink keyset</a></td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
+<tr><td><a href="#tink-keysets-and-the-tink-prefix">Tink encrypted keyset</a></td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key</td><td>0.30.0 and later, and kms-aead-keyring through it</td></tr>
 <tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
 <tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>0.29</td></tr>
 <tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets before 0.24.0</td><td>kms-aead with <code>legacy-formats</code></td><td>0.8.0 to 0.28.1</td></tr>
@@ -9583,7 +9604,84 @@ algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decryp
 </table>
 </div>
 <p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
-provider encrypts the raw DEK in every release, see <a href="#encrypted-deks-1">Encrypted DEKs</a>.</p>
+provider encrypts the raw DEK in every release, see
+<a href="#encrypted-deks-1">Encrypted DEKs</a>.</p>
+<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature. The
+reading rules and the upgrade of stored values are in
+<a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
+<h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
+<p>The first bytes of a stored value:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>First bytes</th><th>Layout</th></tr>
+</thead>
+<tbody>
+<tr><td><code>00 00 00 00</code></td><td>the length-prefixed envelope of 0.28.1 and earlier</td></tr>
+<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, an envelope streamed value, or the 4-byte length prefix of 32-bit targets before 0.24.0</td></tr>
+<tr><td><code>01</code></td><td>envelope layout v1 of 0.29, or a TINK-prefixed value</td></tr>
+<tr><td><code>02</code></td><td>a DEK encrypted with the public half of an asymmetric KEK</td></tr>
+<tr><td><code>FF 01</code></td><td>encrypted DEK layout v1 of 0.29</td></tr>
+</tbody>
+</table>
+</div>
+<p>Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
+16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
+or the local KMS also starts with <code>0x01</code>, and Tink’s LEGACY and CRUNCHY output prefixes with <code>0x00</code>.</p>
+<p>A column that holds two layouts:</p>
+<ul>
+<li>Tink envelopes and TINK-prefixed values: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.29 envelopes: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
+<li>Tink envelopes and 0.28.1 envelopes: the first four bytes;</li>
+<li>0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
+outside the value, such as in another column;</li>
+<li>bare values and any other layout: a bare value has no framing, and its random nonce can start
+with any byte, so a column of bare values holds no other layout;</li>
+<li>streamed values and bare streamed values: no byte tells them apart, since a bare one starts
+with its random salt, so the call names the form, as <code>decrypt_bare</code> does for a bare value, see
+<a href="#streamed-values">Streamed values</a>;</li>
+<li>envelope streamed values and Tink envelopes: both start with <code>[w][encrypted DEK]</code>, so the
+layout is recorded outside the value, as for bare values;</li>
+<li>encrypted DEKs of 0.29 and of 0.30: <code>0xFF 0x01</code> starts no encrypted DEK of a built-in provider, so
+the library tells them apart for those. It never inspects the bytes of an application’s own
+provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its 0.29 keys before reading them.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="values-and-deks"><a class="header" href="#values-and-deks">Values and DEKs</a></h1>
+<p>The bytes of the values an application stores and of the DEKs that go with them. The layouts of
+every kind of value are listed on <a href="#formats">Formats</a>.</p>
+<h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
+<p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
+format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
+check stored bytes against it:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Format</th><th>Layout</th><th>Shortest value</th><th><code>key_id()</code></th><th>Written by</th></tr>
+</thead>
+<tbody>
+<tr><td><code>Envelope</code></td><td><a href="#tinks-kms-envelope">Tink’s KMS envelope</a></td><td>an encrypted DEK of 1 to 4,096 bytes, then 28 bytes</td><td>none</td><td><code>KmsAeadEnvelope::encrypt</code>, <code>Encrypted::join</code></td></tr>
+<tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>28 bytes</td><td>none</td><td><code>AeadCipher::encrypt_bare</code>, <code>KmsAeadEnvelope::encrypt_with_dek</code> and <code>encrypt_with_encrypted_dek</code>, <code>Encrypted::separate</code></td></tr>
+<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td>33 bytes</td><td><code>KeyId</code></td><td><code>AeadCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td>21 bytes</td><td><code>KeyId</code></td><td><code>DeterministicCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
+</tbody>
+</table>
+</div>
+<p>A <code>Bare</code> value is Tink’s AEAD output under a key with the output prefix RAW, and the part of every
+<code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
+that decrypts it.</p>
+<p>The check reads the framing only, and whether the bytes are authentic is known when they are
+decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the envelope layout v1 of 0.29 and
+the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
+same type until they are upgraded, see
+<a href="#upgrading-stored-values">Upgrading stored values</a>. Without the feature,
+<code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in every build. The
+layout of 32-bit targets before 0.24.0 has Tink’s framing, so it reads as an
+<code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>.</p>
+<p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
+bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
+the integers, and compact JSON for <code>JsonEncoded&lt;T&gt;</code>. See
+<a href="#plaintext">Stored values</a>.</p>
 <h2 id="tinks-kms-envelope"><a class="header" href="#tinks-kms-envelope">Tink’s KMS envelope</a></h2>
 <p><code>KmsAeadEnvelope::encrypt</code> writes Tink’s KMS envelope, and <code>Encrypted::join</code> writes it from a
 bare value and an encrypted DEK. <code>separate</code> reads it back:</p>
@@ -9709,6 +9807,329 @@ algorithm of the reader decides how the key is used, as in Tink.</p>
 <p>A decrypted DEK that is no serialised Tink key, or under an Azure key no raw DEK, fails with
 <code>INVALID_KEY_FORMAT</code>. An encrypted Tink
 keyset decrypts under the same KEK too, and this is what keeps it out of the DEK cache.</p>
+<h2 id="deks-encrypted-with-a-public-key"><a class="header" href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a></h2>
+<p>An encrypted DEK that a public key encrypted has one layout for every KMS:</p>
+<pre><code class="language-text">[0x02][a: u8][i: u8][KEK id: i bytes][k: u8][KEK version: k ASCII alphanumerics][RSA block]
+</code></pre>
+<ul>
+<li><code>0x02</code> is the layout. No encrypted DEK of a built-in provider starts with it before 0.31, see
+<a href="#telling-layouts-apart">Telling layouts apart</a>;</li>
+<li><code>a</code> is the algorithm: <code>0x01</code> for RSA-OAEP with SHA-256 as the OAEP hash and the MGF1 hash, and an
+empty label. A later algorithm is another value;</li>
+<li><code>i</code> and the KEK id are the local KEK’s <code>LocalKekId</code>. <code>i</code> is 0 for a cloud KEK;</li>
+<li><code>k</code> and the KEK version are the version the public key carried, as the reader names it to its KMS:
+1 to 255 ASCII alphanumerics. <code>k</code> is 0 under AWS KMS, which has no versions, and the version is the
+decimal <code>LocalKekVersion</code> under the local KMS;</li>
+<li>the RSA block is as long as the modulus: 256, 384 or 512 bytes for a key of 2048, 3072 or 4096
+bits. The encrypted DEK is the header and the block, 260 bytes under AWS KMS with a 2048-bit key.</li>
+</ul>
+<p>The block is the OAEP encryption of the DEK in the form its KEK’s provider encrypts it: the
+<a href="#serialised-deks">serialised DEK</a>, or the raw DEK under Key Vault. The seed of OAEP is random, so
+two encryptions of one DEK differ.</p>
+<p>A reader checks the header against its own shape before any KMS call, and refuses the encrypted DEK
+with <code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code> otherwise: a known algorithm byte; a header within the bytes;
+<code>i</code> of 0 for a cloud KEK; <code>k</code> of 0 under AWS KMS and 1 or more elsewhere; a block of 256, 384 or 512
+bytes. Nothing in the header is authenticated: a changed version or KEK id names a key that fails to
+decrypt the block, and no change decrypts a value.</p>
+<p>How each KMS decrypts the block:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>KMS</th><th>Request</th></tr>
+</thead>
+<tbody>
+<tr><td>Google Cloud KMS</td><td><code>AsymmetricDecrypt</code> on <code>&lt;key&gt;/cryptoKeyVersions/&lt;version&gt;</code>, <code>ciphertext</code> the block</td></tr>
+<tr><td>AWS KMS</td><td><code>Decrypt</code> with <code>KeyId</code> the key, <code>EncryptionAlgorithm</code> <code>RSAES_OAEP_SHA_256</code> and <code>CiphertextBlob</code> the block</td></tr>
+<tr><td>Azure Key Vault</td><td><code>unwrapKey</code> on the key and the version with <code>alg</code> <code>RSA-OAEP-256</code></td></tr>
+<tr><td>Vault Transit</td><td><code>decrypt</code> on the key with <code>ciphertext</code> <code>vault:v&lt;version&gt;:</code> and the standard base64 of the block, <code>padding_scheme</code> <code>oaep</code> and <code>hash_algorithm</code> <code>sha2-256</code></td></tr>
+<tr><td>Local KMS</td><td>RSA-OAEP decryption with the version’s private key</td></tr>
+</tbody>
+</table>
+</div>
+<p>None of the four KMS decryptions takes a label or an AAD. What binds a value to its place is its own
+AAD.</p>
+<h2 id="beacons-2"><a class="header" href="#beacons-2">Beacons</a></h2>
+<p>A <code>Beacon&lt;T&gt;</code> is a prefix and a truncated HMAC-SHA256:</p>
+<pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
+</code></pre>
+<ul>
+<li><code>0x01</code> is the version of the beacon layout. A later layout takes another first byte, so that
+beacons of both layouts can share a column during a re-index;</li>
+<li>the key id names the beacon key that calculated the beacon;</li>
+<li>the HMAC keeps its first <code>bits</code> bits, and the unused low bits of the last byte are zero. A
+beacon is 6 to 37 bytes.</li>
+</ul>
+<p>The HMAC covers the bits, the context and the plaintext, as the <code>Plaintext</code> type encodes it:</p>
+<pre><code class="language-text">HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
+</code></pre>
+<p>so that beacons of two fields, or of two bit counts, never match. <code>Beacon::try_from</code> checks the
+prefix and that 1 to 32 bytes of HMAC follow, and fails with <code>INVALID_BEACON_FORMAT</code> otherwise.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="streamed-values"><a class="header" href="#streamed-values">Streamed values</a></h1>
+<p>The layouts written by the stream encryptors of kms-aead and kms-aead-keyring, and the arithmetic of
+a range read. The layouts of every kind of value are listed on <a href="#formats">Formats</a>.</p>
+<p>A streamed value is a header and chunks. Every length is in bytes and integers are big-endian. The
+prefixed form, the one of <code>AeadCipher::stream_encryptor</code> and of the keyring:</p>
+<pre><code class="language-text">offset          len     field
+     0            1     0x01, Tink's output prefix of type TINK
+     1            4     key id, u32: the keyring version that encrypted the value, or the caller's KeyId
+     5           24     salt, random per value
+    29           32     key commitment
+    61       16,400     chunk 0: 16,384 bytes of ciphertext and a 16-byte tag
+    61 + k × 16,400     chunk k
+</code></pre>
+<p>The bare form is a Cobblestone-256 message as <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a>
+writes it, with the caller’s AAD as its <em>context</em> and the DEK as its <em>input key</em>:</p>
+<pre><code class="language-text">offset          len     field
+     0           24     salt
+    24           32     key commitment
+    56       16,400     chunk 0
+    56 + k × 16,400     chunk k
+</code></pre>
+<p>The envelope form, the one <code>KmsAeadEnvelope::stream_encryptor</code> writes, puts the encrypted DEK in
+front of the bare form, as <a href="#tinks-kms-envelope">Tink’s KMS envelope</a> puts it in front of a bare
+value:</p>
+<pre><code class="language-text">offset          len     field
+     0            4     w, u32: the length of the encrypted DEK, 1 to 4,096
+     4            w     encrypted DEK, the provider's EncryptedDataEncryptionKey
+ 4 + w           24     salt
+28 + w           32     key commitment
+60 + w       16,400     chunk 0
+60 + w + k × 16,400     chunk k
+</code></pre>
+<ul>
+<li>the header <code>H</code> is 61 bytes in the prefixed form, 56 in the bare form and <code>60 + w</code> in the
+envelope form. From the Cobblestone header on, the forms are the same;</li>
+<li>every chunk but the last is 16,400 bytes as stored. The last chunk is 16 to 16,399 bytes, the tag
+and 0 to 16,383 bytes of ciphertext, so a plaintext of a multiple of 16,384 bytes ends with a
+tag alone. An empty plaintext is the header and one tag, 77 bytes prefixed, 72 bare and <code>76 + w</code>
+in the envelope form. There is one chunking for each length;</li>
+<li>only the first byte of a prefixed header is checked when it is read. The key id is not
+authenticated: it names the key that decrypts the value;</li>
+<li>a reader of the envelope form reads <code>w</code> from the first 4 bytes, refuses a <code>w</code> outside 1 to 4,096
+before it fetches or allocates anything, then reads the <code>60 + w</code> bytes of the header. The
+encrypted DEK is not authenticated either: another value’s encrypted DEK decrypts to another DEK,
+which fails the key commitment;</li>
+<li>no byte tells the bare form from the others, since a bare value starts with its random salt. The
+call names the form.</li>
+</ul>
+<p>The keys come from the DEK <code>K</code> of 32 bytes, the salt and the AAD <code>A</code>:</p>
+<pre><code class="language-text">key || base nonce || commitment = HKDF-Expand(SHA-512, PRK = K,
+    info = "c2sp.org/chunked-encryption@v1+" || "AEAD_AES_256_GCM" || 0x00 || salt || A,
+    length = 32 + 12 + 32)
+</code></pre>
+<p>With a 32-byte PRK, HKDF-Expand is two HMAC-SHA-512 calls: <code>T1 = HMAC(K, info || 0x01)</code> gives the key
+(<code>T1[0..32]</code>), the base nonce (<code>T1[32..44]</code>) and <code>commitment[0..20]</code> (<code>T1[44..64]</code>), and
+<code>T2 = HMAC(K, T1 || info || 0x02)</code> gives <code>commitment[20..32]</code> (<code>T2[0..12]</code>). A reader derives all
+three and compares the commitment in constant time before it decrypts a chunk. The AAD is bound here
+and nowhere else: each chunk’s GCM associated data is empty.</p>
+<p>Chunk <code>k</code> holds plaintext bytes <code>[k × 16,384, (k + 1) × 16,384)</code> and is
+<code>AES-256-GCM(key, N_k, aad = "", M_k)</code>, with the nonce <code>N_k = base nonce XOR k</code>, <code>k</code> as a 96-bit
+big-endian integer. There is no final flag: the final chunk is the one that is shorter than a full
+one.</p>
+<p>For a plaintext of <code>L</code> bytes the stored length is <code>Z = H + L + 16 × n</code> with <code>n = L div 16,384 + 1</code>
+chunks. From a stored length <code>Z</code>, with <code>body = Z - H</code>:</p>
+<pre><code class="language-text">Z &lt; H + 16          refused: shorter than the header and one tag
+n = body div 16,400 + 1
+r = body - (n - 1) × 16,400     the final chunk as stored
+r &lt; 16              refused: r = 0 is a value cut at a chunk boundary, 1 to 15 no encryptor writes
+n &gt; 2^38            refused
+L = body - 16 × n
+</code></pre>
+<p>A value holds at most 2^38 chunks, 4 PiB less one byte of plaintext. The refusals are
+<code>STREAM_LENGTH</code>. <code>Z</code> is what the store reports: until the final chunk has been decrypted, <code>L</code> is the
+store’s word. A reader that reads the value to its end needs no <code>Z</code>: the bytes after the last full
+chunk are the final chunk, and the rules above hold for the length it read.</p>
+<p>For a plaintext range <code>[a, b)</code> with <code>a &lt;= b &lt;= L</code>, the chunks to decrypt and the bytes to fetch are
+below. A range open at the start has <code>a = 0</code> and one open at the end has <code>b = L</code>, so <code>..</code> is <code>[0, L)</code>:</p>
+<pre><code class="language-text">first = a div 16,384
+end   = n                      if b == L: the final chunk, even when it holds no plaintext
+        first                  if a == b &lt; L
+        (b - 1) div 16,384 + 1 otherwise
+ciphertext = [H + first × 16,400, min(Z, H + end × 16,400))
+</code></pre>
+<p>The reader cuts the decrypted plaintext to <code>[a - first × 16,384, b - first × 16,384)</code>. For
+<code>a = 1,000,000</code> and <code>b = 1,064,512</code> the chunks are <code>61..65</code> and the bytes <code>[1,000,461, 1,066,061)</code>
+prefixed or <code>[1,000,456, 1,066,056)</code> bare, and <code>4 + w</code> bytes further in the envelope form.</p>
+<p>The two shortest vectors of the C2SP test file as prefixed values under key id 7, with the key
+<code>59454c4c4f57205355424d4152494e452059454c4c4f57205355424d4152494e</code> and an empty AAD:</p>
+<pre><code class="language-text">vector 1, an empty plaintext, 77 bytes:
+0100000007 43a2e39431cbae0389d3fc86adf46f7c3a24de88d9311617
+e53f3164cc1d5dc738a66b97f0bf786565c31799c2f463d50a7e10046011dc6f
+c3c939e3a5db7affb6191551669554fb
+
+vector 2, a plaintext of 7 bytes, 84 bytes:
+0100000007 a1a1b56f6db58cd1ede0c5c9db62aef20d3f96a6c594bb92
+52bb38122de91236502b42a1d7fcab820ffa292940d2f86add212cfa42c38df1
+9d3cc9139ee61a5990d3db57433514229beea49a8a72bd
+</code></pre>
+<p>The lines are the prefix and the salt, the commitment, and the final chunk. In the bare form the
+vectors’ <code>ct</code> are the stored values as they are.</p>
+<p>Vector 2 in the envelope form, with the 7 bytes <code>wrapped</code> as the encrypted DEK, 90 bytes:</p>
+<pre><code class="language-text">0000000777726170706564 a1a1b56f6db58cd1ede0c5c9db62aef20d3f96a6c594bb92
+52bb38122de91236502b42a1d7fcab820ffa292940d2f86add212cfa42c38df1
+9d3cc9139ee61a5990d3db57433514229beea49a8a72bd
+</code></pre>
+<p>The first line is <code>w</code>, the encrypted DEK and the salt. A real encrypted DEK is the provider’s, see
+<a href="#encrypted-deks-1">Encrypted DEKs</a>. Its bytes play no part in the key derivation, which takes the
+DEK.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="signature-and-mac-formats"><a class="header" href="#signature-and-mac-formats">Signature and MAC formats</a></h1>
+<p>The layouts of signatures and MACs, what they are computed over, the key ids of signing keys and
+the test vectors. The layouts of every kind of value are listed on <a href="#formats">Formats</a>.</p>
+<p>Detached and attached signatures and MACs are Tink-prefixed values:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Layout</th><th>Type</th><th>Bytes</th></tr>
+</thead>
+<tbody>
+<tr><td>Detached signature</td><td><code>Signature&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][signature]</code></td></tr>
+<tr><td>Attached signature</td><td><code>Signed&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][signature: w][payload]</code></td></tr>
+<tr><td>Detached MAC</td><td><code>Mac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][tag]</code></td></tr>
+<tr><td>Attached MAC</td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td></tr>
+</tbody>
+</table>
+</div>
+<ul>
+<li><code>0x01</code> is the version of the layout. A later layout takes another first byte;</li>
+<li>the key id names the key that signed or computed the tag. It is not authenticated and is a hint
+only: a value whose id is changed verifies under no key;</li>
+<li>the signature is the raw signature of the key’s algorithm: 64 bytes for Ed25519 (RFC 8032) and
+<code>r || s</code> with each scalar left-padded to 32 bytes for P-256. The algorithm is not in the value:
+the verifying key fixes it;</li>
+<li>the tag is the full HMAC output, never truncated: 32 bytes under HMAC-SHA256, 64 under
+HMAC-SHA512. The key version’s algorithm fixes the length;</li>
+<li><code>w</code> is the signature or tag length of an attached value, 1 to 65,535, so a reader finds the payload at offset <code>7 + w</code>
+without knowing the key.</li>
+</ul>
+<p><code>TryFrom&lt;Vec&lt;u8&gt;&gt;</code> checks a value against its layout and fails with <code>INVALID_SIGNATURE_FORMAT</code> or
+<code>INVALID_MAC_FORMAT</code>.</p>
+<p>Every signature and every MAC is computed over the pre-image, never over the payload itself. It is
+the Pre-Authentication Encoding (PAE) of
+<a href="https://github.com/secure-systems-lab/dsse/blob/master/protocol.md">DSSE</a>, the Dead Simple Signing
+Envelope, with the SHA-256 of the payload as its body:</p>
+<pre><code class="language-text">pre-image = "DSSEv1" SP DEC(len(type)) SP type SP "32" SP SHA-256(payload)
+</code></pre>
+<ul>
+<li><code>SP</code> is one byte <code>0x20</code>;</li>
+<li><code>DEC(n)</code> is <code>n</code> in ASCII decimal with no leading zeros;</li>
+<li><code>type</code> is the payload type: 1 to 255 bytes of visible ASCII, <code>0x21</code> to <code>0x7E</code>, such as
+<code>application/vnd.example.invoice+json</code>;</li>
+<li><code>SHA-256(payload)</code> is the 32-byte digest of the payload bytes.</li>
+</ul>
+<p>The pre-image is 46 to 302 bytes long. Ed25519 signs it as it is, and ECDSA P-256 signs its SHA-256.
+A MAC is the HMAC of the pre-image. The payload is the bytes <code>Signable::to_payload</code> returns, which
+the library neither parses nor re-serialises.</p>
+<p>The key id of a signing key is derived from its public key:</p>
+<pre><code class="language-text">thumbprint input = {"crv":"Ed25519","kty":"OKP","x":"&lt;base64url of the 32 bytes&gt;"}
+                 | {"crv":"P-256","kty":"EC","x":"&lt;base64url of x&gt;","y":"&lt;base64url of y&gt;"}
+digest           = SHA-256(thumbprint input)
+kid              = base64url(digest), without padding, 43 characters
+key id           = the first four bytes of digest, as a big-endian u32
+</code></pre>
+<p>The thumbprint input is the JWK thumbprint of <a href="https://www.rfc-editor.org/rfc/rfc7638">RFC 7638</a>: the
+required members of the key in lexicographic order, with no whitespace. A publisher with a numbering
+of its own sets the id instead, and the published key carries it as the integer member
+<code>kms_aead_key_id</code>. The key id of a MAC key is the keyring’s id of the version, see
+<a href="#keyring-key-ids">Keyring key ids</a>.</p>
+<p>A set of public keys is a JWK Set (<a href="https://www.rfc-editor.org/rfc/rfc7517">RFC 7517</a>). Each key has
+<code>kty</code>, <code>crv</code>, <code>x</code> (and <code>y</code>), <code>kid</code> the full thumbprint, <code>use</code> <code>sig</code> and <code>alg</code> <code>EdDSA</code> or <code>ES256</code>,
+and <code>kms_aead_key_id</code> where the publisher set the id:</p>
+<pre><code class="language-json">{"keys":[
+  {"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+   "kid":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","use":"sig","alg":"EdDSA"},
+  {"kty":"EC","crv":"P-256","x":"YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y",
+   "y":"eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk",
+   "kid":"DOvxvJiAdIqVWIkFt5hDtCunXLF0BV4-JGv4f-ALSm0","use":"sig","alg":"ES256"}
+]}
+</code></pre>
+<h2 id="the-signed-keyring-record"><a class="header" href="#the-signed-keyring-record">The signed keyring record</a></h2>
+<p>A keyring record carries its signature as the top-level member <code>signature</code>, the standard base64 of
+a detached <code>Signature</code> over the record’s canonical document:</p>
+<pre><code class="language-text">canonical = JCS(record document without its "signature" member)
+pre-image = PAE("application/vnd.kms-aead.keyring-record+json", SHA-256(canonical))
+</code></pre>
+<p>JCS is the JSON Canonicalization Scheme of <a href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</a>:
+members sorted by name, no whitespace, standard string escaping with non-ASCII kept as UTF-8 and
+control characters as <code>\u00XX</code>. It is computed over the parsed JSON document with every member
+kept, including members this release does not know, so a later release may add members and sign
+records that carry them. A record holds strings, integers, booleans, <code>null</code>, arrays and objects; a
+fraction, an exponent or an integer beyond 2^53 anywhere in it is <code>RECORD_INVALID</code>. The canonical
+document of a record with a <code>null</code>, a nested <code>compromised</code>, a note holding <code>é</code> and the control
+character <code>0x07</code>, and a member <code>future</code> this release does not define, on one line of 579 bytes
+without the line breaks shown here:</p>
+<pre><code class="language-text">{"algorithms":{"beacon":null,"deterministic":null,"mac":null,"randomized":"aes-256-gcm"},
+"created_at":"2026-10-25T09:00:00Z","future":{"a":[true,null],"b":1},"id":"tenant-42",
+"kek":{"key":"tenant-kek","provider":"local"},"schema":1,"seal_epoch":1,
+"updated_at":"2026-10-25T09:00:00Z","versions":[{"algorithm":"aes-256-gcm",
+"compromised":{"at":"2026-10-25T09:00:00Z","note":"clé \u0007"},
+"created_at":"2026-10-25T09:00:00Z","encrypted_dek":"AQ==","kek_version":"1","key_id":1,
+"seal_epochs":{"end":null,"start":1},"state":"decrypt_only",
+"state_changed_at":"2026-10-25T09:00:00Z"}]}
+</code></pre>
+<p>Its SHA-256 is <code>195ad529d5ec1beec7f6d806169d598723bf067c6abd6b522ab330310f2d79d2</code>, with <code>é</code> as the two
+bytes <code>c3 a9</code>. The pre-image is <code>DSSEv1 44 application/vnd.kms-aead.keyring-record+json 32 </code> and that
+digest, 90 bytes. Under the Ed25519 key of the vectors below the stored member is
+<code>"signature": "AZD6yv6RAlxJsp1uzsdIQxlvyawlD282Dfrtg3QthYeSPnQ02B6jbpOBFA65Y2Zq5lILiXyyTCxj9bv36JGSWC2H2UAG"</code>.</p>
+<h2 id="signature-and-mac-test-vectors"><a class="header" href="#signature-and-mac-test-vectors">Signature and MAC test vectors</a></h2>
+<p>Generated with Python’s <code>cryptography</code> 50.0.2 from published keys, so that nothing in them is
+secret. Payload type <code>application/vnd.example.invoice+json</code>, payload
+<code>{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":12500}</code>:</p>
+<pre><code class="language-text">SHA-256(payload)       7b43154b748a12c6909cba38acd83fff12a11b6345effb807b21c7ce465e4cd1
+pre-image (82 bytes)   445353457631203336206170706c69636174696f6e2f766e642e6578616d706c652e
+                       696e766f6963652b6a736f6e203332207b43154b748a12c6909cba38acd83fff12a1
+                       1b6345effb807b21c7ce465e4cd1
+SHA-256(pre-image)     4617fb02679fc4831b071fb2a064a33c2999e5f6a3c2fb65a96474d5663950be
+</code></pre>
+<p>Ed25519, the RFC 8032 section 7.1 test 1 key, seed
+<code>9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60</code>:</p>
+<pre><code class="language-text">public key             d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
+SubjectPublicKeyInfo   302a300506032b6570032100 || public key
+PKCS#8                 302e020100300506032b657004220420 || seed
+thumbprint input       {"crv":"Ed25519","kty":"OKP","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}
+kid                    kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k
+key id                 90facafe = 2432355070
+signature              21c5f4d55977b19640f25f0e248d4c9765aa0d210f9c781b61b46dece74d4dec
+                       b950acf3947659a9fff322b88ad8562e2c9ee4392440a4da901b7fec385f1102
+detached (69 bytes)    0190facafe || signature
+attached (160 bytes)   0190facafe0040 || signature || payload
+</code></pre>
+<p>ECDSA P-256, the RFC 6979 A.2.5 key, private scalar
+<code>c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721</code>. ECDSA signing is randomised,
+so the signature verifies and is not reproduced:</p>
+<pre><code class="language-text">x                      60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6
+y                      7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299
+SubjectPublicKeyInfo   3059301306072a8648ce3d020106082a8648ce3d030107034200 || 04 || x || y
+thumbprint input       {"crv":"P-256","kty":"EC","x":"YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y","y":"eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk"}
+kid                    DOvxvJiAdIqVWIkFt5hDtCunXLF0BV4-JGv4f-ALSm0
+key id                 0cebf1bc = 216789436
+signature as DER       30450220409b9927a7f27d61f6d7360b9b91941fa6dd14db553a55d0dd573fc9db7fccb7
+                       022100af3a4aaab89c0684256afe5db6aa53e4569286bc2c2f6435fe7563db215b5976
+r || s                 409b9927a7f27d61f6d7360b9b91941fa6dd14db553a55d0dd573fc9db7fccb7
+                       af3a4aaab89c0684256afe5db6aa53e4569286bc2c2f6435fe7563db215b5976
+detached (69 bytes)    010cebf1bc || r || s
+</code></pre>
+<p>HMAC-SHA256 under the key of 32 bytes <code>0x42</code>, key id <code>3221225473</code>, the first MAC version of a
+keyring:</p>
+<pre><code class="language-text">tag                    a2ca416600c31c19620b0b021986b1116ef1186318b32d819659093c125737f9
+detached (37 bytes)    01c0000001 || tag
+attached (128 bytes)   01c00000010020 || tag || payload
+</code></pre>
+<p>HMAC-SHA512 under the key of 64 bytes <code>0x42</code>, key id <code>3221225474</code>, the second MAC version:</p>
+<pre><code class="language-text">tag                    620e50560d4f30c943664d8671c2788db8a1165c742ab379afaf9047dfa3610a
+                       ca85a98e462c791f19d966e04b90748ce397755de7dc86a49f511a9021331ac3
+detached (69 bytes)    01c0000002 || tag
+attached (160 bytes)   01c00000020040 || tag || payload
+</code></pre>
+<p>The primitives are checked against <a href="https://github.com/C2SP/wycheproof/tree/d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9/testvectors_v1">Wycheproof</a>
+on every backend, and these vectors on ring, aws-lc-rs, RustCrypto and, with
+<code>tests/webcrypto_vectors.mjs</code>, WebCrypto under Node.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="keyring-records-and-keysets"><a class="header" href="#keyring-records-and-keysets">Keyring records and keysets</a></h1>
+<p>The key ids, the stored record and the encryption markers of kms-aead-keyring, and the Tink keysets
+that carry keys to Tink and BigQuery. The layouts of every kind of value are listed on
+<a href="#formats">Formats</a>.</p>
 <h2 id="tink-keysets-and-the-tink-prefix"><a class="header" href="#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a></h2>
 <p>Two items describe the TINK-prefixed values:</p>
 <ul>
@@ -9729,53 +10150,6 @@ writers leave out <code>keyset_info</code>, field 3, and so does the library. Ti
 reads it with the KMS client of <code>KekRef::tink_key_uri</code>, which Tink has for GCP and AWS keys, and
 Tink for Go for Vault Transit keys too. A keyring exports it for its versions, see
 <a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>.</p>
-<h2 id="formats-of-encrypted"><a class="header" href="#formats-of-encrypted">Formats of <code>Encrypted</code></a></h2>
-<p>Every value the library encrypts is an <code>Encrypted&lt;T, F&gt;</code>: the bytes of one layout, named by its
-format <code>F</code> from <code>kms_aead::formats</code>. <code>Encrypted::try_from</code> and <code>Encrypted::try_from_hex_string</code>
-check stored bytes against it:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Format</th><th>Layout</th><th>Shortest value</th><th><code>key_id()</code></th><th>Written by</th></tr>
-</thead>
-<tbody>
-<tr><td><code>Envelope</code></td><td><a href="#tinks-kms-envelope">Tink’s KMS envelope</a></td><td>an encrypted DEK of 1 to 4,096 bytes, then 28 bytes</td><td>none</td><td><code>KmsAeadEnvelope::encrypt</code>, <code>Encrypted::join</code></td></tr>
-<tr><td><code>Bare</code></td><td><code>[nonce: 12][ciphertext][tag: 16]</code></td><td>28 bytes</td><td>none</td><td><code>AeadCipher::encrypt_bare</code>, <code>KmsAeadEnvelope::encrypt_with_dek</code> and <code>encrypt_with_encrypted_dek</code>, <code>Encrypted::separate</code></td></tr>
-<tr><td><code>Randomized</code></td><td><code>[0x01][key id: u32 BE][nonce: 12][ciphertext][tag: 16]</code></td><td>33 bytes</td><td><code>KeyId</code></td><td><code>AeadCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
-<tr><td><code>Deterministic</code></td><td><code>[0x01][key id: u32 BE][synthetic IV: 16][ciphertext]</code></td><td>21 bytes</td><td><code>KeyId</code></td><td><code>DeterministicCipher::encrypt</code>, and kms-aead-keyring through it</td></tr>
-</tbody>
-</table>
-</div>
-<p>A <code>Bare</code> value is Tink’s AEAD output under a key with the output prefix RAW, and the part of every
-<code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
-that decrypts it.</p>
-<p>The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the envelope layout v1 of 0.29 and
-the length-prefixed envelope, checked by their lengths, so a column decodes its old rows into the
-same type until they are upgraded, see <a href="#upgrading-stored-values">Upgrading stored values</a>. Without
-the feature, <code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in
-every build. The layout of 32-bit targets before 0.24.0 has Tink’s framing, so it reads as an
-<code>Envelope</code> value in every build, and <code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>.</p>
-<p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
-bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, <code>true</code> or <code>false</code> for <code>bool</code>, decimal ASCII for
-the integers, and compact JSON for <code>JsonEncoded&lt;T&gt;</code>. See
-<a href="#plaintext">Stored values</a>.</p>
-<h2 id="beacons-3"><a class="header" href="#beacons-3">Beacons</a></h2>
-<p>A <code>Beacon&lt;T&gt;</code> is a prefix and a truncated HMAC-SHA256:</p>
-<pre><code class="language-text">[0x01][key id: u32 BE][HMAC-SHA256: the first ceil(bits / 8) bytes]
-</code></pre>
-<ul>
-<li><code>0x01</code> is the version of the beacon layout. A later layout takes another first byte, so that
-beacons of both layouts can share a column during a re-index;</li>
-<li>the key id names the beacon key that calculated the beacon;</li>
-<li>the HMAC keeps its first <code>bits</code> bits, and the unused low bits of the last byte are zero. A
-beacon is 6 to 37 bytes.</li>
-</ul>
-<p>The HMAC covers the bits, the context and the plaintext, as the <code>Plaintext</code> type encodes it:</p>
-<pre><code class="language-text">HMAC-SHA256(key, [bits: u16 BE][context length: u32 BE][context][plaintext])
-</code></pre>
-<p>so that beacons of two fields, or of two bit counts, never match. <code>Beacon::try_from</code> checks the
-prefix and that 1 to 32 bytes of HMAC follow, and fails with <code>INVALID_BEACON_FORMAT</code> otherwise.</p>
 <h2 id="keyring-key-ids"><a class="header" href="#keyring-key-ids">Keyring key ids</a></h2>
 <p>kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
 under it. The two high bits of the id are the purpose, and the rest is the ordinal:</p>
@@ -9969,450 +10343,6 @@ an array of numbers in serde_json, and the <code>postgres</code> and <code>sqlx<
 encrypted through one <code>Encryptor</code>, and which stores the marker of the encryptor’s record, lies in
 the range of every version its fields are under. See <a href="#records-under-a-version">Records under a
 version</a> for the query it serves.</p>
-<h2 id="deks-encrypted-with-a-public-key"><a class="header" href="#deks-encrypted-with-a-public-key">DEKs encrypted with a public key</a></h2>
-<p>An encrypted DEK that a public key encrypted has one layout for every KMS:</p>
-<pre><code class="language-text">[0x02][a: u8][i: u8][KEK id: i bytes][k: u8][KEK version: k ASCII alphanumerics][RSA block]
-</code></pre>
-<ul>
-<li><code>0x02</code> is the layout. No encrypted DEK of a built-in provider starts with it before 0.31, see
-<a href="#telling-layouts-apart">Telling layouts apart</a>;</li>
-<li><code>a</code> is the algorithm: <code>0x01</code> for RSA-OAEP with SHA-256 as the OAEP hash and the MGF1 hash, and an
-empty label. A later algorithm is another value;</li>
-<li><code>i</code> and the KEK id are the local KEK’s <code>LocalKekId</code>. <code>i</code> is 0 for a cloud KEK;</li>
-<li><code>k</code> and the KEK version are the version the public key carried, as the reader names it to its KMS:
-1 to 255 ASCII alphanumerics. <code>k</code> is 0 under AWS KMS, which has no versions, and the version is the
-decimal <code>LocalKekVersion</code> under the local KMS;</li>
-<li>the RSA block is as long as the modulus: 256, 384 or 512 bytes for a key of 2048, 3072 or 4096
-bits. The encrypted DEK is the header and the block, 260 bytes under AWS KMS with a 2048-bit key.</li>
-</ul>
-<p>The block is the OAEP encryption of the DEK in the form its KEK’s provider encrypts it: the
-<a href="#serialised-deks">serialised DEK</a>, or the raw DEK under Key Vault. The seed of OAEP is random, so
-two encryptions of one DEK differ.</p>
-<p>A reader checks the header against its own shape before any KMS call, and refuses the encrypted DEK
-with <code>ASYMMETRIC_ENCRYPTED_DEK_FORMAT</code> otherwise: a known algorithm byte; a header within the bytes;
-<code>i</code> of 0 for a cloud KEK; <code>k</code> of 0 under AWS KMS and 1 or more elsewhere; a block of 256, 384 or 512
-bytes. Nothing in the header is authenticated: a changed version or KEK id names a key that fails to
-decrypt the block, and no change decrypts a value.</p>
-<p>How each KMS decrypts the block:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>KMS</th><th>Request</th></tr>
-</thead>
-<tbody>
-<tr><td>Google Cloud KMS</td><td><code>AsymmetricDecrypt</code> on <code>&lt;key&gt;/cryptoKeyVersions/&lt;version&gt;</code>, <code>ciphertext</code> the block</td></tr>
-<tr><td>AWS KMS</td><td><code>Decrypt</code> with <code>KeyId</code> the key, <code>EncryptionAlgorithm</code> <code>RSAES_OAEP_SHA_256</code> and <code>CiphertextBlob</code> the block</td></tr>
-<tr><td>Azure Key Vault</td><td><code>unwrapKey</code> on the key and the version with <code>alg</code> <code>RSA-OAEP-256</code></td></tr>
-<tr><td>Vault Transit</td><td><code>decrypt</code> on the key with <code>ciphertext</code> <code>vault:v&lt;version&gt;:</code> and the standard base64 of the block, <code>padding_scheme</code> <code>oaep</code> and <code>hash_algorithm</code> <code>sha2-256</code></td></tr>
-<tr><td>Local KMS</td><td>RSA-OAEP decryption with the version’s private key</td></tr>
-</tbody>
-</table>
-</div>
-<p>None of the four KMS decryptions takes a label or an AAD. What binds a value to its place is its own
-AAD.</p>
-<h2 id="streamed-values"><a class="header" href="#streamed-values">Streamed values</a></h2>
-<p>A streamed value is a header and chunks. Every length is in bytes and integers are big-endian. The
-prefixed form, the one of <code>AeadCipher::stream_encryptor</code> and of the keyring:</p>
-<pre><code class="language-text">offset          len     field
-     0            1     0x01, Tink's output prefix of type TINK
-     1            4     key id, u32: the keyring version that encrypted the value, or the caller's KeyId
-     5           24     salt, random per value
-    29           32     key commitment
-    61       16,400     chunk 0: 16,384 bytes of ciphertext and a 16-byte tag
-    61 + k × 16,400     chunk k
-</code></pre>
-<p>The bare form is a Cobblestone-256 message as <a href="https://c2sp.org/chunked-encryption">C2SP chunked encryption</a>
-writes it, with the caller’s AAD as its <em>context</em> and the DEK as its <em>input key</em>:</p>
-<pre><code class="language-text">offset          len     field
-     0           24     salt
-    24           32     key commitment
-    56       16,400     chunk 0
-    56 + k × 16,400     chunk k
-</code></pre>
-<p>The envelope form, the one <code>KmsAeadEnvelope::stream_encryptor</code> writes, puts the encrypted DEK in
-front of the bare form, as <a href="#tinks-kms-envelope">Tink’s KMS envelope</a> puts it in front of a bare
-value:</p>
-<pre><code class="language-text">offset          len     field
-     0            4     w, u32: the length of the encrypted DEK, 1 to 4,096
-     4            w     encrypted DEK, the provider's EncryptedDataEncryptionKey
- 4 + w           24     salt
-28 + w           32     key commitment
-60 + w       16,400     chunk 0
-60 + w + k × 16,400     chunk k
-</code></pre>
-<ul>
-<li>the header <code>H</code> is 61 bytes in the prefixed form, 56 in the bare form and <code>60 + w</code> in the
-envelope form. From the Cobblestone header on, the forms are the same;</li>
-<li>every chunk but the last is 16,400 bytes as stored. The last chunk is 16 to 16,399 bytes, the tag
-and 0 to 16,383 bytes of ciphertext, so a plaintext of a multiple of 16,384 bytes ends with a
-tag alone. An empty plaintext is the header and one tag, 77 bytes prefixed, 72 bare and <code>76 + w</code>
-in the envelope form. There is one chunking for each length;</li>
-<li>only the first byte of a prefixed header is checked when it is read. The key id is not
-authenticated: it names the key that decrypts the value;</li>
-<li>a reader of the envelope form reads <code>w</code> from the first 4 bytes, refuses a <code>w</code> outside 1 to 4,096
-before it fetches or allocates anything, then reads the <code>60 + w</code> bytes of the header. The
-encrypted DEK is not authenticated either: another value’s encrypted DEK decrypts to another DEK,
-which fails the key commitment;</li>
-<li>no byte tells the bare form from the others, since a bare value starts with its random salt. The
-call names the form.</li>
-</ul>
-<p>The keys come from the DEK <code>K</code> of 32 bytes, the salt and the AAD <code>A</code>:</p>
-<pre><code class="language-text">key || base nonce || commitment = HKDF-Expand(SHA-512, PRK = K,
-    info = "c2sp.org/chunked-encryption@v1+" || "AEAD_AES_256_GCM" || 0x00 || salt || A,
-    length = 32 + 12 + 32)
-</code></pre>
-<p>With a 32-byte PRK, HKDF-Expand is two HMAC-SHA-512 calls: <code>T1 = HMAC(K, info || 0x01)</code> gives the key
-(<code>T1[0..32]</code>), the base nonce (<code>T1[32..44]</code>) and <code>commitment[0..20]</code> (<code>T1[44..64]</code>), and
-<code>T2 = HMAC(K, T1 || info || 0x02)</code> gives <code>commitment[20..32]</code> (<code>T2[0..12]</code>). A reader derives all
-three and compares the commitment in constant time before it decrypts a chunk. The AAD is bound here
-and nowhere else: each chunk’s GCM associated data is empty.</p>
-<p>Chunk <code>k</code> holds plaintext bytes <code>[k × 16,384, (k + 1) × 16,384)</code> and is
-<code>AES-256-GCM(key, N_k, aad = "", M_k)</code>, with the nonce <code>N_k = base nonce XOR k</code>, <code>k</code> as a 96-bit
-big-endian integer. There is no final flag: the final chunk is the one that is shorter than a full
-one.</p>
-<p>For a plaintext of <code>L</code> bytes the stored length is <code>Z = H + L + 16 × n</code> with <code>n = L div 16,384 + 1</code>
-chunks. From a stored length <code>Z</code>, with <code>body = Z - H</code>:</p>
-<pre><code class="language-text">Z &lt; H + 16          refused: shorter than the header and one tag
-n = body div 16,400 + 1
-r = body - (n - 1) × 16,400     the final chunk as stored
-r &lt; 16              refused: r = 0 is a value cut at a chunk boundary, 1 to 15 no encryptor writes
-n &gt; 2^38            refused
-L = body - 16 × n
-</code></pre>
-<p>A value holds at most 2^38 chunks, 4 PiB less one byte of plaintext. The refusals are
-<code>STREAM_LENGTH</code>. <code>Z</code> is what the store reports: until the final chunk has been decrypted, <code>L</code> is the
-store’s word. A reader that reads the value to its end needs no <code>Z</code>: the bytes after the last full
-chunk are the final chunk, and the rules above hold for the length it read.</p>
-<p>For a plaintext range <code>[a, b)</code> with <code>a &lt;= b &lt;= L</code>, the chunks to decrypt and the bytes to fetch are
-below. A range open at the start has <code>a = 0</code> and one open at the end has <code>b = L</code>, so <code>..</code> is <code>[0, L)</code>:</p>
-<pre><code class="language-text">first = a div 16,384
-end   = n                      if b == L: the final chunk, even when it holds no plaintext
-        first                  if a == b &lt; L
-        (b - 1) div 16,384 + 1 otherwise
-ciphertext = [H + first × 16,400, min(Z, H + end × 16,400))
-</code></pre>
-<p>The reader cuts the decrypted plaintext to <code>[a - first × 16,384, b - first × 16,384)</code>. For
-<code>a = 1,000,000</code> and <code>b = 1,064,512</code> the chunks are <code>61..65</code> and the bytes <code>[1,000,461, 1,066,061)</code>
-prefixed or <code>[1,000,456, 1,066,056)</code> bare, and <code>4 + w</code> bytes further in the envelope form.</p>
-<p>The two shortest vectors of the C2SP test file as prefixed values under key id 7, with the key
-<code>59454c4c4f57205355424d4152494e452059454c4c4f57205355424d4152494e</code> and an empty AAD:</p>
-<pre><code class="language-text">vector 1, an empty plaintext, 77 bytes:
-0100000007 43a2e39431cbae0389d3fc86adf46f7c3a24de88d9311617
-e53f3164cc1d5dc738a66b97f0bf786565c31799c2f463d50a7e10046011dc6f
-c3c939e3a5db7affb6191551669554fb
-
-vector 2, a plaintext of 7 bytes, 84 bytes:
-0100000007 a1a1b56f6db58cd1ede0c5c9db62aef20d3f96a6c594bb92
-52bb38122de91236502b42a1d7fcab820ffa292940d2f86add212cfa42c38df1
-9d3cc9139ee61a5990d3db57433514229beea49a8a72bd
-</code></pre>
-<p>The lines are the prefix and the salt, the commitment, and the final chunk. In the bare form the
-vectors’ <code>ct</code> are the stored values as they are.</p>
-<p>Vector 2 in the envelope form, with the 7 bytes <code>wrapped</code> as the encrypted DEK, 90 bytes:</p>
-<pre><code class="language-text">0000000777726170706564 a1a1b56f6db58cd1ede0c5c9db62aef20d3f96a6c594bb92
-52bb38122de91236502b42a1d7fcab820ffa292940d2f86add212cfa42c38df1
-9d3cc9139ee61a5990d3db57433514229beea49a8a72bd
-</code></pre>
-<p>The first line is <code>w</code>, the encrypted DEK and the salt. A real encrypted DEK is the provider’s, see
-<a href="#encrypted-deks-1">Encrypted DEKs</a>. Its bytes play no part in the key derivation, which takes the
-DEK.</p>
-<h2 id="signatures-and-macs-1"><a class="header" href="#signatures-and-macs-1">Signatures and MACs</a></h2>
-<p>Detached and attached signatures and MACs are Tink-prefixed values:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Layout</th><th>Type</th><th>Bytes</th><th>Length</th></tr>
-</thead>
-<tbody>
-<tr><td>Detached signature</td><td><code>Signature&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead</td></tr>
-<tr><td>Attached signature</td><td><code>Signed&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead</td></tr>
-<tr><td>Detached MAC</td><td><code>Mac&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td></tr>
-<tr><td>Attached MAC</td><td><code>WithMac&lt;T&gt;</code></td><td>see <a href="#signatures-and-macs-1">Signatures and MACs</a></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td></tr>
-</tbody>
-</table>
-</div>
-<ul>
-<li><code>0x01</code> is the version of the layout. A later layout takes another first byte;</li>
-<li>the key id names the key that signed or computed the tag. It is not authenticated and is a hint
-only: a value whose id is changed verifies under no key;</li>
-<li>the signature is the raw signature of the key’s algorithm: 64 bytes for Ed25519 (RFC 8032) and
-<code>r || s</code> with each scalar left-padded to 32 bytes for P-256. The algorithm is not in the value:
-the verifying key fixes it;</li>
-<li>the tag is the full HMAC output, never truncated: 32 bytes under HMAC-SHA256, 64 under
-HMAC-SHA512. The key version’s algorithm fixes the length;</li>
-<li><code>w</code> is the signature or tag length, 1 to 65,535, so a reader finds the payload at offset <code>7 + w</code>
-without knowing the key.</li>
-</ul>
-<p><code>TryFrom&lt;Vec&lt;u8&gt;&gt;</code> checks a value against its layout and fails with <code>INVALID_SIGNATURE_FORMAT</code> or
-<code>INVALID_MAC_FORMAT</code>.</p>
-<p>Every signature and every MAC is computed over the pre-image, never over the payload itself. It is
-the Pre-Authentication Encoding (PAE) of
-<a href="https://github.com/secure-systems-lab/dsse/blob/master/protocol.md">DSSE</a>, the Dead Simple Signing
-Envelope, with the SHA-256 of the payload as its body:</p>
-<pre><code class="language-text">pre-image = "DSSEv1" SP DEC(len(type)) SP type SP "32" SP SHA-256(payload)
-</code></pre>
-<ul>
-<li><code>SP</code> is one byte <code>0x20</code>;</li>
-<li><code>DEC(n)</code> is <code>n</code> in ASCII decimal with no leading zeros;</li>
-<li><code>type</code> is the payload type: 1 to 255 bytes of visible ASCII, <code>0x21</code> to <code>0x7E</code>, such as
-<code>application/vnd.example.invoice+json</code>;</li>
-<li><code>SHA-256(payload)</code> is the 32-byte digest of the payload bytes.</li>
-</ul>
-<p>The pre-image is 46 to 302 bytes long. Ed25519 signs it as it is, and ECDSA P-256 signs its SHA-256.
-A MAC is the HMAC of the pre-image. The payload is the bytes <code>Signable::to_payload</code> returns, which
-the library neither parses nor re-serialises.</p>
-<p>The key id of a signing key is derived from its public key:</p>
-<pre><code class="language-text">thumbprint input = {"crv":"Ed25519","kty":"OKP","x":"&lt;base64url of the 32 bytes&gt;"}
-                 | {"crv":"P-256","kty":"EC","x":"&lt;base64url of x&gt;","y":"&lt;base64url of y&gt;"}
-digest           = SHA-256(thumbprint input)
-kid              = base64url(digest), without padding, 43 characters
-key id           = the first four bytes of digest, as a big-endian u32
-</code></pre>
-<p>The thumbprint input is the JWK thumbprint of <a href="https://www.rfc-editor.org/rfc/rfc7638">RFC 7638</a>: the
-required members of the key in lexicographic order, with no whitespace. A publisher with a numbering
-of its own sets the id instead, and the published key carries it as the integer member
-<code>kms_aead_key_id</code>. The key id of a MAC key is the keyring’s id of the version, see
-<a href="#keyring-key-ids">Keyring key ids</a>.</p>
-<p>A set of public keys is a JWK Set (<a href="https://www.rfc-editor.org/rfc/rfc7517">RFC 7517</a>). Each key has
-<code>kty</code>, <code>crv</code>, <code>x</code> (and <code>y</code>), <code>kid</code> the full thumbprint, <code>use</code> <code>sig</code> and <code>alg</code> <code>EdDSA</code> or <code>ES256</code>,
-and <code>kms_aead_key_id</code> where the publisher set the id:</p>
-<pre><code class="language-json">{"keys":[
-  {"kty":"OKP","crv":"Ed25519","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
-   "kid":"kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k","use":"sig","alg":"EdDSA"},
-  {"kty":"EC","crv":"P-256","x":"YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y",
-   "y":"eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk",
-   "kid":"DOvxvJiAdIqVWIkFt5hDtCunXLF0BV4-JGv4f-ALSm0","use":"sig","alg":"ES256"}
-]}
-</code></pre>
-<h3 id="the-signed-keyring-record"><a class="header" href="#the-signed-keyring-record">The signed keyring record</a></h3>
-<p>A keyring record carries its signature as the top-level member <code>signature</code>, the standard base64 of
-a detached <code>Signature</code> over the record’s canonical document:</p>
-<pre><code class="language-text">canonical = JCS(record document without its "signature" member)
-pre-image = PAE("application/vnd.kms-aead.keyring-record+json", SHA-256(canonical))
-</code></pre>
-<p>JCS is the JSON Canonicalization Scheme of <a href="https://www.rfc-editor.org/rfc/rfc8785">RFC 8785</a>:
-members sorted by name, no whitespace, standard string escaping with non-ASCII kept as UTF-8 and
-control characters as <code>\u00XX</code>. It is computed over the parsed JSON document with every member
-kept, including members this release does not know, so a later release may add members and sign
-records that carry them. A record holds strings, integers, booleans, <code>null</code>, arrays and objects; a
-fraction, an exponent or an integer beyond 2^53 anywhere in it is <code>RECORD_INVALID</code>. The canonical
-document of a record with a <code>null</code>, a nested <code>compromised</code>, a note holding <code>é</code> and the control
-character <code>0x07</code>, and a member <code>future</code> this release does not define, on one line of 579 bytes
-without the line breaks shown here:</p>
-<pre><code class="language-text">{"algorithms":{"beacon":null,"deterministic":null,"mac":null,"randomized":"aes-256-gcm"},
-"created_at":"2026-10-25T09:00:00Z","future":{"a":[true,null],"b":1},"id":"tenant-42",
-"kek":{"key":"tenant-kek","provider":"local"},"schema":1,"seal_epoch":1,
-"updated_at":"2026-10-25T09:00:00Z","versions":[{"algorithm":"aes-256-gcm",
-"compromised":{"at":"2026-10-25T09:00:00Z","note":"clé \u0007"},
-"created_at":"2026-10-25T09:00:00Z","encrypted_dek":"AQ==","kek_version":"1","key_id":1,
-"seal_epochs":{"end":null,"start":1},"state":"decrypt_only",
-"state_changed_at":"2026-10-25T09:00:00Z"}]}
-</code></pre>
-<p>Its SHA-256 is <code>195ad529d5ec1beec7f6d806169d598723bf067c6abd6b522ab330310f2d79d2</code>, with <code>é</code> as the two
-bytes <code>c3 a9</code>. The pre-image is <code>DSSEv1 44 application/vnd.kms-aead.keyring-record+json 32 </code> and that
-digest, 90 bytes. Under the Ed25519 key of the vectors below the stored member is
-<code>"signature": "AZD6yv6RAlxJsp1uzsdIQxlvyawlD282Dfrtg3QthYeSPnQ02B6jbpOBFA65Y2Zq5lILiXyyTCxj9bv36JGSWC2H2UAG"</code>.</p>
-<h3 id="signature-and-mac-test-vectors"><a class="header" href="#signature-and-mac-test-vectors">Signature and MAC test vectors</a></h3>
-<p>Generated with Python’s <code>cryptography</code> 50.0.2 from published keys, so that nothing in them is
-secret. Payload type <code>application/vnd.example.invoice+json</code>, payload
-<code>{"number":"INV-1042","customer":"Northwind Traders","currency":"EUR","total_cents":12500}</code>:</p>
-<pre><code class="language-text">SHA-256(payload)       7b43154b748a12c6909cba38acd83fff12a11b6345effb807b21c7ce465e4cd1
-pre-image (82 bytes)   445353457631203336206170706c69636174696f6e2f766e642e6578616d706c652e
-                       696e766f6963652b6a736f6e203332207b43154b748a12c6909cba38acd83fff12a1
-                       1b6345effb807b21c7ce465e4cd1
-SHA-256(pre-image)     4617fb02679fc4831b071fb2a064a33c2999e5f6a3c2fb65a96474d5663950be
-</code></pre>
-<p>Ed25519, the RFC 8032 section 7.1 test 1 key, seed
-<code>9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60</code>:</p>
-<pre><code class="language-text">public key             d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a
-SubjectPublicKeyInfo   302a300506032b6570032100 || public key
-PKCS#8                 302e020100300506032b657004220420 || seed
-thumbprint input       {"crv":"Ed25519","kty":"OKP","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo"}
-kid                    kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k
-key id                 90facafe = 2432355070
-signature              21c5f4d55977b19640f25f0e248d4c9765aa0d210f9c781b61b46dece74d4dec
-                       b950acf3947659a9fff322b88ad8562e2c9ee4392440a4da901b7fec385f1102
-detached (69 bytes)    0190facafe || signature
-attached (160 bytes)   0190facafe0040 || signature || payload
-</code></pre>
-<p>ECDSA P-256, the RFC 6979 A.2.5 key, private scalar
-<code>c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721</code>. ECDSA signing is randomised,
-so the signature verifies and is not reproduced:</p>
-<pre><code class="language-text">x                      60fed4ba255a9d31c961eb74c6356d68c049b8923b61fa6ce669622e60f29fb6
-y                      7903fe1008b8bc99a41ae9e95628bc64f2f1b20c2d7e9f5177a3c294d4462299
-SubjectPublicKeyInfo   3059301306072a8648ce3d020106082a8648ce3d030107034200 || 04 || x || y
-thumbprint input       {"crv":"P-256","kty":"EC","x":"YP7UuiVanTHJYet0xjVtaMBJuJI7Yfps5mliLmDyn7Y","y":"eQP-EAi4vJmkGunpVii8ZPLxsgwtfp9Rd6PClNRGIpk"}
-kid                    DOvxvJiAdIqVWIkFt5hDtCunXLF0BV4-JGv4f-ALSm0
-key id                 0cebf1bc = 216789436
-signature as DER       30450220409b9927a7f27d61f6d7360b9b91941fa6dd14db553a55d0dd573fc9db7fccb7
-                       022100af3a4aaab89c0684256afe5db6aa53e4569286bc2c2f6435fe7563db215b5976
-r || s                 409b9927a7f27d61f6d7360b9b91941fa6dd14db553a55d0dd573fc9db7fccb7
-                       af3a4aaab89c0684256afe5db6aa53e4569286bc2c2f6435fe7563db215b5976
-detached (69 bytes)    010cebf1bc || r || s
-</code></pre>
-<p>HMAC-SHA256 under the key of 32 bytes <code>0x42</code>, key id <code>3221225473</code>, the first MAC version of a
-keyring:</p>
-<pre><code class="language-text">tag                    a2ca416600c31c19620b0b021986b1116ef1186318b32d819659093c125737f9
-detached (37 bytes)    01c0000001 || tag
-attached (128 bytes)   01c00000010020 || tag || payload
-</code></pre>
-<p>HMAC-SHA512 under the key of 64 bytes <code>0x42</code>, key id <code>3221225474</code>, the second MAC version:</p>
-<pre><code class="language-text">tag                    620e50560d4f30c943664d8671c2788db8a1165c742ab379afaf9047dfa3610a
-                       ca85a98e462c791f19d966e04b90748ce397755de7dc86a49f511a9021331ac3
-detached (69 bytes)    01c0000002 || tag
-attached (160 bytes)   01c00000020040 || tag || payload
-</code></pre>
-<p>The primitives are checked against <a href="https://github.com/C2SP/wycheproof/tree/d17cc89fa5c8f4f4d378b5385ebf75da5d0926c9/testvectors_v1">Wycheproof</a>
-on every backend, and these vectors on ring, aws-lc-rs, RustCrypto and, with
-<code>tests/webcrypto_vectors.mjs</code>, WebCrypto under Node.</p>
-<h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
-<p>The first bytes of a stored value:</p>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>First bytes</th><th>Layout</th></tr>
-</thead>
-<tbody>
-<tr><td><code>00 00 00 00</code></td><td>the length-prefixed envelope of 0.28.1 and earlier</td></tr>
-<tr><td><code>00</code>, then a length of 1 to 4,096</td><td>Tink’s KMS envelope, an envelope streamed value, or the 4-byte length prefix of 32-bit targets before 0.24.0</td></tr>
-<tr><td><code>01</code></td><td>envelope layout v1 of 0.29, or a TINK-prefixed value</td></tr>
-<tr><td><code>02</code></td><td>a DEK encrypted with the public half of an asymmetric KEK</td></tr>
-<tr><td><code>FF 01</code></td><td>encrypted DEK layout v1 of 0.29</td></tr>
-</tbody>
-</table>
-</div>
-<p>Only the decrypted DEK tells a Tink envelope from the 32-bit layout before 0.24.0: a raw key of
-16 or 32 bytes against a serialised Tink key, whose lengths differ. An encrypted DEK of AWS, Azure
-or the local KMS also starts with <code>0x01</code>, and Tink’s LEGACY and CRUNCHY output prefixes with <code>0x00</code>.</p>
-<p>A column that holds two layouts:</p>
-<ul>
-<li>Tink envelopes and TINK-prefixed values: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
-<li>Tink envelopes and 0.29 envelopes: the first byte, <code>0x00</code> or <code>0x01</code>;</li>
-<li>Tink envelopes and 0.28.1 envelopes: the first four bytes;</li>
-<li>0.29 envelopes and TINK-prefixed values: no byte tells them apart, so the layout is recorded
-outside the value, such as in another column;</li>
-<li>bare values and any other layout: a bare value has no framing, and its random nonce can start
-with any byte, so a column of bare values holds no other layout;</li>
-<li>streamed values and bare streamed values: no byte tells them apart, since a bare one starts
-with its random salt, so the call names the form, as <code>decrypt_bare</code> does for a bare value, see
-<a href="#streamed-values">Streamed values</a>;</li>
-<li>envelope streamed values and Tink envelopes: both start with <code>[w][encrypted DEK]</code>, so the
-layout is recorded outside the value, as for bare values;</li>
-<li>encrypted DEKs of 0.29 and of 0.30: <code>0xFF 0x01</code> starts no encrypted DEK of a built-in provider, so
-the library tells them apart for those. It never inspects the bytes of an application’s own
-provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its 0.29 keys before reading them.</li>
-</ul>
-<h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
-<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
-<ul>
-<li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
-holds with the feature;</li>
-<li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
-raw encrypted DEKs.</li>
-</ul>
-<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
-hold needs the provider to become its bytes.</p>
-<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
-<code>LEGACY_FORMAT</code>, and one of:</p>
-<ul>
-<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
-<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
-<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
-<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
-values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
-</ul>
-<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
-process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
-spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="#observability">Observability</a>.</p>
-<h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
-<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
-and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
-<ul>
-<li><code>upgrade_legacy_value</code>, for envelope values;</li>
-<li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
-<code>to_bytes</code>.</li>
-</ul>
-<p>Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
-serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
-one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
-The AEAD bytes stay as they are.</p>
-<p>An upgraded DEK is encrypted under the KEK’s current version, so the upgrade also does what
-<code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code> do for a value or a DEK already in Tink’s format, see
-<a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.
-Those two refuse a layout of 0.29 or earlier with <code>LEGACY_FORMAT</code>, so a sweep after a KEK rotation
-upgrades a value in an old layout and re-encrypts the DEK of a value in Tink’s format.</p>
-<p>The envelope’s algorithm is the one the values were encrypted with: ChaCha20-Poly1305 for values
-that 0.29 and earlier encrypted under their default. A raw DEK does not record its algorithm, and
-the encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the
-value’s AAD and decrypts the value before it writes anything. Under another algorithm or another AAD
-it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> has no value to decrypt, so it records the
-envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
-another algorithm than its values were encrypted with: use <code>upgrade_legacy_value</code> wherever the
-values are at hand.</p>
-<p>A sweep over stored rows:</p>
-<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
-use kms_aead::formats::Envelope;
-use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
-use secret_vault_value::SecretValue;
-
-/// A stored envelope value and the AAD it was encrypted under.
-struct Row {
-    aad: Vec&lt;u8&gt;,
-    value: Vec&lt;u8&gt;,
-}
-
-/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
-#[allow(deprecated)]
-async fn upgrade_values&lt;P, B&gt;(
-    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
-    rows: &amp;mut [Row],
-) -&gt; KmsAeadResult&lt;usize&gt;
-where
-    P: KmsAeadDecryptionProvider,
-    B: AeadBackend,
-{
-    let mut upgraded = 0;
-    for row in rows.iter_mut() {
-        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.value.clone())?;
-        if let Some(value) = envelope.upgrade_legacy_value(&amp;row.aad, &amp;stored).await? {
-            row.value = value.into_value();
-            upgraded += 1;
-        }
-    }
-    Ok(upgraded)
-}
-<span class="boring">use kms_aead::backends::Ring;
-</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
-</span><span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
-</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
-</span><span class="boring">let dek = cipher.generate_dek()?;
-</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
-</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
-</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
-</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
-</span><span class="boring">legacy.extend_from_slice(bare.value());
-</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
-</span><span class="boring">    provider,
-</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-</span><span class="boring">)?;
-</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
-</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
-</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
-</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
-</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
-</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
-<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
-<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
-breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
-<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
-older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="error-handling"><a class="header" href="#error-handling">Error handling</a></h1>
 <p>Every fallible call returns <code>KmsAeadResult&lt;T&gt;</code>, whose error is <code>kms_aead::errors::KmsAeadError</code>:</p>
@@ -10429,7 +10359,7 @@ call fails the same way again;</li>
 <li><code>SignatureError</code>: a signature could not be made, read or verified, or a KMS refused a sign or
 public-key request; never retried;</li>
 <li><code>LegacyFormat</code>: a stored value in a layout of 0.29 or earlier, which only the
-<code>legacy-formats</code> feature reads, see <a href="#values-written-by-029-and-earlier">Formats</a>.</li>
+<code>legacy-formats</code> feature reads, see <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</li>
 </ul>
 <p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a <code>_</code> arm.</p>
 <h2 id="codes"><a class="header" href="#codes">Codes</a></h2>
@@ -10618,31 +10548,79 @@ the application’s own callers, and it is <code>Serialize</code> and <code>Dese
 failed, when there is one.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="observability"><a class="header" href="#observability">Observability</a></h1>
+<p>kms-aead and kms-aead-keyring report what they do through
+<a href="https://github.com/tokio-rs/tracing">tracing</a> spans and events, and through OpenTelemetry metrics:</p>
+<ul>
+<li><a href="#spans-and-events">Spans and events</a>: one <code>DEBUG</code> span for every envelope call,
+KMS call and keyring call, with the fields of each; the events both crates log; how to show the
+spans and export them as OpenTelemetry traces; and the event of a JSON value that does not decode;</li>
+<li><a href="#metrics">Metrics</a>: the OpenTelemetry instruments of the <code>opentelemetry</code>
+feature, the views that leave out the smallest and the largest plaintext size and that limit the
+number of series, and the Prometheus names.</li>
+</ul>
+<h2 id="what-is-never-logged"><a class="header" href="#what-is-never-logged">What is never logged</a></h2>
+<p>No span field or event carries:</p>
+<ul>
+<li>plaintext, DEKs in any form, plaintext or encrypted, or KEK material;</li>
+<li>AAD content, which can hold entity ids and so personal data;</li>
+<li>cipher text bytes;</li>
+<li>the length of a value or of its AAD. For AES-256-GCM the plaintext length is the value’s length
+minus a fixed overhead, and a length tells short values such as <code>yes</code>, <code>no</code> or a country code
+apart.</li>
+</ul>
+<p>The <code>kms_aead.plaintext.size</code> histogram is the exception: it adds up plaintext lengths. A keyring or
+an envelope that encrypts one value per export interval gives that value’s length to whoever reads
+the metrics. The SDK also keeps the smallest and the largest value of each series, under cumulative
+temporality since the process started, and OTLP exports them: the exact length of the shortest and
+the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
+The OpenTelemetry API gives kms-aead’s instrument no setting to leave them out, so the view in
+<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat
+the histogram like the values themselves where traffic is low, and everywhere without that view.</p>
+<p>The <a href="#json-that-does-not-decode-1"><code>kms_aead::json</code> event</a> is the
+other exception, under a policy that opts in: its outline then carries the length of the values and
+keys of the JSON that did not decode, <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">which gives away a hidden
+boolean</a>,
+and the values the policy reveals. The default policy carries neither, but every policy shows serde_json’s message for
+a syntax error, which is fixed text and can state a property of a hidden value, such as
+<code>number out of range</code>.</p>
+<p>Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
+project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
+<code>key</code> field accordingly in a trace pipeline.</p>
+<p>Errors follow the same rules, see <a href="#what-errors-never-carry">Error handling</a>.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="spans-and-events"><a class="header" href="#spans-and-events">Spans and events</a></h1>
+<p>The spans and events of kms-aead and kms-aead-keyring, and the fields of each span. What they never
+carry is on <a href="#what-is-never-logged">Observability</a>.</p>
+<h2 id="spans"><a class="header" href="#spans">Spans</a></h2>
 <p>The library uses <a href="https://github.com/tokio-rs/tracing">tracing</a>. Every envelope call and every KMS
 call opens one span at the <code>DEBUG</code> level, and the spans carry what a call used besides how long it
-took: the mode, the algorithm and backend, whether the DEK came from the cache, the KMS key and
-its version, and the error code.</p>
+took: the mode, the algorithm and backend, whether the DEK came from the cache, the KMS key and its
+version, and the error code.</p>
 <p>The spans are:</p>
-<ul>
-<li><code>KMS AEAD encrypt</code>: the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code>, <code>encrypt_with_encrypted_dek</code>,
-<code>stream_encryptor</code> and <code>stream_encryptor_bare</code>;</li>
-<li><code>KMS AEAD decrypt</code>: the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code>, <code>decrypt_with_encrypted_dek</code>,
-<code>stream_decryptor</code> and <code>stream_decryptor_bare</code>;</li>
-<li><code>KMS AEAD generate DEK</code>: <code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code>;</li>
-<li><code>KMS AEAD decrypt DEK</code>: <code>decrypt_deterministic_dek</code>;</li>
-<li><code>KMS AEAD re-encrypt DEK</code>: <code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code>;</li>
-<li><code>KMS AEAD beacon</code>: the envelope’s <code>beacon</code>;</li>
-<li><code>KMS encrypt DEK</code>: each provider’s encryption of a DEK, or its encryption with a public key;</li>
-<li><code>KMS decrypt DEK</code>: each provider’s decryption of a DEK;</li>
-<li><code>KMS random</code>: a call to the GCP or AWS KMS generator, when the provider uses it;</li>
-<li><code>Signature sign</code>: a <code>Signer</code>’s <code>sign</code>, <code>sign_attached</code> and <code>sign_digest</code>;</li>
-<li><code>Signature verify</code>: a <code>Verifier</code>’s <code>verify</code>, <code>verify_signed</code> and <code>verify_digest</code>;</li>
-<li><code>MAC compute</code>: an <code>Authenticator</code>’s <code>mac</code> and <code>mac_attached</code>;</li>
-<li><code>MAC verify</code>: an <code>Authenticator</code>’s <code>verify</code> and <code>verify_with_mac</code>;</li>
-<li><code>KMS sign</code>: each signing provider’s sign request;</li>
-<li><code>KMS public key</code>: each signing provider’s request for the public key of its key, and each KMS
-provider’s <code>public_key</code> of an asymmetric KEK.</li>
-</ul>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Span</th><th>Opened by</th><th>Fields</th></tr>
+</thead>
+<tbody>
+<tr><td><code>KMS AEAD encrypt</code></td><td>the envelope’s <code>encrypt</code>, <code>encrypt_with_dek</code>, <code>encrypt_with_encrypted_dek</code>, <code>stream_encryptor</code> and <code>stream_encryptor_bare</code></td><td><code>mode</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD decrypt</code></td><td>the envelope’s <code>decrypt</code>, <code>decrypt_with_dek</code>, <code>decrypt_with_encrypted_dek</code>, <code>stream_decryptor</code> and <code>stream_decryptor_bare</code></td><td><code>mode</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD generate DEK</code></td><td><code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code></td><td><code>purpose</code>, <code>algorithm</code>, <code>backend</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD decrypt DEK</code></td><td><code>decrypt_deterministic_dek</code></td><td><code>purpose</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD re-encrypt DEK</code></td><td><code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code></td><td><code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS AEAD beacon</code></td><td>the envelope’s <code>beacon</code></td><td><code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS encrypt DEK</code></td><td>each provider’s encryption of a DEK, or its encryption with a public key</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS decrypt DEK</code></td><td>each provider’s decryption of a DEK</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS random</code></td><td>a call to the GCP or AWS KMS generator, when the provider uses it</td><td><code>provider</code>, <code>key</code>, <code>len</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Signature sign</code></td><td>a <code>Signer</code>’s <code>sign</code>, <code>sign_attached</code> and <code>sign_digest</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>Signature verify</code></td><td>a <code>Verifier</code>’s <code>verify</code>, <code>verify_signed</code> and <code>verify_digest</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>MAC compute</code></td><td>an <code>Authenticator</code>’s <code>mac</code> and <code>mac_attached</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>MAC verify</code></td><td>an <code>Authenticator</code>’s <code>verify</code> and <code>verify_with_mac</code></td><td><code>algorithm</code>, <code>backend</code>, <code>key_id</code>, <code>payload_type</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS sign</code></td><td>each signing provider’s sign request</td><td><code>provider</code>, <code>key</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>KMS public key</code></td><td>each signing provider’s request for the public key of its key, and each KMS provider’s <code>public_key</code> of an asymmetric KEK</td><td><code>provider</code>, <code>key</code>, <code>kek_version</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+</tbody>
+</table>
+</div>
 <p>The KMS spans nest inside the envelope span, so a DEK the envelope had to decrypt shows its KMS call
 as a child, and a DEK served by the cache shows none. <code>AeadCipher</code> and <code>DeterministicCipher</code> open
 no spans: they run once per value inside the caller’s span.</p>
@@ -10703,81 +10681,31 @@ tracing_subscriber::registry()
 <h2 id="fields"><a class="header" href="#fields">Fields</a></h2>
 <p>Every field name has the <code>/kms_aead/</code> prefix, such as <code>/kms_aead/mode</code>. A value nobody reported is
 left unrecorded, never recorded as <code>0</code> or an empty string.</p>
-<h3 id="kms-aead-encrypt-and-kms-aead-decrypt"><a class="header" href="#kms-aead-encrypt-and-kms-aead-decrypt">KMS AEAD encrypt and KMS AEAD decrypt</a></h3>
 <div class="table-wrapper">
 <table>
 <thead>
 <tr><th>Field</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td><code>mode</code></td><td><code>per_call</code> for <code>encrypt</code>, <code>decrypt</code> and the stream calls, <code>store_less</code> for them on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
-<tr><td><code>algorithm</code></td><td><code>chacha20-poly1305</code>, <code>aes-128-gcm</code>, <code>aes-256-gcm</code> or <code>aes-256-gcm-siv</code></td></tr>
-<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
-<tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> for a call that decrypts through an enabled cache, a failed decryption recording <code>miss</code>; unrecorded for a call that looks nothing up</td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="kms-aead-generate-dek-and-kms-aead-decrypt-dek"><a class="header" href="#kms-aead-generate-dek-and-kms-aead-decrypt-dek">KMS AEAD generate DEK and KMS AEAD decrypt DEK</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
+<tr><td><code>mode</code></td><td>on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>: <code>per_call</code> for <code>encrypt</code>, <code>decrypt</code> and the stream calls, <code>store_less</code> for them on a store-less envelope, <code>caller_dek</code> for the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls</td></tr>
+<tr><td><code>algorithm</code></td><td><code>chacha20-poly1305</code>, <code>aes-128-gcm</code>, <code>aes-256-gcm</code> or <code>aes-256-gcm-siv</code> on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>; the algorithm of the key on <code>KMS AEAD generate DEK</code> and <code>KMS AEAD decrypt DEK</code>, <code>aes-256-siv</code> for deterministic keys; <code>hmac-sha256</code> on <code>KMS AEAD beacon</code>; <code>ed25519</code> or <code>ecdsa-p256-sha256</code> on a signature span, <code>mac-hmac-sha256</code> or <code>mac-hmac-sha512</code> on a MAC span</td></tr>
+<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code>; on <code>KMS AEAD generate DEK</code> the envelope’s backend</td></tr>
+<tr><td><code>dek_cache</code></td><td>on <code>KMS AEAD encrypt</code> and <code>KMS AEAD decrypt</code>: <code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> for a call that decrypts through an enabled cache, a failed decryption recording <code>miss</code>; unrecorded for a call that looks nothing up. On <code>KMS AEAD decrypt DEK</code> and <code>KMS AEAD re-encrypt DEK</code>: <code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise. On <code>KMS AEAD beacon</code>: <code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> with one, a failed decryption of the beacon key recording <code>miss</code></td></tr>
 <tr><td><code>purpose</code></td><td><code>randomized</code> or <code>deterministic</code></td></tr>
-<tr><td><code>algorithm</code></td><td>the algorithm of the key, <code>aes-256-siv</code> for deterministic keys</td></tr>
-<tr><td><code>backend</code></td><td>generate DEK only: the envelope’s backend, <code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
-<tr><td><code>dek_cache</code></td><td>decrypt DEK only: <code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise</td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="kms-aead-re-encrypt-dek"><a class="header" href="#kms-aead-re-encrypt-dek">KMS AEAD re-encrypt DEK</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
-<tr><td><code>dek_cache</code></td><td><code>bypassed</code> beside an enabled cache, since the call never goes through it, <code>disabled</code> otherwise</td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
-<p>Its children are a <code>KMS decrypt DEK</code> under the version that encrypted the DEK and a <code>KMS encrypt DEK</code>
-under the current one.</p>
-<h3 id="kms-aead-beacon"><a class="header" href="#kms-aead-beacon">KMS AEAD beacon</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
-<tr><td><code>algorithm</code></td><td><code>hmac-sha256</code></td></tr>
-<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
-<tr><td><code>dek_cache</code></td><td><code>disabled</code> for an envelope without a cache; <code>hit</code> or <code>miss</code> with one, a failed decryption of the beacon key recording <code>miss</code></td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
-<p>A beacon key the cache did not hold shows its <code>KMS decrypt DEK</code> as a child.</p>
-<h3 id="kms-encrypt-dek-kms-decrypt-dek-and-kms-random"><a class="header" href="#kms-encrypt-dek-kms-decrypt-dek-and-kms-random">KMS encrypt DEK, KMS decrypt DEK and KMS random</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
 <tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
-<tr><td><code>key</code></td><td>the KEK, see below; for <code>KMS random</code> the GCP location, and unrecorded on AWS</td></tr>
-<tr><td><code>kek_version</code></td><td><code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, and the public key’s version on an encryption with a public key; from the encrypted DEK’s bytes on decryption for Azure, Vault Transit, the local KMS and every DEK a public key encrypted; unrecorded when neither has one, as for AWS and a GCP decryption of a symmetric key</td></tr>
-<tr><td><code>len</code></td><td>random only: the bytes requested from the KMS generator</td></tr>
+<tr><td><code>key</code></td><td>on <code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code> the KEK, see below; on <code>KMS random</code> the GCP location, and unrecorded on AWS; on <code>KMS sign</code> and <code>KMS public key</code> the signing key, see <code>SigningKeyRef::key</code>, or the KEK of an asymmetric KEK’s public key</td></tr>
+<tr><td><code>kek_version</code></td><td>on <code>KMS encrypt DEK</code> and <code>KMS decrypt DEK</code>: from the KMS response on encryption, and the public key’s version on an encryption with a public key; from the encrypted DEK’s bytes on decryption for Azure, Vault Transit, the local KMS and every DEK a public key encrypted; unrecorded when neither has one, as for AWS and a GCP decryption of a symmetric key. On <code>KMS public key</code>, the public key of an asymmetric KEK only: the version asked for, or the one the response names when none was</td></tr>
+<tr><td><code>len</code></td><td>on <code>KMS random</code>: the bytes requested from the KMS generator</td></tr>
+<tr><td><code>key_id</code></td><td>the decimal key id the signature or MAC names</td></tr>
+<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of the signed type</td></tr>
 <tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
 <tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
 </tbody>
 </table>
 </div>
+<p>A <code>KMS AEAD re-encrypt DEK</code> has a <code>KMS decrypt DEK</code> as a child under the version that encrypted the
+DEK and a <code>KMS encrypt DEK</code> under the current one. A beacon key the cache did not hold shows its
+<code>KMS decrypt DEK</code> as a child of <code>KMS AEAD beacon</code>.</p>
 <p>The <code>key</code> of each provider:</p>
 <ul>
 <li>GCP: the CryptoKey name, <code>projects/&lt;project&gt;/locations/&lt;location&gt;/keyRings/&lt;ring&gt;/cryptoKeys/&lt;key&gt;</code>;</li>
@@ -10787,36 +10715,6 @@ under the current one.</p>
 when none is set;</li>
 <li>local: the KEK id.</li>
 </ul>
-<h3 id="signature-sign-signature-verify-mac-compute-and-mac-verify"><a class="header" href="#signature-sign-signature-verify-mac-compute-and-mac-verify">Signature sign, Signature verify, MAC compute and MAC verify</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
-<tr><td><code>algorithm</code></td><td><code>ed25519</code> or <code>ecdsa-p256-sha256</code> for a signature; <code>mac-hmac-sha256</code> or <code>mac-hmac-sha512</code> for a MAC</td></tr>
-<tr><td><code>backend</code></td><td><code>ring</code>, <code>aws-lc</code> or <code>rustcrypto</code></td></tr>
-<tr><td><code>key_id</code></td><td>the decimal key id the signature or MAC names</td></tr>
-<tr><td><code>payload_type</code></td><td>the <code>PAYLOAD_TYPE</code> of the signed type</td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
-<h3 id="kms-sign-and-kms-public-key"><a class="header" href="#kms-sign-and-kms-public-key">KMS sign and KMS public key</a></h3>
-<div class="table-wrapper">
-<table>
-<thead>
-<tr><th>Field</th><th>Value</th></tr>
-</thead>
-<tbody>
-<tr><td><code>provider</code></td><td><code>gcp</code>, <code>aws</code>, <code>azure</code>, <code>hc_vault_transit</code>, <code>local</code>, or the name of an application’s own provider</td></tr>
-<tr><td><code>key</code></td><td>the signing key, see <code>SigningKeyRef::key</code>, or the KEK of an asymmetric KEK’s public key</td></tr>
-<tr><td><code>kek_version</code></td><td>the public key of an asymmetric KEK only: the version asked for, or the one the response names when none was</td></tr>
-<tr><td><code>response_time</code></td><td>milliseconds the KMS call took</td></tr>
-<tr><td><code>error_code</code></td><td>the code of the error the call returned</td></tr>
-</tbody>
-</table>
-</div>
 <p>With the <code>opentelemetry</code> feature the signing and MAC calls record their duration as the envelope
 calls do. The spans carry no payload, signature, tag or key bytes.</p>
 <h2 id="events"><a class="header" href="#events">Events</a></h2>
@@ -10888,7 +10786,7 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tbody>
 <tr><td><code>Keyring encrypt</code></td><td>an encryptor’s <code>encrypt</code> and <code>encrypt_deterministic</code>, <code>deterministic_probes</code>, and <code>stream_encryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>algorithm</code>, <code>backend</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring decrypt</code></td><td><code>decrypt</code>, <code>decrypt_with_trust</code>, their deterministic pair, <code>decrypt_envelope_for_migration</code>, and <code>stream_decryptor</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code>, including a <code>shred</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring load</code></td><td>every store read: <code>open</code>, a revalidation, a reload, the read before a write of a <code>KeyringAdmin</code>, including a <code>dangerously_shred</code></td><td><code>keyring</code>, <code>store</code>, <code>reason</code>, <code>changed</code>, <code>revision</code>, <code>response_time</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring beacon</code></td><td>an encryptor’s <code>beacon</code>, <code>beacon_probes</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring mac</code></td><td>an encryptor’s <code>mac</code> and <code>mac_attached</code></td><td><code>keyring</code>, <code>key_id</code>, <code>algorithm</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring verify mac</code></td><td><code>verify_mac</code>, <code>verify_mac_with_trust</code> and <code>verify_with_mac</code></td><td><code>keyring</code>, <code>purpose</code>, <code>key_id</code>, <code>key_state</code>, <code>reload</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
@@ -10897,7 +10795,7 @@ those of <code>KeyringAdmin</code> calls, under the <code>admin</code> feature.<
 <tr><td><code>Keyring mark compromised</code></td><td><code>mark_compromised</code></td><td><code>keyring</code>, <code>key_id</code>, <code>to_key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring retire</code>, <code>Keyring reinstate</code>, <code>Keyring destroy</code></td><td>the call of that name</td><td><code>keyring</code>, <code>key_id</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring destroy all versions</code></td><td><code>dangerously_destroy_all_versions</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
-<tr><td><code>Keyring shred</code></td><td><code>shred</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
+<tr><td><code>Keyring shred</code></td><td><code>dangerously_shred</code></td><td><code>keyring</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring re-encrypt DEKs</code></td><td><code>reencrypt_deks</code></td><td><code>keyring</code>, <code>versions</code>, <code>dek_cache</code>, <code>cas_retries</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring export</code></td><td><code>export_bigquery_keyset</code>, <code>export_tink_keyset</code></td><td><code>keyring</code>, <code>purpose</code>, <code>versions</code>, <code>dek_cache</code>, <code>error_code</code></td></tr>
 <tr><td><code>Keyring sign record</code></td><td>each write of a signed record by the administration</td><td><code>keyring</code>, <code>key_id</code>, <code>error_code</code></td></tr>
@@ -10978,10 +10876,11 @@ a different number of outcomes from it was given candidates, with both counts in
 <li><code>DEBUG</code>: a rate-limited reload for an unknown key id, and a compare-and-swap conflict that is
 retried.</li>
 </ul>
-<p>The keyring’s spans, events and errors leave out everything kms-aead’s do, listed below. The AAD
-rule matters most there, since the default AAD holds the entity id: neither the AAD nor an
-<code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
-<h2 id="metrics"><a class="header" href="#metrics">Metrics</a></h2>
+<p>The keyring’s spans, events and errors leave out everything kms-aead’s do, see
+<a href="#what-is-never-logged">What is never logged</a>. The AAD rule matters most there,
+since the default AAD holds the entity id: neither the AAD nor an <code>EntityId</code> appears anywhere. Key ids, keyring ids and store names are identifiers and appear.</p>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="metrics"><a class="header" href="#metrics">Metrics</a></h1>
 <p>With the <code>opentelemetry</code> feature, kms-aead records OpenTelemetry metrics for every envelope call
 and KMS request. kms-aead-keyring’s <code>opentelemetry</code> feature turns it on, and the keyring records
 into the same instruments, with its own attributes. Both depend on the <code>opentelemetry</code> API crate
@@ -11100,7 +10999,8 @@ plaintext size instrument records nothing for them, since the size is not known 
 <code>AeadCipher</code>’s stream calls open no span;</li>
 <li><code>kms_aead.record.refusals</code> counts each keyring record a process refused because of its
 signature, by code in <code>error.type</code>: <code>RECORD_UNSIGNED</code>, <code>RECORD_SIGNATURE_INVALID</code> or
-<code>RECORD_SIGNATURE_REMOVED</code>. It is the metric of the <code>ERROR</code> event above.</li>
+<code>RECORD_SIGNATURE_REMOVED</code>. It is the metric of the <code>ERROR</code> event for a record refused by record verification, see
+<a href="#keyring-events">Keyring events</a>.</li>
 </ul>
 <p>No attribute names a DEK, so the envelope’s values are recorded per algorithm, not per key. A
 store-less envelope needs no alert on them: it renews its DEK at <code>max_uses</code> and <code>max_bytes</code>, see
@@ -11122,34 +11022,6 @@ it. Key ids are numbered per keyring, so the plaintext size keeps
 duration histograms do not need it, and with their buckets they cost the most series, so the view
 above drops it from them. The view’s <code>with_allowed_attribute_keys</code> needs the SDK’s
 <code>spec_unstable_metrics_views</code> feature.</p>
-<h2 id="what-is-never-logged"><a class="header" href="#what-is-never-logged">What is never logged</a></h2>
-<p>No span field or event carries:</p>
-<ul>
-<li>plaintext, DEKs in any form, plaintext or encrypted, or KEK material;</li>
-<li>AAD content, which can hold entity ids and so personal data;</li>
-<li>cipher text bytes;</li>
-<li>the length of a value or of its AAD. For AES-256-GCM the plaintext length is the value’s length
-minus a fixed overhead, and a length tells short values such as <code>yes</code>, <code>no</code> or a country code
-apart.</li>
-</ul>
-<p>The <code>kms_aead.plaintext.size</code> histogram is the exception: it adds up plaintext lengths. A keyring or
-an envelope that encrypts one value per export interval gives that value’s length to whoever reads
-the metrics. The SDK also keeps the smallest and the largest value of each series, under cumulative
-temporality since the process started, and OTLP exports them: the exact length of the shortest and
-the longest value per keyring and version, at any traffic. A Prometheus exporter exports neither.
-The OpenTelemetry API gives kms-aead’s instrument no setting to leave them out, so the view in
-<a href="#metrics">Metrics</a> turns them off with <code>record_min_max: false</code>. Treat the histogram like the values
-themselves where traffic is low, and everywhere without that view.</p>
-<p>The <code>kms_aead::json</code> event is the other exception, under a policy that opts in: its outline then
-carries the length of the values and keys of the JSON that did not decode, <a href="https://docs.rs/kms-aead/latest/kms_aead/redaction/trait.JsonRedaction.html#associatedconstant.SIZES">which gives away a
-hidden boolean</a>, and the values the
-policy reveals. The default policy carries neither, but every policy shows serde_json’s message for
-a syntax error, which is fixed text and can state a property of a hidden value, such as
-<code>number out of range</code>.</p>
-<p>Key identifiers are recorded: KEK names, key versions and local KEK ids. A KEK name identifies the
-project, the location and the key, and a per-tenant KEK name carries the tenant id, so treat the
-<code>key</code> field accordingly in a trace pipeline.</p>
-<p>Errors follow the same rules, see <a href="#what-errors-never-carry">Error handling</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="security-considerations"><a class="header" href="#security-considerations">Security considerations</a></h1>
 <h2 id="threat-model"><a class="header" href="#threat-model">Threat model</a></h2>
@@ -11708,7 +11580,7 @@ with the deprecated <code>legacy-formats</code> feature, which also rewrites the
 <li>typed fields: <code>Encrypted&lt;T, F&gt;</code> takes any type that implements <code>Plaintext</code>, such as an
 application newtype, where the tables below name <code>SecretValue</code>, see
 <a href="#stored-values">Stored values</a>;</li>
-<li>beacons, for lookups of randomised fields, see <a href="#beacons-1">Beacons</a>;</li>
+<li>beacons, for lookups of randomised fields, see <a href="#beacons">Beacons</a>;</li>
 <li>the <code>kms-aead-keyring</code> crate, with key versions kept in a store, staged rotation and sweeps, see
 <a href="#keyring-and-field-encryption">Keyring and field encryption</a>. Envelope values move to it with a sweep, see
 <a href="#move-envelope-values-to-a-keyring">Move envelope values to a keyring</a>.</li>
@@ -11912,7 +11784,7 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 wrote envelope layout v1 and the encrypted DEK layout v1 <code>[0xFF][0x01]…</code>, and 0.28.1 and earlier a
 length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
 <code>legacy-formats</code> feature, and fails with <code>LEGACY_FORMAT</code> without it, see
-<a href="#values-written-by-029-and-earlier">Formats</a>.</p>
+<a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
 <p>To move stored values to the new format:</p>
@@ -11928,6 +11800,117 @@ algorithm and that AAD;</li>
 </ol>
 <p><code>Encrypted::&lt;T, Envelope&gt;::separate</code> reads Tink’s format only, with or without the feature, so
 code that separated stored 0.29 values runs after the sweep.</p>
+<h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
+<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
+<ul>
+<li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
+holds with the feature;</li>
+<li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
+raw encrypted DEKs.</li>
+</ul>
+<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
+hold needs the provider to become its bytes.</p>
+<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
+<code>LEGACY_FORMAT</code>, and one of:</p>
+<ul>
+<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
+<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
+<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
+values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
+</ul>
+<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
+process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
+spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="#spans-and-events">Observability</a>.</p>
+<h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
+<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
+and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
+<ul>
+<li><code>upgrade_legacy_value</code>, for envelope values;</li>
+<li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
+<code>to_bytes</code>.</li>
+</ul>
+<p>Each decrypts the DEK with the provider, without the DEK cache, and encrypts it again as a
+serialised Tink key when it was in an older layout: one KMS call for a current value, two for an old
+one. A value in Tink’s framing needs the decryption to be told from the 32-bit layout before 0.24.0.
+The AEAD bytes stay as they are.</p>
+<p>An upgraded DEK is encrypted under the KEK’s current version, so the upgrade also does what
+<code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code> do for a value or a DEK already in Tink’s format, see
+<a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.
+Those two refuse a layout of 0.29 or earlier with <code>LEGACY_FORMAT</code>, so a sweep after a KEK rotation
+upgrades a value in an old layout and re-encrypts the DEK of a value in Tink’s format.</p>
+<p>The envelope’s algorithm is the one the values were encrypted with: ChaCha20-Poly1305 for values
+that 0.29 and earlier encrypted under their default. A raw DEK does not record its algorithm, and
+the encrypted DEK of the upgrade records it as a Tink key type, so <code>upgrade_legacy_value</code> takes the
+value’s AAD and decrypts the value before it writes anything. Under another algorithm or another AAD
+it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> has no value to decrypt, so it records the
+envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
+another algorithm than its values were encrypted with: use <code>upgrade_legacy_value</code> wherever the
+values are at hand.</p>
+<p>A sweep over stored rows:</p>
+<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
+use kms_aead::formats::Envelope;
+use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
+use secret_vault_value::SecretValue;
+
+/// A stored envelope value and the AAD it was encrypted under.
+struct Row {
+    aad: Vec&lt;u8&gt;,
+    value: Vec&lt;u8&gt;,
+}
+
+/// Rewrites the envelope values of `rows` in Tink's format, and returns how many changed.
+#[allow(deprecated)]
+async fn upgrade_values&lt;P, B&gt;(
+    envelope: &amp;KmsAeadEnvelope&lt;P, B&gt;,
+    rows: &amp;mut [Row],
+) -&gt; KmsAeadResult&lt;usize&gt;
+where
+    P: KmsAeadDecryptionProvider,
+    B: AeadBackend,
+{
+    let mut upgraded = 0;
+    for row in rows.iter_mut() {
+        let stored = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(row.value.clone())?;
+        if let Some(value) = envelope.upgrade_legacy_value(&amp;row.aad, &amp;stored).await? {
+            row.value = value.into_value();
+            upgraded += 1;
+        }
+    }
+    Ok(upgraded)
+}
+<span class="boring">use kms_aead::backends::Ring;
+</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
+</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
+</span><span class="boring">#[tokio::main(flavor = "current_thread")]
+</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
+</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
+</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
+</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
+</span><span class="boring">let dek = cipher.generate_dek()?;
+</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
+</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
+</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
+</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
+</span><span class="boring">legacy.extend_from_slice(bare.value());
+</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
+</span><span class="boring">    provider,
+</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
+</span><span class="boring">)?;
+</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
+</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
+</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
+</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
+</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
+</span><span class="boring">Ok(())
+</span><span class="boring">}</span></code></pre>
+<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
+<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
+<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
+breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
+<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
+older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
 
                     </main>
 

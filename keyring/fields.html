@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,9 +183,9 @@
 <p>A keyring value is kms-aead’s <a href="../stored-values.html#encryptedt-f"><code>Encrypted&lt;T, Randomized&gt;</code></a>,
 re-exported by the keyring: the bytes to store, which decrypt to a <code>T</code>. <code>T</code> is any type that
 implements <code>Plaintext</code>, usually an application newtype such as <code>Email</code>, so a field names what it
-holds. Its layout is in <a href="../formats.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>. The keyring
+holds. Its layout is in <a href="../formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>. The keyring
 encrypts and decrypts it with kms-aead’s <code>AeadCipher::encrypt</code> and <code>decrypt</code> under the key of the
-version, the calls an application with <a href="../envelope-encryption.html#one-fixed-key">one fixed key</a>
+version, the calls an application with <a href="../one-fixed-key.html">one fixed key</a>
 makes itself.</p>
 <ul>
 <li><code>value()</code> and <code>into_value()</code> return the bytes;</li>

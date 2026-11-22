@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -183,7 +184,7 @@ keyring writes, and the keyring reads theirs, given the same keys under the same
 <h2 id="wire-format"><a class="header" href="#wire-format">Wire format</a></h2>
 <p>Every value starts with Tink’s 5-byte TINK prefix, a version byte <code>0x01</code> and the key id, followed
 by what the version’s algorithm writes, see
-<a href="../formats.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>. These are the layouts of Tink’s AEAD
+<a href="../formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a>. These are the layouts of Tink’s AEAD
 and deterministic AEAD primitives, and of BigQuery’s <code>AEAD.ENCRYPT</code> and <code>DETERMINISTIC_ENCRYPT</code>. A
 randomised version with another algorithm, such as ChaCha20-Poly1305, writes the same prefix
 before its own body, which only kms-aead reads.</p>
@@ -376,25 +377,9 @@ every keyset again after <code>reencrypt_deks</code>, once the new primary versi
 the old bytes in every query and column that holds them before the old version is disabled, see
 <a href="../production/reencrypt-deks.html#encrypted-keysets">Encrypted keysets</a>.</p>
 <h3 id="queries"><a class="header" href="#queries">Queries</a></h3>
-<p>Every value reaches the query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code>, each
-keyset parameter its <code>value()</code>, and <code>@email</code> the address an equality query looks for:</p>
-<pre><code class="language-sql">-- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
-FROM users u;
-
--- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
-FROM users u;
-
--- An equality query: one probe per deterministic version, each with its Single keyset
-SELECT u.id
-FROM users u
-WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
-);
-</code></pre>
+<p>Every value reaches a query as a parameter: <code>@kms_key</code> is the export’s <code>key_uri()</code> and each keyset
+parameter its <code>value()</code>. The queries are in
+<a href="../use-cases/bigquery-and-tink.html#query-keyring-values-in-bigquery">Query keyring values in BigQuery</a>.</p>
 <p>The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
 no <code>Single</code> keyset, and no value is encrypted under it before its promotion.</p>
 <p>The requirements:</p>
@@ -427,7 +412,7 @@ Go and Python decrypt with <code>KeysetHandle.read</code> and their own KMS clie
 call, needs the <code>admin</code> feature only, and runs on a keyring with any provider whose KEK has a Tink
 key URI. The bytes are a <code>google.crypto.tink.EncryptedKeyset</code> around the KMS ciphertext of the
 serialised keyset, see
-<a href="../formats.html#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a>.</p>
+<a href="../formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink keysets and the TINK prefix</a>.</p>
 <p><code>key_uri()</code> is the URI of Tink’s KMS client:</p>
 <ul>
 <li><code>gcp-kms://projects/…/cryptoKeys/…</code> for a Cloud KMS key;</li>
@@ -473,25 +458,8 @@ println!("{}", keyset.key_uri());
 registry.shutdown(None).await;
 <span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p>Tink for Python reads the keyset with the KMS client of that URI, and decrypts a randomised value
-with the value’s default AAD as UTF-8:</p>
-<pre><code class="language-python">import tink
-from tink import aead
-from tink.integration import gcpkms
-
-aead.register()
-key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
-with open('tenant-42.keyset', 'rb') as keyset_file:
-  keyset_handle = tink.read_keyset_handle(
-      tink.BinaryKeysetReader(keyset_file.read()),
-      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
-  )
-email_aead = keyset_handle.primitive(aead.Aead)
-
-
-def decrypt_email(value: bytes, user_id: str) -&gt; str:
-  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
-</code></pre>
+<p>A Tink reader decrypts a randomised value with the value’s default AAD as UTF-8, see
+<a href="../use-cases/bigquery-and-tink.html#read-a-keyring-export-with-tink-for-python">Read a keyring export with Tink for Python</a>.</p>
 <p>The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of <a href="#fields-tink-reads">Fields Tink reads</a>: a selected ChaCha20-Poly1305 or
 beacon version fails with <code>ExportAlgorithmUnsupported</code>, before any KMS call.</p>

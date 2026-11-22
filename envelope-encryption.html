@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -180,7 +181,7 @@
                         <h1 id="envelope-encryption"><a class="header" href="#envelope-encryption">Envelope encryption</a></h1>
 <p><code>KmsAeadEnvelope</code> encrypts values under data encryption keys (DEKs) on the crypto backend it is
 built with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
-<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="./observability.html">Observability</a>.</p>
+<code>async</code>, and every call opens one <code>DEBUG</code> span, see <a href="./observability/spans-and-events.html">Observability</a>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::providers::{LocalKekId, LocalKmsProvider};
 use kms_aead::{AeadAlgorithm, KmsAeadEnvelope, KmsAeadEnvelopeOptions};
@@ -204,7 +205,7 @@ let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::new(
 <p>The value does not record the algorithm, so the writer and the reader of a value must be
 configured with the same one. The backend can differ, see
 <a href="./crypto-backends.html">Crypto backends</a>. The default, AES-256-GCM, is read by every Tink
-implementation too, see <a href="./formats.html#tinks-kms-envelope">Formats</a>. Values that 0.29 and earlier
+implementation too, see <a href="./formats/values.html#tinks-kms-envelope">Formats</a>. Values that 0.29 and earlier
 encrypted under their default decrypt only with ChaCha20-Poly1305 configured, see
 <a href="./migrating-from-0.29.html#default-algorithm">Migrating from 0.29</a>.</p>
 <p>Over a provider that only encrypts, such as the <code>PublicKeyKekProvider</code> of a producer, the envelope
@@ -243,7 +244,7 @@ assert_eq!(decrypted, SecretValue::from("4111 1111 1111 1111"));
 </span><span class="boring">}</span></code></pre>
 <p>The bytes in and out of an <code>Encrypted</code> are in <a href="./stored-values.html#bytes-in-and-out">Stored values</a>.</p>
 <p>The value is in Tink’s KMS envelope format for every provider, so Tink’s <code>KmsEnvelopeAead</code> reads
-it with the same KMS key and algorithm, see <a href="./formats.html#tinks-kms-envelope">Formats</a>.</p>
+it with the same KMS key and algorithm, see <a href="./formats/values.html#tinks-kms-envelope">Formats</a>.</p>
 <p>A new DEK comes from the backend’s CSPRNG, or from the KMS generator when the provider is
 configured to use one, see <a href="./providers.html#kms-random-generators">KMS random generators</a>.</p>
 <h2 id="typed-fields"><a class="header" href="#typed-fields">Typed fields</a></h2>
@@ -252,105 +253,6 @@ application’s <code>Email</code> newtype, and the result is an <code>Encrypted
 The calls run in the envelope’s mode, a DEK per value or store-less DEK reuse, and decrypt through
 the envelope’s DEK cache, whatever the type. <code>Plaintext</code>, the bytes of an <code>Encrypted</code> and how
 serde, tokio-postgres and sqlx store it are in <a href="./stored-values.html">Stored values</a>.</p>
-<h2 id="one-fixed-key"><a class="header" href="#one-fixed-key">One fixed key</a></h2>
-<p><code>AeadCipher::encrypt</code> encrypts a field under a key the application holds, in Tink’s layout of a key
-whose output prefix is TINK, <code>[0x01][key id: u32 BE]</code> before the AEAD value: an
-<code>Encrypted&lt;T, Randomized&gt;</code>. <code>DeterministicCipher::encrypt</code> does the same for an
-<code>Encrypted&lt;T, Deterministic&gt;</code>. The key id is a <code>KeyId</code>, the application’s constant, and Tink
-and BigQuery read the values with a keyset of the one key under that id:</p>
-<pre><code class="language-rust no_run">use kms_aead::backends::Ring;
-use kms_aead::cache::{DekCache, DekCacheOptions};
-use kms_aead::formats::{Randomized, TinkKeyType, TinkKeyset};
-use kms_aead::providers::{GcpKmsKeyRef, GcpKmsProvider};
-use kms_aead::{
-    AeadAlgorithm, AeadCipher, DataEncryptionKey, Encrypted, EncryptedDataEncryptionKey, KeyId,
-    KmsAeadEncryptionProvider, KmsAeadResult, Plaintext,
-};
-use secret_vault_value::SecretValue;
-
-#[derive(Debug, Clone, PartialEq)]
-struct Email(String);
-
-impl Plaintext for Email {
-    fn to_plaintext(&amp;self) -&gt; KmsAeadResult&lt;SecretValue&gt; {
-        self.0.to_plaintext()
-    }
-
-    fn from_plaintext(plaintext: SecretValue) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_plaintext(plaintext).map(Email)
-    }
-}
-
-// The id of the one key, in every value and in the keyset
-const EMAIL_KEY: KeyId = KeyId::new(1);
-
-<span class="boring">async fn example() -&gt; KmsAeadResult&lt;()&gt; {
-</span>let key_ref = GcpKmsKeyRef::new(
-    "my-project".to_string(),
-    "europe-north1".to_string(),
-    "my-key-ring".to_string(),
-    "my-key".to_string(),
-);
-let provider = GcpKmsProvider::new(&amp;key_ref).await?;
-let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::Aes256Gcm)?;
-let cache = DekCache::new(DekCacheOptions::new())?;
-
-// Once, by an administrative job: the key encrypted by Cloud KMS, stored in the settings
-let (_, encrypted_dek): (DataEncryptionKey, EncryptedDataEncryptionKey) =
-    cipher.generate_encrypted_dek(&amp;provider).await?;
-
-// On every write and read: the key decrypted through the cache, no KMS call while it is cached
-let email = Email("alice@example.com".to_string());
-let (encrypted, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        cipher.encrypt(EMAIL_KEY, b"users/1042/email", &amp;email, dek)
-    })
-    .await?;
-let encrypted: Encrypted&lt;Email, Randomized&gt; = encrypted?;
-
-let (decrypted, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        cipher.decrypt(b"users/1042/email", &amp;encrypted, dek)
-    })
-    .await?;
-let decrypted: Email = decrypted?;
-assert_eq!(decrypted, email);
-
-// Once, for BigQuery: the keyset of the one key, encrypted by the same Cloud KMS key
-let mut keyset = TinkKeyset::new(EMAIL_KEY);
-let (added, _) = cache
-    .with_dek(&amp;provider, &amp;encrypted_dek, |dek| {
-        keyset.add_key(EMAIL_KEY, TinkKeyType::from(cipher.algorithm()), dek)
-    })
-    .await?;
-added?;
-let first_level_keyset: EncryptedDataEncryptionKey = provider
-    .encrypt_data_encryption_key(&amp;DataEncryptionKey::from(keyset.to_bytes()))
-    .await?;
-<span class="boring">let _ = first_level_keyset;
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>BigQuery reads the column with <code>KEYS.KEYSET_CHAIN</code> over the encrypted keyset, passed as a <code>BYTES</code>
-query parameter, beside the key’s Tink URI as a <code>STRING</code> one,
-<code>gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key</code>:</p>
-<pre><code class="language-sql">SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(@kms_key, @first_level_keyset),
-  u.email,
-  CONCAT('users/', CAST(u.id AS STRING), '/email'))
-FROM users u;
-</code></pre>
-<ul>
-<li>BigQuery reads AES-256-GCM values with <code>AEAD.DECRYPT_STRING</code> and <code>AEAD.DECRYPT_BYTES</code>, and
-the AES-SIV values of <code>DeterministicCipher</code> with <code>DETERMINISTIC_DECRYPT_STRING</code> and
-<code>DETERMINISTIC_DECRYPT_BYTES</code>. <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only;</li>
-<li><code>AeadCipher::decrypt</code> reads the values Tink and BigQuery write under the same key and id. The
-caller picks the key by <code>key_id()</code>, which the prefix names without authenticating it;</li>
-<li>a rotation needs a second key id, values of both ids in one column and a keyset of both keys.
-kms-aead-keyring keeps those versions.</li>
-</ul>
-<h2 id="beacons"><a class="header" href="#beacons">Beacons</a></h2>
-<p>A beacon, or blind index, finds rows by a field’s value without decrypting the column, see
-<a href="./beacons.html">Beacons</a>.</p>
 <h2 id="aad"><a class="header" href="#aad">AAD</a></h2>
 <p>The AAD is authenticated but not encrypted: a value decrypts only with the AAD it was encrypted
 with, and a wrong AAD fails with <code>DECRYPT</code>. Use it to bind a value to its place, such as
@@ -445,7 +347,7 @@ from the bytes.</p>
 the same key, to the DEK cache and in a map, as the one the provider returned with it.</p>
 <p>The encrypted DEK is the one Tink stores in its KMS envelope, so <code>Encrypted::join</code> of a bare value
 and its encrypted DEK is an <code>Encrypted&lt;T, Envelope&gt;</code> that Tink reads. See
-<a href="./formats.html#encrypted-deks">Formats</a> for each provider’s bytes.</p>
+<a href="./formats/values.html#encrypted-deks">Formats</a> for each provider’s bytes.</p>
 <h2 id="re-encrypting-deks"><a class="header" href="#re-encrypting-deks">Re-encrypting DEKs</a></h2>
 <p>After a KEK rotation, a DEK stored before it keeps decrypting with the old KEK version only. Two
 calls move a stored DEK to the version the provider encrypts with now, without decrypting any value:</p>
@@ -459,7 +361,7 @@ fields, and for a DEK that many values share.</li>
 <p>Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
 cache. A value or a DEK in a layout of 0.29 or earlier fails with <code>LEGACY_FORMAT</code>:
 <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, see
-<a href="./formats.html#upgrading-stored-values">Upgrading stored values</a>.</p>
+<a href="./migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>.</p>
 <p>The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.</p>
 
@@ -471,7 +373,7 @@ rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
-                            <a rel="next prefetch" href="dek-caching.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="one-fixed-key.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                             </a>
 
@@ -485,7 +387,7 @@ rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 
-                    <a rel="next prefetch" href="dek-caching.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="one-fixed-key.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
                     </a>
             </nav>
@@ -519,7 +421,7 @@ rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after
         <script>
             document.addEventListener('DOMContentLoaded', function() {
                 const fragmentMap =
-                    {"#encrypted-keysets":"/production/reencrypt-deks.html#encrypted-keysets","#pacing":"/production/reencrypt-deks.html#pacing","#re-encrypting-deks-after-a-kek-rotation":"/production/reencrypt-deks.html","#rolling-back-a-rotation":"/production/reencrypt-deks.html#rolling-back-a-rotation","#the-check":"/production/reencrypt-deks.html#the-check","#the-sweep":"/production/reencrypt-deks.html#the-sweep"}
+                    {"#beacons":"/beacons.html","#encrypted-keysets":"/production/reencrypt-deks.html#encrypted-keysets","#one-fixed-key":"/one-fixed-key.html","#pacing":"/production/reencrypt-deks.html#pacing","#re-encrypting-deks-after-a-kek-rotation":"/production/reencrypt-deks.html","#rolling-back-a-rotation":"/production/reencrypt-deks.html#rolling-back-a-rotation","#the-check":"/production/reencrypt-deks.html#the-check","#the-sweep":"/production/reencrypt-deks.html#the-sweep"}
                 ;
                 const target = fragmentMap[window.location.hash];
                 if (target) {

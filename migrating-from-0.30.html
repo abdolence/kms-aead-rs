@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -288,11 +289,11 @@ record.</p>
 credentials chain takes the session of <code>aws login</code>, as the AWS CLI does.</p>
 <h2 id="readers-before-producers"><a class="header" href="#readers-before-producers">Readers before producers</a></h2>
 <p>The encrypted DEK a public key encrypts is a layout of 0.31, which starts with <code>0x02</code>, and no
-earlier release reads it, see <a href="./formats.html#deks-encrypted-with-a-public-key">DEKs encrypted with a public
+earlier release reads it, see <a href="./formats/values.html#deks-encrypted-with-a-public-key">DEKs encrypted with a public
 key</a>. A deployment moves every reader, every
 application and administrative job that decrypts, to 0.31 before the first producer encrypts with a
 public key, as every reader moved to 0.30 before the first value in Tink’s envelope format, see
-<a href="./formats.html#upgrading-stored-values">Upgrading stored values</a>. Nothing already stored changes: the
+<a href="./migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. Nothing already stored changes: the
 encrypted DEKs the KMS encrypted keep their bytes and keep decrypting.</p>
 <p>A keyring record gains a <code>signature</code> member, which 0.30 reads and ignores, and which a 0.30
 administrative write removes, since 0.30 rewrites the record from its own fields: move every

@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="../theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "../searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-a4ca9268.js"></script>
+        <script src="../toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -203,7 +204,7 @@ crypto-shredded:</p>
 <p>Notes on the table:</p>
 <ul>
 <li>Tink reads envelope values with <code>KmsEnvelopeAead</code> and its own KMS client, see
-<a href="../formats.html#tinks-kms-envelope">Tink’s KMS envelope</a>, and keyring keysets with
+<a href="../formats/values.html#tinks-kms-envelope">Tink’s KMS envelope</a>, and keyring keysets with
 <code>KeysetHandle.read</code>, see <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>;</li>
 <li>BigQuery’s <code>KEYS.KEYSET_CHAIN</code> decrypts with Cloud KMS only, see
 <a href="../use-cases/bigquery-and-tink.html">Read values in BigQuery or Tink</a>;</li>

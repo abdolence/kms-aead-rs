@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -192,7 +193,7 @@ call fails the same way again;</li>
 <li><code>SignatureError</code>: a signature could not be made, read or verified, or a KMS refused a sign or
 public-key request; never retried;</li>
 <li><code>LegacyFormat</code>: a stored value in a layout of 0.29 or earlier, which only the
-<code>legacy-formats</code> feature reads, see <a href="./formats.html#values-written-by-029-and-earlier">Formats</a>.</li>
+<code>legacy-formats</code> feature reads, see <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</li>
 </ul>
 <p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a <code>_</code> arm.</p>
 <h2 id="codes"><a class="header" href="#codes">Codes</a></h2>
@@ -329,7 +330,7 @@ text may change in any release.</p>
 <tr><td><code>InvalidIdentifier</code></td><td><code>INVALID_IDENTIFIER</code></td><td>a keyring id, an AAD part or a store name that breaks the rule of its type</td></tr>
 <tr><td><code>RecordMissing</code></td><td><code>RECORD_MISSING</code></td><td>no record for the keyring: at <code>open</code> and <code>admin</code>, before an administrative write, and from <code>reload</code> once the process took the record as deleted, see <a href="./keyring/record-cache.html#a-record-gone-from-the-store">A record gone from the store</a>. A <code>dangerously_shred()</code> of a keyring already gone returns <code>Ok</code></td></tr>
 <tr><td><code>RecordExists</code></td><td><code>RECORD_EXISTS</code></td><td><code>create</code> found a record</td></tr>
-<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (<code>DuplicateEncryptedDek</code>) or a <code>signature</code> member that is not a detached signature (<code>MalformedSignature</code>), see <a href="./formats.html#keyring-records">Keyring records</a></td></tr>
+<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (<code>DuplicateEncryptedDek</code>) or a <code>signature</code> member that is not a detached signature (<code>MalformedSignature</code>), see <a href="./formats/keyring-records.html#keyring-records">Keyring records</a></td></tr>
 <tr><td><code>RecordUnsigned</code></td><td><code>RECORD_UNSIGNED</code></td><td>an unsigned record where record verification is <code>Required</code>, or where a signing admin writes over it, see <a href="./signing.html#signing-the-keyring-record">Signing the keyring record</a></td></tr>
 <tr><td><code>RecordSignatureInvalid</code></td><td><code>RECORD_SIGNATURE_INVALID</code></td><td>a record whose signature fails under the verifying keys, or that is signed where the registry has no key; the cause carries the signature error’s code</td></tr>
 <tr><td><code>RecordSignerMissing</code></td><td><code>RECORD_SIGNER_MISSING</code></td><td>a write by an administration without a record signer over a signed record, before any store write</td></tr>
@@ -374,7 +375,7 @@ error in <code>root_cause</code>;</li>
 <p>No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in <code>Display</code> or in <code>Debug</code>. An application can log errors with <code>{}</code> and <code>{:?}</code>. A
 <code>JsonEncoded</code> value that does not decode also logs a redacted outline of its JSON, see
-<a href="./observability.html#json-that-does-not-decode">Observability</a>.</p>
+<a href="./observability/spans-and-events.html#json-that-does-not-decode">Observability</a>.</p>
 <p><code>message</code> is meant for a person reading logs. <code>public</code> holds the code, the part safe to return to
 the application’s own callers, and it is <code>Serialize</code> and <code>Deserialize</code>.
 <code>std::error::Error::source()</code> returns the root cause, the error of the SDK or library that
@@ -384,7 +385,7 @@ failed, when there is one.</p>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-                            <a rel="prev" href="formats.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                            <a rel="prev" href="formats/keyring-records.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                                 <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                             </a>
 
@@ -398,7 +399,7 @@ failed, when there is one.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-                    <a rel="prev" href="formats.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                    <a rel="prev" href="formats/keyring-records.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
                         <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
                     </a>
 

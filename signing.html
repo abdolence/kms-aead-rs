@@ -28,6 +28,7 @@
         <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="ayu-highlight-3fdfc3ac.css">
 
         <!-- Custom theme stylesheets -->
+        <link rel="stylesheet" href="theme/tables-f383538c.css">
 
 
         <!-- Provide site root and default themes to javascript -->
@@ -35,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-cf763c17.js";
+            window.path_to_searchindex_js = "searchindex-eea81289.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-a4ca9268.js"></script>
+        <script src="toc-add654e4.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -282,7 +283,7 @@ then decodes and returns its payload. MACs have the same pair: a detached <code>
 <code>verify_mac</code> on a keyring, and an attached <code>WithMac&lt;T&gt;</code>, which <code>mac_attached</code> computes and
 <code>verify_with_mac</code> checks before it returns the payload. The four types are stored as <code>Encrypted</code>
 is, with serde, <code>postgres</code> and <code>sqlx</code>, and none implements <code>PartialEq</code>. The bytes are in
-<a href="./formats.html#signatures-and-macs">Formats</a>.</p>
+<a href="./formats/signatures-and-macs.html">Formats</a>.</p>
 <h2 id="another-encoding"><a class="header" href="#another-encoding">Another encoding</a></h2>
 <p>A type whose payload is not JSON implements <code>Signable</code> itself: <code>to_payload</code> returns the bytes that
 are signed, and <code>from_payload</code> decodes the bytes of an attached value after they verified. Both
@@ -439,7 +440,7 @@ async function keyIdOf(jwk) {
 </code></pre>
 <p>An attached value is split first: <code>w</code> is the big-endian <code>u16</code> at bytes 5 and 6, the signature the
 <code>w</code> bytes after it, and the payload the rest; verify before using the payload. The test vectors of
-<a href="./formats.html#signature-and-mac-test-vectors">Formats</a> run against this code in CI.</p>
+<a href="./formats/signatures-and-macs.html#signature-and-mac-test-vectors">Formats</a> run against this code in CI.</p>
 <h2 id="macs-in-a-keyring"><a class="header" href="#macs-in-a-keyring">MACs in a keyring</a></h2>
 <p>A keyring holds MAC key versions beside its other versions, under the purpose <code>Mac</code>: HMAC-SHA256
 keys of 32 bytes or HMAC-SHA512 keys of 64 bytes, encrypted by the KEK as every DEK is, with the
@@ -572,7 +573,7 @@ assert!(admin.keyring().record().signature().is_some());
 </span><span class="boring">}</span></code></pre>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs">here</a>.
-The signed bytes are in <a href="./formats.html#the-signed-keyring-record">Formats</a>.</p>
+The signed bytes are in <a href="./formats/signatures-and-macs.html#the-signed-keyring-record">Formats</a>.</p>
 <p>Move an existing deployment in this order:</p>
 <ol>
 <li>move every administrative binary to 0.31, since a 0.30 administrative write removes the
