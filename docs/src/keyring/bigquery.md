@@ -226,27 +226,9 @@ the old bytes in every query and column that holds them before the old version i
 
 ### Queries
 
-Every value reaches the query as a parameter: `@kms_key` is the export's `key_uri()`, each
-keyset parameter its `value()`, and `@email` the address an equality query looks for:
-
-```sql
--- Randomised values, with a Readable(Randomized) keyset
-SELECT AEAD.DECRYPT_STRING(
-  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
-FROM users u;
-
--- Deterministic values, with a Readable(Deterministic) or Single keyset
-SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
-FROM users u;
-
--- An equality query: one probe per deterministic version, each with its Single keyset
-SELECT u.id
-FROM users u
-WHERE u.email_det IN (
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
-  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
-);
-```
+Every value reaches a query as a parameter: `@kms_key` is the export's `key_uri()` and each keyset
+parameter its `value()`. The queries are in
+[Query keyring values in BigQuery](../use-cases/bigquery-and-tink.md#query-keyring-values-in-bigquery).
 
 The probes in BigQuery are those of the active and decrypt-only versions. A pending version has
 no `Single` keyset, and no value is encrypted under it before its promotion.
@@ -336,27 +318,8 @@ registry.shutdown(None).await;
 # }
 ```
 
-Tink for Python reads the keyset with the KMS client of that URI, and decrypts a randomised value
-with the value's default AAD as UTF-8:
-
-```python
-import tink
-from tink import aead
-from tink.integration import gcpkms
-
-aead.register()
-key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
-with open('tenant-42.keyset', 'rb') as keyset_file:
-  keyset_handle = tink.read_keyset_handle(
-      tink.BinaryKeysetReader(keyset_file.read()),
-      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
-  )
-email_aead = keyset_handle.primitive(aead.Aead)
-
-
-def decrypt_email(value: bytes, user_id: str) -> str:
-  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
-```
+A Tink reader decrypts a randomised value with the value's default AAD as UTF-8, see
+[Read a keyring export with Tink for Python](../use-cases/bigquery-and-tink.md#read-a-keyring-export-with-tink-for-python).
 
 The selection, the fresh read of the record and the rights are those of the BigQuery export. The
 algorithms are those of [Fields Tink reads](#fields-tink-reads): a selected ChaCha20-Poly1305 or

@@ -56,3 +56,54 @@ An exported keyset holds the keys of the versions it selects, so treat it as a c
 record's readable versions, see [Keyring limits](../security.md#keyring-limits). BigQuery cannot
 calculate a beacon: a beacon lookup in BigQuery matches beacons the application calculated, see
 [BigQuery](../beacons.md#bigquery).
+
+## Query keyring values in BigQuery
+
+Every value reaches the query as a parameter: `@kms_key` is the export's `key_uri()`, each
+keyset parameter its `value()`, and `@email` the address an equality query looks for. The
+requirements of a query are in [Queries](../keyring/bigquery.md#queries):
+
+```sql
+-- Randomised values, with a Readable(Randomized) keyset
+SELECT AEAD.DECRYPT_STRING(
+  KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_enc, CONCAT('user/', u.id, '/email'))
+FROM users u;
+
+-- Deterministic values, with a Readable(Deterministic) or Single keyset
+SELECT DETERMINISTIC_DECRYPT_STRING(KEYS.KEYSET_CHAIN(@kms_key, @keyset), u.email_det, 'user/email')
+FROM users u;
+
+-- An equality query: one probe per deterministic version, each with its Single keyset
+SELECT u.id
+FROM users u
+WHERE u.email_det IN (
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d2), @email, 'user/email'),
+  DETERMINISTIC_ENCRYPT(KEYS.KEYSET_CHAIN(@kms_key, @keyset_d1), @email, 'user/email')
+);
+```
+
+## Read a keyring export with Tink for Python
+
+Tink for Python reads the keyset that `export_tink_keyset` wrote, such as `tenant-42.keyset` of
+[Exporting a keyset to Tink](../keyring/bigquery.md#exporting-a-keyset-to-tink), with the KMS
+client of the key URI the export returned, and decrypts a randomised value with the value's default
+AAD as UTF-8:
+
+```python
+import tink
+from tink import aead
+from tink.integration import gcpkms
+
+aead.register()
+key_uri = 'gcp-kms://projects/my-project/locations/europe-north1/keyRings/my-key-ring/cryptoKeys/my-key'
+with open('tenant-42.keyset', 'rb') as keyset_file:
+  keyset_handle = tink.read_keyset_handle(
+      tink.BinaryKeysetReader(keyset_file.read()),
+      gcpkms.GcpKmsClient(key_uri).get_aead(key_uri),
+  )
+email_aead = keyset_handle.primitive(aead.Aead)
+
+
+def decrypt_email(value: bytes, user_id: str) -> str:
+  return email_aead.decrypt(value, f'user/{user_id}/email'.encode()).decode()
+```

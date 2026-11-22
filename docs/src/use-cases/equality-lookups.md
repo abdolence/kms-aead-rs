@@ -63,4 +63,4 @@ Each rotation of a deterministic or beacon version adds a probe to every lookup 
    equal beacon never proves an equal value.
 
 A deterministic field in BigQuery is queried in SQL, with one `DETERMINISTIC_ENCRYPT` per version,
-see [Queries](../keyring/bigquery.md#queries).
+see [Query keyring values in BigQuery](./bigquery-and-tink.md#query-keyring-values-in-bigquery).
