@@ -38,7 +38,7 @@ let envelope = KmsAeadEnvelope::<GcpKmsProvider, AwsLc>::new(provider)?;
 Each provider names its configured KEK on every decryption, so a DEK encrypted under another KEK
 fails at the KMS and never decrypts a value. `provider.kek()` returns that KEK as a `KekRef`: the
 KMS and the key name. It is also the `provider` and `key` field of the [KMS
-spans](./observability.md) and the key of the [DEK cache](./dek-caching.md). Nothing else is
+spans](./observability/spans-and-events.md) and the key of the [DEK cache](./dek-caching.md). Nothing else is
 checked: an encrypted DEK carries no context that the KMS authenticates, see [Security
 considerations](./security.md#threat-model).
 

@@ -80,6 +80,8 @@
   - [Keyring records and keysets](./formats/keyring-records.md)
 - [Error handling](./errors.md)
 - [Observability](./observability.md)
+  - [Spans and events](./observability/spans-and-events.md)
+  - [Metrics](./observability/metrics.md)
 - [Security considerations](./security.md)
 
 # Upgrading

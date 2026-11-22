@@ -5,9 +5,9 @@ key version and for the two rotations.
 
 ## What to alert on
 
-The events are logged through tracing, see [Keyring events](../observability.md#keyring-events)
-and [Events](../observability.md#events), and the metrics need the `opentelemetry` feature, see
-[Metrics](../observability.md#metrics).
+The events are logged through tracing, see [Keyring events](../observability/spans-and-events.md#keyring-events)
+and [Events](../observability/spans-and-events.md#events), and the metrics need the `opentelemetry` feature, see
+[Metrics](../observability/metrics.md#metrics).
 
 | Signal | What it means | Next step |
 |---|---|---|
@@ -36,7 +36,7 @@ Without a keyring, the rows of kms-aead apply: `error.type` on `kms_aead.operati
 ## Alerting on volume
 
 With the `opentelemetry` feature, the keyring records the plaintext size of each value it encrypts
-under each version, see [Metrics](../observability.md#metrics): the histogram's count is the
+under each version, see [Metrics](../observability/metrics.md#metrics): the histogram's count is the
 values, and its sum their bytes. Each process records its own, and the alert sums them across the
 fleet. Here at half of 2^32 values and of 2^38 bytes per version, in PromQL over the Prometheus
 export, with the range covering the version's life:
@@ -73,7 +73,7 @@ names, as in [Staging a rotation](./rotation.md#rotation-cadence).
 - the values and bytes per version, which say when the next rotation is due, see
   [Alerting on volume](#alerting-on-volume).
 
-The metrics need the `opentelemetry` feature, see [Metrics](../observability.md#metrics).
+The metrics need the `opentelemetry` feature, see [Metrics](../observability/metrics.md#metrics).
 
 ## During a KEK rotation
 

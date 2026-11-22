@@ -223,7 +223,7 @@ The whole procedure, with the application's own DEKs and keysets, is in
 A `None` among the versions in use stands for the DEKs whose KMS reported no version: every DEK
 under AWS KMS, and under a KMS with versions, a version that is unknown, as with an application's
 own provider that returns none. A Cloud KMS or Vault Transit response without a key version is
-logged at `WARN`, see [Events](../observability.md#events). `reencrypt_deks` keeps such a DEK at
+logged at `WARN`, see [Events](../observability/spans-and-events.md#events). `reencrypt_deks` keeps such a DEK at
 `None`, so the check before the disable never passes. The procedure in
 [Re-encrypt DEKs after a KEK rotation](./reencrypt-deks.md)
 then goes from step 2 to step 4, and the check after the disable, step 6, is the only one.

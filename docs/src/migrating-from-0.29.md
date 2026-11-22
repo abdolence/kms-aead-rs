@@ -260,7 +260,7 @@ Without the feature, reading them fails with `KmsAeadError::LegacyFormat`, the c
 
 The error never echoes the bytes read. With the feature, the first read of each layout in a
 process logs one `WARN` event that names the upgrade methods. Without it, the `KMS AEAD decrypt`
-spans of such values record `error_code=LEGACY_FORMAT`, see [Observability](./observability.md).
+spans of such values record `error_code=LEGACY_FORMAT`, see [Observability](./observability/spans-and-events.md).
 
 ## Upgrading stored values
 

@@ -195,7 +195,7 @@ The other variants fail the same way until the record, the configuration or the 
 No error carries plaintext, key material in any form, plaintext or encrypted, AAD content or cipher
 text bytes, in `Display` or in `Debug`. An application can log errors with `{}` and `{:?}`. A
 `JsonEncoded` value that does not decode also logs a redacted outline of its JSON, see
-[Observability](./observability.md#json-that-does-not-decode).
+[Observability](./observability/spans-and-events.md#json-that-does-not-decode).
 
 `message` is meant for a person reading logs. `public` holds the code, the part safe to return to
 the application's own callers, and it is `Serialize` and `Deserialize`.

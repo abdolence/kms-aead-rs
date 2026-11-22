@@ -66,4 +66,4 @@ A keyring stays open until the registry shuts down, so a process holds every key
   in each `reencrypt_deks`. A KEK rotation re-encrypts every keyring under the KEK, see
   [The KMS decrypt burst](../production/rotation.md#the-kms-decrypt-burst);
 - **metrics**: the plaintext size histogram has a series per keyring and version, see
-  [Metrics](../observability.md#metrics) for its cardinality limit.
+  [Metrics](../observability/metrics.md#metrics) for its cardinality limit.

@@ -118,4 +118,4 @@ The classes of bytes that do not start as JSON are `empty`, `whitespace only`, `
 
 `JsonEncoded<T, P>` applies the same policies to the JSON that fails to decode after an encrypted
 value is opened, see [JSON that does not decode](../stored-values.md#json-that-does-not-decode). The
-event it logs is in [Observability](../observability.md#json-that-does-not-decode).
+event it logs is in [Observability](../observability/spans-and-events.md#json-that-does-not-decode).

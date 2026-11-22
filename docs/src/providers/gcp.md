@@ -83,7 +83,7 @@ disabled", for several hours in exceptional cases. So:
 - start the sweep only once the new primary version has propagated. The `kek_version()` of the
   encrypted DEK an encryption returns, and the `kek_version` field of the `KMS encrypt DEK` span,
   name the version Cloud KMS encrypted with, the `N` of `cryptoKeyVersions/N`, see
-  [Observability](../observability.md). A keyring whose `reencrypt_deks` ran before the new
+  [Observability](../observability/spans-and-events.md). A keyring whose `reencrypt_deks` ran before the new
   primary version had propagated still lists the old version among its `kek_versions_in_use`:
   run `reencrypt_deks` again, see [Re-encrypting a keyring's DEKs](../production/rotation.md#re-encrypting-a-keyrings-deks);
 - run the check only once the disable has propagated, and run it again before destroying the

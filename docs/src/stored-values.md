@@ -464,7 +464,7 @@ The outline names the field and the value that differs, and shows the length of 
 nothing else of it. A plaintext is encrypted because it is secret, so a policy reveals codes and
 identifiers only. A revealed value goes to the logs whenever the JSON does not decode: never reveal
 personal data. `kms_aead::json=off` in an `EnvFilter` turns the event off. The event's fields are
-in [Observability](./observability.md#json-that-does-not-decode). `RedactedJson` outlines any JSON
+in [Observability](./observability/spans-and-events.md#json-that-does-not-decode). `RedactedJson` outlines any JSON
 the same way, with no encryption, see
 [Log JSON payloads without leaking data](./use-cases/log-json-payloads.md).
 

@@ -2,7 +2,7 @@
 
 `KmsAeadEnvelope` encrypts values under data encryption keys (DEKs) on the crypto backend it is
 built with, and encrypts the DEKs with the KEK of its provider. A call that makes no KMS call is not
-`async`, and every call opens one `DEBUG` span, see [Observability](./observability.md).
+`async`, and every call opens one `DEBUG` span, see [Observability](./observability/spans-and-events.md).
 
 ```rust
 use kms_aead::backends::Ring;

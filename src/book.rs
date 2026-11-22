@@ -59,8 +59,11 @@ mod formats_values {}
 #[doc = include_str!("../docs/src/errors.md")]
 mod errors {}
 
-#[doc = include_str!("../docs/src/observability.md")]
-mod observability {}
+#[doc = include_str!("../docs/src/observability/spans-and-events.md")]
+mod observability_spans_and_events {}
+
+#[doc = include_str!("../docs/src/observability/metrics.md")]
+mod observability_metrics {}
 
 #[doc = include_str!("../docs/src/security.md")]
 mod security {}

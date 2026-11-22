@@ -29,7 +29,7 @@ The crate has no default features.
 | `legacy-formats` | reads the layouts written by 0.29 and earlier. Deprecated, see [Migrating from 0.29](./migrating-from-0.29.md#values-written-by-029-and-earlier) |
 | `postgres` | `ToSql` and `FromSql` of postgres-types for `Encrypted`, as `BYTEA`, for tokio-postgres |
 | `sqlx` | sqlx's PostgreSQL traits for `Encrypted`, as `BYTEA`, without a sqlx runtime or TLS stack |
-| `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value encrypted and decrypted, and the time each call, KMS request and keyring store read takes, see [Metrics](./observability.md#metrics) |
+| `opentelemetry` | OpenTelemetry metrics on the API crate only (no SDK): the plaintext size of each value encrypted and decrypted, and the time each call, KMS request and keyring store read takes, see [Metrics](./observability/metrics.md#metrics) |
 
 The local KMS provider, `LocalKmsProvider`, is in every build and needs no feature.
 
@@ -82,7 +82,7 @@ The crate has no default features.
 | `sqlx` | `Encrypted` and `EncryptionMarker` in sqlx on PostgreSQL, as `BYTEA` |
 | `stream` | kms-aead's `stream`, `Encryptor::stream_encryptor`, `Keyring::stream_decryptor`, `decrypting_stream` and `decrypting_reader`, and the `stream` module re-exported. Needs a backend feature, see [Streaming encryption](./streaming.md) |
 | `bigquery-export` | `admin`, and `export_bigquery_keyset`, see [Exporting a keyset to BigQuery](./keyring/bigquery.md#exporting-a-keyset-to-bigquery) |
-| `opentelemetry` | kms-aead's `opentelemetry`, with the keyring's calls recorded per keyring and key version, see [Metrics](./observability.md#metrics) |
+| `opentelemetry` | kms-aead's `opentelemetry`, with the keyring's calls recorded per keyring and key version, see [Metrics](./observability/metrics.md#metrics) |
 
 Beacons need no feature, and `export_tink_keyset` needs `admin` only. The KMS providers come from
 kms-aead and its provider features, and secret-vault-value's `SecretValue` is what an application
