@@ -34,7 +34,7 @@ struct ObjectStore {
 
 impl ObjectStore {
     /// The object in frames of 8,000 bytes, as a download streams it.
-    fn download(&self) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin {
+    fn download(&self) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin + use<> {
         let frames: Vec<Bytes> = self
             .object
             .chunks(8_000)

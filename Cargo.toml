@@ -2,7 +2,7 @@
 name = "kms-aead"
 version = "0.33.0"
 authors = ["Abdulla Abdurakhmanov <me@abdolence.dev>"]
-edition = "2021"
+edition = "2024"
 rust-version.workspace = true
 license = "Apache-2.0"
 description = "Envelope encryption with Google Cloud KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KEK, in Tink's formats: typed fields, deterministic AEAD and beacons, on ring, aws-lc-rs or RustCrypto"

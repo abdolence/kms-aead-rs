@@ -315,11 +315,10 @@ impl KeyringRecord {
                 return Err(RecordInvalidReason::OrdinalOrder(key_id));
             }
             *last = Some(key_id);
-            if let Some(encrypted_dek) = version.encrypted_dek() {
-                if !seen_deks.insert(encrypted_dek.value()) {
+            if let Some(encrypted_dek) = version.encrypted_dek()
+                && !seen_deks.insert(encrypted_dek.value()) {
                     return Err(RecordInvalidReason::DuplicateEncryptedDek(key_id));
                 }
-            }
         }
         for purpose in Purpose::ALL {
             let in_state = |state| {

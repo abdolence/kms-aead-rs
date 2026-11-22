@@ -98,14 +98,13 @@ impl HttpClient for CannedHttpClient {
                 Vec::new(),
             ));
         }
-        if let Body::Bytes(body) = request.body() {
-            if !body.is_empty() {
+        if let Body::Bytes(body) = request.body()
+            && !body.is_empty() {
                 self.request_bodies
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .push(body.to_vec());
             }
-        }
         headers.insert(headers::CONTENT_TYPE, "application/json");
         Ok(AsyncRawResponse::from_bytes(
             self.status,

@@ -1350,7 +1350,7 @@ fn one_decryptor_serves_ranges_and_a_reader_at_once() -> TestResult {
 fn counted(
     items: Vec<Bytes>,
     taken: &Arc<AtomicUsize>,
-) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin {
+) -> impl Stream<Item = Result<Bytes, io::Error>> + Unpin + use<> {
     let taken = taken.clone();
     stream::iter(items).map(move |item| {
         taken.fetch_add(1, Ordering::SeqCst);

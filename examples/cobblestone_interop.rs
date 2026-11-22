@@ -47,7 +47,7 @@ async fn main() -> Result<(), Failure> {
     }
 }
 
-fn frames(bytes: &[u8]) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Unpin {
+fn frames(bytes: &[u8]) -> impl futures::Stream<Item = Result<Bytes, std::io::Error>> + Unpin + use<> {
     stream::iter(
         bytes
             .chunks(FRAME_LEN)

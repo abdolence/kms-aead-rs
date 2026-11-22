@@ -136,14 +136,13 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
     /// The cached record, revalidated first when it is older than the TTL and no other call is
     /// refreshing it.
     pub(crate) async fn current(&self) -> Arc<KeyringRecord> {
-        if self.revalidation_due() {
-            if let Ok(refresh) = self.refresh.try_lock() {
+        if self.revalidation_due()
+            && let Ok(refresh) = self.refresh.try_lock() {
                 // Another call may have revalidated between the check and the lock.
                 if self.revalidation_due() {
                     self.revalidate(&refresh, LoadReason::Ttl).await;
                 }
             }
-        }
         self.record()
     }
 
@@ -505,13 +504,12 @@ impl<S: KeyringStore, B: AeadBackend> RecordCache<S, B> {
                 edit.destroy_all(Timestamp::now());
                 self.swap(&refresh, signer, edit, &stored.revision).await?
             };
-            if let Some(revision) = revision {
-                if self.store.delete(&self.id, &revision).await? == Deletion::Deleted {
+            if let Some(revision) = revision
+                && self.store.delete(&self.id, &revision).await? == Deletion::Deleted {
                     self.take_deletion(&refresh, Found::Shredded)?;
                     spans::record_cas_retries(conflicts);
                     return Ok(());
                 }
-            }
             spans::write_conflict(&self.id, conflicts.saturating_add(1));
         }
         Err(self.conflict(cas_retries))

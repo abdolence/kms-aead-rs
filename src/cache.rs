@@ -337,11 +337,10 @@ impl Snapshot {
     ) -> Self {
         let mut slots = self.slots.clone();
         slots.remove(&encrypted_dek);
-        if let Some(oldest) = self.oldest.as_ref() {
-            if slots.len() >= max_entries.get() {
+        if let Some(oldest) = self.oldest.as_ref()
+            && slots.len() >= max_entries.get() {
                 slots.retain(|_, cached| !Arc::ptr_eq(cached, oldest));
             }
-        }
         slots.insert(encrypted_dek, slot);
         slots.into()
     }

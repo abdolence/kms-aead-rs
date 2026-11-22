@@ -281,11 +281,10 @@ impl DekReuse {
         if let Some(current) = self.claim(len) {
             return Ok(ClaimedDek::Claimed(current));
         }
-        if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival {
-            if let Some(error) = &*last_failure {
+        if self.ended_renewals.load(Ordering::Relaxed) != ended_on_arrival
+            && let Some(error) = &*last_failure {
                 return Err(error.clone());
             }
-        }
         let renewed = renew().await;
         self.ended_renewals.fetch_add(1, Ordering::Relaxed);
         match renewed {

@@ -6,7 +6,7 @@ title = "KMS envelope encryption for Rust"
 description = "Envelope encryption for Rust with GCP KMS, AWS KMS, Azure Key Vault, HashiCorp Vault Transit or a local KMS, on ring, aws-lc-rs or RustCrypto"
 
 [rust]
-edition = "2021"
+edition = "2024"
 
 [build]
 build-dir = "output"
