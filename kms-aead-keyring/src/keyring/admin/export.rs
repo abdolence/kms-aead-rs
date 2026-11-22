@@ -722,7 +722,7 @@ mod tests {
     /// the call exists on an admin that signs its records.
     #[cfg(feature = "bigquery-export")]
     #[test]
-    fn a_signing_admin_exports_a_bigquery_keyset() {
+    fn export_bigquery_keyset_is_on_a_signing_admin() {
         use kms_aead::providers::LocalSigningProvider;
         use kms_aead::signing::Signer;
 
