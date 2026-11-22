@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2313879a.js";
+            window.path_to_searchindex_js = "searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -211,7 +211,6 @@ keyring store and optional modes; the choice of a provider and a backend is in
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds <code>p256</code> and <code>ed25519-dalek</code> for signatures, and <code>rsa</code> for RSA-OAEP, see <a href="./asymmetric-kek.html#what-each-backend-does">Asymmetric KEKs</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="./deterministic.html">Deterministic encryption</a></td></tr>
 <tr><td><code>stream</code></td><td>streaming encryption of values of any length, see the notes below. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
-<tr><td><code>legacy-formats</code></td><td>reads the legacy envelope and DEK layouts. Deprecated, see <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
 <tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK), see the notes below and <a href="./observability/metrics.html#metrics">Metrics</a></td></tr>

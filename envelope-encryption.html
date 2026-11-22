@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2313879a.js";
+            window.path_to_searchindex_js = "searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -363,9 +363,8 @@ their values, such as those of the <code>*_with_encrypted_dek</code> calls, of b
 fields, and for a DEK that many values share.</li>
 </ul>
 <p>Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
-cache. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>: <code>upgrade_legacy_value</code> and
-<code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, see
-<a href="./migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>.</p>
+cache. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>, see
+<a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in <a href="./production/reencrypt-deks.html">Re-encrypt DEKs after a KEK rotation</a>.</p>
 

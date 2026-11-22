@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -252,7 +252,11 @@ application.open(local_kek()?, TENANT).await?;
 </span><span class="boring">}</span></code></pre>
 <p>A new keyring is signed from its first write with <code>create_signed</code> or <code>open_or_create_signed</code>. The
 administration re-signs the record on every write it makes: <code>rotate</code>, <code>promote</code>,
-<code>dangerously_shred()</code> and the rest need the signer’s KMS right, <code>cloudkms.cryptoKeyVersions.useToSign</code> on Cloud KMS.</p>
+<code>dangerously_shred()</code> and the rest need the signer’s KMS right, <code>cloudkms.cryptoKeyVersions.useToSign</code> on Cloud KMS.
+Under <code>Required</code>, a registry writes no record without a signer: <code>create</code>, <code>open_or_create</code> where it
+would create the record, and every write of an administration without a signer fail with
+<code>RECORD_SIGNER_MISSING</code> before any KMS call or store write. <code>open_or_create</code> reads the store once
+first, and refuses only when that read finds no record.</p>
 <h2 id="rotate-the-signing-key"><a class="header" href="#rotate-the-signing-key">Rotate the signing key</a></h2>
 <p>Add the new public key to every registry’s set first, then run <code>sign_record</code> on every keyring with
 the new signer. Remove the old key from the sets once every keyring is signed by the new one. The
@@ -278,16 +282,18 @@ backwards with <code>RECORD_REGRESSED</code>, and a process that has just starte
 Keep backups and the store’s version history to compare against, see
 <a href="../security.html#keyring-deployment">Keyring deployment</a>.</p>
 <h2 id="stop-signing"><a class="header" href="#stop-signing">Stop signing</a></h2>
-<p>Switch every reader to <code>VerifyIfSigned</code>, write the record unsigned with
-<code>dangerously_unsign_record</code> on an administration without a signer, then restart the readers: the
-running ones refuse the unsigned record until they do.</p>
+<p>Switch every reader to <code>VerifyIfSigned</code>, the administration’s registry included, write the record
+unsigned with <code>dangerously_unsign_record</code> on an administration without a signer, then restart the
+readers: the running ones refuse the unsigned record until they do. Under <code>Required</code>,
+<code>dangerously_unsign_record</code> fails with <code>RECORD_SIGNER_MISSING</code>.</p>
 <h2 id="what-to-watch-for"><a class="header" href="#what-to-watch-for">What to watch for</a></h2>
 <ul>
 <li>Whoever may sign records and write the store may write any record. Give the signing right to the
 administration only, and read its audit log;</li>
 <li>a keyring under an asymmetric KEK runs with <code>Required</code> on every application before the first DEK
 a public key encrypts, see <a href="../use-cases/write-only-producers.html">Accept data from partners and devices that cannot read it back</a>;</li>
-<li>an administration without a signer is refused over a signed record with <code>RECORD_SIGNER_MISSING</code>.</li>
+<li>an administration without a signer is refused over a signed record with <code>RECORD_SIGNER_MISSING</code>,
+and under <code>Required</code> it writes nothing.</li>
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs">here</a>.</p>

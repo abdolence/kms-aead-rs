@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2313879a.js";
+            window.path_to_searchindex_js = "searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -216,18 +216,17 @@ algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decryp
 <tr><td><a href="./formats/signatures-and-macs.html">Attached MAC</a></td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>current</td></tr>
 <tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink keyset</a></td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery; kms-aead-keyring writes it too</td><td>current</td></tr>
 <tr><td><a href="./formats/keyring-records.html#tink-keysets-and-the-tink-prefix">Tink encrypted keyset</a></td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key; kms-aead-keyring writes it too</td><td>current</td></tr>
-<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets in early releases</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy, except under Azure, which still writes it</td></tr>
+<tr><td>Envelope layout v1</td><td>none</td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Encrypted DEK layout v1</td><td>none</td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Length-prefixed envelope</td><td>none</td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets in early releases</td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead 0.33 and earlier, and kms-aead under Azure</td><td>legacy, except under Azure, which still writes it</td></tr>
 </tbody>
 </table>
 </div>
 <p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
 provider encrypts the raw DEK, see <a href="./formats/values.html#encrypted-deks">Encrypted DEKs</a>.</p>
-<p>The legacy layouts are read only with the deprecated <code>legacy-formats</code> feature. The reading rules and
-the upgrade of stored values are in
-<a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
+<p>The library refuses the legacy layouts with <code>LEGACY_FORMAT</code>. How kms-aead 0.33 rewrites stored
+values in them is in <a href="./migrating-from-0.29.html#old-values">Migrating from 0.29</a>.</p>
 <h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
 <p>The first bytes of a stored value:</p>
 <div class="table-wrapper">
@@ -262,9 +261,8 @@ with its random salt, so the call names the form, as <code>decrypt_bare</code> d
 <li>envelope streamed values and Tink envelopes: both start with <code>[w][encrypted DEK]</code>, so the
 layout is recorded outside the value, as for bare values;</li>
 <li>legacy encrypted DEKs of layout v1 and current ones: <code>0xFF 0x01</code> starts no encrypted DEK of a
-built-in provider, so the library tells them apart for those. It never inspects the bytes of an
-application’s own provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its legacy keys
-before reading them.</li>
+built-in provider, so the library tells them apart for those and refuses the legacy ones before
+the KMS call. It never inspects the bytes of an application’s own provider.</li>
 </ul>
 
                     </main>

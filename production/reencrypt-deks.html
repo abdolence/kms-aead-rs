@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -317,9 +317,8 @@ value, and the checks of steps 3 and 6 find it if its DEK is still under the old
 values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
 each on a cache miss afterwards. The same <code>reencrypt_encrypted_dek</code> re-encrypts the DEKs stored
 apart from their values, such as those of the <code>*_with_encrypted_dek</code> calls, of beacons and of
-deterministic fields. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>:
-<code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, with its DEK
-under the current version, see <a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>.</p>
+deterministic fields. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>, see
+<a href="../migrating-from-0.29.html#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
 current version. The sweep needs KMS encrypt and decrypt on the KEK.</p>

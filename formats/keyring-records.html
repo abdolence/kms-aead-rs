@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -205,7 +205,7 @@ Tink for Go for Vault Transit keys too. A keyring exports it for its versions, s
 <a href="../keyring/bigquery.html#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>.</p>
 <h2 id="keyring-key-ids"><a class="header" href="#keyring-key-ids">Keyring key ids</a></h2>
 <p>kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
-under it. The two high bits of the id are the purpose, and the rest is the ordinal:</p>
+under it. The two high bits of the id are the purpose, and bits 0 to 23 are the ordinal:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -215,7 +215,8 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 <tr><td>31</td><td>set for deterministic versions, alone</td></tr>
 <tr><td>30</td><td>set for beacon versions, alone</td></tr>
 <tr><td>31 and 30</td><td>set for MAC versions</td></tr>
-<tr><td>0 to 29</td><td>the ordinal, from 1, counted per purpose</td></tr>
+<tr><td>24 to 29</td><td>reserved: clear in the id of every version</td></tr>
+<tr><td>0 to 23</td><td>the ordinal, from 1, counted per purpose</td></tr>
 </tbody>
 </table>
 </div>
@@ -226,11 +227,17 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 <li>beacon: <code>1073741825</code>, <code>1073741826</code>, …;</li>
 <li>MAC: <code>3221225473</code>, <code>3221225474</code>, ….</li>
 </ul>
-<p>An id whose ordinal is 0 is reserved: <code>0</code>, <code>2^30</code>, <code>2^31</code> and <code>2^31 + 2^30</code>. A value that carries
-one fails with <code>ReservedKeyId</code>. A value whose id is of another
-purpose than the call fails with <code>KeyPurposeMismatch</code>. Both fail before any store or KMS call. Ids
-are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
-a SQL column holding one is a <code>BIGINT</code>.</p>
+<p>Two kinds of id are reserved, and no version has one:</p>
+<ul>
+<li>an id whose ordinal is 0: <code>0</code>, <code>2^30</code>, <code>2^31</code> and <code>2^31 + 2^30</code>;</li>
+<li>an id with any of bits 24 to 29 set. These bits are kept for purposes a later release may add,
+so a reader refuses such an id rather than take it for a version of one of the four purposes.</li>
+</ul>
+<p>A value that carries a reserved id fails with <code>ReservedKeyId</code>, and a value whose id is of another
+purpose than the call fails with <code>KeyPurposeMismatch</code>. Both fail before any store or KMS call. A
+record that holds a reserved id fails with <code>RecordInvalid</code> and the reason <code>ReservedKeyId</code>. Each
+purpose has 2^24 - 1 ordinals, and ids are never reused: a destroyed version keeps its id in the
+record. A key id goes up to 2^32 - 1, so a SQL column holding one is a <code>BIGINT</code>.</p>
 <h2 id="keyring-records"><a class="header" href="#keyring-records">Keyring records</a></h2>
 <p>kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
 record with deterministic and beacon versions, after one randomised rotation and with another one
@@ -379,6 +386,13 @@ filed under a second id is refused where the record is read;</li>
 <li><code>seal_epochs</code> on every active, decrypt-only and retired version and on no pending one, open on
 the active version, starting at 1 or more and below its end, and within the <code>seal_epoch</code>.</li>
 </ul>
+<p>A reader reads past a member it does not know, at any depth, and keeps it in the canonical digest
+that a signature covers. An administrative write refuses a record that holds one, with
+<code>RecordInvalid</code> and the reason <code>UnknownMembers</code>, before it writes anything: the record it writes
+holds only the members its release knows, so the others would be lost, and a signing
+administration would sign what is left. Once a later release writes a member into a record, an
+administrative binary of an earlier release still reads the record and no longer writes it, until
+it moves to that release.</p>
 <h2 id="encryption-markers"><a class="header" href="#encryption-markers">Encryption markers</a></h2>
 <p>An encryption marker is the re-encryption epoch of the keyring record a write encrypted a
 record’s fields under, which the application stores beside them:</p>

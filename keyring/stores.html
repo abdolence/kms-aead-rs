@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -233,7 +233,9 @@ project, database and credentials it chooses. The version of the <code>firestore
 this crate’s API under the Firestore features.</p>
 <h3 id="storage-layout"><a class="header" href="#storage-layout">Storage layout</a></h3>
 <p>The record of a keyring is the document <code>kms_keyrings/&lt;keyring id&gt;</code>, whose fields are those of the
-record’s JSON. <code>with_collection</code> takes another collection than
+record’s JSON. A <code>null</code> member is a field of Firestore’s null type, so that the document reads back
+with the canonical digest that the record’s signature covers. <code>with_collection</code> takes another
+collection than
 <code>FirestoreKeyringStore::DEFAULT_COLLECTION</code>, as firestore-rs’s <code>FirestoreCollectionId</code>. A create fails when the document exists, and an
 update carries the update time it read as its precondition.</p>
 <h3 id="setup"><a class="header" href="#setup">Setup</a></h3>
@@ -521,6 +523,14 @@ first, since a record gone from the store reads as shredded and no shred deletes
 </li>
 <li>read a stored document with <code>KeyringRecord::from_json</code> and write one with
 <code>KeyringRecord::to_json</code>, so the document is the one every store keeps and every read checks it;</li>
+<li>keep every member of the document as written, <code>null</code> ones included. A record’s signature covers
+its canonical digest, and a store that maps the document into fields of its own can drop a
+<code>null</code> member, as firestore-rs does with a JSON <code>null</code>, which makes every signed record it holds
+fail with <code>RecordSignatureInvalid</code>. The conformance check
+<code>a_loaded_record_keeps_the_written_digest</code> holds every store to it, on a create and on an
+update;</li>
+<li>build the <code>Stored</code> that <code>load</code> and <code>revalidate</code> return with <code>Stored::new(record, revision)</code>,
+since the struct is <code>#[non_exhaustive]</code>;</li>
 <li>return the client’s errors as <code>KeyringError::Store</code>, with the client’s error as the root cause.
 Never format the record or the request into an error and never log either, since both carry
 encrypted DEKs.</li>

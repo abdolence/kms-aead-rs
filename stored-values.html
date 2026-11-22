@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2313879a.js";
+            window.path_to_searchindex_js = "searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -222,15 +222,16 @@ what a lookup by the encrypted value needs, see <a href="./deterministic.html">D
 </ul>
 <p>See <a href="./formats/values.html#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the layout and the shortest
 value of each format, and <a href="./migrating-from-0.29.html#values-written-by-029-and-earlier">Values written by 0.29 and
-earlier</a> for the legacy layouts.</p>
+earlier</a> for the legacy layouts, which
+the library refuses.</p>
 <h3 id="bytes-in-and-out"><a class="header" href="#bytes-in-and-out">Bytes in and out</a></h3>
 <p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
 lowercase hex. The only ways back are <code>Encrypted::try_from</code> for bytes and
 <code>Encrypted::try_from_hex_string</code> for hex in either case. Both check the bytes against the layout
 of <code>F</code> before any KMS call, so a truncated or foreign value fails when it is read, with
 <code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_HEX</code>, or <code>LEGACY_FORMAT</code> for
-a legacy layout without the <code>legacy-formats</code> feature. The check reads the framing only: a changed
-value fails to decrypt with <code>DECRYPT</code>.</p>
+a legacy layout. The check reads the framing only: a changed value fails to decrypt with
+<code>DECRYPT</code>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Randomized;
 use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, KeyId};

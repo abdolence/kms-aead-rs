@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -264,12 +264,12 @@ call has no <code>error.type</code>.</p>
 <tr><td></td><td><code>beacon</code></td><td>an envelope’s beacon</td></tr>
 <tr><td></td><td><code>generate_dek</code></td><td><code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code></td></tr>
 <tr><td></td><td><code>decrypt_dek</code></td><td><code>decrypt_deterministic_dek</code></td></tr>
-<tr><td></td><td><code>reencrypt_dek</code></td><td><code>reencrypt_dek</code>, <code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code></td></tr>
+<tr><td></td><td><code>reencrypt_dek</code></td><td><code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code></td></tr>
 <tr><td></td><td><code>stream_encrypt</code>, <code>stream_decrypt</code></td><td>the stream calls</td></tr>
 <tr><td></td><td><code>sign</code>, <code>verify</code>, <code>mac</code>, <code>verify_mac</code></td><td>a <code>Signer</code>, a <code>Verifier</code> and an <code>Authenticator</code></td></tr>
 <tr><td><code>kms_aead.operation</code> on <code>kms_aead.kms.duration</code></td><td><code>encrypt_dek</code>, <code>decrypt_dek</code>, <code>random</code>, <code>sign</code>, <code>public_key</code>, <code>encrypt_dek_with_public_key</code></td><td>the request to the KMS, or the local encryption with a public key</td></tr>
-<tr><td><code>kms_aead.mode</code></td><td><code>per_call</code>, <code>store_less</code></td><td>an envelope’s <code>encrypt</code>, <code>decrypt</code>, the stream calls, <code>reencrypt_dek</code> and <code>upgrade_legacy_value</code></td></tr>
-<tr><td></td><td><code>caller_dek</code></td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK, <code>reencrypt_encrypted_dek</code>, <code>upgrade_legacy_encrypted_dek</code>, and an <code>Authenticator</code>’s <code>mac</code> and <code>verify_mac</code></td></tr>
+<tr><td><code>kms_aead.mode</code></td><td><code>per_call</code>, <code>store_less</code></td><td>an envelope’s <code>encrypt</code>, <code>decrypt</code>, the stream calls and <code>reencrypt_dek</code></td></tr>
+<tr><td></td><td><code>caller_dek</code></td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK, <code>reencrypt_encrypted_dek</code>, and an <code>Authenticator</code>’s <code>mac</code> and <code>verify_mac</code></td></tr>
 <tr><td></td><td><code>signature</code></td><td>a <code>Signer</code> and a <code>Verifier</code></td></tr>
 <tr><td></td><td><code>keyring</code></td><td>a keyring’s calls</td></tr>
 </tbody>

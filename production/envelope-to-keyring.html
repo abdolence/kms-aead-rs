@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -238,8 +238,8 @@ outcome. An envelope value names no key version, so its outcome has <code>from_c
 };</code></pre>
 <p>The keyring’s provider decrypts the envelope values, so they must have been encrypted by the
 keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout <code>KmsAeadEnvelope</code> writes.
-Values in a legacy layout, which an old release wrote, are upgraded in place first, with
-<code>KmsAeadEnvelope::upgrade_legacy_value(aad, value)</code> under kms-aead’s <code>legacy-formats</code> feature, see
+Values in a legacy layout, which kms-aead 0.29 and earlier wrote, fail with <code>LEGACY_FORMAT</code>: they
+are rewritten in place first with kms-aead 0.33, see
 <a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
 the marker’s, never inferred from its bytes.</p>
 <p><code>decrypt_envelope_for_migration</code> decrypts whatever encrypted DEK an envelope value carries, under the

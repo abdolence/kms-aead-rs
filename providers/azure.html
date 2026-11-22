@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -328,8 +328,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 <span class="boring">let _ = jwk;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>AzureKmsSigningProvider::with_client_options</code> takes the settings of the Azure SDK, such as a
-custom HTTP transport or retry policy. Creating the provider sends no request and fails with
+<p><code>AzureKmsSigningProvider::with_options</code> takes <code>AzureKmsSigningProviderOptions</code>, whose
+<code>client_options</code> are the settings of the Azure SDK, such as a custom HTTP transport or retry
+policy, as <code>AzureKmsProviderOptions</code> has them. Creating the provider sends no request and fails with
 <code>AZURE_KEY_NAME</code> or <code>AZURE_VAULT_URL</code> as <code>AzureKmsProvider</code> does; <code>Signer::new</code> sends the first
 request.</p>
 <ul>

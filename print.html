@@ -37,7 +37,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-2313879a.js";
+            window.path_to_searchindex_js = "searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-add654e4.js"></script>
@@ -835,8 +835,9 @@ that needs either guarantee uses a KEK per tenant.</p>
 <a href="#the-registry-and-its-handles">The registry and its handles</a>;</li>
 <li><code>registry.open(provider, keyring_id)</code> for each tenant the process serves. A second open of an
 open keyring reads nothing from the store and shares the first one’s record and watch. The call
-takes the provider by value: <code>GcpKmsProvider</code> and <code>HcVaultTransitProvider</code> are <code>Clone</code>, and the
-other providers are built once per keyring;</li>
+takes the provider by value: one provider serves every keyring of its KEK as an <code>Arc&lt;P&gt;</code>, which
+implements the provider traits for every provider, or as a clone of a provider that is <code>Clone</code>,
+such as <code>GcpKmsProvider</code>, <code>AwsKmsProvider</code> and <code>HcVaultTransitProvider</code>;</li>
 <li>a <code>FieldSpec</code> constant per encrypted field, the same for every tenant, since each keyring
 has DEKs of its own, see <a href="#encrypted-fields-and-aad">Encrypted fields and AAD</a>;</li>
 <li>on every write, <code>keyring.encryptor()</code> and its <code>encrypt</code>, and the encryption marker it gives,
@@ -851,7 +852,9 @@ see <a href="#the-encryption-marker">The encryption marker</a>; on every read,
 <p>An application that creates a keyring on a tenant’s first request builds with the <code>admin</code> feature
 and runs with the administrative rights, so it is trusted as the administration is, see
 <a href="#permissions-applications-and-administration">Permissions: applications and administration</a> and
-<a href="#keyring-limits">Keyring limits</a>.</p>
+<a href="#keyring-limits">Keyring limits</a>. Under <code>RecordSignaturePolicy::Required</code> it holds
+the record signer too and calls <code>open_or_create_signed</code>: <code>open_or_create</code> fails with
+<code>RECORD_SIGNER_MISSING</code> where it would create the record.</p>
 <h3 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h3>
 <p>A keyring stays open until the registry shuts down, so a process holds every keyring it opened:</p>
 <ul>
@@ -2215,7 +2218,6 @@ that read the shred’s first write logs an <code>INFO</code> instead.</p>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
 <tr><td><code>WARN</code>: a record a sweep could not re-encrypt, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="#running-a-sweep">Running a sweep</a></td></tr>
-<tr><td><code>WARN</code>, once per process: the first read of a legacy layout</td><td>values not yet upgraded</td><td><a href="#upgrading-stored-values">Upgrading stored values</a></td></tr>
 </tbody>
 </table>
 </div>
@@ -2717,9 +2719,8 @@ value, and the checks of steps 3 and 6 find it if its DEK is still under the old
 values that shared a DEK would then cost one KMS encryption each in the sweep and one KMS decryption
 each on a cache miss afterwards. The same <code>reencrypt_encrypted_dek</code> re-encrypts the DEKs stored
 apart from their values, such as those of the <code>*_with_encrypted_dek</code> calls, of beacons and of
-deterministic fields. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>:
-<code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, with its DEK
-under the current version, see <a href="#upgrading-stored-values">Upgrading stored values</a>.</p>
+deterministic fields. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>, see
+<a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The DEK cache plays no part: the sweep decrypts through the provider and leaves the cache as it is,
 so it evicts no entry that serves reads. Every call encrypts again, also for a DEK already under the
 current version. The sweep needs KMS encrypt and decrypt on the KEK.</p>
@@ -3219,6 +3220,7 @@ println!("{report:?}");
 <tr><td>The record needed nothing, or changed after it was read</td><td><code>skipped</code></td><td>not logged</td></tr>
 <tr><td>The re-encryption failed</td><td><code>failed</code></td><td><code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code></td></tr>
 <tr><td>The stream returned the candidate as an error</td><td><code>failed</code></td><td><code>WARN</code> with the error’s <code>Display</code></td></tr>
+<tr><td>A batch of <code>reencrypt_records_batched</code> failed as a whole, or returned more or fewer outcomes than it was given candidates</td><td><code>failed</code>, every candidate of the batch</td><td>one <code>WARN</code> per batch, with the number of candidates and the error’s <code>Display</code> or the number of outcomes</td></tr>
 </tbody>
 </table>
 </div>
@@ -4393,7 +4395,11 @@ application.open(local_kek()?, TENANT).await?;
 </span><span class="boring">}</span></code></pre>
 <p>A new keyring is signed from its first write with <code>create_signed</code> or <code>open_or_create_signed</code>. The
 administration re-signs the record on every write it makes: <code>rotate</code>, <code>promote</code>,
-<code>dangerously_shred()</code> and the rest need the signer’s KMS right, <code>cloudkms.cryptoKeyVersions.useToSign</code> on Cloud KMS.</p>
+<code>dangerously_shred()</code> and the rest need the signer’s KMS right, <code>cloudkms.cryptoKeyVersions.useToSign</code> on Cloud KMS.
+Under <code>Required</code>, a registry writes no record without a signer: <code>create</code>, <code>open_or_create</code> where it
+would create the record, and every write of an administration without a signer fail with
+<code>RECORD_SIGNER_MISSING</code> before any KMS call or store write. <code>open_or_create</code> reads the store once
+first, and refuses only when that read finds no record.</p>
 <h2 id="rotate-the-signing-key"><a class="header" href="#rotate-the-signing-key">Rotate the signing key</a></h2>
 <p>Add the new public key to every registry’s set first, then run <code>sign_record</code> on every keyring with
 the new signer. Remove the old key from the sets once every keyring is signed by the new one. The
@@ -4419,16 +4425,18 @@ backwards with <code>RECORD_REGRESSED</code>, and a process that has just starte
 Keep backups and the store’s version history to compare against, see
 <a href="#keyring-deployment">Keyring deployment</a>.</p>
 <h2 id="stop-signing"><a class="header" href="#stop-signing">Stop signing</a></h2>
-<p>Switch every reader to <code>VerifyIfSigned</code>, write the record unsigned with
-<code>dangerously_unsign_record</code> on an administration without a signer, then restart the readers: the
-running ones refuse the unsigned record until they do.</p>
+<p>Switch every reader to <code>VerifyIfSigned</code>, the administration’s registry included, write the record
+unsigned with <code>dangerously_unsign_record</code> on an administration without a signer, then restart the
+readers: the running ones refuse the unsigned record until they do. Under <code>Required</code>,
+<code>dangerously_unsign_record</code> fails with <code>RECORD_SIGNER_MISSING</code>.</p>
 <h2 id="what-to-watch-for-12"><a class="header" href="#what-to-watch-for-12">What to watch for</a></h2>
 <ul>
 <li>Whoever may sign records and write the store may write any record. Give the signing right to the
 administration only, and read its audit log;</li>
 <li>a keyring under an asymmetric KEK runs with <code>Required</code> on every application before the first DEK
 a public key encrypts, see <a href="#accept-data-from-partners-and-devices-that-cannot-read-it-back">Accept data from partners and devices that cannot read it back</a>;</li>
-<li>an administration without a signer is refused over a signed record with <code>RECORD_SIGNER_MISSING</code>.</li>
+<li>an administration without a signer is refused over a signed record with <code>RECORD_SIGNER_MISSING</code>,
+and under <code>Required</code> it writes nothing.</li>
 </ul>
 <p>Full example available
 <a href="https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/record_signing.rs">here</a>.</p>
@@ -4493,8 +4501,8 @@ outcome. An envelope value names no key version, so its outcome has <code>from_c
 };</code></pre>
 <p>The keyring’s provider decrypts the envelope values, so they must have been encrypted by the
 keyring’s KEK. <code>decrypt_envelope_for_migration</code> reads Tink’s KMS envelope, the layout <code>KmsAeadEnvelope</code> writes.
-Values in a legacy layout, which an old release wrote, are upgraded in place first, with
-<code>KmsAeadEnvelope::upgrade_legacy_value(aad, value)</code> under kms-aead’s <code>legacy-formats</code> feature, see
+Values in a legacy layout, which kms-aead 0.29 and earlier wrote, fail with <code>LEGACY_FORMAT</code>: they
+are rewritten in place first with kms-aead 0.33, see
 <a href="#upgrading-stored-values">Upgrading stored values</a>. The layout of a value is always
 the marker’s, never inferred from its bytes.</p>
 <p><code>decrypt_envelope_for_migration</code> decrypts whatever encrypted DEK an envelope value carries, under the
@@ -4548,15 +4556,16 @@ what a lookup by the encrypted value needs, see <a href="#deterministic-encrypti
 </ul>
 <p>See <a href="#formats-of-encrypted">Formats of <code>Encrypted</code></a> for the layout and the shortest
 value of each format, and <a href="#values-written-by-029-and-earlier">Values written by 0.29 and
-earlier</a> for the legacy layouts.</p>
+earlier</a> for the legacy layouts, which
+the library refuses.</p>
 <h3 id="bytes-in-and-out"><a class="header" href="#bytes-in-and-out">Bytes in and out</a></h3>
 <p><code>value()</code> and <code>into_value()</code> return the bytes to store, and <code>to_hex_string()</code> returns them as
 lowercase hex. The only ways back are <code>Encrypted::try_from</code> for bytes and
 <code>Encrypted::try_from_hex_string</code> for hex in either case. Both check the bytes against the layout
 of <code>F</code> before any KMS call, so a truncated or foreign value fails when it is read, with
 <code>INVALID_CIPHER_TEXT_FORMAT</code>, <code>UNKNOWN_CIPHER_TEXT_LAYOUT</code>, <code>INVALID_HEX</code>, or <code>LEGACY_FORMAT</code> for
-a legacy layout without the <code>legacy-formats</code> feature. The check reads the framing only: a changed
-value fails to decrypt with <code>DECRYPT</code>.</p>
+a legacy layout. The check reads the framing only: a changed value fails to decrypt with
+<code>DECRYPT</code>.</p>
 <pre><code class="language-rust">use kms_aead::backends::Ring;
 use kms_aead::formats::Randomized;
 use kms_aead::{AeadAlgorithm, AeadCipher, Encrypted, KeyId};
@@ -5150,9 +5159,8 @@ their values, such as those of the <code>*_with_encrypted_dek</code> calls, of b
 fields, and for a DEK that many values share.</li>
 </ul>
 <p>Each call makes two KMS calls, a decryption and an encryption, and never goes through the DEK
-cache. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>: <code>upgrade_legacy_value</code> and
-<code>upgrade_legacy_encrypted_dek</code> rewrite it in Tink’s format, see
-<a href="#upgrading-stored-values">Upgrading stored values</a>.</p>
+cache. A value or a DEK in a legacy layout fails with <code>LEGACY_FORMAT</code>, see
+<a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
 <p>The order of a rotation, the sweep, the checks around the disable of the old version and the
 rollback are in <a href="#re-encrypt-deks-after-a-kek-rotation">Re-encrypt DEKs after a KEK rotation</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
@@ -6234,10 +6242,12 @@ impl Signable for Statement {
         Ok(self.0.clone().into_bytes())
     }
 
-    fn from_payload(payload: Vec&lt;u8&gt;) -&gt; KmsAeadResult&lt;Self&gt; {
-        String::from_utf8(payload).map(Statement).map_err(|_| {
-            KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
-        })
+    fn from_payload(payload: &amp;[u8]) -&gt; KmsAeadResult&lt;Self&gt; {
+        std::str::from_utf8(payload)
+            .map(|text| Statement(text.to_string()))
+            .map_err(|_| {
+                KmsAeadEncryptionError::create("INVALID_PAYLOAD", "The payload is not UTF-8 text")
+            })
     }
 }</code></pre>
 <h2 id="payloads-that-do-not-decode"><a class="header" href="#payloads-that-do-not-decode">Payloads that do not decode</a></h2>
@@ -7391,8 +7401,9 @@ let jwk = signer.verifying_key().encode(PublicKeyFormat::Jwk)?;
 <span class="boring">let _ = jwk;
 </span><span class="boring">Ok(())
 </span><span class="boring">}</span></code></pre>
-<p><code>AzureKmsSigningProvider::with_client_options</code> takes the settings of the Azure SDK, such as a
-custom HTTP transport or retry policy. Creating the provider sends no request and fails with
+<p><code>AzureKmsSigningProvider::with_options</code> takes <code>AzureKmsSigningProviderOptions</code>, whose
+<code>client_options</code> are the settings of the Azure SDK, such as a custom HTTP transport or retry
+policy, as <code>AzureKmsProviderOptions</code> has them. Creating the provider sends no request and fails with
 <code>AZURE_KEY_NAME</code> or <code>AZURE_VAULT_URL</code> as <code>AzureKmsProvider</code> does; <code>Signer::new</code> sends the first
 request.</p>
 <ul>
@@ -8534,7 +8545,9 @@ project, database and credentials it chooses. The version of the <code>firestore
 this crate’s API under the Firestore features.</p>
 <h3 id="storage-layout"><a class="header" href="#storage-layout">Storage layout</a></h3>
 <p>The record of a keyring is the document <code>kms_keyrings/&lt;keyring id&gt;</code>, whose fields are those of the
-record’s JSON. <code>with_collection</code> takes another collection than
+record’s JSON. A <code>null</code> member is a field of Firestore’s null type, so that the document reads back
+with the canonical digest that the record’s signature covers. <code>with_collection</code> takes another
+collection than
 <code>FirestoreKeyringStore::DEFAULT_COLLECTION</code>, as firestore-rs’s <code>FirestoreCollectionId</code>. A create fails when the document exists, and an
 update carries the update time it read as its precondition.</p>
 <h3 id="setup"><a class="header" href="#setup">Setup</a></h3>
@@ -8822,6 +8835,14 @@ first, since a record gone from the store reads as shredded and no shred deletes
 </li>
 <li>read a stored document with <code>KeyringRecord::from_json</code> and write one with
 <code>KeyringRecord::to_json</code>, so the document is the one every store keeps and every read checks it;</li>
+<li>keep every member of the document as written, <code>null</code> ones included. A record’s signature covers
+its canonical digest, and a store that maps the document into fields of its own can drop a
+<code>null</code> member, as firestore-rs does with a JSON <code>null</code>, which makes every signed record it holds
+fail with <code>RecordSignatureInvalid</code>. The conformance check
+<code>a_loaded_record_keeps_the_written_digest</code> holds every store to it, on a create and on an
+update;</li>
+<li>build the <code>Stored</code> that <code>load</code> and <code>revalidate</code> return with <code>Stored::new(record, revision)</code>,
+since the struct is <code>#[non_exhaustive]</code>;</li>
 <li>return the client’s errors as <code>KeyringError::Store</code>, with the client’s error as the root cause.
 Never format the record or the request into an error and never log either, since both carry
 encrypted DEKs.</li>
@@ -9986,7 +10007,6 @@ keyring store and optional modes; the choice of a provider and a backend is in
 <tr><td><code>rustcrypto</code></td><td>the backend on the pure Rust RustCrypto crates, no C compiler needed. Adds <code>p256</code> and <code>ed25519-dalek</code> for signatures, and <code>rsa</code> for RSA-OAEP, see <a href="#what-each-backend-does">Asymmetric KEKs</a></td></tr>
 <tr><td><code>deterministic</code></td><td>deterministic encryption with AES-SIV, see <a href="#deterministic-encryption">Deterministic encryption</a></td></tr>
 <tr><td><code>stream</code></td><td>streaming encryption of values of any length, see the notes below. Turns on tokio’s <code>io-util</code> and brings in <code>bytes</code> and <code>futures-core</code></td></tr>
-<tr><td><code>legacy-formats</code></td><td>reads the legacy envelope and DEK layouts. Deprecated, see <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a></td></tr>
 <tr><td><code>postgres</code></td><td><code>ToSql</code> and <code>FromSql</code> of postgres-types for <code>Encrypted</code>, as <code>BYTEA</code>, for tokio-postgres</td></tr>
 <tr><td><code>sqlx</code></td><td>sqlx’s PostgreSQL traits for <code>Encrypted</code>, as <code>BYTEA</code>, without a sqlx runtime or TLS stack</td></tr>
 <tr><td><code>opentelemetry</code></td><td>OpenTelemetry metrics on the API crate only (no SDK), see the notes below and <a href="#metrics-1">Metrics</a></td></tr>
@@ -10116,18 +10136,17 @@ algorithm, and a value Tink encrypts decrypts with <code>KmsAeadEnvelope::decryp
 <tr><td><a href="#signature-and-mac-formats">Attached MAC</a></td><td><code>WithMac&lt;T&gt;</code></td><td><code>[0x01][key id: u32 BE][w: u16 BE][tag: w][payload]</code></td><td>kms-aead, and kms-aead-keyring for its MAC versions</td><td>current</td></tr>
 <tr><td><a href="#tink-keysets-and-the-tink-prefix">Tink keyset</a></td><td><code>TinkKeyset</code></td><td><code>google.crypto.tink.Keyset</code></td><td>Tink, BigQuery; kms-aead-keyring writes it too</td><td>current</td></tr>
 <tr><td><a href="#tink-keysets-and-the-tink-prefix">Tink encrypted keyset</a></td><td><code>TinkKeyset::into_encrypted_bytes</code></td><td><code>google.crypto.tink.EncryptedKeyset</code>, <code>[0x12][w: varint][encrypted keyset: w]</code></td><td>Tink with a GCP, AWS or Vault Transit key; kms-aead-keyring writes it too</td><td>current</td></tr>
-<tr><td>Envelope layout v1</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Encrypted DEK layout v1</td><td>stored <code>EncryptedDataEncryptionKey</code></td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Length-prefixed envelope</td><td><code>Encrypted&lt;T, Envelope&gt;</code> with <code>legacy-formats</code></td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets in early releases</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy</td></tr>
-<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead with <code>legacy-formats</code></td><td>legacy, except under Azure, which still writes it</td></tr>
+<tr><td>Envelope layout v1</td><td>none</td><td><code>[0x01][k: u8][key version: k][w: u16 BE][encrypted DEK: w][cipher text]</code></td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Encrypted DEK layout v1</td><td>none</td><td><code>[0xFF][0x01][k: u8][key version: k][encrypted DEK]</code></td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Length-prefixed envelope</td><td>none</td><td><code>[w: u64 BE][encrypted DEK: w][cipher text]</code>, and <code>[w: u32 BE]</code> from 32-bit targets in early releases</td><td>kms-aead 0.33 and earlier</td><td>legacy</td></tr>
+<tr><td>Raw encrypted DEK</td><td><code>EncryptedDataEncryptionKey</code></td><td>the KMS ciphertext of the DEK’s 16 or 32 raw bytes</td><td>kms-aead 0.33 and earlier, and kms-aead under Azure</td><td>legacy, except under Azure, which still writes it</td></tr>
 </tbody>
 </table>
 </div>
 <p><code>k = 0</code> records no key version. A key version is 1 to 255 ASCII alphanumeric characters. The Azure
 provider encrypts the raw DEK, see <a href="#encrypted-deks-1">Encrypted DEKs</a>.</p>
-<p>The legacy layouts are read only with the deprecated <code>legacy-formats</code> feature. The reading rules and
-the upgrade of stored values are in
-<a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
+<p>The library refuses the legacy layouts with <code>LEGACY_FORMAT</code>. How kms-aead 0.33 rewrites stored
+values in them is in <a href="#old-values">Migrating from 0.29</a>.</p>
 <h2 id="telling-layouts-apart"><a class="header" href="#telling-layouts-apart">Telling layouts apart</a></h2>
 <p>The first bytes of a stored value:</p>
 <div class="table-wrapper">
@@ -10162,9 +10181,8 @@ with its random salt, so the call names the form, as <code>decrypt_bare</code> d
 <li>envelope streamed values and Tink envelopes: both start with <code>[w][encrypted DEK]</code>, so the
 layout is recorded outside the value, as for bare values;</li>
 <li>legacy encrypted DEKs of layout v1 and current ones: <code>0xFF 0x01</code> starts no encrypted DEK of a
-built-in provider, so the library tells them apart for those. It never inspects the bytes of an
-application’s own provider: strip the header <code>[0xFF][0x01][k][key version]</code> of its legacy keys
-before reading them.</li>
+built-in provider, so the library tells them apart for those and refuses the legacy ones before
+the KMS call. It never inspects the bytes of an application’s own provider.</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="values-and-deks"><a class="header" href="#values-and-deks">Values and DEKs</a></h1>
@@ -10192,13 +10210,10 @@ check stored bytes against it:</p>
 <code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
 that decrypts it.</p>
 <p>The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the legacy envelope layout v1 and
-the legacy length-prefixed envelope, checked by their lengths, so a column decodes its old rows into
-the same type until they are upgraded, see
-<a href="#upgrading-stored-values">Upgrading stored values</a>. Without the feature,
-<code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in every build. A legacy layout that early releases wrote on 32-bit
-targets has Tink’s framing, so it reads as an <code>Envelope</code> value in every build, and
-<code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>, see
+decrypted. <code>Encrypted::try_from</code> refuses the legacy envelope layout v1 and the legacy
+length-prefixed envelope with <code>LEGACY_FORMAT</code>. A legacy layout that early releases wrote on 32-bit
+targets has Tink’s framing, so it reads as an <code>Envelope</code> value, and <code>KmsAeadEnvelope::decrypt</code>
+refuses it with <code>LEGACY_FORMAT</code> once its DEK decrypts to a raw key, see
 <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
 bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, decimal ASCII for the integers, and compact JSON
@@ -10683,7 +10698,7 @@ Tink for Go for Vault Transit keys too. A keyring exports it for its versions, s
 <a href="#exporting-a-keyset-to-tink">Exporting a keyset to Tink</a>.</p>
 <h2 id="keyring-key-ids"><a class="header" href="#keyring-key-ids">Keyring key ids</a></h2>
 <p>kms-aead-keyring writes the key id of a version into the TINK prefix of every value and beacon
-under it. The two high bits of the id are the purpose, and the rest is the ordinal:</p>
+under it. The two high bits of the id are the purpose, and bits 0 to 23 are the ordinal:</p>
 <div class="table-wrapper">
 <table>
 <thead>
@@ -10693,7 +10708,8 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 <tr><td>31</td><td>set for deterministic versions, alone</td></tr>
 <tr><td>30</td><td>set for beacon versions, alone</td></tr>
 <tr><td>31 and 30</td><td>set for MAC versions</td></tr>
-<tr><td>0 to 29</td><td>the ordinal, from 1, counted per purpose</td></tr>
+<tr><td>24 to 29</td><td>reserved: clear in the id of every version</td></tr>
+<tr><td>0 to 23</td><td>the ordinal, from 1, counted per purpose</td></tr>
 </tbody>
 </table>
 </div>
@@ -10704,11 +10720,17 @@ under it. The two high bits of the id are the purpose, and the rest is the ordin
 <li>beacon: <code>1073741825</code>, <code>1073741826</code>, …;</li>
 <li>MAC: <code>3221225473</code>, <code>3221225474</code>, ….</li>
 </ul>
-<p>An id whose ordinal is 0 is reserved: <code>0</code>, <code>2^30</code>, <code>2^31</code> and <code>2^31 + 2^30</code>. A value that carries
-one fails with <code>ReservedKeyId</code>. A value whose id is of another
-purpose than the call fails with <code>KeyPurposeMismatch</code>. Both fail before any store or KMS call. Ids
-are never reused: a destroyed version keeps its id in the record. A key id goes up to 2^32 - 1, so
-a SQL column holding one is a <code>BIGINT</code>.</p>
+<p>Two kinds of id are reserved, and no version has one:</p>
+<ul>
+<li>an id whose ordinal is 0: <code>0</code>, <code>2^30</code>, <code>2^31</code> and <code>2^31 + 2^30</code>;</li>
+<li>an id with any of bits 24 to 29 set. These bits are kept for purposes a later release may add,
+so a reader refuses such an id rather than take it for a version of one of the four purposes.</li>
+</ul>
+<p>A value that carries a reserved id fails with <code>ReservedKeyId</code>, and a value whose id is of another
+purpose than the call fails with <code>KeyPurposeMismatch</code>. Both fail before any store or KMS call. A
+record that holds a reserved id fails with <code>RecordInvalid</code> and the reason <code>ReservedKeyId</code>. Each
+purpose has 2^24 - 1 ordinals, and ids are never reused: a destroyed version keeps its id in the
+record. A key id goes up to 2^32 - 1, so a SQL column holding one is a <code>BIGINT</code>.</p>
 <h2 id="keyring-records"><a class="header" href="#keyring-records">Keyring records</a></h2>
 <p>kms-aead-keyring keeps a keyring record as one JSON document, the same in every keyring store. A
 record with deterministic and beacon versions, after one randomised rotation and with another one
@@ -10857,6 +10879,13 @@ filed under a second id is refused where the record is read;</li>
 <li><code>seal_epochs</code> on every active, decrypt-only and retired version and on no pending one, open on
 the active version, starting at 1 or more and below its end, and within the <code>seal_epoch</code>.</li>
 </ul>
+<p>A reader reads past a member it does not know, at any depth, and keeps it in the canonical digest
+that a signature covers. An administrative write refuses a record that holds one, with
+<code>RecordInvalid</code> and the reason <code>UnknownMembers</code>, before it writes anything: the record it writes
+holds only the members its release knows, so the others would be lost, and a signing
+administration would sign what is left. Once a later release writes a member into a record, an
+administrative binary of an earlier release still reads the record and no longer writes it, until
+it moves to that release.</p>
 <h2 id="encryption-markers"><a class="header" href="#encryption-markers">Encryption markers</a></h2>
 <p>An encryption marker is the re-encryption epoch of the keyring record a write encrypted a
 record’s fields under, which the application stores beside them:</p>
@@ -10892,9 +10921,7 @@ be read, or a KMS refused the request, such as a denied permission or a disabled
 call fails the same way again;</li>
 <li><code>UnsupportedAlgorithm</code>: the backend does not implement the algorithm, from constructors only;</li>
 <li><code>SignatureError</code>: a signature could not be made, read or verified, or a KMS refused a sign or
-public-key request; never retried;</li>
-<li><code>LegacyFormat</code>: a stored value in a legacy layout, which only the
-<code>legacy-formats</code> feature reads, see <a href="#values-written-by-029-and-earlier">Migrating from 0.29</a>.</li>
+public-key request; never retried.</li>
 </ul>
 <p>The enum is <code>#[non_exhaustive]</code>, so a <code>match</code> on it needs a <code>_</code> arm.</p>
 <h2 id="codes"><a class="header" href="#codes">Codes</a></h2>
@@ -10941,10 +10968,9 @@ assert!(matches!(&amp;too_short, Err(e) if e.code() == "INVALID_CIPHER_TEXT_FORM
 <tr><td><code>UNKNOWN_CIPHER_TEXT_LAYOUT</code></td><td>encryption</td><td>an empty envelope value, or a first byte that starts no layout</td></tr>
 <tr><td><code>INVALID_PLAINTEXT</code></td><td>encryption</td><td>a decrypted value that is not an encoding of its type, or a <code>JsonEncoded</code> value that does not serialise</td></tr>
 <tr><td><code>INVALID_KEY_FORMAT</code></td><td>encryption</td><td>a decrypted DEK that is not a serialised Tink key, such as an encrypted keyset</td></tr>
-<tr><td><code>INVALID_ENCRYPTED_KEY_FORMAT</code></td><td>encryption</td><td>the legacy encrypted DEK layout v1 that cannot be read, with <code>legacy-formats</code></td></tr>
-<tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK or a legacy layout</td></tr>
+<tr><td><code>INVALID_KEY_VERSION</code></td><td>encryption</td><td>a key version that is not ASCII alphanumeric, in an Azure encrypted DEK</td></tr>
 <tr><td><code>INVALID_HEX</code></td><td>encryption</td><td><code>try_from_hex_string</code> of text that is not hex</td></tr>
-<tr><td><code>LEGACY_FORMAT</code></td><td>legacy format</td><td>a legacy layout without <code>legacy-formats</code>, at <code>Encrypted::try_from</code> or at decryption, and the legacy envelope layouts in <code>separate</code></td></tr>
+<tr><td><code>LEGACY_FORMAT</code></td><td>encryption</td><td>a layout of 0.29 or earlier, at <code>Encrypted::try_from</code> or at decryption, see <a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></td></tr>
 <tr><td><code>INVALID_DEK_CACHE_TTL</code></td><td>system</td><td>a DEK cache TTL of zero</td></tr>
 <tr><td><code>INVALID_DEK_REUSE_POLICY</code></td><td>system</td><td>a reuse policy out of range, or beside a disabled cache</td></tr>
 </tbody>
@@ -11133,11 +11159,11 @@ text may change in any release.</p>
 <tr><td><code>InvalidIdentifier</code></td><td><code>INVALID_IDENTIFIER</code></td><td>a keyring id, an AAD part or a store name that breaks the rule of its type</td></tr>
 <tr><td><code>RecordMissing</code></td><td><code>RECORD_MISSING</code></td><td>no record for the keyring: at <code>open</code> and <code>admin</code>, before an administrative write, and from <code>reload</code> once the process took the record as deleted, see <a href="#a-record-gone-from-the-store">A record gone from the store</a>. A <code>dangerously_shred()</code> of a keyring already gone returns <code>Ok</code></td></tr>
 <tr><td><code>RecordExists</code></td><td><code>RECORD_EXISTS</code></td><td><code>create</code> found a record</td></tr>
-<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (<code>DuplicateEncryptedDek</code>) or a <code>signature</code> member that is not a detached signature (<code>MalformedSignature</code>), see <a href="#keyring-records">Keyring records</a></td></tr>
+<tr><td><code>RecordInvalid</code></td><td><code>RECORD_INVALID</code></td><td>a record that breaks a size cap or an invariant, such as two versions holding the same encrypted DEK (<code>DuplicateEncryptedDek</code>) or a <code>signature</code> member that is not a detached signature (<code>MalformedSignature</code>); and before an administrative write, a record that holds members this release does not know (<code>UnknownMembers</code>), see <a href="#keyring-records">Keyring records</a></td></tr>
 <tr><td><code>RecordUnsigned</code></td><td><code>RECORD_UNSIGNED</code></td><td>an unsigned record where record verification is <code>Required</code>, or where a signing admin writes over it, see <a href="#signing-the-keyring-record">Signing the keyring record</a></td></tr>
 <tr><td><code>RecordSignatureInvalid</code></td><td><code>RECORD_SIGNATURE_INVALID</code></td><td>a record whose signature fails under the verifying keys, or that is signed where the registry has no key; the cause carries the signature error’s code</td></tr>
-<tr><td><code>RecordSignerMissing</code></td><td><code>RECORD_SIGNER_MISSING</code></td><td>a write by an administration without a record signer over a signed record, before any store write</td></tr>
-<tr><td><code>RecordSignatureRemoved</code></td><td><code>RECORD_SIGNATURE_REMOVED</code></td><td>an unsigned record where the process holds a signed one, under <code>VerifyIfSigned</code></td></tr>
+<tr><td><code>RecordSignerMissing</code></td><td><code>RECORD_SIGNER_MISSING</code></td><td>a write by an administration without a record signer over a signed record, before any store write; under <code>Required</code>, any write without one, before any KMS call or store write: <code>create</code>, <code>open_or_create</code> where it would create the record, after the one read that finds none, and every write of such an administration, <code>dangerously_unsign_record</code> included</td></tr>
+<tr><td><code>RecordSignatureRemoved</code></td><td><code>RECORD_SIGNATURE_REMOVED</code></td><td>an unsigned record where the process holds a signed one, under <code>VerifyIfSigned</code>, or held one before the record’s deletion; a <code>create</code> that it refuses writes nothing</td></tr>
 <tr><td><code>RecordRegressed</code></td><td><code>RECORD_REGRESSED</code></td><td>a record that moves a version backwards from the one this process holds, from <code>reload</code> and before an administrative write</td></tr>
 <tr><td><code>RecordConflict</code></td><td><code>RECORD_CONFLICT</code></td><td>an administrative write lost every compare-and-swap, <code>attempts</code> of them</td></tr>
 <tr><td><code>KekMismatch</code></td><td><code>KEK_MISMATCH</code></td><td>the provider’s KEK is not the one the record names</td></tr>
@@ -11162,7 +11188,7 @@ text may change in any release.</p>
 <tr><td><code>KeyPurposeMismatch</code></td><td><code>KEY_PURPOSE_MISMATCH</code></td><td>a key id of another purpose than the call’s</td></tr>
 <tr><td><code>InvalidTransition</code></td><td><code>INVALID_TRANSITION</code></td><td>a lifecycle call that does not apply to the version’s state, see <a href="#states">States</a></td></tr>
 <tr><td><code>PromotionTooEarly</code></td><td><code>PROMOTION_TOO_EARLY</code></td><td>a promotion before <code>record_ttl</code> has passed since the version was staged</td></tr>
-<tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero</td></tr>
+<tr><td><code>ReservedKeyId</code></td><td><code>RESERVED_KEY_ID</code></td><td>a key id no version has: ordinal zero, or one of bits 24 to 29 set, see <a href="#keyring-key-ids">Keyring key ids</a></td></tr>
 <tr><td><code>UnknownKeyVersionState</code></td><td><code>UNKNOWN_KEY_VERSION_STATE</code></td><td><code>FromStr</code> of a name that is no <code>KeyVersionState</code></td></tr>
 </tbody>
 </table>
@@ -11382,7 +11408,6 @@ calls do. The spans carry no payload, signature, tag or key bytes.</p>
 <p>Besides the spans, the library logs:</p>
 <ul>
 <li><code>WARN</code>, inside the KMS span: a GCP or Vault Transit response without a key version;</li>
-<li><code>WARN</code>, once per process and layout: the first read of a legacy layout with <code>legacy-formats</code>;</li>
 <li><code>WARN</code>, when a Vault Transit provider is created: an <code>http</code> address to another host, or a system
 CA certificate that cannot be loaded;</li>
 <li><code>WARN</code>, on the <code>kms_aead::json</code> target: a <code>JsonEncoded</code> value that does not decode, see
@@ -11625,12 +11650,12 @@ call has no <code>error.type</code>.</p>
 <tr><td></td><td><code>beacon</code></td><td>an envelope’s beacon</td></tr>
 <tr><td></td><td><code>generate_dek</code></td><td><code>generate_encrypted_dek</code> and <code>generate_encrypted_deterministic_dek</code></td></tr>
 <tr><td></td><td><code>decrypt_dek</code></td><td><code>decrypt_deterministic_dek</code></td></tr>
-<tr><td></td><td><code>reencrypt_dek</code></td><td><code>reencrypt_dek</code>, <code>reencrypt_encrypted_dek</code> and the deprecated <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code></td></tr>
+<tr><td></td><td><code>reencrypt_dek</code></td><td><code>reencrypt_dek</code> and <code>reencrypt_encrypted_dek</code></td></tr>
 <tr><td></td><td><code>stream_encrypt</code>, <code>stream_decrypt</code></td><td>the stream calls</td></tr>
 <tr><td></td><td><code>sign</code>, <code>verify</code>, <code>mac</code>, <code>verify_mac</code></td><td>a <code>Signer</code>, a <code>Verifier</code> and an <code>Authenticator</code></td></tr>
 <tr><td><code>kms_aead.operation</code> on <code>kms_aead.kms.duration</code></td><td><code>encrypt_dek</code>, <code>decrypt_dek</code>, <code>random</code>, <code>sign</code>, <code>public_key</code>, <code>encrypt_dek_with_public_key</code></td><td>the request to the KMS, or the local encryption with a public key</td></tr>
-<tr><td><code>kms_aead.mode</code></td><td><code>per_call</code>, <code>store_less</code></td><td>an envelope’s <code>encrypt</code>, <code>decrypt</code>, the stream calls, <code>reencrypt_dek</code> and <code>upgrade_legacy_value</code></td></tr>
-<tr><td></td><td><code>caller_dek</code></td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK, <code>reencrypt_encrypted_dek</code>, <code>upgrade_legacy_encrypted_dek</code>, and an <code>Authenticator</code>’s <code>mac</code> and <code>verify_mac</code></td></tr>
+<tr><td><code>kms_aead.mode</code></td><td><code>per_call</code>, <code>store_less</code></td><td>an envelope’s <code>encrypt</code>, <code>decrypt</code>, the stream calls and <code>reencrypt_dek</code></td></tr>
+<tr><td></td><td><code>caller_dek</code></td><td>the <code>*_with_dek</code> and <code>*_with_encrypted_dek</code> calls, <code>beacon</code>, the calls that generate or decrypt a DEK, <code>reencrypt_encrypted_dek</code>, and an <code>Authenticator</code>’s <code>mac</code> and <code>verify_mac</code></td></tr>
 <tr><td></td><td><code>signature</code></td><td>a <code>Signer</code> and a <code>Verifier</code></td></tr>
 <tr><td></td><td><code>keyring</code></td><td>a keyring’s calls</td></tr>
 </tbody>
@@ -12225,7 +12250,7 @@ keyring</a>.</li>
 order, starting with <a href="#migrating-from-030">Migrating from 0.30</a>.</p>
 <p>0.30 replaces the ring-only API with a choice of crypto backends, adds store-less DEK reuse, the DEK
 cache, deterministic encryption and the local KMS, and makes ring optional. It writes the KMS
-envelope format of Tink, Google’s open-source cryptography library, for every provider. Values written by 0.29 and earlier read only with the deprecated
+envelope format of Tink, Google’s open-source cryptography library, for every provider. Values written by 0.29 and earlier read only in 0.30 to 0.33, with the deprecated
 <code>legacy-formats</code> feature, which also rewrites them in the new format, see <a href="#old-values">Old values</a>.</p>
 <p>Eight changes break a build against 0.29:</p>
 <ul>
@@ -12238,7 +12263,7 @@ gone, replaced by inherent methods;</li>
 <li><a href="#errors-5">the errors</a> gain variants, change codes and lose the <code>From</code> conversions of SDK errors;</li>
 <li><a href="#aws-kms-decryption-names-the-key">AWS KMS decryption</a> names the configured key;</li>
 <li><a href="#default-algorithm">the default algorithm</a> is AES-256-GCM, not ChaCha20-Poly1305;</li>
-<li><a href="#old-values">values written by 0.29 and earlier</a> read only with <code>legacy-formats</code>.</li>
+<li><a href="#old-values">values written by 0.29 and earlier</a> read only with <code>legacy-formats</code>, up to 0.33.</li>
 </ul>
 <p>0.30 also adds what 0.29 had no counterpart for, so nothing below maps to it:</p>
 <ul>
@@ -12404,7 +12429,7 @@ Google Cloud KMS is an <code>EncryptionError</code> in 0.30, and a timeout, a co
 <tr><td><code>DECRYPT_KEY</code></td><td><code>RANDOM_GENERATOR</code></td><td>the GCP KMS generator, when its request cannot be built</td></tr>
 <tr><td><code>SYSTEM_TIME_ERROR</code></td><td>removed</td><td></td></tr>
 <tr><td><code>UNKNOWN_ENCRYPTED_KEY_LAYOUT</code></td><td>removed</td><td>stored encrypted DEKs are the provider’s bytes</td></tr>
-<tr><td><code>AZURE_KEY_VERSION_MISSING</code></td><td><code>AZURE_ENCRYPTED_DEK_FORMAT</code></td><td>the Azure decryption of bytes outside its layout; the old code stays for a 0.29 value without a key version, with <code>legacy-formats</code></td></tr>
+<tr><td><code>AZURE_KEY_VERSION_MISSING</code></td><td><code>AZURE_ENCRYPTED_DEK_FORMAT</code></td><td>the Azure decryption of bytes outside its layout; up to 0.33, the old code stays for a 0.29 value without a key version, with <code>legacy-formats</code></td></tr>
 <tr><td><code>AZURE_WRAP_ALGORITHM</code></td><td>removed</td><td><code>AzureKmsAlgorithm</code> has no variant for <code>Rsa1_5</code> or an unknown algorithm</td></tr>
 </tbody>
 </table>
@@ -12444,49 +12469,52 @@ cannot tell the two algorithms apart. AES-256-GCM suits a column that holds no 0
 <h2 id="old-values"><a class="header" href="#old-values">Old values</a></h2>
 <p>0.30 writes Tink’s KMS envelope, and encrypts every DEK but Azure’s as a serialised Tink key. 0.29
 wrote envelope layout v1 and the encrypted DEK layout v1 <code>[0xFF][0x01]…</code>, and 0.28.1 and earlier a
-length-prefixed envelope, all with the raw DEK encrypted. 0.30 reads them only with the deprecated
-<code>legacy-formats</code> feature, and fails with <code>LEGACY_FORMAT</code> without it, see
+length-prefixed envelope, all with the raw DEK encrypted. 0.30 to 0.33 read them only with the
+deprecated <code>legacy-formats</code> feature, and fail with <code>LEGACY_FORMAT</code> without it. Later releases have
+no such feature and refuse them, see
 <a href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a>.</p>
-<p>The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
+<p>kms-aead 0.33 is the last release that reads them, so stored values move to the new format on it.
+The envelopes that read and upgrade those values keep the algorithm they were encrypted with, see
 <a href="#default-algorithm">Default algorithm</a>.</p>
 <p>To move stored values to the new format:</p>
 <ol>
-<li>upgrade every process that reads the values to 0.30 with <code>legacy-formats</code>. 0.29 and earlier
+<li>upgrade every process that reads the values to 0.33 with <code>legacy-formats</code>. 0.29 and earlier
 cannot read Tink’s format, so no process writes it before every reader has the upgrade;</li>
 <li>rewrite the stored values with <code>upgrade_legacy_value</code> and <code>upgrade_legacy_encrypted_dek</code> of
 <code>KmsAeadEnvelope</code>, one or two KMS calls per value, see
 <a href="#upgrading-stored-values">Upgrading stored values</a>. <code>upgrade_legacy_value</code> takes
 the value’s AAD, and fails with <code>DECRYPT</code> on a value that does not decrypt under the envelope’s
 algorithm and that AAD;</li>
-<li>turn the feature off.</li>
+<li>turn the feature off, and move to a later release.</li>
 </ol>
-<p><code>Encrypted::&lt;T, Envelope&gt;::separate</code> reads Tink’s format only, with or without the feature, so
-code that separated stored 0.29 values runs after the sweep.</p>
+<p><code>Encrypted::&lt;T, Envelope&gt;::separate</code> reads Tink’s format only, in every release, so code that
+separated stored 0.29 values runs after the sweep.</p>
 <h2 id="values-written-by-029-and-earlier"><a class="header" href="#values-written-by-029-and-earlier">Values written by 0.29 and earlier</a></h2>
-<p>The layouts of 0.29 and earlier are read only with the deprecated <code>legacy-formats</code> feature:</p>
+<p>Releases after 0.33 never read the layouts of 0.29 and earlier. Reading one fails with
+<code>KmsAeadError::EncryptionError</code> and the code <code>LEGACY_FORMAT</code>:</p>
+<ul>
+<li><code>Encrypted::&lt;T, Envelope&gt;::try_from</code> refuses the envelope layout v1 and the length-prefixed
+envelope;</li>
+<li>a decryption, the DEK cache and the re-encryptions refuse the encrypted DEK layout v1 before the
+KMS call, and an encrypted DEK that decrypts to the raw key after it. The values of 32-bit
+targets before 0.24.0 fail this way, since their framing is Tink’s.</li>
+</ul>
+<p>The error never echoes the bytes read. The <code>KMS AEAD decrypt</code> spans of such values record
+<code>error_code=LEGACY_FORMAT</code>, see <a href="#spans-and-events">Observability</a>.</p>
+<p>In 0.30 to 0.33, <code>legacy-formats</code> reads them:</p>
 <ul>
 <li><code>KmsAeadEnvelope::decrypt</code> reads the three envelope layouts, which <code>Encrypted&lt;T, Envelope&gt;</code>
 holds with the feature;</li>
 <li>the <code>*_with_encrypted_dek</code> calls and the DEK cache read the encrypted DEK layout v1 of 0.29 and
 raw encrypted DEKs.</li>
 </ul>
-<p><code>Encrypted::separate</code> never reads the older envelope layouts: for Azure, the encrypted DEK they
-hold needs the provider to become its bytes.</p>
-<p>Without the feature, reading them fails with <code>KmsAeadError::LegacyFormat</code>, the code
-<code>LEGACY_FORMAT</code>, and one of:</p>
-<ul>
-<li><code>KmsAeadLegacyFormat::EnvelopeV1</code>;</li>
-<li><code>KmsAeadLegacyFormat::LengthPrefixedEnvelope</code>;</li>
-<li><code>KmsAeadLegacyFormat::EncryptedDekV1</code>;</li>
-<li><code>KmsAeadLegacyFormat::RawEncryptedDek</code>, for an encrypted DEK that decrypts to the raw key. The
-values of 32-bit targets before 0.24.0 fail with it, since their framing is Tink’s.</li>
-</ul>
-<p>The error never echoes the bytes read. With the feature, the first read of each layout in a
-process logs one <code>WARN</code> event that names the upgrade methods. Without it, the <code>KMS AEAD decrypt</code>
-spans of such values record <code>error_code=LEGACY_FORMAT</code>, see <a href="#spans-and-events">Observability</a>.</p>
+<p>Without the feature, those releases fail with <code>KmsAeadError::LegacyFormat</code>, the code
+<code>LEGACY_FORMAT</code>, and with the feature, the first read of each layout in a process logs one <code>WARN</code>
+event that names the upgrade methods.</p>
 <h2 id="upgrading-stored-values"><a class="header" href="#upgrading-stored-values">Upgrading stored values</a></h2>
-<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> rewrite a stored value in Tink’s format,
-and return <code>None</code> when it already is in it, so a sweep writes only the rows that change:</p>
+<p>With <code>legacy-formats</code>, two methods of <code>KmsAeadEnvelope</code> in 0.30 to 0.33 rewrite a stored value in
+Tink’s format, and return <code>None</code> when it already is in it, so a sweep writes only the rows that
+change:</p>
 <ul>
 <li><code>upgrade_legacy_value</code>, for envelope values;</li>
 <li><code>upgrade_legacy_encrypted_dek</code>, for encrypted DEKs stored apart, such as the bytes of 0.29’s
@@ -12509,8 +12537,8 @@ it fails with <code>DECRYPT</code>. <code>upgrade_legacy_encrypted_dek</code> ha
 envelope’s algorithm for any key of its length. Be aware not to upgrade a DEK stored apart under
 another algorithm than its values were encrypted with: use <code>upgrade_legacy_value</code> wherever the
 values are at hand.</p>
-<p>A sweep over stored rows:</p>
-<pre><code class="language-rust">use kms_aead::backends::AeadBackend;
+<p>A sweep over stored rows, on kms-aead 0.33 with <code>legacy-formats</code>:</p>
+<pre><code class="language-rust ignore">use kms_aead::backends::AeadBackend;
 use kms_aead::formats::Envelope;
 use kms_aead::{Encrypted, KmsAeadDecryptionProvider, KmsAeadEnvelope, KmsAeadResult};
 use secret_vault_value::SecretValue;
@@ -12540,39 +12568,12 @@ where
         }
     }
     Ok(upgraded)
-}
-<span class="boring">use kms_aead::backends::Ring;
-</span><span class="boring">use kms_aead::providers::{LocalKekId, LocalKmsProvider};
-</span><span class="boring">use kms_aead::{AeadAlgorithm, AeadCipher, KmsAeadEncryptionProvider, KmsAeadEnvelopeOptions};
-</span><span class="boring">#[tokio::main(flavor = "current_thread")]
-</span><span class="boring">async fn main() -&gt; KmsAeadResult&lt;()&gt; {
-</span><span class="boring">let provider = LocalKmsProvider::&lt;Ring&gt;::ephemeral(LocalKekId::try_from("example".to_string())?)?;
-</span><span class="boring">// A value as 0.28.1 wrote it: [w: u64 BE][encrypted raw key][cipher text]
-</span><span class="boring">let cipher = AeadCipher::&lt;Ring&gt;::new(AeadAlgorithm::ChaCha20Poly1305)?;
-</span><span class="boring">let dek = cipher.generate_dek()?;
-</span><span class="boring">let bare = cipher.encrypt_bare(b"aad", &amp;SecretValue::from("secret"), &amp;dek)?;
-</span><span class="boring">let encrypted_dek = provider.encrypt_data_encryption_key(&amp;dek).await?;
-</span><span class="boring">let mut legacy = u64::try_from(encrypted_dek.value().len()).unwrap().to_be_bytes().to_vec();
-</span><span class="boring">legacy.extend_from_slice(encrypted_dek.value());
-</span><span class="boring">legacy.extend_from_slice(bare.value());
-</span><span class="boring">let envelope = KmsAeadEnvelope::&lt;LocalKmsProvider&lt;Ring&gt;, Ring&gt;::with_options(
-</span><span class="boring">    provider,
-</span><span class="boring">    KmsAeadEnvelopeOptions::new().with_algorithm(AeadAlgorithm::ChaCha20Poly1305),
-</span><span class="boring">)?;
-</span><span class="boring">let mut rows = vec![Row { aad: b"aad".to_vec(), value: legacy }];
-</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 1);
-</span><span class="boring">assert_eq!(upgrade_values(&amp;envelope, &amp;mut rows).await?, 0);
-</span><span class="boring">let upgraded = Encrypted::&lt;SecretValue, Envelope&gt;::try_from(rows[0].value.clone())?;
-</span><span class="boring">let decrypted: SecretValue = envelope.decrypt(b"aad", &amp;upgraded).await?;
-</span><span class="boring">assert_eq!(decrypted, SecretValue::from("secret"));
-</span><span class="boring">Ok(())
-</span><span class="boring">}</span></code></pre>
-<p>Upgrade every reader to 0.30 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
-<h2 id="deprecation"><a class="header" href="#deprecation">Deprecation</a></h2>
-<p>Reading the layouts of 0.29 and earlier is deprecated since 0.30.0 and will be removed in a later
-breaking release, together with the <code>legacy-formats</code> feature and the upgrade methods, which carry
-<code>#[deprecated]</code> from their first release, so every call site warns. Without the feature, the
-older layouts keep failing with <code>LEGACY_FORMAT</code>.</p>
+}</code></pre>
+<p>Upgrade every reader to 0.33 before the sweep writes: 0.29 and earlier cannot read Tink’s format.</p>
+<h2 id="removal"><a class="header" href="#removal">Removal</a></h2>
+<p>Reading the layouts of 0.29 and earlier was deprecated in 0.30.0. 0.33 is the last release with
+the <code>legacy-formats</code> feature and the two upgrade methods, and later releases refuse the older
+layouts with <code>LEGACY_FORMAT</code>.</p>
 
                     </main>
 

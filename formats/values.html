@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -203,13 +203,10 @@ check stored bytes against it:</p>
 <code>Envelope</code> value after the encrypted DEK. It names no key: the application keeps track of the key
 that decrypts it.</p>
 <p>The check reads the framing only, and whether the bytes are authentic is known when they are
-decrypted. With <code>legacy-formats</code>, an <code>Envelope</code> value also holds the legacy envelope layout v1 and
-the legacy length-prefixed envelope, checked by their lengths, so a column decodes its old rows into
-the same type until they are upgraded, see
-<a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a>. Without the feature,
-<code>Encrypted::try_from</code> refuses them with <code>LEGACY_FORMAT</code>. <code>separate</code> refuses them in every build. A legacy layout that early releases wrote on 32-bit
-targets has Tink’s framing, so it reads as an <code>Envelope</code> value in every build, and
-<code>KmsAeadEnvelope::decrypt</code> decrypts it with <code>legacy-formats</code>, see
+decrypted. <code>Encrypted::try_from</code> refuses the legacy envelope layout v1 and the legacy
+length-prefixed envelope with <code>LEGACY_FORMAT</code>. A legacy layout that early releases wrote on 32-bit
+targets has Tink’s framing, so it reads as an <code>Envelope</code> value, and <code>KmsAeadEnvelope::decrypt</code>
+refuses it with <code>LEGACY_FORMAT</code> once its DEK decrypts to a raw key, see
 <a href="../migrating-from-0.29.html#values-written-by-029-and-earlier">Migrating from 0.29</a>.</p>
 <p>The plaintext inside is the encoding of the value’s <code>Plaintext</code> type: UTF-8 for <code>String</code>, the
 bytes themselves for <code>Vec&lt;u8&gt;</code> and <code>SecretValue</code>, decimal ASCII for the integers, and compact JSON

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -492,6 +492,7 @@ println!("{report:?}");
 <tr><td>The record needed nothing, or changed after it was read</td><td><code>skipped</code></td><td>not logged</td></tr>
 <tr><td>The re-encryption failed</td><td><code>failed</code></td><td><code>WARN</code> with the candidate’s <code>Display</code> and the error’s <code>Display</code></td></tr>
 <tr><td>The stream returned the candidate as an error</td><td><code>failed</code></td><td><code>WARN</code> with the error’s <code>Display</code></td></tr>
+<tr><td>A batch of <code>reencrypt_records_batched</code> failed as a whole, or returned more or fewer outcomes than it was given candidates</td><td><code>failed</code>, every candidate of the batch</td><td>one <code>WARN</code> per batch, with the number of candidates and the error’s <code>Display</code> or the number of outcomes</td></tr>
 </tbody>
 </table>
 </div>

@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -215,8 +215,9 @@ that needs either guarantee uses a KEK per tenant.</p>
 <a href="../keyring.html#the-registry-and-its-handles">The registry and its handles</a>;</li>
 <li><code>registry.open(provider, keyring_id)</code> for each tenant the process serves. A second open of an
 open keyring reads nothing from the store and shares the first one’s record and watch. The call
-takes the provider by value: <code>GcpKmsProvider</code> and <code>HcVaultTransitProvider</code> are <code>Clone</code>, and the
-other providers are built once per keyring;</li>
+takes the provider by value: one provider serves every keyring of its KEK as an <code>Arc&lt;P&gt;</code>, which
+implements the provider traits for every provider, or as a clone of a provider that is <code>Clone</code>,
+such as <code>GcpKmsProvider</code>, <code>AwsKmsProvider</code> and <code>HcVaultTransitProvider</code>;</li>
 <li>a <code>FieldSpec</code> constant per encrypted field, the same for every tenant, since each keyring
 has DEKs of its own, see <a href="../keyring/fields.html">Encrypted fields and AAD</a>;</li>
 <li>on every write, <code>keyring.encryptor()</code> and its <code>encrypt</code>, and the encryption marker it gives,
@@ -231,7 +232,9 @@ see <a href="../production/sweeps.html#the-encryption-marker">The encryption mar
 <p>An application that creates a keyring on a tenant’s first request builds with the <code>admin</code> feature
 and runs with the administrative rights, so it is trusted as the administration is, see
 <a href="../production/permissions.html">Permissions: applications and administration</a> and
-<a href="../security.html#keyring-limits">Keyring limits</a>.</p>
+<a href="../security.html#keyring-limits">Keyring limits</a>. Under <code>RecordSignaturePolicy::Required</code> it holds
+the record signer too and calls <code>open_or_create_signed</code>: <code>open_or_create</code> fails with
+<code>RECORD_SIGNER_MISSING</code> where it would create the record.</p>
 <h3 id="what-many-keyrings-cost"><a class="header" href="#what-many-keyrings-cost">What many keyrings cost</a></h3>
 <p>A keyring stays open until the registry shuts down, so a process holds every keyring it opened:</p>
 <ul>

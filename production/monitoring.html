@@ -36,7 +36,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-2313879a.js";
+            window.path_to_searchindex_js = "../searchindex-1fb4c390.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-add654e4.js"></script>
@@ -214,7 +214,6 @@ that read the shred’s first write logs an <code>INFO</code> instead.</p>
 <tr><td><code>WARN</code>: a read of a compromised version under the <code>Allow</code> policy</td><td>values under a leaked DEK are being read</td><td>the sweep of <a href="./runbook.html#a-plaintext-dek-leaked">A plaintext DEK leaked</a></td></tr>
 <tr><td><code>WARN</code>: a read refused because its version is retired or destroyed</td><td>a value the sweep missed</td><td><code>reinstate</code> a retired version, and sweep again</td></tr>
 <tr><td><code>WARN</code>: a record a sweep could not re-encrypt, or <code>SweepReport::failed</code> above zero</td><td>a record left under an old version</td><td>the cause in the event’s <code>error</code>, see <a href="./sweeps.html#running-a-sweep">Running a sweep</a></td></tr>
-<tr><td><code>WARN</code>, once per process: the first read of a legacy layout</td><td>values not yet upgraded</td><td><a href="../migrating-from-0.29.html#upgrading-stored-values">Upgrading stored values</a></td></tr>
 </tbody>
 </table>
 </div>
