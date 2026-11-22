@@ -89,8 +89,8 @@ mod recorded {
 
     use kms_aead::formats::Format;
     use kms_aead::metrics::{
-        record_keyring_record_refusal, record_keyring_store_load, record_operation,
-        OperationAttributes, OperationOutcome,
+        count_keyring_record_refusal, record_keyring_store_load, OperationAttributes,
+        OperationOutcome,
     };
     use opentelemetry::KeyValue;
 
@@ -181,8 +181,7 @@ mod recorded {
             let purpose = self
                 .purpose
                 .map(|purpose| KeyValue::new(PURPOSE, purpose.as_str()));
-            record_operation(
-                &call,
+            call.record(
                 std::iter::once(self.keyring.0.clone()).chain(purpose),
                 elapsed,
                 outcome,
@@ -193,7 +192,7 @@ mod recorded {
     /// Counts one record of `keyring` refused because of its signature, with the refusal's
     /// `code`.
     pub(crate) fn record_refusal(keyring: &KeyringAttribute, code: &str) {
-        record_keyring_record_refusal([keyring.0.clone()], code);
+        count_keyring_record_refusal([keyring.0.clone()], code);
     }
 
     /// Records one read of `keyring`'s record from `store` for `reason` that took `elapsed`.
