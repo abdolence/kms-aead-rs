@@ -5,18 +5,23 @@
 
 # Use cases
 
-- [Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md)
-- [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md)
-- [Give each customer of a SaaS its own keys](./use-cases/keyring-per-tenant.md)
-- [Find a user by an encrypted email](./use-cases/equality-lookups.md)
-- [Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md)
-- [Store customer uploads and serve byte ranges](./use-cases/large-files.md)
-- [Send a large export over HTTP, encrypted](./use-cases/encrypted-http-streams.md)
-- [Publish a rate sheet or a release anyone can verify](./use-cases/publish-verifiable.md)
-- [Detect tampering with jobs and rows between your services](./use-cases/service-integrity.md)
-- [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md)
-- [Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md)
-- [Erase one customer's data for good](./use-cases/erase-a-tenant.md)
+- [Protect data in your database](./use-cases/database.md)
+  - [Encrypt personal data and secrets in your database](./use-cases/encrypt-fields.md)
+  - [Cut KMS calls with a DEK cache and DEK reuse](./use-cases/fewer-kms-calls.md)
+  - [Give each customer of a SaaS its own keys](./use-cases/keyring-per-tenant.md)
+  - [Find a user by an encrypted email](./use-cases/equality-lookups.md)
+  - [Erase one customer's data for good](./use-cases/erase-a-tenant.md)
+- [Share encrypted data with other systems](./use-cases/sharing.md)
+  - [Decrypt columns in BigQuery SQL or with Tink](./use-cases/bigquery-and-tink.md)
+  - [Accept data from partners and devices that cannot read it back](./use-cases/write-only-producers.md)
+- [Files and streams](./use-cases/files-and-streams.md)
+  - [Store customer uploads and serve byte ranges](./use-cases/large-files.md)
+  - [Send a large export over HTTP, encrypted](./use-cases/encrypted-http-streams.md)
+- [Prove where data came from](./use-cases/provenance.md)
+  - [Publish a rate sheet or a release anyone can verify](./use-cases/publish-verifiable.md)
+  - [Detect tampering with jobs and rows between your services](./use-cases/service-integrity.md)
+- [Keep sensitive data out of logs](./use-cases/logs.md)
+  - [Log a webhook payload that failed to parse](./use-cases/log-json-payloads.md)
 
 # Running in production
 
