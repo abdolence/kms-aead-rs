@@ -13,8 +13,8 @@ the KMS and decrypts them for the readers. See [Asymmetric KEKs](../asymmetric-k
 | Reader | a KMS provider, with decrypt on the key | decrypts values, as for any KEK |
 | Administration | the public key's source, read right on the key | hands the public key to the producers |
 
-1. Create an RSA key for asymmetric decryption in the KMS, 3072 bits, with the algorithm
-   RSA-OAEP SHA-256. Cloud KMS, AWS KMS, Azure Key Vault and Vault Transit offer it;
+1. Create an RSA key for asymmetric decryption in the KMS, with the algorithm and the key size of
+   [Asymmetric KEKs](../asymmetric-kek.md);
 2. grant the readers the decrypt right and the administration the right to read the public key,
    see [Under an asymmetric KEK](../production/permissions.md#under-an-asymmetric-kek);
 3. the administration fetches the public key on its provider, writes `to_json()` and the key's
@@ -56,7 +56,7 @@ let encrypted: Encrypted<SecretValue, Envelope> = producer
     .encrypt(b"submissions/1042", &SecretValue::from("account 1234"))
     .await?;
 
-// The reader's side: the provider it uses today
+// The reader's side: the provider it already uses
 let reader =
     KmsAeadEnvelope::<LocalAsymmetricKmsProvider<AwsLc>, AwsLc>::new(reader_provider)?;
 let decrypted: SecretValue = reader.decrypt(b"submissions/1042", &encrypted).await?;
@@ -75,7 +75,7 @@ with the administration's.
 `decrypt`, `beacon`, the stream decryptors and the `*_with_encrypted_dek` calls, requires a
 decrypting provider, so over a producer none of them compiles. A producer streams as well: an
 envelope over it encrypts a large file with `stream_encryptor` and decrypts none, see
-[Large files](./large-files.md).
+[Store customer uploads and serve byte ranges](./large-files.md).
 
 The guarantee covers the producer's calls into the library. A producer process holds the plaintext
 DEKs of its cached writes, and its own code can read what it wrote in memory. A service that writes
@@ -94,9 +94,9 @@ key encrypts, see [Protect the keyring record](../production/signed-records.md).
 
 - The producer encrypts randomised values only. A beacon or a deterministic value needs a key's
   plaintext, which only a reader holds;
-- `Ring` has no RSA encryption: a producer on it fails at construction with
-  `UNSUPPORTED_ALGORITHM`. Use `AwsLc` or `RustCrypto`;
-- the encryption is local, so the KMS audit log no longer shows who encrypted a DEK. The decrypt
+- `Ring` has no RSA encryption, so a producer needs `AwsLc` or `RustCrypto`, see
+  [Crypto backends](../crypto-backends.md#ring);
+- the encryption is local, so the KMS audit log does not show who encrypted a DEK. The decrypt
   log stays;
 - anyone holding the public key makes a reader pay for an asymmetric KMS decryption by sending a
   made-up value. Rate-limit what readers decrypt;

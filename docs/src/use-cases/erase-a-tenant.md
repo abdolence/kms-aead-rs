@@ -11,8 +11,8 @@ A scope's values become unreadable once nothing can decrypt their DEKs. With kms
 DEKs are encrypted by the KEK, so shredding is the destruction of the KEK's versions that encrypted
 them, backups included. Per KMS:
 
-- **Google Cloud KMS**: destroy the key versions. Cloud KMS schedules the destruction, 30 days
-  later by default, and until then a version can be restored, see
+- **Google Cloud KMS**: destroy the key versions. Cloud KMS schedules the destruction, and until
+  then a version can be restored, see
   [Google Cloud KMS](../providers/gcp.md#key-versions-and-rotation);
 - **AWS KMS**: delete the key. Rotated key material is never destroyed on its own, see
   [AWS KMS](../providers/aws.md#key-versions-and-rotation);
@@ -31,12 +31,12 @@ destroying the KEK's versions makes the backups of the record and the exported k
 unrecoverable too.
 
 Since a deletion of the key takes every version, shredding one scope under AWS KMS or Azure Key
-Vault needs a key per scope. With a keyring, a shared KEK has a second route, `dangerously_shred()`:
-it destroys every version of the keyring and deletes its record from the store, with the earlier
+Vault needs a key per scope. With a keyring, a shared KEK has a second route, `dangerously_shred()`.
+It destroys every version of the keyring and deletes its record from the store, with the earlier
 versions the store keeps. The keys stay in every copy the store keeps beyond its API, such as a
 backup, and in every keyset exported from the keyring, see
 [What survives a shred](#what-survives-a-shred). A deployment that needs shredding guarantees uses
-a KEK per scope, see [A keyring per tenant](./keyring-per-tenant.md).
+a KEK per scope, see [Give each customer of a SaaS its own keys](./keyring-per-tenant.md).
 
 ## Shredding a tenant with `dangerously_shred()`
 

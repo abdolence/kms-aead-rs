@@ -60,13 +60,12 @@ A keyring stays open until the registry shuts down, so a process holds every key
 
 - **store reads**: one at the first `open`, and one revalidation per keyring per `record_ttl`, or
   per change signal, see [How the record is refreshed](../keyring/record-cache.md#how-the-record-is-refreshed);
-- **connections**: on Firestore, one listen stream per store, with a target on each keyring's
-  document; on PostgreSQL, at most two connections per store, however many keyrings, see
-  [Keyring stores](../keyring/stores.md);
+- **connections**: a store holds a fixed number of listen streams or connections, however many
+  keyrings it serves, see [Keyring stores](../keyring/stores.md);
 - **the DEK cache**: one per registry, shared by its keyrings, with an entry per version in use per
-  keyring. It holds `DekCacheOptions::DEFAULT_MAX_ENTRIES`, 1024, by default, and an entry evicted
-  for capacity is decrypted through the KMS again on its next use, so size it above the tenants a
-  process serves times the versions each uses, see [Sizing](../dek-caching.md#sizing);
+  keyring. An entry evicted for capacity is decrypted through the KMS again on its next use, so
+  size it above the tenants a process serves times the versions each uses, see
+  [Sizing](../dek-caching.md#sizing);
 - **KMS calls**: one decryption per version per DEK cache TTL in every process, and two per version
   in each `reencrypt_deks`. A KEK rotation re-encrypts every keyring under the KEK, see
   [The KMS decrypt burst](../production/rotation.md#the-kms-decrypt-burst);

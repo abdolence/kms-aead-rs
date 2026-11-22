@@ -195,17 +195,14 @@ form.
   requests: a decryptor, like an encryptor, keeps decrypting after a shred, a destroy or a
   compromised flag of its version until it is dropped, see
   [Streaming encryption](../streaming.md#limits);
-- `DecryptingReader`, `DecryptingStream` and `decrypt_stream` yield the plaintext of a chunk as soon
-  as the chunk is authentic, so write the response to a place you can discard. A failure of the source or the sink
-  is `STREAM_IO`, and the retry is the whole stream again. They take the end of their source as
-  the end of the object;
+- a response written chunk by chunk goes to a place you can discard, since a chunk is yielded as soon
+  as it is authentic, see [Streaming encryption](../streaming.md#limits);
 - the object carries no signature. A party without the DEK that must check it gets a `Signature<T>`
   over a document that lists the object's SHA-256 digest, see
-  [Publish content anyone can verify](./publish-verifiable.md);
-- a sweep re-encrypts a streamed object whole: decrypt it under the version it names and encrypt it
-  again under the active one, with no helper.
+  [Publish a rate sheet or a release anyone can verify](./publish-verifiable.md).
 
-The limits are in [Streaming encryption](../streaming.md#limits).
+The other limits, such as `STREAM_IO` and the sweep of a streamed object, are in
+[Streaming encryption](../streaming.md#limits).
 
 Full examples available
 [here](https://github.com/abdolence/kms-aead-rs/blob/master/kms-aead-keyring/examples/stream.rs) for
