@@ -3,7 +3,11 @@
 A beacon, or blind index, finds rows by a field's value without decrypting the column: an
 HMAC-SHA256 of the value under a beacon key, truncated, stored beside the encrypted field. A
 query calculates the beacon of the value it looks for and matches it by equality. `Beacon<T>` holds
-the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is:
+the bytes to store, and the beacon key is a 32-byte key encrypted by the KMS, as a DEK is.
+
+This page specifies beacons: the calls, what a beacon leaks and the bits. To look a user up by an
+encrypted email from start to finish, read [Find a user by an encrypted
+email](./use-cases/equality-lookups.md) first.
 
 ```rust
 use kms_aead::backends::Ring;
@@ -81,7 +85,7 @@ assert_eq!(decrypted, email);
 
 `Beacon<T>` is stored as `Encrypted` is, with serde and the `postgres` and `sqlx` features, and
 read back through `TryFrom`, which checks its layout, see [Stored values](./stored-values.md#beacont).
-See [Formats](./formats/values.md#beacons) for its bytes.
+See [Values and DEKs](./formats/values.md#beacons) for its bytes.
 
 A message authentication code (MAC) over a value's bytes, which is not truncated and never serves
 a lookup, is in [Beacons and MACs](./signing.md#beacons-and-macs).
@@ -114,7 +118,7 @@ An equal beacon never proves an equal value: a lookup always decrypts the rows i
 compares the plaintexts. The bits enter the HMAC, so beacons of one value under different bits
 never match: after a change of a column's bits, its stored beacons match no lookup until a
 re-index computes them again. The numbers of the default for a column of 1,000,000 emails are in
-[Find rows by an encrypted value](./use-cases/equality-lookups.md).
+[Find a user by an encrypted email](./use-cases/equality-lookups.md).
 
 ## Normalisation
 

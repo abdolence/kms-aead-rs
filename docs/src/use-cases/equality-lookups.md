@@ -16,7 +16,7 @@ and a beacon, a truncated HMAC stored beside a field that stays randomised.
 | BigQuery | SQL cannot calculate a beacon; it matches beacons the application calculated | SQL decrypts the field and searches it by equality |
 | FIPS | HMAC-SHA256 on the configured backend | AES-SIV, which is not FIPS-approved |
 
-With the default 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
+With the default of 16 bits, there are 65,536 possible beacons. A column of 1,000,000 distinct
 emails gives about 1,000,000 / 65,536, or 15, emails per beacon, so a lookup of one email returns
 about 15 rows. The application decrypts them and keeps the one equal to the email it looks for.
 How the bits trade rows to filter against what the column leaks is in
@@ -51,7 +51,7 @@ still decrypts:
 2. compute the probes of the value looked for, one per key that still decrypts: with kms-aead
    alone one, or two during a rotation by hand until the re-index; with a keyring one per version;
 3. query by them: `WHERE email_beacon = ANY($1)` on PostgreSQL with the probes bound as a
-   `BYTEA[]`, an `in` filter on Firestore, which takes up to 30 values, see
+   `BYTEA[]`, an `in` filter on Firestore, which limits its number of values, see
    [Queries across rotations](../keyring/deterministic.md#queries-across-rotations);
 4. for a beacon, decrypt every row found and keep the ones whose plaintext equals the value: an
    equal beacon never proves an equal value.
